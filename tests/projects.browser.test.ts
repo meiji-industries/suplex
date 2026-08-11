@@ -56,12 +56,12 @@ test("projects desktop flow activates valid configuration and shows actionable v
 
   await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Forge browser test"]);
   await execFileAsync("git", ["-C", repositoryPath, "config", "user.email", "forge-browser@example.invalid"]);
-  await execFileAsync("git", ["-C", repositoryPath, "commit", "--allow-empty", "-m", "Initial fixture"]);
+  await execFileAsync("git", ["-c", "commit.gpgsign=false", "-C", repositoryPath, "commit", "--allow-empty", "-m", "Initial fixture"]);
   await execFileAsync("git", ["-C", repositoryPath, "remote", "add", "origin", "https://github.com/acme/forge.git"]);
   await execFileAsync("git", ["init", "-b", "main", narrowRepository]);
   await execFileAsync("git", ["-C", narrowRepository, "config", "user.name", "Forge browser test"]);
   await execFileAsync("git", ["-C", narrowRepository, "config", "user.email", "forge-browser@example.invalid"]);
-  await execFileAsync("git", ["-C", narrowRepository, "commit", "--allow-empty", "-m", "Narrow fixture"]);
+  await execFileAsync("git", ["-c", "commit.gpgsign=false", "-C", narrowRepository, "commit", "--allow-empty", "-m", "Narrow fixture"]);
   await execFileAsync("git", ["-C", narrowRepository, "remote", "add", "origin", "https://github.com/acme/narrow.git"]);
 
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
@@ -109,6 +109,7 @@ test("projects desktop flow activates valid configuration and shows actionable v
       await page.getByText("Ready", { exact: true }).waitFor();
       expect(await page.getByLabel("Base branch").inputValue()).toBe("main");
       expect(await page.getByLabel("Target branch").inputValue()).toBe("main");
+      expect(await page.locator("#project-leadProfile").innerText()).toBe("Browser profile");
       expect(await page.getByRole("group", { name: "Required GitHub checks" }).getByRole("checkbox", { name: /Tests \/ unit/ }).isChecked()).toBe(true);
       expect(await page.getByRole("group", { name: "Profiles" }).getByRole("checkbox", { name: "Browser profile" }).isChecked()).toBe(true);
       await page.getByRole("button", { name: "Save settings" }).click();

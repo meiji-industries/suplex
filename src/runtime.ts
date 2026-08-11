@@ -9,7 +9,7 @@ import { TemporalInfrastructureError } from "./config.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { DockerContainerInspectionSchema } from "./schemas.js";
 import { assertLegacyNamespaceProbeOnly, connectTemporal, ensureTemporalFoundation } from "./temporal/service.js";
-import { defaultProcessController, processIdentityMatches, readProcessRegistry, type OwnedProcess, type ProcessController, type ProcessInspection, type ProcessRegistry, type TemporalContainer, stopOwnedProcesses, writeProcessRegistry } from "./process-manager.js";
+import { defaultProcessController, hasCompleteProcessIdentity, ownedProcessIsRunning, processIdentityMatches, readProcessRegistry, type OwnedProcess, type ProcessController, type ProcessInspection, type ProcessRegistry, type TemporalContainer, signalOwnedProcess, stopOwnedProcesses, writeProcessRegistry } from "./process-manager.js";
 import { configureTailscaleServe, disableTailscaleServe, isTailscaleServeConfigured, verifyTailscaleServe } from "./tailscale.js";
 
 const execFileAsync = promisify(execFile);
@@ -304,9 +304,8 @@ async function waitForProcessIdentity(pid: number, attempts = 10, delayMs = 50):
 }
 
 async function spawnForgeProcess(name: string, script: string, config: ForgeConfig, runtimeRoot: string, foreground: boolean): Promise<{ child: ChildProcess; owned: OwnedProcess }> {
-  const tsxCli = new URL("../node_modules/tsx/dist/cli.mjs", import.meta.url);
   const command = process.execPath;
-  const args = [tsxCli.pathname, script];
+  const args = ["--import", "tsx", script];
   const logHandle = foreground ? undefined : await open(`${runtimeRoot}/${name}.log`, "a", 0o600);
   const child = spawn(command, args, {
     cwd: process.cwd(),
@@ -337,7 +336,7 @@ async function spawnForgeProcess(name: string, script: string, config: ForgeConf
     owned: {
       name,
       pid: child.pid,
-      command: fullCommand,
+      command: identity?.command ?? fullCommand,
       startedAt,
       startId,
       processGroup: identity?.processGroup ?? child.pid,
@@ -359,8 +358,7 @@ function hasCompleteRunningProcessSet(registry: ProcessRegistry): boolean {
 
 async function waitForRecordedProcessToStop(recorded: OwnedProcess, controller: RuntimeReconciliationController): Promise<void> {
   for (let attempt = 0; attempt < 10; attempt += 1) {
-    const live = await controller.process.inspect(recorded.pid);
-    if (!live || !processIdentityMatches(recorded, live)) {
+    if (!await ownedProcessIsRunning(recorded, controller.process)) {
       return;
     }
     await controller.wait(100);
@@ -400,7 +398,11 @@ export async function reconcileExistingRegistry(
       return { recorded, live, match: live !== undefined && processIdentityMatches(recorded, live) };
     }),
   );
-  const ambiguousProcess = liveProcesses.find((entry) => entry.live !== undefined && !entry.match);
+  const ambiguousProcess = liveProcesses.find((entry) => (
+    entry.live !== undefined
+    && !entry.match
+    && !hasCompleteProcessIdentity(entry.recorded)
+  ));
   if (ambiguousProcess) {
     throw new Error(`Could not reconcile recorded Forge process ${ambiguousProcess.recorded.name}; ownership is ambiguous`);
   }
@@ -429,15 +431,17 @@ export async function reconcileExistingRegistry(
     serveAlive = await controller.serveIsConfigured(config);
   }
   const allAlive = hasCompleteRunningProcessSet(registry) && liveProcesses.every((entry) => entry.match);
-  const currentTemporalIsVerified = registry.temporalContainer !== undefined
-    && !registry.temporalContainer.legacy
-    && containerAlive;
+  const currentTemporalIsVerified = config.temporalMode === "external"
+    ? registry.temporalContainer === undefined
+    : registry.temporalContainer !== undefined
+      && !registry.temporalContainer.legacy
+      && containerAlive;
   if (allAlive && currentTemporalIsVerified && (!registry.tailscaleServe || serveAlive)) {
     return true;
   }
   for (const entry of liveProcesses) {
     if (entry.match) {
-      await controller.process.signal(entry.recorded.pid, "SIGTERM");
+      await signalOwnedProcess(entry.recorded, "SIGTERM", controller.process);
       await waitForRecordedProcessToStop(entry.recorded, controller);
     }
   }
@@ -463,7 +467,16 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
     }
   }
   if (existingRegistry && await reconcileExistingRegistry(existingRegistry, config)) {
-    throw new Error("Forge already has recorded owned processes running; use restart or stop before starting another runtime");
+    if (foreground) {
+      const removeShutdownListeners = await waitForForegroundShutdown();
+      try {
+        await stopOwnedProcesses(existingRegistry);
+        await rm(`${config.runtimeRoot}/owned-processes.json`, { force: true });
+      } finally {
+        removeShutdownListeners();
+      }
+    }
+    return existingRegistry;
   }
   let temporalContainer: TemporalContainer | undefined;
   let registry: ProcessRegistry | undefined;
@@ -522,13 +535,13 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
     }
     await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
     if (foreground) {
-      await new Promise<void>((resolve) => {
-        const shutdown = (): void => resolve();
-        process.once("SIGTERM", shutdown);
-        process.once("SIGINT", shutdown);
-      });
-      await stopOwnedProcesses(registry);
-      await rm(`${config.runtimeRoot}/owned-processes.json`, { force: true });
+      const removeShutdownListeners = await waitForForegroundShutdown();
+      try {
+        await stopOwnedProcesses(registry);
+        await rm(`${config.runtimeRoot}/owned-processes.json`, { force: true });
+      } finally {
+        removeShutdownListeners();
+      }
     }
     return registry;
   } catch (error) {
@@ -551,4 +564,22 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
     }
     throw error;
   }
+}
+
+async function waitForForegroundShutdown(): Promise<() => void> {
+  return new Promise((resolve) => {
+    const keepAlive = setInterval(() => undefined, 60_000);
+    let shuttingDown = false;
+    const shutdown = (): void => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      clearInterval(keepAlive);
+      resolve(() => {
+        process.off("SIGTERM", shutdown);
+        process.off("SIGINT", shutdown);
+      });
+    };
+    process.on("SIGTERM", shutdown);
+    process.on("SIGINT", shutdown);
+  });
 }

@@ -69,7 +69,7 @@ test("pins the Temporal server image to an explicit versioned release", () => {
 
 test("rejects an unsupported Node major before loading configuration", () => {
   const original = process.versions.node;
-  Object.defineProperty(process.versions, "node", { value: "26.7.0", configurable: true });
+  Object.defineProperty(process.versions, "node", { value: "22.22.1", configurable: true });
   try {
     expect(() => loadConfig(baseEnvironment)).toThrow(UnsupportedRuntimeError);
   } finally {

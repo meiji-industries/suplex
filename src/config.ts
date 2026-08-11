@@ -39,7 +39,7 @@ export class UnsafeBindingError extends Error {
 
 export class UnsupportedRuntimeError extends Error {
   constructor(supportedMajor: number, foundVersion: string) {
-    super(`Forge requires Node.js ${supportedMajor} LTS; found ${foundVersion}`);
+    super(`Forge requires Node.js ${supportedMajor}; found ${foundVersion}`);
     this.name = "UnsupportedRuntimeError";
   }
 }
@@ -51,11 +51,11 @@ export class TemporalInfrastructureError extends Error {
   }
 }
 
-const SUPPORTED_NODE_MAJOR = 22;
+const SUPPORTED_NODE_MAJOR = 26;
 
 function assertSupportedNodeRuntime(): void {
   const major = Number(process.versions.node.split(".")[0]);
-  if (major !== SUPPORTED_NODE_MAJOR) {
+  if (major < SUPPORTED_NODE_MAJOR || major > SUPPORTED_NODE_MAJOR) {
     throw new UnsupportedRuntimeError(SUPPORTED_NODE_MAJOR, process.versions.node);
   }
 }

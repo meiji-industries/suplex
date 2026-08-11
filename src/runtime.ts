@@ -209,7 +209,7 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
     const cleanupRegistry = registry ?? {
       version: 1 as const,
       processes: [],
-      temporalContainer,
+      ...(temporalContainer?.legacy ? {} : { temporalContainer }),
     };
     await stopOwnedProcesses(cleanupRegistry).catch(() => undefined);
     await rm(`${config.runtimeRoot}/owned-processes.json`, { force: true });

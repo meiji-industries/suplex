@@ -38,9 +38,9 @@ async function publishedTemporalPort(name: string): Promise<number> {
 
 test("starts, persists, restarts, and queries a probe Workflow without touching the live Forge container", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-temporal-test-"));
-  const containerName = `forge-temporal-test-${process.pid}-${randomUUID().slice(0, 8)}`;
+  const containerName = `temporal-test-${process.pid}-${randomUUID().slice(0, 8)}`;
   const liveForgeContainerId = await containerId("forge-temporal");
-  let config = createTestConfig(root, { taskQueue: `forge-test-${process.pid}-${randomUUID().slice(0, 8)}` });
+  let config = createTestConfig(root, { taskQueue: `tasks-test-${process.pid}-${randomUUID().slice(0, 8)}` });
   let worker: Worker | undefined;
   let workerConnection: NativeConnection | undefined;
   let database: ForgeDatabase | undefined;

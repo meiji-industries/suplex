@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { sql } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 
 import { probeWorkflows, workerRegistrations } from "./database-schema.js";
 
@@ -48,6 +48,7 @@ function migrationFolder(): string {
   const candidates = [
     resolve(process.cwd(), "drizzle"),
     resolve(dirname(fileURLToPath(import.meta.url)), "../drizzle"),
+    resolve(dirname(fileURLToPath(import.meta.url)), "../../drizzle"),
   ];
   const folder = candidates.find((candidate) => {
     try {
@@ -100,7 +101,7 @@ export class ForgeDatabase {
         status: probeWorkflows.status,
       })
       .from(probeWorkflows)
-      .where(sql`${probeWorkflows.probeId} = ${probeId}`)
+      .where(eq(probeWorkflows.probeId, probeId))
       .get();
     return row as ProbeRecord | undefined;
   }
@@ -122,7 +123,7 @@ export class ForgeDatabase {
   }
 
   unregisterWorker(workerId: string): void {
-    this.orm.delete(workerRegistrations).where(sql`${workerRegistrations.workerId} = ${workerId}`).run();
+    this.orm.delete(workerRegistrations).where(eq(workerRegistrations.workerId, workerId)).run();
   }
 
   workerHealth(taskQueue: string): WorkerHealth | undefined {
@@ -134,8 +135,8 @@ export class ForgeDatabase {
         heartbeatAt: workerRegistrations.heartbeatAt,
       })
       .from(workerRegistrations)
-      .where(sql`${workerRegistrations.taskQueue} = ${taskQueue}`)
-      .orderBy(sql`${workerRegistrations.heartbeatAt} DESC`)
+      .where(eq(workerRegistrations.taskQueue, taskQueue))
+      .orderBy(desc(workerRegistrations.heartbeatAt))
       .get();
     if (!row) {
       return undefined;

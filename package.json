@@ -9,6 +9,7 @@
   },
   "files": [
     "dist",
+    "drizzle",
     "README.md",
     "components.json"
   ],

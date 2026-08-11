@@ -1,4 +1,4 @@
-import { allHandlersFinished, condition, continueAsNew, defineQuery, defineUpdate, proxyActivities, setHandler, workflowInfo } from "@temporalio/workflow";
+import { allHandlersFinished, condition, continueAsNew, defineQuery, defineUpdate, patched, proxyActivities, setHandler, workflowInfo } from "@temporalio/workflow";
 
 import { ProbeWorkflowInputSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueActivities, type IssueWorkflowInput, type IssueWorkflowState, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
@@ -10,6 +10,9 @@ const { recordProbeStarted } = proxyActivities<ProbeActivities>({
 
 const { projectIssueState } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
+});
+const { runLeadPlanning } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "20 minutes",
 });
 
 export const probeStateQuery = defineQuery<ProbeWorkflowState>("probeState");
@@ -31,6 +34,7 @@ export async function probeWorkflow(input: ProbeWorkflowInput): Promise<ProbeWor
 export const issueStateQuery = defineQuery<IssueWorkflowState>("issueState");
 export const startPlanningUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("startPlanning");
 export const recordProgressUpdate = defineUpdate<IssueWorkflowState, [RecordProgressInput]>("recordProgress");
+const leadPlanningPatch = "forge-lead-planning-v1";
 
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
@@ -75,7 +79,22 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     state = next;
     assertPayloadWithinLimit("Issue Workflow result", next);
     await projectIssueState(next);
-    return next;
+    if (patched(leadPlanningPatch)) {
+      const leadResult = await runLeadPlanning({
+        taskId: validatedInput.issueId,
+        companyId: validatedInput.companyId,
+        workflowId: validatedInput.workflowId,
+        projectId: validatedInput.projectId,
+        projectRevisionId: validatedInput.projectRevisionId,
+        briefArtifactId: validatedInput.briefArtifactId,
+        imageArtifactIds: validatedInput.imageArtifactIds,
+        roleProfiles: validatedInput.roleProfiles,
+        revision: next.revision,
+      });
+      state = IssueWorkflowStateSchema.parse({ ...next, ...leadResult });
+      assertPayloadWithinLimit("Issue Workflow result", state);
+    }
+    return state;
   }, {
     validator(rawInput) {
       const command = StartPlanningInputSchema.parse(rawInput);

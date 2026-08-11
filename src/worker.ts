@@ -24,7 +24,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       identity: workerId,
       buildId,
       workflowsPath: fileURLToPath(new URL("./temporal/workflows.ts", import.meta.url)),
-      activities: createActivities(database),
+      activities: createActivities(database, config),
       shutdownGraceTime: "10 seconds",
       shutdownForceTime: "20 seconds",
     });

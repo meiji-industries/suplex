@@ -3,6 +3,7 @@ import { z } from "zod";
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
 export const IssuePhaseSchema = z.enum(["backlog", "planning"]);
+export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
 
 export const IssueContinuationStateSchema = z.object({
   phase: IssuePhaseSchema,
@@ -13,6 +14,12 @@ export const IssueContinuationStateSchema = z.object({
   lastEventId: durableId,
   continuationCount: z.number().int().nonnegative(),
   lastSummaryHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  leadSessionRef: durableId.nullable().optional(),
+  leadExecutionId: durableId.nullable().optional(),
+  leadEvidenceArtifactId: durableId.nullable().optional(),
+  leadOutputArtifactId: durableId.nullable().optional(),
+  leadOutputKind: IssueLeadOutputKindSchema.nullable().optional(),
+  leadSummary: z.string().max(2_000).nullable().optional(),
 });
 
 export const IssueWorkflowInputWithContinuationSchema = z.object({
@@ -47,6 +54,12 @@ export const IssueWorkflowStateSchema = z.object({
   lastEventId: durableId,
   continuationCount: z.number().int().nonnegative(),
   lastSummaryHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  leadSessionRef: durableId.nullable().optional(),
+  leadExecutionId: durableId.nullable().optional(),
+  leadEvidenceArtifactId: durableId.nullable().optional(),
+  leadOutputArtifactId: durableId.nullable().optional(),
+  leadOutputKind: IssueLeadOutputKindSchema.nullable().optional(),
+  leadSummary: z.string().max(2_000).nullable().optional(),
 });
 
 export const StartPlanningInputSchema = z.object({
@@ -64,6 +77,28 @@ export type IssueWorkflowState = z.infer<typeof IssueWorkflowStateSchema>;
 export type StartPlanningInput = z.infer<typeof StartPlanningInputSchema>;
 export type RecordProgressInput = z.infer<typeof RecordProgressInputSchema>;
 
+export interface LeadPlanningActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  projectId: string;
+  projectRevisionId: string;
+  briefArtifactId: string;
+  imageArtifactIds: string[];
+  roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
+  revision: number;
+}
+
+export interface LeadPlanningResult {
+  leadSessionRef: string;
+  leadExecutionId: string;
+  leadEvidenceArtifactId: string;
+  leadOutputArtifactId: string;
+  leadOutputKind: "plan" | "decision_blocker";
+  leadSummary: string;
+}
+
 export interface IssueActivities {
   projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState>;
+  runLeadPlanning(input: LeadPlanningActivityInput): Promise<LeadPlanningResult>;
 }

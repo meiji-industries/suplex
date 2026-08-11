@@ -4,12 +4,12 @@ import type { HealthCheck } from "./health.js";
 import { GhAuthStatusSchema } from "./schemas.js";
 
 export type CommandResult = { stdout: string; stderr: string };
-export type CommandRunner = (command: string, args: string[], options: { timeout: number; maxBuffer: number }) => Promise<CommandResult>;
+export type CommandRunner = (command: string, args: string[], options: { timeout: number; maxBuffer: number; cwd?: string }) => Promise<CommandResult>;
 
 const codexReadinessCacheMs = 5 * 60_000;
 
 const runCommand: CommandRunner = (command, args, options) => new Promise((resolve, reject) => {
-  const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+  const child = spawn(command, args, { cwd: options.cwd, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
   let settled = false;
@@ -56,6 +56,7 @@ export class CodexReadinessProbe {
     private readonly command: string,
     private readonly runner: CommandRunner = runCommand,
     private readonly cacheDurationMs = codexReadinessCacheMs,
+    private readonly workingDirectory = process.cwd(),
   ) {}
 
   async check(): Promise<HealthCheck> {
@@ -63,7 +64,7 @@ export class CodexReadinessProbe {
     let authenticated = false;
     let failure: string | undefined;
     try {
-      const versionResult = await this.runner(this.command, ["--version"], { timeout: 3_000, maxBuffer: 4 * 1024 });
+      const versionResult = await this.runner(this.command, ["--version"], { timeout: 3_000, maxBuffer: 4 * 1024, cwd: this.workingDirectory });
       const versionMatch = /\b\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\b/.exec(versionResult.stdout);
       if (!versionMatch) {
         failure = "unsupported-version";
@@ -75,7 +76,7 @@ export class CodexReadinessProbe {
     }
     if (!failure && version !== "unknown") {
       try {
-        await this.runner(this.command, ["login", "status"], { timeout: 3_000, maxBuffer: 4 * 1024 });
+        await this.runner(this.command, ["login", "status"], { timeout: 3_000, maxBuffer: 4 * 1024, cwd: this.workingDirectory });
         authenticated = true;
       } catch (error) {
         failure = commandFailure(error, "unauthenticated", "auth-timeout");
@@ -95,7 +96,7 @@ export class CodexReadinessProbe {
         label: "Codex readiness",
         status: "unhealthy",
         summary: failure === "version-unavailable" || failure === "command-missing" ? "Codex version is unavailable" : "Codex local authentication is unavailable",
-        details: { command: this.command, version, authentication: "unavailable", smoke: "not-run", failure: failure ?? "unauthenticated", testedAt },
+        details: { command: this.command, version, authentication: "unavailable", smoke: "not-run", workingDirectory: this.workingDirectory, failure: failure ?? "unauthenticated", testedAt },
       };
     } else {
       try {
@@ -107,7 +108,7 @@ export class CodexReadinessProbe {
           "--sandbox",
           "read-only",
           "Return exactly a JSON object with an ok boolean. Do not use tools.",
-        ], { timeout: 20_000, maxBuffer: 64 * 1024 });
+        ], { timeout: 20_000, maxBuffer: 64 * 1024, cwd: this.workingDirectory });
         const events = smoke.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as unknown);
         const completed = events.some((event) => event && typeof event === "object" && "type" in event && event.type === "turn.completed");
         const validOutput = events.some((event) => {
@@ -129,7 +130,7 @@ export class CodexReadinessProbe {
           label: "Codex readiness",
           status: "healthy",
           summary: "Codex version, authentication, and structured smoke are ready",
-          details: { command: this.command, version, authentication: "available", smoke: "passed", failure: "none", testedAt },
+          details: { command: this.command, version, authentication: "available", smoke: "passed", workingDirectory: this.workingDirectory, failure: "none", testedAt },
         };
       } catch (error) {
         const smokeFailure = smokeFailureKind(error);
@@ -138,7 +139,7 @@ export class CodexReadinessProbe {
           label: "Codex readiness",
           status: "unhealthy",
           summary: "Codex authentication is available but the structured smoke failed",
-          details: { command: this.command, version, authentication: "available", smoke: "failed", failure: smokeFailure, testedAt },
+          details: { command: this.command, version, authentication: "available", smoke: "failed", workingDirectory: this.workingDirectory, failure: smokeFailure, testedAt },
         };
       }
     }

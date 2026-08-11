@@ -5,6 +5,7 @@ import type { AuthUser } from "./auth.js";
 import { AuthFailure, AuthService } from "./auth.js";
 import type { ForgeConfig } from "./config.js";
 import { ArtifactFailure, ArtifactStore, type StoredArtifact } from "./artifacts.js";
+import { LeadOutputSchema, type LeadOutput } from "./codex-lead.js";
 import { ForgeDatabase } from "./database.js";
 import { ProjectFailure, ProjectService, type ProjectRole } from "./projects.js";
 import { startIssuePlanning, startIssueWorkflow } from "./temporal/service.js";
@@ -83,6 +84,15 @@ export interface ForgeTask {
   createdAt: string;
   updatedAt: string;
   timeline: TaskTimelineEntry[];
+  leadOutput?: {
+    kind: "plan" | "decision_blocker";
+    summary: string;
+    sessionRef: string;
+    executionId: string;
+    outputArtifactId: string;
+    evidenceArtifactId: string;
+    content: LeadOutput;
+  };
 }
 
 export interface TaskEvent {
@@ -142,6 +152,17 @@ interface TimelineRow {
   event_type: string;
   metadata_json: string;
   created_at: string;
+}
+
+interface LeadOutputRow {
+  kind: "plan" | "decision_blocker";
+  summary: string;
+  session_ref: string;
+  execution_id: string;
+  output_artifact_id: string;
+  evidence_artifact_id: string;
+  storage_path: string;
+  sha256: string;
 }
 
 const titlePattern = /^\S[\s\S]{0,159}$/;
@@ -363,7 +384,17 @@ export class TaskService {
     const description = this.artifacts.readSync({ storagePath: brief.storage_path, sha256: brief.sha256 }).toString("utf8");
     void actorUserId;
     const timeline = this.database.authQuery((db) => db.prepare("SELECT id, revision, event_type, metadata_json, created_at FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision, id").all(row.id) as TimelineRow[]).map((entry) => ({ id: entry.id, revision: entry.revision, eventType: entry.event_type, metadata: parseMetadata(entry.metadata_json), createdAt: entry.created_at }));
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, timeline };
+    const leadOutput = this.leadOutput(row.id, row.company_id);
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, timeline, ...(leadOutput ? { leadOutput } : {}) };
+  }
+
+  private leadOutput(taskId: string, companyId: string): ForgeTask["leadOutput"] {
+    const row = this.database.authQuery((db) => db.prepare(`SELECT o.kind, o.summary, o.session_ref, o.execution_id, o.output_artifact_id, o.evidence_artifact_id, a.storage_path, a.sha256
+      FROM forge_issue_outputs o JOIN forge_artifacts a ON a.id = o.output_artifact_id
+      WHERE o.task_id = ? AND o.company_id = ? ORDER BY o.revision DESC LIMIT 1`).get(taskId, companyId) as LeadOutputRow | undefined);
+    if (!row) return undefined;
+    const content = LeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
+    return { kind: row.kind, summary: row.summary, sessionRef: row.session_ref, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };
   }
 
   private taskQuery(scope: string): string {

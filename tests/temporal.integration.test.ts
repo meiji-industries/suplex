@@ -116,13 +116,14 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     temporalConnection.close();
 
     database = new ForgeDatabase(config.databasePath);
+    const integrationAgent = { runLeadPlanning: async () => ({ leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan" as const, leadSummary: "Integration plan" }) };
     workerConnection = await NativeConnection.connect({ address: config.temporalAddress });
     worker = await Worker.create({
       connection: workerConnection,
       namespace: config.temporalNamespace,
       taskQueue: config.taskQueue,
       workflowsPath: fileURLToPath(new URL("../src/temporal/workflows.ts", import.meta.url)),
-      activities: createActivities(database),
+      activities: createActivities(database, config, { agent: integrationAgent }),
     });
     workerRun = worker.run();
     api = await createForgeServer(config);
@@ -178,7 +179,7 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
       if (continuationState.continuationCount === 1) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    expect(continuationState).toEqual({ workflowId: startedContinuation.workflowId, companyId: "issue-company", projectId: "issue-project", issueId: "issue-continuation", projectRevisionId: "issue-revision", phase: "planning", revision: 2, owner: "lead", allowedCommands: ["record_progress"], pendingAction: "Lead planning", lastEventId: `${startedContinuation.workflowId}:2`, continuationCount: 1, lastSummaryHash: "a".repeat(64) });
+    expect(continuationState).toEqual({ workflowId: startedContinuation.workflowId, companyId: "issue-company", projectId: "issue-project", issueId: "issue-continuation", projectRevisionId: "issue-revision", phase: "planning", revision: 2, owner: "lead", allowedCommands: ["record_progress"], pendingAction: "Lead planning", lastEventId: `${startedContinuation.workflowId}:2`, continuationCount: 1, lastSummaryHash: "a".repeat(64), leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan", leadSummary: "Integration plan" });
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-continuation'").get())).toEqual({ revision: 2, phase: "planning" });
     expect(database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = 'issue-continuation' ORDER BY revision").all())).toEqual([{ revision: 0 }, { revision: 1 }, { revision: 2 }]);
     if (process.env.FORGE_REPLAY_CAPTURE_PATH) {
@@ -213,7 +214,7 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
       namespace: config.temporalNamespace,
       taskQueue: config.taskQueue,
       workflowsPath: fileURLToPath(new URL("../src/temporal/workflows.ts", import.meta.url)),
-      activities: createActivities(reopenedDatabase),
+      activities: createActivities(reopenedDatabase, config, { agent: integrationAgent }),
     });
     workerRun = worker.run();
     api = await createForgeServer(config);

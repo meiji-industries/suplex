@@ -6,6 +6,7 @@ import { chromium } from "playwright";
 import { expect, test } from "vitest";
 
 import { AuthService, type WebAuthnAdapter } from "../src/auth.js";
+import { ArtifactStore } from "../src/artifacts.js";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
@@ -35,7 +36,19 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
   const profile = projects.createProfile("admin-1", { name: "Browser task profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const project = await projects.createProject("admin-1", company.id, { name: "Browser task project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
   await projects.activateProject("admin-1", project.id);
-  const workflow: IssueWorkflowPort = { async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) { return { workflowId: input.workflowId!, runId: "run" }; }, async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return { workflowId, companyId: company.id, projectId: project.id, issueId: workflowId.split("-issue-")[1]!, projectRevisionId: project.activeRevisionId!, phase: "planning", revision: input.expectedRevision + 1, owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null }; } };
+  const workflow: IssueWorkflowPort = { async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) { return { workflowId: input.workflowId!, runId: "run" }; }, async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    const taskId = workflowId.split("-issue-")[1]!;
+    const artifactStore = new ArtifactStore(config.artifactRoot);
+    const evidence = await artifactStore.put(company.id, "agent-evidence", { filename: "agent.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"turn.completed\"}\n") });
+    const output = await artifactStore.put(company.id, "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "A focused browser plan", reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect repository", verification: "The issue is understood" }, { number: 2, instruction: "Run focused tests", verification: "The focused suite passes" }], compatibilityAnalysis: "The change is local.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [] })) });
+    database.authQuery((db) => {
+      const now = new Date().toISOString();
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, output.id, output.companyId, output.kind, output.filename, output.mimeType, output.byteSize, output.sha256, output.storagePath, output.createdAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_browser', ?, ?, ?, 'lead', 'completed', 1, 'session_browser', ?, ?, ?)").run(taskId, company.id, workflowId, now, now, evidence.id);
+      db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_browser', ?, ?, ?, 'agent_browser', ?, 'plan', ?, ?, 'session_browser', 'A focused browser plan', ?)").run(taskId, company.id, workflowId, input.expectedRevision + 1, output.id, evidence.id, now);
+    });
+    return { workflowId, companyId: company.id, projectId: project.id, issueId: taskId, projectRevisionId: project.activeRevisionId!, phase: "planning", revision: input.expectedRevision + 1, owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: output.id, leadOutputKind: "plan", leadSummary: "A focused browser plan" };
+  } };
   const tasks = new TaskService(database, auth, projects, config, { workflow });
   const app = createApp({ config, auth, projects, tasks, health: { temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }), database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }), artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }), worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }), codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }), ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }) } });
   await app.listen({ host: "127.0.0.1", port: 0 });
@@ -66,6 +79,8 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
       await page.getByRole("button", { name: "Start planning", exact: true }).click();
       await page.getByText(/planning · revision 1/).waitFor();
       await page.getByText("evidence.png", { exact: true }).waitFor();
+      await page.getByText("Lead plan", { exact: true }).waitFor();
+      await page.getByText("Inspect repository", { exact: true }).waitFor();
       const narrow = await context.newPage(); await narrow.setViewportSize({ width: 390, height: 844 }); await narrow.goto(`${baseUrl}/tasks`); expect(await narrow.getByRole("button", { name: "Open navigation" }).isVisible()).toBe(true); await narrow.close(); await page.close(); await context.close();
     } finally { await browser.close(); }
   } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }

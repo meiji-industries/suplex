@@ -59,3 +59,9 @@ pnpm run test:temporal
 ```
 
 The browser proof uses Playwright at narrow and desktop viewports against the same responsive application served by the API, including passkey enrollment, sign-in/out, membership, and recovery. The Temporal lifecycle proof provisions a uniquely named Docker container on a dynamic host port and runs with `pnpm run test:temporal`; it does not touch Forge's live container.
+
+The real Lead integration proof is opt-in because it starts authenticated Codex turns and consumes provider capacity. Run it with a model accepted by the local authenticated Codex account; the proof intentionally forces a same-session format correction and verifies the immutable plan/evidence path:
+
+```sh
+FORGE_RUN_REAL_CODEX=1 FORGE_CODEX_REAL_MODEL=<supported-model> pnpm exec vitest run tests/codex-lead.test.ts
+```

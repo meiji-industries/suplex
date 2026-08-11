@@ -1,7 +1,11 @@
 import { expect, test } from "vitest";
 
 import { createTestConfig } from "../src/config.js";
-import { healthProbeAddress } from "../src/runtime.js";
+import { healthProbeAddress, readinessProbePath } from "../src/runtime.js";
+
+test("uses the public auth status endpoint for startup readiness", () => {
+  expect(readinessProbePath()).toBe("/api/auth/status");
+});
 
 test("probes the local backend when Tailscale Serve owns HTTPS", () => {
   const config = createTestConfig("/tmp/forge-runtime-test", {

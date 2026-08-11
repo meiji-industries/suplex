@@ -201,12 +201,16 @@ export function healthProbeAddress(config: ForgeConfig): string {
   return `http://${host}:${config.port}`;
 }
 
+export function readinessProbePath(): string {
+  return "/api/auth/status";
+}
+
 async function waitForHealthPage(config: ForgeConfig, timeoutMs = 30_000): Promise<void> {
   const probeAddress = healthProbeAddress(config);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${probeAddress}/api/health`, { signal: AbortSignal.timeout(2_000) });
+      const response = await fetch(`${probeAddress}${readinessProbePath()}`, { signal: AbortSignal.timeout(2_000) });
       if (response.ok) {
         return;
       }

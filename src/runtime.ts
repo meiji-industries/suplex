@@ -41,7 +41,7 @@ const processController: ProcessController = {
       return {
         id: inspection.Id,
         name,
-        image: inspection.Image ?? "",
+        image: inspection.Config?.Image ?? "",
         owner: inspection.Config?.Labels?.["com.forge.owner"] ?? "",
       };
     } catch {
@@ -84,7 +84,7 @@ async function inspectTemporalContainer(name: string): Promise<DockerMetadata | 
     status: inspection.State.Status,
     namespace: namespaceIndex >= 0 ? command[namespaceIndex + 1] : undefined,
     volumeNames: (inspection.Mounts ?? []).flatMap((mount) => mount.Name ? [mount.Name] : []),
-    image: inspection.Image,
+    image: inspection.Config?.Image,
   };
 }
 

@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { promisify } from "node:util";
 
-import { ProcessRegistrySchema, TailscaleServeStatusSchema } from "./schemas.js";
+import { DockerContainerInspectionSchema, ProcessRegistrySchema, TailscaleServeStatusSchema } from "./schemas.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -96,10 +96,14 @@ const defaultController: ProcessController = {
   },
   async inspectContainer(name) {
     try {
-      const result = await execFileAsync("docker", ["inspect", "--format", "{{.Id}} {{.Name}} {{.Config.Image}} {{.Config.Labels.com.forge.owner}}", name]);
-      const parts = result.stdout.trim().split(/\s+/);
-      if (parts.length < 3) return undefined;
-      return { id: parts[0]!, name: parts[1]!, image: parts[2]!, owner: parts[3] ?? "" };
+      const result = await execFileAsync("docker", ["inspect", "--format", "{{json .}}", name]);
+      const inspection = DockerContainerInspectionSchema.parse(JSON.parse(result.stdout));
+      return {
+        id: inspection.Id,
+        name,
+        image: inspection.Config?.Image ?? "",
+        owner: inspection.Config?.Labels?.["com.forge.owner"] ?? "",
+      };
     } catch {
       return undefined;
     }

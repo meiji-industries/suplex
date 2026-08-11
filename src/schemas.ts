@@ -97,6 +97,7 @@ export const DockerContainerInspectionSchema = z.object({
   Id: z.string().min(1),
   Image: z.string().min(1).optional(),
   Config: z.object({
+    Image: z.string().min(1).optional(),
     Cmd: z.array(z.string()).optional(),
     Labels: z.record(z.string(), z.string()).optional(),
   }).optional(),

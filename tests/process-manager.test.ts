@@ -157,7 +157,7 @@ test("shutdown preserves an adopted legacy Temporal container", async () => {
 test("shutdown does not claim a Temporal container stopped when Docker fails", async () => {
   const controller = makeController({
     async inspectContainer() {
-      return { id: "neutral-id", name: "forge-temporal-neutral", image: "temporalio/temporal:1.8.2", owner: "runtime-test" };
+      return { id: "neutral-id", name: "forge-temporal-neutral", image: "temporalio/temporal:1.8.2", owner: "runtime-test", status: "running" };
     },
     async stopContainer() {
       throw new Error("Docker is unavailable");
@@ -174,7 +174,7 @@ test("shutdown does not claim a Temporal container stopped when Docker fails", a
 test("shutdown skips a Temporal container whose live identity does not match", async () => {
   const controller = makeController({
     async inspectContainer() {
-      return { id: "other-id", name: "forge-temporal-neutral", image: "temporalio/temporal:1.8.2", owner: "runtime-test" };
+      return { id: "other-id", name: "forge-temporal-neutral", image: "temporalio/temporal:1.8.2", owner: "runtime-test", status: "running" };
     },
     async stopContainer() {
       throw new Error("Docker should not be called");

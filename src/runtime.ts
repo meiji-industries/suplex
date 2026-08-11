@@ -10,7 +10,7 @@ import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { DockerContainerInspectionSchema } from "./schemas.js";
 import { assertLegacyNamespaceProbeOnly, connectTemporal, ensureTemporalFoundation } from "./temporal/service.js";
 import { readProcessRegistry, type OwnedProcess, type ProcessController, type ProcessInspection, type ProcessRegistry, type TemporalContainer, stopOwnedProcesses, writeProcessRegistry } from "./process-manager.js";
-import { configureTailscaleServe, verifyTailscaleServe } from "./tailscale.js";
+import { configureTailscaleServe, disableTailscaleServe, verifyTailscaleServe } from "./tailscale.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -43,6 +43,7 @@ const processController: ProcessController = {
         name,
         image: inspection.Config?.Image ?? "",
         owner: inspection.Config?.Labels?.["com.forge.owner"] ?? "",
+        status: inspection.State.Status,
       };
     } catch {
       return undefined;
@@ -352,6 +353,69 @@ async function spawnForgeProcess(name: string, script: string, config: ForgeConf
   };
 }
 
+function identitiesMatch(recorded: OwnedProcess, live: ProcessInspection): boolean {
+  return (
+    live.pid === recorded.pid
+    && live.processGroup === recorded.processGroup
+    && live.startTime === recorded.startTime
+    && live.command === recorded.command
+  );
+}
+
+async function reconcileExistingRegistry(registry: ProcessRegistry, config: ForgeConfig): Promise<boolean> {
+  const liveProcesses = await Promise.all(
+    registry.processes.map(async (recorded) => {
+      const live = await processController.inspect(recorded.pid);
+      return { recorded, live, match: live !== undefined && identitiesMatch(recorded, live) };
+    }),
+  );
+  const allAlive = liveProcesses.every((entry) => entry.match);
+  let containerAlive = false;
+  if (registry.temporalContainer) {
+    const live = await processController.inspectContainer(registry.temporalContainer.name);
+    containerAlive = live !== undefined
+      && live.id === registry.temporalContainer.id
+      && live.image === registry.temporalContainer.image
+      && live.status === "running";
+  }
+  let serveAlive = false;
+  if (registry.tailscaleServe) {
+    try {
+      await verifyTailscaleServe(config);
+      serveAlive = true;
+    } catch {
+      serveAlive = false;
+    }
+  }
+  if (allAlive && (!registry.temporalContainer || containerAlive) && (!registry.tailscaleServe || serveAlive)) {
+    return true;
+  }
+  for (const entry of liveProcesses) {
+    if (entry.match) {
+      try {
+        await processController.signal(entry.recorded.pid, "SIGTERM");
+      } catch {
+        // The process may have exited before the signal could be delivered.
+      }
+    }
+  }
+  if (containerAlive) {
+    try {
+      await processController.stopContainer(registry.temporalContainer!.id);
+    } catch {
+      // If a leftover container cannot be stopped, do not block starting a fresh runtime.
+    }
+  }
+  if (serveAlive) {
+    try {
+      await disableTailscaleServe(registry.tailscaleServe!.port);
+    } catch {
+      // Serve may already be disabled; continue.
+    }
+  }
+  return false;
+}
+
 export async function startForge(config: ForgeConfig, foreground: boolean): Promise<ProcessRegistry> {
   await mkdir(config.runtimeRoot, { recursive: true });
   let existingRegistry: ProcessRegistry | undefined;
@@ -362,8 +426,8 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
       throw new Error("Forge owned-process registry could not be read safely; inspect it before starting another runtime", { cause: error });
     }
   }
-  if (existingRegistry?.processes.length) {
-    throw new Error("Forge already has recorded owned processes; use restart or stop before starting another runtime");
+  if (existingRegistry && await reconcileExistingRegistry(existingRegistry, config)) {
+    throw new Error("Forge already has recorded owned processes running; use restart or stop before starting another runtime");
   }
   let temporalContainer: TemporalContainer | undefined;
   let registry: ProcessRegistry | undefined;

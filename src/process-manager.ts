@@ -54,6 +54,7 @@ export interface ContainerInspection {
   name: string;
   image: string;
   owner: string;
+  status: string;
 }
 
 export interface ProcessController {
@@ -103,6 +104,7 @@ const defaultController: ProcessController = {
         name,
         image: inspection.Config?.Image ?? "",
         owner: inspection.Config?.Labels?.["com.forge.owner"] ?? "",
+        status: inspection.State.Status,
       };
     } catch {
       return undefined;

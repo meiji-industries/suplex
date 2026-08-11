@@ -14,7 +14,15 @@ run = [{ tasks = ["temporal", "server", "watch"] }]
 
 [tasks.temporal]
 description = "Run the pinned Temporal development service through Compose"
-run = "pnpm run dev:temporal"
+run = "pnpm run docker:up"
+
+[tasks."docker:up"]
+description = "Start the Compose-managed Temporal development service"
+run = "pnpm exec tsx scripts/compose-temporal.ts up"
+
+[tasks."docker:down"]
+description = "Stop and remove the Compose-managed Temporal development service"
+run = "pnpm exec tsx scripts/compose-temporal.ts down"
 
 [tasks.server]
 description = "Start the Forge server in the foreground"

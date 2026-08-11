@@ -1,6 +1,12 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 
 import { loadConfig } from "../src/config.js";
+
+const action = process.argv[2] ?? "up";
+if (action !== "up" && action !== "down") {
+  throw new Error(`Unsupported Compose action: ${action}`);
+}
 
 const config = loadConfig();
 const temporalPort = config.temporalAddress.split(":").at(-1);
@@ -8,7 +14,14 @@ if (!temporalPort) {
   throw new Error(`Invalid Temporal address: ${config.temporalAddress}`);
 }
 
-const child = spawn("docker", ["compose", "-f", "compose.dev.yaml", "up", "temporal"], {
+const docker = process.env.FORGE_DOCKER_BIN
+  ?? (existsSync("/Applications/OrbStack.app/Contents/MacOS/xbin/docker")
+    ? "/Applications/OrbStack.app/Contents/MacOS/xbin/docker"
+    : "docker");
+const composeArguments = ["compose", "-f", "compose.dev.yaml", action];
+if (action === "up") composeArguments.push("temporal");
+
+const child = spawn(docker, composeArguments, {
   cwd: process.cwd(),
   env: {
     ...process.env,

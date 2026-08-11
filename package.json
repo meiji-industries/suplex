@@ -20,7 +20,7 @@
     "forge": "tsx src/cli.ts",
     "build": "tsc && vite build",
     "dev": "tsx src/cli.ts start --foreground",
-    "dev:temporal": "tsx scripts/compose-temporal.ts",
+    "dev:temporal": "tsx scripts/compose-temporal.ts up",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude 'tests/temporal.integration.test.ts' --exclude 'tests/**/*.browser.test.ts'",
     "test:temporal": "vitest run tests/temporal.integration.test.ts",

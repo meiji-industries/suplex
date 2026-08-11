@@ -1,5 +1,5 @@
 [tools]
-node = "26"
+node = "22.22.1"
 pnpm = "11.0.6"
 
 [env]

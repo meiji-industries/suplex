@@ -1,16 +1,60 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, open, rm, stat } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 import type { ForgeConfig } from "./config.js";
+import { TemporalInfrastructureError } from "./config.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { DockerContainerInspectionSchema } from "./schemas.js";
 import { assertLegacyNamespaceProbeOnly, connectTemporal, ensureTemporalFoundation } from "./temporal/service.js";
-import { readProcessRegistry, type OwnedProcess, type ProcessRegistry, type TemporalContainer, stopOwnedProcesses, writeProcessRegistry } from "./process-manager.js";
+import { readProcessRegistry, type OwnedProcess, type ProcessController, type ProcessInspection, type ProcessRegistry, type TemporalContainer, stopOwnedProcesses, writeProcessRegistry } from "./process-manager.js";
 import { configureTailscaleServe, verifyTailscaleServe } from "./tailscale.js";
 
 const execFileAsync = promisify(execFile);
+
+const processController: ProcessController = {
+  async inspect(pid) {
+    try {
+      const [commandResult, pgidResult, lstartResult, commResult] = await Promise.all([
+        execFileAsync("ps", ["-p", String(pid), "-o", "command="]),
+        execFileAsync("ps", ["-p", String(pid), "-o", "pgid="]),
+        execFileAsync("ps", ["-p", String(pid), "-o", "lstart="]),
+        execFileAsync("ps", ["-p", String(pid), "-o", "comm="]),
+      ]);
+      const command = commandResult.stdout.trim();
+      if (!command) return undefined;
+      const pgid = Number(pgidResult.stdout.trim() || "0");
+      const startTime = lstartResult.stdout.trim();
+      const comm = commResult.stdout.trim();
+      const argv = command.split(/\s+/).filter(Boolean);
+      return { pid, command, executable: comm, argv, processGroup: pgid, startTime };
+    } catch {
+      return undefined;
+    }
+  },
+  async inspectContainer(name) {
+    try {
+      const result = await execFileAsync("docker", ["inspect", "--format", "{{json .}}", name]);
+      const inspection = DockerContainerInspectionSchema.parse(JSON.parse(result.stdout));
+      return {
+        id: inspection.Id,
+        name,
+        image: inspection.Image ?? "",
+        owner: inspection.Config?.Labels?.["com.forge.owner"] ?? "",
+      };
+    } catch {
+      return undefined;
+    }
+  },
+  async signal(pid, signal) {
+    process.kill(pid, signal);
+  },
+  async stopContainer(id) {
+    await execFileAsync("docker", ["stop", "--time", "10", id]);
+  },
+};
 
 interface DockerMetadata {
   id: string;
@@ -18,6 +62,7 @@ interface DockerMetadata {
   status: string;
   namespace: string | undefined;
   volumeNames: string[];
+  image: string | undefined;
 }
 
 const legacyTemporalContainerName = "forge-temporal";
@@ -39,6 +84,7 @@ async function inspectTemporalContainer(name: string): Promise<DockerMetadata | 
     status: inspection.State.Status,
     namespace: namespaceIndex >= 0 ? command[namespaceIndex + 1] : undefined,
     volumeNames: (inspection.Mounts ?? []).flatMap((mount) => mount.Name ? [mount.Name] : []),
+    image: inspection.Image,
   };
 }
 
@@ -60,7 +106,23 @@ async function publishedTemporalAddress(name: string): Promise<string> {
   return `127.0.0.1:${match[1]}`;
 }
 
+async function ensureTemporalImageAvailable(image: string): Promise<void> {
+  try {
+    await execFileAsync("docker", ["image", "inspect", image]);
+    return;
+  } catch {
+    // The image may not be loaded locally; try to pull the pinned release.
+  }
+  try {
+    await execFileAsync("docker", ["pull", image]);
+    await execFileAsync("docker", ["image", "inspect", image]);
+  } catch {
+    throw new TemporalInfrastructureError(`Temporal image is not available and cannot be pulled: ${image}`);
+  }
+}
+
 async function createTemporalContainer(config: ForgeConfig, temporalAddress: string | undefined): Promise<TemporalContainer> {
+  await ensureTemporalImageAvailable(config.temporalImage);
   const identifiers = runtimeIdentifiers(config.installationId);
   const temporalPort = temporalAddress?.split(":").at(-1);
   const restoredTemporalPath = process.env.FORGE_TEMPORAL_RESTORE_PATH?.trim();
@@ -87,7 +149,7 @@ async function createTemporalContainer(config: ForgeConfig, temporalAddress: str
       temporalPort ? "127.0.0.1:8233:8233" : "127.0.0.1::8233",
       "--volume",
       temporalVolume,
-      "temporalio/temporal:latest",
+      config.temporalImage,
       "server",
       "start-dev",
       "--ip",
@@ -107,7 +169,7 @@ async function createTemporalContainer(config: ForgeConfig, temporalAddress: str
   }
   try {
     const address = temporalAddress ?? await publishedTemporalAddress(identifiers.temporalContainerName);
-    return { id, name: identifiers.temporalContainerName, address };
+    return { id, name: identifiers.temporalContainerName, address, image: config.temporalImage };
   } catch (error) {
     await execFileAsync("docker", ["rm", "--force", identifiers.temporalContainerName]).catch(() => undefined);
     throw error;
@@ -124,7 +186,7 @@ async function startTemporalContainer(config: ForgeConfig): Promise<TemporalCont
     if (existing.status !== "running") {
       await execFileAsync("docker", ["start", identifiers.temporalContainerName]);
     }
-    return { id: existing.id, name: identifiers.temporalContainerName, address: await publishedTemporalAddress(identifiers.temporalContainerName) };
+    return { id: existing.id, name: identifiers.temporalContainerName, address: await publishedTemporalAddress(identifiers.temporalContainerName), image: existing.image };
   }
 
   const legacy = await inspectTemporalContainer(legacyTemporalContainerName);
@@ -138,7 +200,7 @@ async function startTemporalContainer(config: ForgeConfig): Promise<TemporalCont
     if (legacy.status !== "running") {
       await execFileAsync("docker", ["start", legacyTemporalContainerName]);
     }
-    return { id: legacy.id, name: legacyTemporalContainerName, legacy: true, address: config.temporalAddress };
+    return { id: legacy.id, name: legacyTemporalContainerName, legacy: true, address: config.temporalAddress, image: legacy.image };
   }
 
   if (await temporalVolumeExists(legacyTemporalVolumeName)) {
@@ -149,6 +211,7 @@ async function startTemporalContainer(config: ForgeConfig): Promise<TemporalCont
 }
 
 async function migrateLegacyTemporalContainer(config: ForgeConfig, legacy: TemporalContainer): Promise<TemporalContainer> {
+  await ensureTemporalImageAvailable(config.temporalImage);
   const identifiers = runtimeIdentifiers(config.installationId);
   if (await temporalVolumeExists(identifiers.temporalVolumeName)) {
     throw new Error(`Refusing to overwrite existing neutral Temporal volume ${identifiers.temporalVolumeName}; inspect or migrate it explicitly`);
@@ -168,7 +231,7 @@ async function migrateLegacyTemporalContainer(config: ForgeConfig, legacy: Tempo
       `${legacyTemporalVolumeName}:/from:ro`,
       "--volume",
       `${identifiers.temporalVolumeName}:/to`,
-      "temporalio/temporal:latest",
+      config.temporalImage,
       "-c",
       "cp -a /from/. /to/",
     ]);
@@ -234,6 +297,15 @@ async function waitForHealthPage(config: ForgeConfig, timeoutMs = 30_000): Promi
   throw new Error(`Forge API did not become reachable at ${probeAddress}; configured external address is ${config.reachableAddress}`);
 }
 
+async function waitForProcessIdentity(pid: number, attempts = 10, delayMs = 50): Promise<ProcessInspection | undefined> {
+  for (let i = 0; i < attempts; i += 1) {
+    const inspection = await processController.inspect(pid);
+    if (inspection) return inspection;
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  return undefined;
+}
+
 async function spawnForgeProcess(name: string, script: string, config: ForgeConfig, runtimeRoot: string): Promise<{ child: ChildProcess; owned: OwnedProcess }> {
   const tsxCli = new URL("../node_modules/tsx/dist/cli.mjs", import.meta.url);
   const command = process.execPath;
@@ -259,13 +331,23 @@ async function spawnForgeProcess(name: string, script: string, config: ForgeConf
     throw new Error(`Could not start Forge ${name}`);
   }
   await logHandle.close();
+  const identity = await waitForProcessIdentity(child.pid);
+  const startedAt = new Date().toISOString();
+  const startId = randomUUID();
+  const fullCommand = [command, ...args].join(" ");
   return {
     child,
     owned: {
       name,
       pid: child.pid,
-      command: [command, ...args].join(" "),
-      startedAt: new Date().toISOString(),
+      command: fullCommand,
+      startedAt,
+      startId,
+      processGroup: identity?.processGroup ?? child.pid,
+      startTime: identity?.startTime ?? startedAt,
+      executable: identity?.executable ?? command,
+      argv: identity?.argv ?? [command, ...args],
+      ready: false,
     },
   };
 }
@@ -320,16 +402,23 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
         tailscaleServe: { port: config.port, backend: `http://${config.bindAddress}:${config.port}` },
       } : {}),
     };
+    await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
     const worker = await spawnForgeProcess("worker", "src/worker.ts", runtimeConfig, config.runtimeRoot);
     registry.processes.push(worker.owned);
+    await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
     const server = await spawnForgeProcess("server", "src/server.ts", runtimeConfig, config.runtimeRoot);
     registry.processes.push(server.owned);
+    await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
     if (config.tailscaleExposure === "serve") {
       await configureTailscaleServe(config);
       await verifyTailscaleServe(config);
+      await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
+    }
+    await waitForHealthPage(config);
+    for (const process of registry.processes) {
+      process.ready = true;
     }
     await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
-    await waitForHealthPage(config);
     if (foreground) {
       await new Promise<void>((resolve) => {
         const shutdown = (): void => resolve();

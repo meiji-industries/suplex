@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { UnsafeBindingError, loadConfig } from "../src/config.js";
+import { UnsafeBindingError, UnsupportedRuntimeError, loadConfig } from "../src/config.js";
 
 const baseEnvironment = {
   FORGE_TAILSCALE_ADDRESS: "forge.tailnet.ts.net",
@@ -59,4 +59,20 @@ test("rejects a non-Tailscale access mode", () => {
 
 test("refuses legacy durable runtime names instead of silently migrating them", () => {
   expect(() => loadConfig({ ...baseEnvironment, FORGE_TEMPORAL_NAMESPACE: "forge", FORGE_TASK_QUEUE: "forge" })).toThrow(UnsafeBindingError);
+});
+
+test("pins the Temporal server image to an explicit versioned release", () => {
+  const config = loadConfig(baseEnvironment);
+  expect(config.temporalImage).not.toContain(":latest");
+  expect(config.temporalImage).toMatch(/^[^\s]+\/[^:]+:[^:@\s]+(@sha256:[a-f0-9]{64})?$/);
+});
+
+test("rejects an unsupported Node major before loading configuration", () => {
+  const original = process.versions.node;
+  Object.defineProperty(process.versions, "node", { value: "26.7.0", configurable: true });
+  try {
+    expect(() => loadConfig(baseEnvironment)).toThrow(UnsupportedRuntimeError);
+  } finally {
+    Object.defineProperty(process.versions, "node", { value: original, configurable: true });
+  }
 });

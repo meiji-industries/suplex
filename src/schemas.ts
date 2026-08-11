@@ -20,6 +20,7 @@ export const ForgeEnvironmentSchema = z.object({
   FORGE_LEGACY_RUNTIME: z.literal("1").optional(),
   FORGE_TEMPORAL_ADDRESS: z.string().regex(/^[^:\s]+:\d+$/).optional(),
   FORGE_TEMPORAL_NAMESPACE: z.string().min(1).optional(),
+  FORGE_TEMPORAL_IMAGE: z.string().min(1).optional(),
   FORGE_TASK_QUEUE: z.string().min(1).optional(),
   FORGE_DELIVERY_REPAIR_LIMIT: z.string().regex(/^\d+$/).optional(),
   FORGE_CODEX_CAPACITY: z.string().regex(/^\d+$/).optional(),
@@ -39,6 +40,7 @@ export const ForgeConfigSchema = z.object({
   worktreeRoot: z.string().min(1),
   temporalAddress: z.string().regex(/^[^:\s]+:\d+$/),
   temporalNamespace: z.string().min(1),
+  temporalImage: z.string().regex(/^[^:]+\/[^:]+(:[^:]+)?(@sha256:[a-f0-9]{64})?$/),
   taskQueue: z.string().min(1),
   deliveryRepairCycleLimit: z.number().int().min(0).max(5),
   externalTurnCapacity: z.number().int().min(1).max(64),
@@ -50,6 +52,12 @@ export const OwnedProcessSchema = z.object({
   pid: z.number().int().positive(),
   command: z.string().min(1),
   startedAt: z.string().min(1),
+  processGroup: z.number().int().positive().optional(),
+  startTime: z.string().min(1).optional(),
+  startId: z.string().min(1).optional(),
+  executable: z.string().min(1).optional(),
+  argv: z.array(z.string()).optional(),
+  ready: z.boolean().optional(),
 });
 
 export const TemporalContainerSchema = z.object({
@@ -57,6 +65,7 @@ export const TemporalContainerSchema = z.object({
   name: z.string().min(1),
   legacy: z.boolean().optional(),
   address: z.string().regex(/^[^:\s]+:\d+$/).optional(),
+  image: z.string().min(1).optional(),
 });
 
 export const TailscaleServeSchema = z.object({
@@ -86,6 +95,7 @@ export const TailscaleServeStatusSchema = z.object({
 
 export const DockerContainerInspectionSchema = z.object({
   Id: z.string().min(1),
+  Image: z.string().min(1).optional(),
   Config: z.object({
     Cmd: z.array(z.string()).optional(),
     Labels: z.record(z.string(), z.string()).optional(),

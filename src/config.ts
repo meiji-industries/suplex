@@ -23,6 +23,7 @@ export interface ForgeConfig {
   worktreeRoot: string;
   temporalAddress: string;
   temporalNamespace: string;
+  temporalImage: string;
   taskQueue: string;
   deliveryRepairCycleLimit: number;
   externalTurnCapacity: number;
@@ -33,6 +34,29 @@ export class UnsafeBindingError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "UnsafeBindingError";
+  }
+}
+
+export class UnsupportedRuntimeError extends Error {
+  constructor(supportedMajor: number, foundVersion: string) {
+    super(`Forge requires Node.js ${supportedMajor} LTS; found ${foundVersion}`);
+    this.name = "UnsupportedRuntimeError";
+  }
+}
+
+export class TemporalInfrastructureError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TemporalInfrastructureError";
+  }
+}
+
+const SUPPORTED_NODE_MAJOR = 22;
+
+function assertSupportedNodeRuntime(): void {
+  const major = Number(process.versions.node.split(".")[0]);
+  if (major !== SUPPORTED_NODE_MAJOR) {
+    throw new UnsupportedRuntimeError(SUPPORTED_NODE_MAJOR, process.versions.node);
   }
 }
 
@@ -113,6 +137,7 @@ function installationId(dataRoot: string, environment: { FORGE_INSTALLATION_ID?:
 }
 
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeConfig {
+  assertSupportedNodeRuntime();
   const environmentFile = environment.FORGE_ENV_FILE ?? (environment === process.env ? ".forge/forge.env" : undefined);
   const fileEnvironment = environmentFile ? readEnvironmentFile(environmentFile) : {};
   const configuredEnvironment: NodeJS.ProcessEnv = { ...fileEnvironment, ...environment };
@@ -153,6 +178,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
   const identifiers = runtimeIdentifiers(stableInstallationId);
   const temporalNamespace = parsedEnvironment.data.FORGE_TEMPORAL_NAMESPACE ?? identifiers.namespace;
   const taskQueue = parsedEnvironment.data.FORGE_TASK_QUEUE ?? identifiers.taskQueue;
+  const temporalImage = parsedEnvironment.data.FORGE_TEMPORAL_IMAGE ?? "temporalio/temporal:1.8.2@sha256:cf86707827fac99e4d1c4a47dc11b105382d796199c7bd41fb3213fb0471628e";
   const deliveryRepairCycleLimit = Number(parsedEnvironment.data.FORGE_DELIVERY_REPAIR_LIMIT ?? "2");
   const externalTurnCapacity = Number(parsedEnvironment.data.FORGE_CODEX_CAPACITY ?? "2");
   if ((isLegacyDurableIdentifier(temporalNamespace) || isLegacyDurableIdentifier(taskQueue)) && parsedEnvironment.data.FORGE_LEGACY_RUNTIME !== "1") {
@@ -172,6 +198,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
     worktreeRoot: resolve(parsedEnvironment.data.FORGE_WORKTREE_ROOT ?? resolve(dataRoot, "worktrees")),
     temporalAddress: parsedEnvironment.data.FORGE_TEMPORAL_ADDRESS ?? "127.0.0.1:7233",
     temporalNamespace,
+    temporalImage,
     taskQueue,
     deliveryRepairCycleLimit,
     externalTurnCapacity,
@@ -197,6 +224,7 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     worktreeRoot: overrides.worktreeRoot ?? resolve(dataRoot, "worktrees"),
     temporalAddress: overrides.temporalAddress ?? "127.0.0.1:7233",
     temporalNamespace: overrides.temporalNamespace ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").namespace,
+    temporalImage: overrides.temporalImage ?? "temporalio/temporal:1.8.2@sha256:cf86707827fac99e4d1c4a47dc11b105382d796199c7bd41fb3213fb0471628e",
     taskQueue: overrides.taskQueue ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").taskQueue,
     deliveryRepairCycleLimit: overrides.deliveryRepairCycleLimit ?? 2,
     externalTurnCapacity: overrides.externalTurnCapacity ?? 2,

@@ -93,7 +93,7 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     await execFileAsync("docker", [
       "run", "--detach", "--name", containerName,
       "--publish", "127.0.0.1::7233",
-      "temporalio/temporal:latest", "server", "start-dev", "--ip", "0.0.0.0", "--namespace", config.temporalNamespace,
+      config.temporalImage, "server", "start-dev", "--ip", "0.0.0.0", "--namespace", config.temporalNamespace,
     ]);
     config = createTestConfig(root, {
       taskQueue: config.taskQueue,

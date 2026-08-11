@@ -2,7 +2,7 @@
 
 Forge is a local-first, Tailscale-only software-delivery control plane.
 
-The health surface uses a source-owned shadcn/Rhea-style component layer with Base UI primitives, Tailwind v4 design tokens, and a dense Linear-inspired operations layout.
+The health surface uses a source-owned shadcn/Rhea-style component layer with Base UI primitives, Tailwind v4 design tokens, and a dense desktop application layout inspired by Linear and Paperclip.
 
 ## Start Forge locally
 

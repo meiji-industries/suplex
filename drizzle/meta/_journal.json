@@ -85,6 +85,20 @@
       "when": 1786426600000,
       "tag": "0011_capacity_status_index",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786426700000,
+      "tag": "0012_delivery_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786426800000,
+      "tag": "0013_merge_conflict_resolution",
+      "breakpoints": true
     }
   ]
 }

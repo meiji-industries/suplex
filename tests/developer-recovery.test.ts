@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { ForgeDatabase } from "../src/database.js";
-import { cancelDeveloperExecution, reconcileDeveloperExecutions, type DeveloperProcessController, type DeveloperProcessInspection } from "../src/developer-recovery.js";
+import { cancelDeveloperExecution, reconcileDeveloperExecutions, reconcileRestoredDeveloperExecutions, type DeveloperProcessController, type DeveloperProcessInspection } from "../src/developer-recovery.js";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "forge-developer-recovery-test-"));
@@ -67,5 +67,16 @@ test("PID reuse or command ownership mismatch blocks cancellation, while a verif
     expect(calls).toEqual([[126, "SIGTERM"]]);
     expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions WHERE id = 'developer_owned'").get())).toEqual({ status: "cancelled" });
     expect(value.database.authQuery((db) => db.prepare("SELECT phase, allowed_commands_json FROM forge_issue_projections WHERE task_id = 'task_1'").get())).toMatchObject({ phase: "delivery_blocked", allowed_commands_json: '["retry_development"]' });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("restore invalidates source-host process ownership without starting a duplicate turn", async () => {
+  const value = await fixture();
+  try {
+    execution(value.database, "developer_restored", 127);
+    const report = reconcileRestoredDeveloperExecutions(value.database);
+    expect(report).toEqual([{ executionId: "developer_restored", status: "interrupted", reason: "restore-invalidated-process-ownership" }]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = 'developer_restored'").get())).toEqual({ status: "interrupted", failure_code: "restore-process-invalidated" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT phase, allowed_commands_json, pending_action FROM forge_issue_projections WHERE task_id = 'task_1'").get())).toMatchObject({ phase: "development", allowed_commands_json: '["retry_development","cancel_development","cancel_issue"]', pending_action: "Developer turn interrupted during restore" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

@@ -27,6 +27,7 @@ export interface AcceptanceInput {
   headTree: string;
   actorUserId: string;
   decision?: AcceptanceDecision;
+  finalReviewId?: string;
 }
 
 export interface AcceptanceResult {
@@ -41,20 +42,30 @@ export class AcceptanceService {
   async accept(input: AcceptanceInput): Promise<AcceptanceResult> {
     const release = this.database.authQuery((db) => db.prepare("SELECT id, repository, base_branch, base_sha, head_sha, head_tree, pr_number, pr_url FROM forge_releases WHERE id = ? AND task_id = ? AND company_id = ?").get(input.releaseId, input.taskId, input.companyId) as { id: string; repository: string; base_branch: string; base_sha: string; head_sha: string; head_tree: string; pr_number: number | null; pr_url: string | null } | undefined);
     const review = this.database.authQuery((db) => db.prepare("SELECT id, outcome, subject_commit, subject_tree, base_sha FROM forge_delivery_reviews WHERE id = ? AND task_id = ? AND company_id = ?").get(input.reviewId, input.taskId, input.companyId) as { id: string; outcome: string; subject_commit: string; subject_tree: string; base_sha: string } | undefined);
+    const finalReview = input.finalReviewId ? this.database.authQuery((db) => db.prepare("SELECT id, outcome, subject_commit, subject_tree, base_sha FROM forge_final_reviews WHERE id = ? AND task_id = ? AND company_id = ? AND release_id = ? AND ci_run_id = ?").get(input.finalReviewId, input.taskId, input.companyId, input.releaseId, input.ciRunId) as { id: string; outcome: string; subject_commit: string; subject_tree: string; base_sha: string } | undefined) : undefined;
     const ci = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_ci_runs WHERE id = ? AND task_id = ? AND company_id = ? AND release_id = ?").get(input.ciRunId, input.taskId, input.companyId, input.releaseId) as { status: string } | undefined);
-    if (!release || !review || review.outcome !== "approved" || review.subject_commit !== input.headSha || review.subject_tree !== input.headTree || !ci || release.repository !== input.repository || release.base_branch !== input.baseBranch || release.head_sha !== input.headSha || release.head_tree !== input.headTree || review.base_sha !== release.base_sha || ci.status !== "passed" || release.pr_number === null) throw new AcceptanceFailure("not-ready");
+    if (!release || !review || review.outcome !== "approved" || review.subject_commit !== input.headSha || review.subject_tree !== input.headTree || (input.finalReviewId && (!finalReview || finalReview.outcome !== "approved" || finalReview.subject_commit !== input.headSha || finalReview.subject_tree !== input.headTree || finalReview.base_sha !== release.base_sha)) || !ci || release.repository !== input.repository || release.base_branch !== input.baseBranch || release.head_sha !== input.headSha || release.head_tree !== input.headTree || review.base_sha !== release.base_sha || ci.status !== "passed" || release.pr_number === null) throw new AcceptanceFailure("not-ready");
+    const decision = input.decision ?? "accept";
     const current = await this.currentPr(input.repository, release.pr_number);
     if (current.headSha.toLowerCase() !== input.headSha.toLowerCase() || current.baseBranch !== input.baseBranch) throw new AcceptanceFailure("stale");
+    if (this.github.getBranchHead) {
+      const baseHead = await this.github.getBranchHead({ repository: input.repository, branch: input.baseBranch });
+      if (baseHead.toLowerCase() !== release.base_sha.toLowerCase()) throw new AcceptanceFailure("stale");
+    }
     if (!current.isDraft) throw new AcceptanceFailure("stale");
+    const existingAcceptance = this.database.authQuery((db) => db.prepare("SELECT id, status FROM forge_acceptances WHERE task_id = ? AND release_id = ? AND head_sha = ? AND decision = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.releaseId, input.headSha, decision) as { id: string; status: "accepted" | "requested_changes" | "cancelled" } | undefined);
+    if (existingAcceptance) return { acceptanceId: existingAcceptance.id, status: existingAcceptance.status, pullRequest: current };
     const acceptanceId = id();
     const now = new Date().toISOString();
-    const decision = input.decision ?? "accept";
     if (decision === "accept") {
       if (!this.github.markReadyForReview) throw new AcceptanceFailure("provider");
       await this.github.markReadyForReview({ repository: input.repository, number: current.number });
     }
     const status = decision === "accept" ? "accepted" : decision === "request_changes" ? "requested_changes" : "cancelled";
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_acceptances (id, task_id, company_id, release_id, review_id, ci_run_id, repository, base_branch, head_sha, head_tree, actor_user_id, decision, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(acceptanceId, input.taskId, input.companyId, input.releaseId, input.reviewId, input.ciRunId, input.repository, input.baseBranch, input.headSha, input.headTree, input.actorUserId, decision, status, now, now));
+    this.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_acceptances (id, task_id, company_id, release_id, review_id, final_review_id, ci_run_id, repository, base_branch, head_sha, head_tree, actor_user_id, decision, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(acceptanceId, input.taskId, input.companyId, input.releaseId, input.reviewId, input.finalReviewId ?? null, input.ciRunId, input.repository, input.baseBranch, input.headSha, input.headTree, input.actorUserId, decision, status, now, now);
+      db.prepare("INSERT INTO forge_provider_operations (id, operation_key, task_id, company_id, kind, status, result_json, created_at, updated_at) VALUES (?, ?, ?, ?, 'acceptance', 'completed', ?, ?, ?) ON CONFLICT(operation_key) DO UPDATE SET status = 'completed', result_json = excluded.result_json, updated_at = excluded.updated_at").run(`provider_${randomBytes(12).toString("hex")}`, `${input.taskId}:acceptance:${input.releaseId}:${input.headSha}:${decision}`, input.taskId, input.companyId, JSON.stringify({ acceptanceId, decision, headSha: input.headSha }), now, now);
+    });
     return { acceptanceId, status, pullRequest: decision === "accept" ? { ...current, isDraft: false } : current };
   }
 

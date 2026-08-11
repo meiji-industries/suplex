@@ -7,30 +7,45 @@ import { redact } from "../logging.js";
 import { AgentService } from "../codex-lead.js";
 import { DeveloperService } from "../codex-developer.js";
 import { cancelDeveloperExecution } from "../developer-recovery.js";
+import { AcceptanceService } from "../acceptance.js";
+import { CiService, createGithubCiProvider } from "../ci.js";
+import { createGithubReleasePort, ReleaseService } from "../github-release.js";
+import { ForwardMergeService } from "../forward-merge.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { DeliveryDecisionActivityInputSchema, IssueWorkflowStateSchema, type IssueActivities, type IssueWorkflowState } from "./issue-contracts.js";
+import { DeliveryDecisionActivityInputSchema, IssueWorkflowStateSchema, type AcceptDeliveryActivityInput, type FinalReviewActivityInput, type IssueActivities, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput } from "./issue-contracts.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
 import { CapacityManager } from "../capacity.js";
 
 export interface ActivityOptions {
-  agent?: Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery">>;
-  developer?: Partial<Pick<DeveloperService, "run" | "runRepair">>;
+  agent?: Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "planMergeConflict">>;
+  developer?: Partial<Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution">>;
+  githubRelease?: GithubReleasePort;
+}
+
+export class CapacityWaitError extends Error {
+  constructor(readonly requestId: string, readonly position: number) {
+    super(`Forge capacity is unavailable; retry request ${requestId} at queue position ${position}`);
+    this.name = "CapacityWaitError";
+  }
 }
 
 export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): ProbeActivities & IssueActivities {
   const logger = new StructuredLogger();
   const defaultAgent = new AgentService(database, config);
   const defaultDeveloper = new DeveloperService(database, config);
+  const githubRelease = options.githubRelease ?? createGithubReleasePort();
+  const release = new ReleaseService(database, new ArtifactStore(config.artifactRoot), githubRelease);
+  const ci = new CiService(database, createGithubCiProvider(), new ArtifactStore(config.artifactRoot));
+  const acceptance = new AcceptanceService(database, githubRelease);
+  const forwardMerge = new ForwardMergeService(database);
   const capacity = new CapacityManager(database, config);
+  capacity.reconcileFromLedgers();
   const agent = options.agent;
   const developer = options.developer ?? defaultDeveloper;
   const withCapacity = async <T>(input: { taskId: string; companyId: string; workflowId: string }, turnKind: "lead" | "developer" | "review", operation: () => Promise<T>): Promise<T> => {
     const request = capacity.request({ ...input, turnKind });
-    let admitted = capacity.tryAcquire(request.id);
-    while (!admitted.acquired) {
-      await new Promise((resolve) => setTimeout(resolve, 500));
-      admitted = capacity.tryAcquire(request.id);
-    }
+    const admitted = capacity.tryAcquire(request.id);
+    if (!admitted.acquired) throw new CapacityWaitError(request.id, capacity.position(request.id) ?? 1);
     try { return await operation(); } finally { capacity.release(request.id, "turn-completed"); }
   };
   return {
@@ -63,6 +78,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         allowedCommands: state.allowedCommands,
         pendingAction: state.pendingAction,
         lastEventId: state.lastEventId,
+        state,
         ...(state.planRevision !== undefined ? { planRevision: state.planRevision } : {}),
         ...(state.planMaterial !== undefined ? { planMaterial: state.planMaterial } : {}),
         ...(state.materialCategories !== undefined ? { materialCategories: state.materialCategories } : {}),
@@ -103,6 +119,65 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     },
     async reviewDelivery(input) {
       return withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(input));
+    },
+    async publishRelease(input: PublishReleaseActivityInput) {
+      const context = database.authQuery((db) => db.prepare(`SELECT p.repository_path AS repositoryPath, p.repository_identity AS repository, p.base_branch AS baseBranch, d.worktree_path AS worktreePath, d.branch_name AS branchName, d.target_base_sha AS targetBaseSha, d.result_commit AS subjectCommit, d.result_tree AS subjectTree, r.summary AS deliverySummary, t.title
+        FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id
+        JOIN forge_developer_executions d ON d.id = ?
+        JOIN forge_delivery_reviews r ON r.id = ? AND r.task_id = t.id AND r.company_id = t.company_id AND r.workflow_id = t.workflow_id
+      WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(input.developerExecutionId, input.reviewId, input.taskId, input.companyId, input.workflowId) as { repositoryPath: string; repository: string | null; baseBranch: string; worktreePath: string; branchName: string; targetBaseSha: string; subjectCommit: string; subjectTree: string; deliverySummary: string; title: string } | undefined);
+      if (!context?.repository || !context.repositoryPath) throw new Error("Release context is unavailable");
+      if (githubRelease.getBranchHead) {
+        const currentBaseSha = await githubRelease.getBranchHead({ repository: context.repository, branch: context.baseBranch });
+        const expectedBaseSha = input.targetBaseSha || context.targetBaseSha;
+        if (currentBaseSha.toLowerCase() !== expectedBaseSha.toLowerCase()) {
+          const merged = await forwardMerge.reconcile({ worktreePath: context.worktreePath, repositoryPath: context.repositoryPath, branchName: input.branchName || context.branchName, expectedBaseSha, currentBaseSha, taskId: input.taskId, companyId: input.companyId });
+          if (merged.status === "conflict") {
+            return { releaseId: "", repository: context.repository, branchName: input.branchName || context.branchName, headSha: context.subjectCommit, headTree: context.subjectTree, pullRequestNumber: 0, pullRequestUrl: "", isDraft: false, reused: false, baseDriftConflict: true, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), priorHead: merged.priorHead, conflictFiles: merged.conflictFiles, ...(merged.conflictDiff !== undefined ? { conflictDiff: merged.conflictDiff } : {}), targetBaseSha: currentBaseSha };
+          }
+          const headSha = merged.mergeCommit ?? context.subjectCommit;
+          const headTree = merged.tree ?? context.subjectTree;
+          return { releaseId: "", repository: context.repository, branchName: input.branchName || context.branchName, headSha, headTree, pullRequestNumber: 0, pullRequestUrl: "", isDraft: false, reused: false, baseDriftMerged: true, targetBaseSha: currentBaseSha };
+        }
+      }
+      const result = await release.publish({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, repositoryPath: context.worktreePath, repository: context.repository, branchName: input.branchName || context.branchName, baseBranch: context.baseBranch, targetBaseSha: input.targetBaseSha || context.targetBaseSha, subjectCommit: input.subjectCommit || context.subjectCommit, subjectTree: input.subjectTree || context.subjectTree, reviewId: input.reviewId, planSummary: input.planSummary || context.title, deliverySummary: input.deliverySummary || context.deliverySummary, verificationSummary: input.verificationSummary });
+      return { releaseId: result.releaseId, repository: result.repository, branchName: result.branchName, headSha: result.headSha, headTree: result.headTree, pullRequestNumber: result.pullRequest.number, pullRequestUrl: result.pullRequest.url, isDraft: result.pullRequest.isDraft, reused: result.reused };
+    },
+    async reconcileCi(input: ReconcileCiActivityInput) {
+      const context = database.authQuery((db) => db.prepare("SELECT p.repository_identity AS repository, p.required_checks_json AS requiredChecks FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id WHERE t.id = ? AND t.company_id = ?").get(input.taskId, input.companyId) as { repository: string | null; requiredChecks: string } | undefined);
+      if (!context?.repository) throw new Error("CI repository context is unavailable");
+      const result = await ci.reconcile({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, repository: context.repository, expectedHeadSha: input.expectedHeadSha, requiredChecks: JSON.parse(context.requiredChecks) as string[], ...(input.attempt !== undefined ? { attempt: input.attempt } : {}) });
+      return { runId: result.runId, outcome: result.outcome, summary: result.summary, nextPollAt: result.nextPollAt };
+    },
+    async finalReview(input: FinalReviewActivityInput) {
+      const context = database.authQuery((db) => db.prepare("SELECT p.repository_identity AS repository, p.base_branch AS baseBranch FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id WHERE t.id = ? AND t.company_id = ?").get(input.taskId, input.companyId) as { repository: string | null; baseBranch: string } | undefined);
+      if (context?.repository && githubRelease.getBranchHead) {
+        const currentBaseSha = await githubRelease.getBranchHead({ repository: context.repository, branch: context.baseBranch });
+        if (currentBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new Error("Target base has drifted since CI completed; a fresh forward merge and review are required");
+      }
+      const review = await withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))({ ...input, reviewKind: "final" }));
+      return { finalReviewId: review.reviewId, leadExecutionId: review.leadExecutionId, leadSessionRef: review.leadSessionRef, opinionArtifactId: review.opinionArtifactId, evidenceArtifactId: review.evidenceArtifactId, outcome: review.outcome, summary: review.summary, findings: review.findings };
+    },
+    async acceptDelivery(input: AcceptDeliveryActivityInput & { decision?: "accept" | "request_changes" | "cancel" }) {
+      const context = database.authQuery((db) => db.prepare(`SELECT p.repository_identity AS repository, p.base_branch AS baseBranch, r.id AS reviewId, r.subject_commit AS subjectCommit, r.subject_tree AS subjectTree, rel.pr_number AS pullRequestNumber
+        FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id JOIN forge_delivery_reviews r ON r.task_id = t.id AND r.company_id = t.company_id AND r.workflow_id = t.workflow_id AND r.outcome = 'approved'
+        JOIN forge_releases rel ON rel.id = ? AND rel.task_id = t.id AND rel.company_id = t.company_id
+        WHERE t.id = ? AND t.company_id = ? ORDER BY r.created_at DESC LIMIT 1`).get(input.releaseId, input.taskId, input.companyId) as { repository: string | null; baseBranch: string; reviewId: string; subjectCommit: string; subjectTree: string; pullRequestNumber: number | null } | undefined);
+      if (!context?.repository || context.pullRequestNumber === null) throw new Error("Acceptance context is unavailable");
+      const result = await acceptance.accept({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, reviewId: context.reviewId, ...(input.finalReviewId ? { finalReviewId: input.finalReviewId } : {}), ciRunId: input.ciRunId, repository: context.repository, baseBranch: context.baseBranch, headSha: input.expectedHeadSha || context.subjectCommit, headTree: input.expectedHeadTree || context.subjectTree, actorUserId: input.actorUserId, ...(input.decision ? { decision: input.decision } : {}) });
+      return { acceptanceId: result.acceptanceId, status: result.status, pullRequestNumber: result.pullRequest.number, pullRequestUrl: result.pullRequest.url };
+    },
+    async reconcileMerge(input: ReconcileMergeActivityInput) {
+      const context = database.authQuery((db) => db.prepare("SELECT p.repository_identity AS repository, p.base_branch AS baseBranch, r.pr_number AS pullRequestNumber FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id JOIN forge_releases r ON r.id = ? AND r.task_id = t.id AND r.company_id = t.company_id WHERE t.id = ? AND t.company_id = ?").get(input.releaseId, input.taskId, input.companyId) as { repository: string | null; baseBranch: string; pullRequestNumber: number | null } | undefined);
+      if (!context?.repository || context.pullRequestNumber === null) throw new Error("Merge reconciliation context is unavailable");
+      const result = await acceptance.reconcile({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, repository: context.repository, number: context.pullRequestNumber, expectedHeadSha: input.expectedHeadSha, expectedBaseBranch: context.baseBranch });
+      return { outcome: result.outcome, pullRequestNumber: result.pullRequest?.number ?? context.pullRequestNumber, pullRequestUrl: result.pullRequest?.url ?? "" };
+    },
+    async planMergeConflict(input: MergeConflictPlanActivityInput) {
+      return withCapacity(input, "lead", () => (agent?.planMergeConflict ?? defaultAgent.planMergeConflict.bind(defaultAgent))(input));
+    },
+    async resolveMergeConflict(input: MergeConflictResolutionActivityInput) {
+      return withCapacity(input, "developer", () => (developer?.runMergeConflictResolution ?? defaultDeveloper.runMergeConflictResolution.bind(defaultDeveloper))(input));
     },
     async runDeveloperExecution(input) {
       return withCapacity(input, "developer", () => (developer.run ?? defaultDeveloper.run.bind(defaultDeveloper))(input));

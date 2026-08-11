@@ -8,8 +8,10 @@ export type AttentionCategory =
   | "agent_contradiction"
   | "unsafe_recovery"
   | "provider_ambiguity"
+  | "provider_authentication"
   | "verification_blocked"
-  | "target_drift";
+  | "target_drift"
+  | "capacity_exhausted";
 
 export interface AttentionItem {
   id: string;
@@ -87,9 +89,16 @@ function candidateFor(database: ForgeDatabase, row: ProjectionRow): AttentionCan
     return { taskId: row.task_id, category: "agent_contradiction", summary: "The exact delivery review found blocking work that the agent has not resolved.", action: "Inspect the bounded findings and repair only the reviewed revision.", evidenceRef: `review-cycle-${review.repair_cycle}` };
   }
 
+  if (row.phase === "merge_conflict_required") {
+    return { taskId: row.task_id, category: "target_drift", summary: "Target-base drift produced a forward-merge conflict that requires the Lead plan and Developer resolution.", action: "Review the recorded conflict plan and resolve the merge in the owned issue worktree." };
+  }
+
   const release = database.authQuery((db) => db.prepare("SELECT status FROM forge_releases WHERE task_id = ? ORDER BY updated_at DESC LIMIT 1").get(row.task_id) as { status: string } | undefined);
   if (release?.status === "ambiguous" || release?.status === "provider_unavailable") {
     return { taskId: row.task_id, category: "provider_ambiguity", summary: "GitHub release state needs operator reconciliation.", action: "Inspect the existing branch and pull requests before retrying provider mutation." };
+  }
+  if (release?.status === "authentication") {
+    return { taskId: row.task_id, category: "provider_authentication", summary: "GitHub authentication is unavailable for this release.", action: "Re-authenticate the host GitHub CLI, then retry the Workflow update." };
   }
 
   const ci = database.authQuery((db) => db.prepare("SELECT status, summary FROM forge_ci_runs WHERE task_id = ? ORDER BY updated_at DESC LIMIT 1").get(row.task_id) as { status: string; summary: string } | undefined);
@@ -99,11 +108,21 @@ function candidateFor(database: ForgeDatabase, row: ProjectionRow): AttentionCan
   if (ci?.status === "stale_head") {
     return { taskId: row.task_id, category: "target_drift", summary: "Verification observed a different commit than the reviewed release.", action: "Reconcile the target branch by a guarded forward merge before rerunning verification." };
   }
+  const queuedCapacity = database.authQuery((db) => db.prepare("SELECT requested_at FROM forge_capacity_requests WHERE task_id = ? AND status = 'queued' ORDER BY requested_at LIMIT 1").get(row.task_id) as { requested_at: string } | undefined);
+  if (queuedCapacity && Date.now() - Date.parse(queuedCapacity.requested_at) > 5 * 60_000) {
+    return { taskId: row.task_id, category: "capacity_exhausted", summary: "The issue has waited for an external turn longer than the operator threshold.", action: "Review active external turns and capacity before retrying." };
+  }
   return undefined;
 }
 
 export class AttentionService {
   constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService) {}
+
+  rebuildAll(): number {
+    const companies = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_companies").all() as Array<{ id: string }>);
+    for (const company of companies) this.rebuild(company.id);
+    return companies.length;
+  }
 
   rebuild(companyId: string): void {
     this.database.authTransaction((db) => {
@@ -137,14 +156,14 @@ export class AttentionService {
       return this.database.authQuery((db) => {
         const rows = db.prepare(`SELECT ip.task_id, t.title AS task_title, ip.company_id, ip.phase, ip.allowed_commands_json, ip.updated_at
           FROM forge_issue_projections ip JOIN forge_tasks t ON t.id = ip.task_id WHERE ip.company_id = ? ORDER BY ip.updated_at, ip.task_id`).all(company.id) as ProjectionRow[];
-        const activePhases = new Set(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required"]);
+        const activePhases = new Set(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_required", "final_review", "accepted", "manual_merge"]);
         const phases: Record<string, number> = {};
         for (const row of rows) if (activePhases.has(row.phase)) phases[row.phase] = (phases[row.phase] ?? 0) + 1;
         const attentionRows = db.prepare(`SELECT ai.id, ai.company_id, ai.task_id, t.title AS task_title, ai.category, ai.summary, ai.action, ai.evidence_ref, ai.updated_at
           FROM forge_attention_items ai JOIN forge_tasks t ON t.id = ai.task_id WHERE ai.company_id = ? AND ai.active = 1
-          ORDER BY ai.updated_at, ai.id`).all(company.id) as Array<{ id: string; company_id: string; task_id: string; task_title: string; category: AttentionCategory; summary: string; action: string; evidence_ref: string | null; updated_at: string }>;
+          ORDER BY CASE ai.category WHEN 'member_decision' THEN 0 WHEN 'agent_contradiction' THEN 1 WHEN 'unsafe_recovery' THEN 2 WHEN 'provider_authentication' THEN 3 WHEN 'provider_ambiguity' THEN 4 WHEN 'verification_blocked' THEN 5 WHEN 'target_drift' THEN 6 WHEN 'capacity_exhausted' THEN 7 ELSE 8 END, ai.updated_at DESC, ai.id`).all(company.id) as Array<{ id: string; company_id: string; task_id: string; task_title: string; category: AttentionCategory; summary: string; action: string; evidence_ref: string | null; updated_at: string }>;
         const terminalRows = db.prepare(`SELECT t.id AS task_id, t.title AS task_title, ip.phase, ip.updated_at FROM forge_tasks t JOIN forge_issue_projections ip ON ip.task_id = t.id
-          WHERE t.company_id = ? AND ip.phase IN ('delivery_reviewed', 'delivery_blocked') ORDER BY ip.updated_at DESC, t.id DESC LIMIT 5`).all(company.id) as RecentOutcome[];
+          WHERE t.company_id = ? AND ip.phase IN ('accepted', 'manual_merge', 'done', 'cancelled', 'failed', 'delivery_blocked') ORDER BY ip.updated_at DESC, t.id DESC LIMIT 5`).all(company.id) as RecentOutcome[];
         return {
           companyId: company.id,
           companyName: company.name,

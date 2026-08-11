@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 
 import type { ForgeDatabase } from "./database.js";
@@ -13,6 +13,8 @@ export interface ForwardMergeResult {
   mergeCommit: string | null;
   tree: string | null;
   conflictFiles: string[];
+  conflictDiff?: string;
+  forwardMergeId?: string;
 }
 
 export class ForwardMergeFailure extends Error {
@@ -28,8 +30,9 @@ export class ForwardMergeService {
   async reconcile(input: { worktreePath: string; expectedBaseSha: string; currentBaseSha: string; branchName: string; repositoryPath: string; taskId?: string; companyId?: string }): Promise<ForwardMergeResult> {
     if (input.expectedBaseSha.toLowerCase() === input.currentBaseSha.toLowerCase()) {
       const head = await this.git(["rev-parse", "HEAD"], input.worktreePath);
-      const result = { status: "no_drift" as const, priorHead: head, targetBaseSha: input.currentBaseSha, mergeCommit: null, tree: null, conflictFiles: [] };
-      this.record(input, result);
+      const result: ForwardMergeResult = { status: "no_drift", priorHead: head, targetBaseSha: input.currentBaseSha, mergeCommit: null, tree: null, conflictFiles: [] };
+      const forwardMergeId = this.record(input, result);
+      if (forwardMergeId) result.forwardMergeId = forwardMergeId;
       return result;
     }
     const priorHead = await this.git(["rev-parse", "HEAD"], input.worktreePath);
@@ -43,13 +46,18 @@ export class ForwardMergeService {
       await this.git(["merge", "--no-ff", "--no-edit", input.currentBaseSha], input.worktreePath);
     } catch {
       const conflicts = (await this.gitOptional(["diff", "--name-only", "--diff-filter=U"], input.worktreePath))?.split(/\r?\n/).filter(Boolean) ?? [];
-      this.record(input, { status: "conflict", priorHead, targetBaseSha: input.currentBaseSha, mergeCommit: null, tree: null, conflictFiles: conflicts });
-      throw new ForwardMergeFailure(conflicts.length ? "conflict" : "git");
+      if (!conflicts.length) throw new ForwardMergeFailure("git");
+      const conflictDiff = (await this.gitOptional(["diff", "--cc", "--no-ext-diff"], input.worktreePath) ?? "").slice(0, 80_000);
+      const result: ForwardMergeResult = { status: "conflict", priorHead, targetBaseSha: input.currentBaseSha, mergeCommit: null, tree: null, conflictFiles: conflicts, conflictDiff };
+      const forwardMergeId = this.record(input, result);
+      if (forwardMergeId) result.forwardMergeId = forwardMergeId;
+      return result;
     }
     const mergeCommit = await this.git(["rev-parse", "HEAD"], input.worktreePath);
     const tree = await this.git(["rev-parse", "HEAD^{tree}"], input.worktreePath);
-    const result = { status: "merged" as const, priorHead, targetBaseSha: input.currentBaseSha, mergeCommit, tree, conflictFiles: [] };
-    this.record(input, result);
+    const result: ForwardMergeResult = { status: "merged", priorHead, targetBaseSha: input.currentBaseSha, mergeCommit, tree, conflictFiles: [] };
+    const forwardMergeId = this.record(input, result);
+    if (forwardMergeId) result.forwardMergeId = forwardMergeId;
     return result;
   }
 
@@ -62,8 +70,11 @@ export class ForwardMergeService {
     try { return await this.git(args, cwd); } catch { return undefined; }
   }
 
-  private record(input: { worktreePath: string; expectedBaseSha: string; currentBaseSha: string; branchName: string; repositoryPath: string; taskId?: string; companyId?: string }, result: ForwardMergeResult): void {
-    if (!this.database || !input.taskId || !input.companyId) return;
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(`merge_${randomBytes(12).toString("hex")}`, input.taskId, input.companyId, input.expectedBaseSha, input.currentBaseSha, result.priorHead, result.mergeCommit, result.tree, result.status, JSON.stringify(result.conflictFiles), new Date().toISOString()));
+  private record(input: { worktreePath: string; expectedBaseSha: string; currentBaseSha: string; branchName: string; repositoryPath: string; taskId?: string; companyId?: string }, result: ForwardMergeResult): string | undefined {
+    if (!this.database || !input.taskId || !input.companyId) return undefined;
+    const id = `merge_${createHash("sha256").update(`${input.companyId}:${input.taskId}:${result.status}:${input.expectedBaseSha}:${input.currentBaseSha}:${result.priorHead}:${result.mergeCommit ?? ""}:${result.tree ?? ""}:${JSON.stringify(result.conflictFiles)}`).digest("hex").slice(0, 32)}`;
+    const now = new Date().toISOString();
+    this.database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, input.taskId, input.companyId, input.expectedBaseSha, input.currentBaseSha, result.priorHead, result.mergeCommit, result.tree, result.status, JSON.stringify(result.conflictFiles), now));
+    return id;
   }
 }

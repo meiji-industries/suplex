@@ -8,6 +8,7 @@ import type { AttentionService } from "./attention.js";
 import type { AcceptanceService } from "./acceptance.js";
 import type { CiService } from "./ci.js";
 import type { ReleaseService } from "./github-release.js";
+import type { ForgeDatabase } from "./database.js";
 import type { ForgeConfig } from "./config.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
 import { ProjectFailure, ProjectService, type ProjectInput, type ProjectRole } from "./projects.js";
@@ -41,6 +42,7 @@ export interface AppDependencies {
   release?: ReleaseService;
   ci?: CiService;
   acceptance?: AcceptanceService;
+  database?: ForgeDatabase;
 }
 
 export function createApp(dependencies: AppDependencies): FastifyInstance {
@@ -96,6 +98,12 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
   });
   app.get("/auth", async (_request, reply) => reply.type("text/html; charset=utf-8").send(renderApplicationPage("auth")));
   app.get("/admin", async (request, reply) => {
+    if (auth && !(await sessionUser(request))) {
+      return reply.redirect("/auth");
+    }
+    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("admin"));
+  });
+  app.get("/admin/profiles", async (request, reply) => {
     if (auth && !(await sessionUser(request))) {
       return reply.redirect("/auth");
     }
@@ -543,44 +551,25 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
       if (!user) return reply;
       try { return reply.send({ items: attention.get(user.id, request.params.taskId) }); } catch (error) { return sendAuthError(reply, error); }
     });
+    if (database) app.post("/api/admin/rebuild-projections", async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return reply;
+      if (user.role !== "admin") return reply.code(403).send({ error: "Administrator access required" });
+      const rebuilt = database.rebuildIssueProjections();
+      for (const company of auth.listVisibleCompanies(user.id)) attention.rebuild(company.id);
+      return reply.send({ rebuilt });
+    });
   }
-  if (tasks && projects && auth) {
-    const deliveryError = (reply: { code: (statusCode: number) => { send: (body: object) => unknown } }, error: unknown): unknown => {
-      if (error instanceof AuthFailure) return sendAuthError(reply, error);
-      return reply.code(400).send({ error: error instanceof Error ? error.message : "Delivery request failed" });
+  if (tasks && auth) {
+    const sendWorkflowError = (reply: { code: (statusCode: number) => { send: (body: object) => unknown } }, error: unknown): unknown => reply.code(error instanceof TaskFailure ? error.statusCode : 400).send(error instanceof TaskFailure ? { error: error.publicMessage, findings: error.findings } : { error: "Workflow action failed" });
+    const workflowAction = (action: "publishDraft" | "resolveMergeConflict" | "reconcileCI" | "repairCI" | "acceptDelivery" | "requestDeliveryChanges" | "cancelIssue" | "reconcileMerge") => async (request: { params: { taskId: string }; body: unknown; cookies: Record<string, string | undefined> }, reply: { code: (statusCode: number) => { send: (body: object) => unknown }; send: (body: object) => unknown }): Promise<unknown> => {
+      const user = await requireUser(request, reply);
+      if (!user) return reply;
+      const body = requestBody(request);
+      const expectedRevision = typeof body.expectedRevision === "number" ? body.expectedRevision : Number(body.expectedRevision);
+      try { return reply.send(await tasks[action](user.id, request.params.taskId, expectedRevision, ...(action === "requestDeliveryChanges" ? [typeof body.note === "string" ? body.note : undefined] : [])) as never); } catch (error) { return sendWorkflowError(reply, error); }
     };
-    app.post<{ Params: { taskId: string } }>("/api/tasks/:taskId/publish-draft", async (request, reply) => {
-      const user = await requireUser(request, reply);
-      if (!user || !release) return reply;
-      try {
-        const task = tasks.getTask(user.id, request.params.taskId);
-        const project = projects.getProject(user.id, task.projectId);
-        const body = requestBody(request);
-        const text = (key: string): string => typeof body[key] === "string" ? body[key] as string : "";
-        return reply.send(await release.publish({ taskId: task.id, companyId: task.companyId, workflowId: task.workflowId, repositoryPath: project.repositoryPath, repository: project.repository ?? text("repository"), branchName: text("branchName"), baseBranch: project.baseBranch, targetBaseSha: text("targetBaseSha"), subjectCommit: text("subjectCommit"), subjectTree: text("subjectTree"), reviewId: text("reviewId"), planSummary: text("planSummary"), deliverySummary: text("deliverySummary"), verificationSummary: text("verificationSummary") }));
-      } catch (error) { return deliveryError(reply, error); }
-    });
-    app.post<{ Params: { taskId: string } }>("/api/tasks/:taskId/reconcile-ci", async (request, reply) => {
-      const user = await requireUser(request, reply);
-      if (!user || !ci) return reply;
-      try {
-        const task = tasks.getTask(user.id, request.params.taskId);
-        const project = projects.getProject(user.id, task.projectId);
-        const body = requestBody(request);
-        const requiredChecks = Array.isArray(body.requiredChecks) ? body.requiredChecks.filter((value): value is string => typeof value === "string") : project.requiredChecks;
-        return reply.send(await ci.reconcile({ taskId: task.id, companyId: task.companyId, releaseId: typeof body.releaseId === "string" ? body.releaseId : "", repository: project.repository ?? "", expectedHeadSha: typeof body.expectedHeadSha === "string" ? body.expectedHeadSha : "", requiredChecks }));
-      } catch (error) { return deliveryError(reply, error); }
-    });
-    app.post<{ Params: { taskId: string } }>("/api/tasks/:taskId/accept-delivery", async (request, reply) => {
-      const user = await requireUser(request, reply);
-      if (!user || !acceptance) return reply;
-      try {
-        const task = tasks.getTask(user.id, request.params.taskId);
-        const project = projects.getProject(user.id, task.projectId);
-        const body = requestBody(request);
-        return reply.send(await acceptance.accept({ taskId: task.id, companyId: task.companyId, releaseId: String(body.releaseId ?? ""), reviewId: String(body.reviewId ?? ""), ciRunId: String(body.ciRunId ?? ""), repository: project.repository ?? "", baseBranch: project.baseBranch, headSha: String(body.headSha ?? ""), headTree: String(body.headTree ?? ""), actorUserId: user.id, decision: body.decision === "request_changes" || body.decision === "cancel" ? body.decision : "accept" }));
-      } catch (error) { return deliveryError(reply, error); }
-    });
+    for (const [path, action] of [["publish-draft", "publishDraft"], ["resolve-merge-conflict", "resolveMergeConflict"], ["reconcile-ci", "reconcileCI"], ["repair-ci", "repairCI"], ["accept-delivery", "acceptDelivery"], ["request-delivery-changes", "requestDeliveryChanges"], ["cancel", "cancelIssue"], ["reconcile-merge", "reconcileMerge"]] as const) app.post<{ Params: { taskId: string } }>(`/api/tasks/:taskId/${path}`, workflowAction(action));
   }
   app.get("/assets/forge-ui.js", async (_request, reply) => {
     try {

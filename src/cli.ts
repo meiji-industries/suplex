@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-import { rm } from "node:fs/promises";
+import { join } from "node:path";
+import { rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { loadConfig } from "./config.js";
@@ -9,7 +10,10 @@ import { readProcessRegistry, stopOwnedProcesses } from "./process-manager.js";
 import { startForge } from "./runtime.js";
 import { StructuredLogger } from "./logging.js";
 import { runSetup } from "./setup.js";
-import { BackupService } from "./backup.js";
+import { BackupService, reconcileRestoredState } from "./backup.js";
+import { AttentionService } from "./attention.js";
+import { CapacityManager } from "./capacity.js";
+import { createGithubReleasePort } from "./github-release.js";
 
 const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
 const foreground = process.argv.includes("--foreground");
@@ -28,11 +32,11 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "help") {
-    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|restore|start|stop|restart> [--foreground]\n");
+    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|rebuild-projections|start|stop|restart> [--foreground]\n");
     return;
   }
   const config = loadConfig();
-  if (command === "backup" || command === "restore") {
+  if (command === "backup" || command === "verify-backup" || command === "restore") {
     const service = new BackupService(config);
     const archive = process.argv[3];
     if (command === "backup") {
@@ -40,12 +44,50 @@ async function main(): Promise<void> {
       if (!archive || !temporalPath) throw new Error("backup requires an archive path and FORGE_TEMPORAL_DATA_PATH");
       const result = await service.create({ destination: archive, temporalPersistencePath: temporalPath });
       process.stdout.write(`Backup created at ${result.archivePath} (${result.manifest.entries.length} files, ${result.durationMs}ms)\n`);
+    } else if (command === "verify-backup") {
+      if (!archive) throw new Error("verify-backup requires an archive path");
+      const result = await service.verify(archive);
+      process.stdout.write(`Backup verification ${result.valid ? "passed" : "failed"} (${result.durationMs}ms)${result.errors.length ? `: ${result.errors.join("; ")}` : ""}\n`);
+      if (!result.valid) process.exitCode = 1;
     } else {
       const destination = process.argv[4];
       if (!archive || !destination) throw new Error("restore requires an archive path and separate destination");
       const result = await service.restore(archive, destination);
-      process.stdout.write(`Backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"}\n`);
+      const restoredDatabase = new ForgeDatabase(`${destination}/forge-backup/app/forge.sqlite`);
+      try {
+        const rebuilt = restoredDatabase.rebuildIssueProjections();
+        const restoredAuth = new AuthService(restoredDatabase, config);
+        const companies = new AttentionService(restoredDatabase, restoredAuth).rebuildAll();
+        new CapacityManager(restoredDatabase, config).reconcileFromLedgers();
+        const reconciliation = await reconcileRestoredState(restoredDatabase, createGithubReleasePort());
+        const handoff = {
+          version: 1,
+          restoredAt: new Date().toISOString(),
+          archivePath: result.archivePath,
+          verification: { valid: result.valid, verifiedAt: result.verifiedAt, errors: result.errors },
+          projectionsRebuilt: rebuilt,
+          companiesRebuilt: companies,
+          reconciliation,
+          requiresReauthentication: true,
+          nextSteps: ["Reauthenticate the restored host integrations", "Start Forge against the restored installation", "Inspect interrupted Developer turns before explicitly retrying or cancelling them"],
+        };
+        await writeFile(join(destination, "forge-backup", "restore-handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`, { mode: 0o600 });
+        process.stdout.write(`Restored projection state (${rebuilt} issue snapshots, ${companies} companies); `);
+        process.stdout.write(`reconciled ${reconciliation.developerExecutions.length} Developer executions and ${reconciliation.providers.length} provider releases; `);
+      } finally { restoredDatabase.close(); }
+      process.stdout.write(`backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"}; see forge-backup/restore-handoff.json\n`);
     }
+    return;
+  }
+  if (command === "rebuild-projections") {
+    const database = new ForgeDatabase(config.databasePath);
+    try {
+      const rebuilt = database.rebuildIssueProjections();
+      const attention = new AttentionService(database, new AuthService(database, config));
+      attention.rebuildAll();
+      new CapacityManager(database, config).reconcileFromLedgers();
+      process.stdout.write(`Rebuilt ${rebuilt} issue projections and reconciled operator ledgers\n`);
+    } finally { database.close(); }
     return;
   }
   if (command === "recover") {

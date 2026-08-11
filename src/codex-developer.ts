@@ -12,7 +12,7 @@ import { AgentFailure, FileSessionStore, runCodexProcess, type LeadProcessResult
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import { createGitCommandGuard, WorktreeManager } from "./worktrees.js";
-import { DeveloperRepairActivityInputSchema, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairResult } from "./temporal/issue-contracts.js";
+import { DeveloperRepairActivityInputSchema, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairResult, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -42,6 +42,18 @@ export const DeveloperRepairReportSchema = z.object({
   addressedFindingIds: z.array(z.string().min(1).max(256)).max(64),
   commandsRun: z.array(z.string().max(500)).max(128),
   testResults: z.array(z.string().max(2_000)).max(64),
+  resultCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  dirtyState: z.enum(["clean", "dirty"]),
+  blocker: z.string().max(4_000).nullable(),
+});
+
+export const DeveloperMergeConflictResolutionReportSchema = z.object({
+  kind: z.literal("merge_conflict_resolution"),
+  summary: z.string().min(1).max(2_000),
+  resolvedFiles: z.array(z.string().min(1).max(1_000)).max(128),
+  commandsRun: z.array(z.string().max(500)).min(1).max(128),
+  testResults: z.array(z.string().max(2_000)).min(1).max(64),
   resultCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
   resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
   dirtyState: z.enum(["clean", "dirty"]),
@@ -115,6 +127,16 @@ function parseRepairReport(lines: string[]): z.infer<typeof DeveloperRepairRepor
   try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-repair-report", "Codex Developer returned malformed repair JSON"); }
   const result = DeveloperRepairReportSchema.safeParse(parsed);
   if (!result.success) throw new AgentFailure("invalid-repair-report", "Codex Developer returned a repair report outside the required schema");
+  return result.data;
+}
+
+function parseMergeConflictResolutionReport(lines: string[]): z.infer<typeof DeveloperMergeConflictResolutionReportSchema> {
+  const text = lines.map((line) => eventValue(line).message).filter((value): value is string => Boolean(value)).at(-1);
+  if (!text) throw new AgentFailure("missing-merge-resolution-report", "Codex Developer did not return a merge-conflict resolution report");
+  let parsed: unknown;
+  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-merge-resolution-report", "Codex Developer returned malformed merge-conflict resolution JSON"); }
+  const result = DeveloperMergeConflictResolutionReportSchema.safeParse(parsed);
+  if (!result.success) throw new AgentFailure("invalid-merge-resolution-report", "Codex Developer returned a merge-conflict resolution outside the required schema");
   return result.data;
 }
 
@@ -249,6 +271,68 @@ export class DeveloperService {
     } finally { await guard?.cleanup(); }
   }
 
+  async runMergeConflictResolution(rawInput: MergeConflictResolutionActivityInput): Promise<MergeConflictResolutionActivityResult> {
+    const input = rawInput;
+    const prior = this.database.authQuery((db) => db.prepare(`SELECT id, status, session_ref, branch_name, worktree_path
+      FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; status: string; session_ref: string | null; branch_name: string; worktree_path: string } | undefined);
+    const planRow = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'merge-conflict-plan'").get(input.planArtifactId, input.companyId) as { storage_path: string; sha256: string } | undefined);
+    if (!prior || !planRow || !["completed", "blocked"].includes(prior.status) || prior.session_ref !== input.developerSessionRef || prior.branch_name !== input.branchName || prior.worktree_path !== input.worktreePath) {
+      throw new AgentFailure("merge-resolution-identity-mismatch", "Merge-conflict resolution coordinates do not match the owned Developer worktree");
+    }
+    const plan = (await this.artifacts.read({ companyId: input.companyId, storagePath: planRow.storage_path, sha256: planRow.sha256 })).toString("utf8");
+    const rawSessionId = await this.sessionStore.read(input.developerSessionRef);
+    const executionId = `developer_${randomBytes(12).toString("hex")}`;
+    const attempt = Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
+    const guard = await createGitCommandGuard(this.config.runtimeRoot);
+    const startedAt = this.now().toISOString();
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, input.worktreePath, input.targetBaseSha, `wrapper_${randomBytes(12).toString("hex")}`, guard.directory, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt));
+    const evidenceLines: string[] = [];
+    const expectedRawSessionId = rawSessionId;
+    try {
+      const result = await this.processRunner({
+        command: this.command,
+        args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.mergeConflictResolutionPrompt(plan, input)],
+        cwd: input.worktreePath,
+        env: guard.env,
+        detached: true,
+        onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); },
+        onLine: async (line) => {
+          const event = eventValue(line);
+          if (event.threadId && event.threadId !== expectedRawSessionId) throw new AgentFailure("session-identity-conflict", "Merge-conflict resolution returned a different Developer session identity");
+          evidenceLines.push(safeJsonLine(line));
+          await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET heartbeat_at = ? WHERE id = ?").run(this.now().toISOString(), executionId));
+        },
+      });
+      if (result.exitCode !== 0) throw new AgentFailure(processFailure(result), "Codex Developer merge-conflict resolution did not complete");
+      const report = parseMergeConflictResolutionReport(evidenceLines);
+      const missingFiles = input.conflictFiles.filter((file) => !report.resolvedFiles.includes(file));
+      if (missingFiles.length || report.blocker !== null) throw new AgentFailure("merge-resolution-incomplete", missingFiles.length ? `The Developer did not resolve: ${missingFiles.join(", ")}` : report.blocker ?? "Merge-conflict resolution is blocked");
+      const gitState = await this.worktrees.inspectDelivery(input.worktreePath);
+      const parents = (await execFileAsync("git", ["rev-list", "--parents", "-n", "1", "HEAD"], { cwd: input.worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim().split(/\s+/);
+      if (gitState.branchName !== input.branchName || gitState.dirtyState !== "clean" || gitState.headSha.toLowerCase() !== report.resultCommit.toLowerCase() || gitState.treeSha.toLowerCase() !== report.resultTree.toLowerCase() || parents.length !== 3 || (parents[1] ?? "").toLowerCase() !== input.priorHead.toLowerCase() || (parents[2] ?? "").toLowerCase() !== input.targetBaseSha.toLowerCase()) {
+        throw new AgentFailure("merge-resolution-revision-invalid", "Developer resolution did not produce the required clean two-parent merge commit");
+      }
+      const resolutionArtifact = await this.artifacts.put(input.companyId, "merge-conflict-resolution", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(report, null, 2), "utf8") });
+      const evidence = await this.artifacts.put(input.companyId, "agent-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
+      const now = this.now().toISOString();
+      this.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, resolutionArtifact.id, resolutionArtifact.companyId, resolutionArtifact.kind, resolutionArtifact.filename, resolutionArtifact.mimeType, resolutionArtifact.byteSize, resolutionArtifact.sha256, resolutionArtifact.storagePath, resolutionArtifact.createdAt);
+        db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = 'clean', delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(now, now, gitState.headSha, gitState.treeSha, resolutionArtifact.id, evidence.id, executionId);
+        db.prepare("UPDATE forge_merge_conflict_resolutions SET developer_execution_id = ?, developer_session_ref = ?, result_commit = ?, result_tree = ?, status = 'completed', updated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ?").run(executionId, input.developerSessionRef, gitState.headSha, gitState.treeSha, now, input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha);
+      });
+      return { developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, resultCommit: gitState.headSha, resultTree: gitState.treeSha, deliveryArtifactId: resolutionArtifact.id, evidenceArtifactId: evidence.id, summary: report.summary };
+    } catch (error) {
+      const failure = error instanceof AgentFailure ? error : new AgentFailure("merge-resolution-failed", "Codex Developer merge-conflict resolution failed");
+      const evidence = await this.artifacts.put(input.companyId, "agent-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
+      this.database.authTransaction((db) => {
+        db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
+        db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId);
+        db.prepare("UPDATE forge_merge_conflict_resolutions SET developer_execution_id = ?, developer_session_ref = ?, status = 'blocked', updated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ?").run(executionId, input.developerSessionRef, this.now().toISOString(), input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha);
+      });
+      throw failure;
+    } finally { await guard.cleanup(); }
+  }
+
   async runRepair(rawInput: DeveloperRepairActivityInput): Promise<DeveloperRepairResult> {
     const input = DeveloperRepairActivityInputSchema.parse(rawInput);
     if (input.cycle > input.repairCycleLimit) throw new AgentFailure("repair-cap-exhausted", "The configured Developer repair-cycle limit has been reached");
@@ -335,6 +419,16 @@ export class DeveloperService {
       });
       throw failure;
     } finally { await guard.cleanup(); }
+  }
+
+  private mergeConflictResolutionPrompt(plan: string, input: MergeConflictResolutionActivityInput): string {
+    return [
+      "You are Forge's authenticated Developer continuing the same Developer session in the exact owned issue worktree. A guarded normal merge is already in progress. Resolve only the listed conflicts using the Lead-authored plan.",
+      "Do not abort the merge, rebase, amend, reset, clean, force-push, use GitHub/provider commands, or modify another checkout. Inspect both sides and the combined conflict markers, apply the bounded resolutions, run the complete relevant local verification suite from the approved plan, stage only the resolved worktree, and create exactly one ordinary merge commit with both parents. Leave the worktree clean.",
+      'Return exactly one JSON object with no markdown fences or commentary matching: {"kind":"merge_conflict_resolution","summary":"...","resolvedFiles":[],"commandsRun":[],"testResults":[],"resultCommit":"40+ hex","resultTree":"40+ hex","dirtyState":"clean","blocker":null}. Include every listed conflict file in resolvedFiles and report any blocker instead of claiming success.',
+      "Merge identity:\n" + JSON.stringify({ branchName: input.branchName, priorHead: input.priorHead, targetBaseSha: input.targetBaseSha, conflictFiles: input.conflictFiles }),
+      "Lead-authored resolution plan:\n" + plan,
+    ].join("\n\n");
   }
 
   private repairPrompt(repairPlan: string, findings: DeliveryFinding[], worktree: { branchName: string; worktreePath: string; targetBaseSha: string; subjectCommit: string; subjectTree: string }): string {

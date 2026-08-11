@@ -23,6 +23,12 @@ export interface DeveloperRecoveryOutcome {
   reason?: string;
 }
 
+export interface RestoredDeveloperRecoveryReport {
+  executionId: string;
+  status: "recovered" | "interrupted";
+  reason: "stored-delivery-result" | "restore-invalidated-process-ownership";
+}
+
 interface DeveloperExecutionRow {
   id: string;
   task_id: string;
@@ -82,6 +88,34 @@ function markInterrupted(database: ForgeDatabase, row: DeveloperExecutionRow, co
     db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ? WHERE id = ? AND status IN ('starting', 'running')").run(status, now(), now(), code, summary, row.id);
     db.prepare("UPDATE forge_issue_projections SET phase = 'development', owner = 'human', allowed_commands_json = ?, pending_action = ?, updated_at = ? WHERE task_id = ? AND phase = 'development'").run(JSON.stringify(status === "ownership_ambiguous" ? [] : ["retry_development", "cancel_development"]), status === "ownership_ambiguous" ? "Operator must verify Developer ownership" : "Developer turn interrupted", now(), row.task_id);
   });
+}
+
+/**
+ * A restored installation cannot trust PIDs, process groups, or wrapper paths
+ * copied from the source host. Reconcile those rows before the new worker can
+ * admit another Developer turn. A fully persisted result is safe to consume
+ * once; every other active row becomes an explicit interrupted attempt.
+ */
+export function reconcileRestoredDeveloperExecutions(database: ForgeDatabase): RestoredDeveloperRecoveryReport[] {
+  const rows = database.authQuery((db) => db.prepare("SELECT id, task_id, company_id, workflow_id, status, process_pid, process_group_id, process_start_identity, wrapper_id, wrapper_path, worktree_path, delivery_artifact_id, evidence_artifact_id, result_commit, result_tree FROM forge_developer_executions WHERE status IN ('starting', 'running') ORDER BY started_at, id").all() as DeveloperExecutionRow[]);
+  const reports: RestoredDeveloperRecoveryReport[] = [];
+  for (const row of rows) {
+    const restoredAt = now();
+    if (row.delivery_artifact_id && row.evidence_artifact_id && row.result_commit && row.result_tree) {
+      database.authTransaction((db) => {
+        db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running')").run(restoredAt, restoredAt, row.id);
+        db.prepare("UPDATE forge_issue_projections SET phase = 'delivery_ready', owner = 'lead', allowed_commands_json = '[\"review_delivery\",\"cancel_issue\"]', pending_action = 'Lead delivery review', updated_at = ? WHERE task_id = ? AND phase = 'development'").run(restoredAt, row.task_id);
+      });
+      reports.push({ executionId: row.id, status: "recovered", reason: "stored-delivery-result" });
+      continue;
+    }
+    database.authTransaction((db) => {
+      db.prepare("UPDATE forge_developer_executions SET status = 'interrupted', finished_at = ?, heartbeat_at = ?, failure_code = 'restore-process-invalidated', failure_summary = 'The source-host Developer process cannot be resumed from a restored installation.' WHERE id = ? AND status IN ('starting', 'running')").run(restoredAt, restoredAt, row.id);
+      db.prepare("UPDATE forge_issue_projections SET phase = 'development', owner = 'human', allowed_commands_json = '[\"retry_development\",\"cancel_development\",\"cancel_issue\"]', pending_action = 'Developer turn interrupted during restore', updated_at = ? WHERE task_id = ? AND phase = 'development'").run(restoredAt, row.task_id);
+    });
+    reports.push({ executionId: row.id, status: "interrupted", reason: "restore-invalidated-process-ownership" });
+  }
+  return reports;
 }
 
 export async function reconcileDeveloperExecutions(database: ForgeDatabase, controller: DeveloperProcessController = defaultController): Promise<DeveloperRecoveryOutcome[]> {

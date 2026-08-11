@@ -1,0 +1,31 @@
+CREATE TABLE IF NOT EXISTS `forge_merge_conflict_resolutions` (
+	`id` text PRIMARY KEY NOT NULL,
+	`task_id` text NOT NULL,
+	`company_id` text NOT NULL,
+	`workflow_id` text NOT NULL,
+	`forward_merge_id` text,
+	`prior_head` text NOT NULL,
+	`target_base_sha` text NOT NULL,
+	`conflict_files_json` text NOT NULL,
+	`plan_artifact_id` text,
+	`plan_evidence_artifact_id` text,
+	`lead_execution_id` text,
+	`lead_session_ref` text,
+	`developer_execution_id` text,
+	`developer_session_ref` text,
+	`result_commit` text,
+	`result_tree` text,
+	`status` text NOT NULL,
+	`created_at` text NOT NULL,
+	`updated_at` text NOT NULL,
+	FOREIGN KEY (`task_id`) REFERENCES `forge_tasks`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`company_id`) REFERENCES `forge_companies`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`forward_merge_id`) REFERENCES `forge_forward_merges`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`plan_artifact_id`) REFERENCES `forge_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`plan_evidence_artifact_id`) REFERENCES `forge_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`lead_execution_id`) REFERENCES `forge_agent_executions`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`developer_execution_id`) REFERENCES `forge_developer_executions`(`id`) ON UPDATE no action ON DELETE no action,
+	CONSTRAINT `forge_merge_conflict_resolution_key_unique` UNIQUE(`workflow_id`, `prior_head`, `target_base_sha`)
+);
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS `forge_merge_conflict_resolution_task_idx` ON `forge_merge_conflict_resolutions` (`task_id`, `created_at`);

@@ -9,14 +9,17 @@ import { expect, test } from "vitest";
 import { AcceptanceService } from "../src/acceptance.js";
 import { AttentionService } from "../src/attention.js";
 import { AuthService } from "../src/auth.js";
-import { BackupService, checkBackupHealth } from "../src/backup.js";
+import { BackupService, checkBackupHealth, reconcileRestoredState } from "../src/backup.js";
 import { CapacityManager } from "../src/capacity.js";
 import { CiService, type CheckSnapshot } from "../src/ci.js";
+import { randomBytes } from "node:crypto";
+
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { ForwardMergeService } from "../src/forward-merge.js";
 import { ReleaseService, type GithubPullRequest, type GithubReleasePort } from "../src/github-release.js";
 import { ArtifactStore } from "../src/artifacts.js";
+import { createActivities } from "../src/temporal/activities.js";
 
 const exec = promisify(execFile);
 const now = "2026-08-11T00:00:00.000Z";
@@ -156,6 +159,16 @@ test("backup archive verifies hashes and restores only into a separate clean loc
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("restored provider reconciliation observes existing pull requests without mutating them", async () => {
+  const value = await fixture();
+  try {
+    addReleaseFixtures(value.database);
+    const report = await reconcileRestoredState(value.database, fakeGithub());
+    expect(report.providers).toEqual([expect.objectContaining({ releaseId: "release-a", status: "matched", pullRequestNumber: 12 })]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT kind, status FROM forge_provider_operations WHERE task_id = 'task-a' AND kind = 'restore-reconcile'").get())).toEqual({ kind: "restore-reconcile", status: "matched" });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("forward merge updates an issue branch only through a normal non-rewriting merge", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-forward-merge-"));
   try {
@@ -175,5 +188,122 @@ test("forward merge updates an issue branch only through a normal non-rewriting 
     expect(result.priorHead).toBe(issueHead);
     expect(result.mergeCommit).not.toBe(issueHead);
     expect((await exec("git", ["status", "--porcelain"], { cwd: root })).stdout).toBe("");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("forward merge leaves a guarded conflict for Lead planning instead of rewriting the issue branch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-forward-merge-conflict-"));
+  try {
+    await exec("git", ["init", "-b", "main"], { cwd: root });
+    await exec("git", ["config", "user.email", "forge@example.test"], { cwd: root });
+    await exec("git", ["config", "user.name", "Forge Test"], { cwd: root });
+    await writeFile(join(root, "shared.txt"), "base\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "base"], { cwd: root });
+    const oldBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await exec("git", ["checkout", "-b", "issue/task-conflict"], { cwd: root });
+    await writeFile(join(root, "shared.txt"), "issue side\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "issue"], { cwd: root });
+    const priorHead = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await exec("git", ["checkout", "main"], { cwd: root }); await writeFile(join(root, "shared.txt"), "base side\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "base-update"], { cwd: root });
+    const targetBaseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await exec("git", ["checkout", "issue/task-conflict"], { cwd: root });
+    const result = await new ForwardMergeService().reconcile({ worktreePath: root, expectedBaseSha: oldBase, currentBaseSha: targetBaseSha, branchName: "issue/task-conflict", repositoryPath: root });
+    expect(result).toMatchObject({ status: "conflict", priorHead, targetBaseSha, conflictFiles: ["shared.txt"] });
+    expect(result.conflictDiff).toContain("shared.txt");
+    expect((await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim()).toBe(priorHead);
+    expect((await exec("git", ["status", "--porcelain"], { cwd: root })).stdout).toContain("UU shared.txt");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("forward merge reports no drift without mutating the issue branch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-forward-merge-no-drift-"));
+  try {
+    await exec("git", ["init", "-b", "main"], { cwd: root });
+    await exec("git", ["config", "user.email", "forge@example.test"], { cwd: root });
+    await exec("git", ["config", "user.name", "Forge Test"], { cwd: root });
+    await writeFile(join(root, "base.txt"), "base\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "base"], { cwd: root });
+    const base = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await exec("git", ["checkout", "-b", "issue/task-a"], { cwd: root });
+    await writeFile(join(root, "issue.txt"), "issue\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "issue"], { cwd: root });
+    const issueHead = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    const service = new ForwardMergeService();
+    const first = await service.reconcile({ worktreePath: root, expectedBaseSha: base, currentBaseSha: base, branchName: "issue/task-a", repositoryPath: root });
+    expect(first).toMatchObject({ status: "no_drift", priorHead: issueHead, targetBaseSha: base, mergeCommit: null, tree: null, conflictFiles: [] });
+    expect((await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim()).toBe(issueHead);
+    expect((await exec("git", ["status", "--porcelain"], { cwd: root })).stdout).toBe("");
+    const second = await service.reconcile({ worktreePath: root, expectedBaseSha: base, currentBaseSha: base, branchName: "issue/task-a", repositoryPath: root });
+    expect(second).toMatchObject({ status: "no_drift", priorHead: issueHead, targetBaseSha: base });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("forward merge rejects a non-descendant target base instead of rewriting history", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-forward-merge-orphan-"));
+  try {
+    await exec("git", ["init", "-b", "main"], { cwd: root });
+    await exec("git", ["config", "user.email", "forge@example.test"], { cwd: root });
+    await exec("git", ["config", "user.name", "Forge Test"], { cwd: root });
+    await writeFile(join(root, "base.txt"), "base\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "base"], { cwd: root });
+    const oldBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await exec("git", ["checkout", "-b", "issue/task-a"], { cwd: root });
+    await writeFile(join(root, "issue.txt"), "issue\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "issue"], { cwd: root });
+    const issueHead = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await exec("git", ["checkout", "--orphan", "replaced-main"], { cwd: root });
+    await writeFile(join(root, "base.txt"), "replaced\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "replaced base"], { cwd: root });
+    const alienBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await exec("git", ["checkout", "issue/task-a"], { cwd: root });
+    await expect(new ForwardMergeService().reconcile({ worktreePath: root, expectedBaseSha: oldBase, currentBaseSha: alienBase, branchName: "issue/task-a", repositoryPath: root })).rejects.toMatchObject({ code: "not-ancestor" });
+    expect((await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim()).toBe(issueHead);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("forward merge records the merge evidence in the database", async () => {
+  const value = await fixture();
+  const repoPath = join(value.root, "repo");
+  await mkdir(repoPath, { recursive: true });
+  try {
+    await exec("git", ["init", "-b", "main"], { cwd: repoPath });
+    await exec("git", ["config", "user.email", "forge@example.test"], { cwd: repoPath });
+    await exec("git", ["config", "user.name", "Forge Test"], { cwd: repoPath });
+    await writeFile(join(repoPath, "base.txt"), "base\n"); await exec("git", ["add", "."], { cwd: repoPath }); await exec("git", ["commit", "-m", "base"], { cwd: repoPath });
+    const oldBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    await exec("git", ["checkout", "-b", "issue/task-a"], { cwd: repoPath });
+    await writeFile(join(repoPath, "issue.txt"), "issue\n"); await exec("git", ["add", "."], { cwd: repoPath }); await exec("git", ["commit", "-m", "issue"], { cwd: repoPath });
+    const priorHead = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    await exec("git", ["checkout", "main"], { cwd: repoPath }); await writeFile(join(repoPath, "base.txt"), "base updated\n"); await exec("git", ["add", "."], { cwd: repoPath }); await exec("git", ["commit", "-m", "base-update"], { cwd: repoPath });
+    const newBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    await exec("git", ["checkout", "issue/task-a"], { cwd: repoPath });
+    const service = new ForwardMergeService(value.database);
+    const result = await service.reconcile({ worktreePath: repoPath, expectedBaseSha: oldBase, currentBaseSha: newBase, branchName: "issue/task-a", repositoryPath: repoPath, taskId: "task-a", companyId: "company-a" });
+    expect(result.status).toBe("merged");
+    const row = value.database.authQuery((db) => db.prepare("SELECT expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json FROM forge_forward_merges WHERE task_id = 'task-a'").get()) as { expected_base_sha: string; current_base_sha: string; prior_head: string; merge_commit: string; tree: string; status: string; conflict_files_json: string };
+    expect(row).toMatchObject({ expected_base_sha: oldBase, current_base_sha: newBase, prior_head: priorHead, merge_commit: result.mergeCommit, tree: result.tree, status: "merged", conflict_files_json: "[]" });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("forward merge in one worktree does not disturb another active worktree", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-forward-merge-isolation-"));
+  try {
+    await exec("git", ["init", "-b", "main"], { cwd: root });
+    await exec("git", ["config", "user.email", "forge@example.test"], { cwd: root });
+    await exec("git", ["config", "user.name", "Forge Test"], { cwd: root });
+    await writeFile(join(root, "base.txt"), "base\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "base"], { cwd: root });
+    const oldBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    const worktreeA = join(root, "worktrees", "a");
+    const worktreeB = join(root, "worktrees", "b");
+    await mkdir(worktreeA, { recursive: true });
+    await mkdir(worktreeB, { recursive: true });
+    await exec("git", ["worktree", "add", "-b", "issue/task-a", worktreeA, "main"], { cwd: root });
+    await exec("git", ["worktree", "add", "-b", "issue/task-b", worktreeB, "main"], { cwd: root });
+    await writeFile(join(worktreeA, "a.txt"), "a\n"); await exec("git", ["add", "a.txt"], { cwd: worktreeA }); await exec("git", ["-c", "user.name=Forge Test", "-c", "user.email=forge@example.test", "commit", "-m", "a"], { cwd: worktreeA });
+    await writeFile(join(worktreeB, "b.txt"), "b\n"); await exec("git", ["add", "b.txt"], { cwd: worktreeB }); await exec("git", ["-c", "user.name=Forge Test", "-c", "user.email=forge@example.test", "commit", "-m", "b"], { cwd: worktreeB });
+    const headA = (await exec("git", ["rev-parse", "HEAD"], { cwd: worktreeA })).stdout.trim();
+    const headB = (await exec("git", ["rev-parse", "HEAD"], { cwd: worktreeB })).stdout.trim();
+    await exec("git", ["checkout", "main"], { cwd: root });
+    await writeFile(join(root, "base.txt"), "base updated\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "base-update"], { cwd: root });
+    const newBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await exec("git", ["checkout", "issue/task-a"], { cwd: worktreeA });
+    const result = await new ForwardMergeService().reconcile({ worktreePath: worktreeA, expectedBaseSha: oldBase, currentBaseSha: newBase, branchName: "issue/task-a", repositoryPath: root });
+    expect(result.status).toBe("merged");
+    expect((await exec("git", ["rev-parse", "HEAD"], { cwd: worktreeB })).stdout.trim()).toBe(headB);
+    expect((await exec("git", ["status", "--porcelain"], { cwd: worktreeB })).stdout).toBe("");
+    expect((await exec("git", ["rev-parse", "HEAD"], { cwd: worktreeA })).stdout.trim()).not.toBe(headA);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

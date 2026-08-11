@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { cp, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -8,6 +8,9 @@ import { promisify } from "node:util";
 import Database from "better-sqlite3";
 
 import type { ForgeConfig } from "./config.js";
+import type { ForgeDatabase } from "./database.js";
+import type { GithubReleasePort } from "./github-release.js";
+import { reconcileRestoredDeveloperExecutions, type RestoredDeveloperRecoveryReport } from "./developer-recovery.js";
 
 const execFileAsync = promisify(execFile);
 const backupVersion = 1;
@@ -41,6 +44,22 @@ export interface BackupVerification {
 export interface BackupCreateInput {
   destination: string;
   temporalPersistencePath: string;
+}
+
+export interface RestoredProviderReconciliation {
+  releaseId: string;
+  repository: string;
+  branch: string;
+  pullRequestNumber: number | null;
+  status: "matched" | "changed" | "merged" | "closed" | "provider_unavailable" | "reauthentication_required" | "not_published";
+  branchHead?: string;
+  pullRequestHead?: string;
+  summary: string;
+}
+
+export interface RestoredStateReconciliation {
+  developerExecutions: RestoredDeveloperRecoveryReport[];
+  providers: RestoredProviderReconciliation[];
 }
 
 export class BackupFailure extends Error {
@@ -210,6 +229,45 @@ export class BackupService {
     await execFileAsync("tar", ["-xzf", resolve(archivePath), "-C", target, "--no-same-owner"], { timeout: 60_000, maxBuffer: 64 * 1024 });
     return verification;
   }
+}
+
+/**
+ * Reconcile facts that are not contained in the application database after a
+ * restore. This function is deliberately read-only with respect to providers:
+ * reauthentication and any later mutation remain explicit operator actions.
+ */
+export async function reconcileRestoredState(database: ForgeDatabase, github: GithubReleasePort): Promise<RestoredStateReconciliation> {
+  const developerExecutions = reconcileRestoredDeveloperExecutions(database);
+  const releases = database.authQuery((db) => db.prepare("SELECT id, repository, head_branch AS branch, base_branch AS baseBranch, head_sha AS headSha, pr_number AS pullRequestNumber FROM forge_releases WHERE pr_number IS NOT NULL ORDER BY updated_at, id").all() as Array<{ id: string; repository: string; branch: string; baseBranch: string; headSha: string; pullRequestNumber: number | null }>);
+  const providers: RestoredProviderReconciliation[] = [];
+  for (const release of releases) {
+    const operationKey = `restore-reconcile:${release.id}:${release.headSha}`;
+    let observation: RestoredProviderReconciliation;
+    try {
+      if (!github.getPullRequest && !github.getBranchHead) {
+        observation = { releaseId: release.id, repository: release.repository, branch: release.branch, pullRequestNumber: release.pullRequestNumber, status: "reauthentication_required", summary: "Provider read APIs are unavailable; reauthenticate before resuming release work." };
+      } else {
+        const [branchHead, pullRequest] = await Promise.all([
+          github.getBranchHead ? github.getBranchHead({ repository: release.repository, branch: release.branch }) : Promise.resolve(undefined),
+          github.getPullRequest && release.pullRequestNumber !== null ? github.getPullRequest({ repository: release.repository, number: release.pullRequestNumber }) : Promise.resolve(undefined),
+        ]);
+        const branchMatches = branchHead === undefined || branchHead.toLowerCase() === release.headSha.toLowerCase();
+        if (!pullRequest) {
+          observation = { releaseId: release.id, repository: release.repository, branch: release.branch, pullRequestNumber: release.pullRequestNumber, status: branchMatches ? "matched" : "changed", ...(branchHead ? { branchHead } : {}), summary: branchMatches ? "The restored release branch matches its recorded head." : "The restored release branch differs from its recorded head." };
+        } else {
+          const pullRequestMatches = pullRequest.headSha.toLowerCase() === release.headSha.toLowerCase() && pullRequest.baseBranch === release.baseBranch;
+          const status = pullRequest.state === "merged" ? (branchMatches && pullRequestMatches ? "merged" : "changed") : pullRequest.state === "closed" ? "closed" : branchMatches && pullRequestMatches ? "matched" : "changed";
+          observation = { releaseId: release.id, repository: release.repository, branch: release.branch, pullRequestNumber: release.pullRequestNumber, status, ...(branchHead ? { branchHead } : {}), pullRequestHead: pullRequest.headSha, summary: `Observed pull request ${pullRequest.number} as ${pullRequest.state} at ${pullRequest.headSha}.` };
+        }
+      }
+    } catch {
+      observation = { releaseId: release.id, repository: release.repository, branch: release.branch, pullRequestNumber: release.pullRequestNumber, status: "provider_unavailable", summary: "Provider state could not be read; no release mutation was attempted." };
+    }
+    const now = new Date().toISOString();
+    database.authTransaction((db) => db.prepare("INSERT INTO forge_provider_operations (id, operation_key, task_id, company_id, kind, status, result_json, created_at, updated_at) SELECT ?, ?, task_id, company_id, 'restore-reconcile', ?, ?, ?, ? FROM forge_releases WHERE id = ? ON CONFLICT(operation_key) DO UPDATE SET status = excluded.status, result_json = excluded.result_json, updated_at = excluded.updated_at").run(`provider_restore_${randomBytes(12).toString("hex")}`, operationKey, observation.status, JSON.stringify(observation), now, now, release.id));
+    providers.push(observation);
+  }
+  return { developerExecutions, providers };
 }
 
 function component(entries: BackupManifestEntry[], prefix: string): { path: string; count: number; bytes: number } {

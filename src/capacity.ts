@@ -55,6 +55,8 @@ export class CapacityManager {
       if (!request) throw new CapacityFailure("not-found");
       if (request.status === "active") return { acquired: true, request };
       if (request.status !== "queued") return { acquired: false, request };
+      const sameTaskActive = db.prepare("SELECT id FROM forge_capacity_requests WHERE task_id = ? AND status = 'active' AND id <> ? LIMIT 1").get(request.taskId, requestId) as { id: string } | undefined;
+      if (sameTaskActive) return { acquired: false, request };
       const active = Number((db.prepare("SELECT COUNT(*) AS count FROM forge_capacity_requests WHERE status = 'active'").get() as { count: number }).count);
       const first = db.prepare("SELECT id FROM forge_capacity_requests WHERE status = 'queued' ORDER BY requested_at, id LIMIT 1").get() as { id: string } | undefined;
       if (active >= this.config.externalTurnCapacity || first?.id !== requestId) return { acquired: false, request };
@@ -78,6 +80,14 @@ export class CapacityManager {
       for (const row of active) if (!activeRequestIds.has(row.id)) released += db.prepare("UPDATE forge_capacity_requests SET status = 'stale', released_at = ?, release_reason = ? WHERE id = ? AND status = 'active'").run(now, reason, row.id).changes;
       return released;
     });
+  }
+
+  reconcileFromLedgers(now = new Date().toISOString()): number {
+    const activeRequestIds = this.database.authQuery((db) => new Set((db.prepare(`SELECT c.id
+      FROM forge_capacity_requests c
+      WHERE c.status = 'active' AND ((c.turn_kind = 'developer' AND EXISTS (SELECT 1 FROM forge_developer_executions d WHERE d.task_id = c.task_id AND d.workflow_id = c.workflow_id AND d.status IN ('starting', 'running', 'cancelling')))
+        OR (c.turn_kind IN ('lead', 'review') AND EXISTS (SELECT 1 FROM forge_agent_executions a WHERE a.task_id = c.task_id AND a.workflow_id = c.workflow_id AND a.status IN ('starting', 'running'))))`).all() as Array<{ id: string }>).map((row) => row.id)));
+    return this.reconcile(activeRequestIds, "worker-restart-ledger-reconciled", now);
   }
 
   position(requestId: string): number | null {

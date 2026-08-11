@@ -41,6 +41,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig()): Pro
     projects,
     tasks,
     attention,
+    database,
     release,
     ci,
     acceptance,

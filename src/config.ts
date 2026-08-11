@@ -149,7 +149,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
   const identifiers = runtimeIdentifiers(stableInstallationId);
   const temporalNamespace = parsedEnvironment.data.FORGE_TEMPORAL_NAMESPACE ?? identifiers.namespace;
   const taskQueue = parsedEnvironment.data.FORGE_TASK_QUEUE ?? identifiers.taskQueue;
-  if (isLegacyDurableIdentifier(temporalNamespace) || isLegacyDurableIdentifier(taskQueue)) {
+  if ((isLegacyDurableIdentifier(temporalNamespace) || isLegacyDurableIdentifier(taskQueue)) && parsedEnvironment.data.FORGE_LEGACY_RUNTIME !== "1") {
     throw new UnsafeBindingError("Refusing legacy Forge namespace or task queue; preserve the legacy runtime and migrate explicitly");
   }
   return ForgeConfigSchema.parse({

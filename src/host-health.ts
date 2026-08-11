@@ -166,8 +166,6 @@ export class CodexReadinessProbe {
           "--skip-git-repo-check",
           "--sandbox",
           "read-only",
-          "--ask-for-approval",
-          "never",
           "Return exactly a JSON object with an ok boolean. Do not use tools.",
         ], { timeout: 12_000, maxBuffer: 64 * 1024 });
         const events = smoke.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as unknown);

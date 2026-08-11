@@ -15,6 +15,7 @@ export const ForgeEnvironmentSchema = z.object({
   FORGE_ARTIFACT_ROOT: z.string().min(1).optional(),
   FORGE_RUNTIME_ROOT: z.string().min(1).optional(),
   FORGE_INSTALLATION_ID: z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/).optional(),
+  FORGE_LEGACY_RUNTIME: z.literal("1").optional(),
   FORGE_TEMPORAL_ADDRESS: z.string().regex(/^[^:\s]+:\d+$/).optional(),
   FORGE_TEMPORAL_NAMESPACE: z.string().min(1).optional(),
   FORGE_TASK_QUEUE: z.string().min(1).optional(),

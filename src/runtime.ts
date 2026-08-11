@@ -139,7 +139,14 @@ async function spawnForgeProcess(name: string, script: string, config: ForgeConf
   const child = spawn(command, args, {
     cwd: process.cwd(),
     detached: true,
-    env: { ...process.env, FORGE_DATA_ROOT: config.dataRoot },
+    env: {
+      ...process.env,
+      FORGE_DATA_ROOT: config.dataRoot,
+      FORGE_INSTALLATION_ID: config.installationId,
+      FORGE_TEMPORAL_NAMESPACE: config.temporalNamespace,
+      FORGE_TASK_QUEUE: config.taskQueue,
+      ...(config.temporalNamespace === "forge" ? { FORGE_LEGACY_RUNTIME: "1" } : {}),
+    },
     stdio: ["ignore", logHandle.fd, logHandle.fd],
   });
   child.unref();
@@ -169,10 +176,11 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
   let registry: ProcessRegistry | undefined;
   try {
     temporalContainer = await startTemporalContainer(config);
-    await waitForTemporal(config);
-    const temporal = await connectTemporal(config);
+    const runtimeConfig = temporalContainer.legacy ? { ...config, temporalNamespace: "forge", taskQueue: "forge" } : config;
+    await waitForTemporal(runtimeConfig);
+    const temporal = await connectTemporal(runtimeConfig);
     try {
-      await ensureTemporalFoundation(temporal.connection, config);
+      await ensureTemporalFoundation(temporal.connection, runtimeConfig);
     } finally {
       temporal.connection.close();
     }
@@ -185,9 +193,9 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
         tailscaleServe: { port: config.port, backend: `http://${config.bindAddress}:${config.port}` },
       } : {}),
     };
-    const worker = await spawnForgeProcess("worker", "src/worker.ts", config, config.runtimeRoot);
+    const worker = await spawnForgeProcess("worker", "src/worker.ts", runtimeConfig, config.runtimeRoot);
     registry.processes.push(worker.owned);
-    const server = await spawnForgeProcess("server", "src/server.ts", config, config.runtimeRoot);
+    const server = await spawnForgeProcess("server", "src/server.ts", runtimeConfig, config.runtimeRoot);
     registry.processes.push(server.owned);
     if (config.tailscaleExposure === "serve") {
       await configureTailscaleServe(config);

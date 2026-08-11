@@ -33,7 +33,7 @@ async function fixture(): Promise<{ root: string; database: ForgeDatabase; auth:
   const stateByTask = new Map<string, IssueWorkflowState>();
   const workflow: IssueWorkflowPort = {
     async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) {
-      const state: IssueWorkflowState = { workflowId: input.workflowId!, companyId: input.companyId, projectId: input.projectId, issueId: input.issueId, projectRevisionId: input.projectRevisionId, phase: "backlog", revision: 0, owner: "human", allowedCommands: ["start_planning"], pendingAction: "Start planning", lastEventId: `${input.workflowId}:0` };
+      const state: IssueWorkflowState = { workflowId: input.workflowId!, companyId: input.companyId, projectId: input.projectId, issueId: input.issueId, projectRevisionId: input.projectRevisionId, phase: "backlog", revision: 0, owner: "human", allowedCommands: ["start_planning"], pendingAction: "Start planning", lastEventId: `${input.workflowId}:0`, continuationCount: 0, lastSummaryHash: null };
       stateByTask.set(input.issueId, state);
       return { workflowId: state.workflowId, runId: "run-1" };
     },

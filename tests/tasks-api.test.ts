@@ -40,7 +40,7 @@ test("task API creates an idempotent backlog card and accepts only the current p
   const active = await projects.activateProject("admin-1", project.id);
   const workflow: IssueWorkflowPort = {
     async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) { return { workflowId: input.workflowId!, runId: "run" }; },
-    async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return { workflowId, companyId: company.id, projectId: active.id, issueId: workflowId.split("-issue-")[1]!, projectRevisionId: active.activeRevisionId!, phase: "planning", revision: input.expectedRevision + 1, owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${input.expectedRevision + 1}` }; },
+    async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return { workflowId, companyId: company.id, projectId: active.id, issueId: workflowId.split("-issue-")[1]!, projectRevisionId: active.activeRevisionId!, phase: "planning", revision: input.expectedRevision + 1, owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null }; },
   };
   const tasks = new TaskService(database, auth, projects, config, { workflow });
   const app = createApp({ config, auth, projects, tasks, health: {

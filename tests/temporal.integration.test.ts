@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
@@ -8,6 +8,7 @@ import { expect, test } from "vitest";
 import { fileURLToPath } from "node:url";
 
 import { Connection } from "@temporalio/client";
+import proto from "@temporalio/proto";
 import { NativeConnection, Worker } from "@temporalio/worker";
 
 import { createTestConfig, loadConfig } from "../src/config.js";
@@ -15,9 +16,25 @@ import { createForgeServer, type ForgeServer } from "../src/server.js";
 import { ForgeDatabase } from "../src/database.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 import { createActivities } from "../src/temporal/activities.js";
-import { ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
+import { connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, recordIssueProgress, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
 
 const execFileAsync = promisify(execFile);
+const replayDurationKeys = new Set(["firstWorkflowTaskBackoff", "workflowTaskTimeout", "startToCloseTimeout", "scheduleToCloseTimeout", "scheduleToStartTimeout", "heartbeatTimeout", "initialInterval", "maximumInterval"]);
+
+function sanitizeReplayValue(value: unknown, key?: string): unknown {
+  if (Array.isArray(value)) return value.map((item) => sanitizeReplayValue(item));
+  if (!value || typeof value !== "object") return value;
+  const record = value as Record<string, unknown>;
+  if (replayDurationKeys.has(key ?? "") && Object.keys(record).length === 0) return "0s";
+  if ((typeof record.seconds === "string" || typeof record.seconds === "number") && (record.nanos === undefined || typeof record.nanos === "number")) {
+    const nanos = typeof record.nanos === "number" ? record.nanos : 0;
+    if (key === "eventTime") return new Date(Number(record.seconds) * 1000 + nanos / 1_000_000).toISOString();
+    const fraction = nanos === 0 ? "" : `.${String(nanos).padStart(9, "0").replace(/0+$/, "")}`;
+    return `${record.seconds}${fraction}s`;
+  }
+  return Object.fromEntries(Object.entries(record).map(([entryKey, entryValue]) => [entryKey, sanitizeReplayValue(entryValue, entryKey)]));
+}
+
 async function containerId(name: string): Promise<string | undefined> {
   try {
     const result = await execFileAsync("docker", ["inspect", "--format", "{{.Id}}", name]);
@@ -133,6 +150,7 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
       db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, actor_user_id, created_at) VALUES ('issue-revision', 'issue-project', 1, 'issue-identity', '{}', 'issue-admin', ?)").run(new Date().toISOString());
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('issue-brief', 'issue-company', 'task-brief', 'task.md', 'text/markdown', 4, ?, 'issue-company/issue-brief.bin', ?)").run("0".repeat(64), new Date().toISOString());
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-restart', 'issue-company', 'issue-project', 'Restart issue', 'issue-brief', '[]', '{}', 0, ?, 'issue-revision', 'issue-restart-key', ?, ?)").run(`${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-restart`, new Date().toISOString(), new Date().toISOString());
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-continuation', 'issue-company', 'issue-project', 'Continue issue', 'issue-brief', '[]', '{}', 0, ?, 'issue-revision', 'issue-continuation-key', ?, ?)").run(`${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-continuation`, new Date().toISOString(), new Date().toISOString());
     });
     const startedIssue = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-restart", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false });
     let issueState = await queryIssueWorkflow(config, startedIssue.workflowId);
@@ -144,6 +162,36 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     const plannedIssue = await startIssuePlanning(config, startedIssue.workflowId, { expectedRevision: 0, actorUserId: "issue-admin" });
     expect(plannedIssue).toMatchObject({ phase: "planning", revision: 1, owner: "lead" });
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-restart'").get())).toEqual({ revision: 1, phase: "planning" });
+
+    const startedContinuation = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-continuation", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, continueAsNewAfter: 2 });
+    let continuationState = await queryIssueWorkflow(config, startedContinuation.workflowId);
+    for (let attempt = 0; attempt < 20 && continuationState.phase !== "backlog"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      continuationState = await queryIssueWorkflow(config, startedContinuation.workflowId);
+    }
+    expect(continuationState).toMatchObject({ phase: "backlog", revision: 0, continuationCount: 0 });
+    await startIssuePlanning(config, startedContinuation.workflowId, { expectedRevision: 0, actorUserId: "issue-admin" });
+    const progressState = await recordIssueProgress(config, startedContinuation.workflowId, { expectedRevision: 1, summaryHash: "a".repeat(64) });
+    expect(progressState).toMatchObject({ phase: "planning", revision: 2, continuationCount: 0, lastSummaryHash: "a".repeat(64) });
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      continuationState = await queryIssueWorkflow(config, startedContinuation.workflowId);
+      if (continuationState.continuationCount === 1) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(continuationState).toEqual({ workflowId: startedContinuation.workflowId, companyId: "issue-company", projectId: "issue-project", issueId: "issue-continuation", projectRevisionId: "issue-revision", phase: "planning", revision: 2, owner: "lead", allowedCommands: ["record_progress"], pendingAction: "Lead planning", lastEventId: `${startedContinuation.workflowId}:2`, continuationCount: 1, lastSummaryHash: "a".repeat(64) });
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-continuation'").get())).toEqual({ revision: 2, phase: "planning" });
+    expect(database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = 'issue-continuation' ORDER BY revision").all())).toEqual([{ revision: 0 }, { revision: 1 }, { revision: 2 }]);
+    if (process.env.FORGE_REPLAY_CAPTURE_PATH) {
+      const replayClient = await connectTemporal(config);
+      try {
+        const history = await replayClient.client.workflow.getHandle(startedIssue.workflowId).fetchHistory();
+        const replayHistory = proto.temporal.api.history.v1.History.create(history);
+        const replayJson = proto.temporal.api.history.v1.History.toObject(replayHistory, { longs: String, enums: String, bytes: String, defaults: false, arrays: true, objects: true });
+        await writeFile(process.env.FORGE_REPLAY_CAPTURE_PATH, JSON.stringify(sanitizeReplayValue(replayJson), null, 2));
+      } finally {
+        replayClient.connection.close();
+      }
+    }
 
     worker.shutdown();
     await workerRun;

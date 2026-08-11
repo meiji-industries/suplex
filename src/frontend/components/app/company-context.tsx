@@ -4,6 +4,19 @@ import { flushSync } from "react-dom";
 import { companySettingsPath, readJson, withCompany, type ApiCompany, type ApiUser, type CompanyStatus } from "../../lib/api.js";
 
 const activeCompanyStorageKey = "forge.activeCompanyId";
+const companiesStorageKey = "forge.companies";
+const userStorageKey = "forge.user";
+
+function readCached<T>(key: string): T | undefined {
+  const value = window.localStorage.getItem(key);
+  if (!value) return undefined;
+  try { return JSON.parse(value) as T; } catch { return undefined; }
+}
+
+function writeCached<T>(key: string, value: T | undefined): void {
+  if (value === undefined) { window.localStorage.removeItem(key); return; }
+  try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
+}
 
 export type CompanyContextValue = {
   user?: ApiUser;
@@ -41,10 +54,23 @@ function isScopedDetailPath(pathname: string, companyId: string): string | undef
 }
 
 export function CompanyProvider({ children }: { children: ReactNode }): ReactElement {
-  const [user, setUser] = useState<ApiUser>();
-  const [companies, setCompanies] = useState<ApiCompany[]>([]);
-  const [currentCompany, setCurrentCompany] = useState<ApiCompany>();
-  const [loading, setLoading] = useState(true);
+  const cachedCompanies = readCached<ApiCompany[]>(companiesStorageKey);
+  const cachedUser = readCached<ApiUser>(userStorageKey);
+  const initialCompanies = cachedCompanies ? sortCompanies(cachedCompanies) : [];
+  const params = new URLSearchParams(window.location.search);
+  const urlSelection = params.get("company");
+  const storedSelection = window.localStorage.getItem(activeCompanyStorageKey);
+  const initialCurrentCompany = initialCompanies.length
+    ? (initialCompanies.find((company) => company.id === urlSelection)
+      ?? initialCompanies.find((company) => company.id === storedSelection)
+      ?? initialCompanies.find((company) => company.status === "active")
+      ?? initialCompanies.find((company) => company.status === "paused")
+      ?? initialCompanies.find((company) => company.status === "archived"))
+    : undefined;
+  const [user, setUser] = useState<ApiUser | undefined>(cachedUser);
+  const [companies, setCompanies] = useState<ApiCompany[]>(initialCompanies);
+  const [currentCompany, setCurrentCompany] = useState<ApiCompany | undefined>(initialCurrentCompany);
+  const [loading, setLoading] = useState(!cachedUser || initialCompanies.length === 0);
   const [error, setError] = useState<string>();
 
   const resolveSelection = useCallback((visibleCompanies: ApiCompany[]): void => {
@@ -72,12 +98,15 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     setError(undefined);
     try {
       const result = await readJson<{ companies: ApiCompany[] }>("/api/companies");
-      setCompanies(sortCompanies(result.companies));
+      const sorted = sortCompanies(result.companies);
+      setCompanies(sorted);
+      writeCached(companiesStorageKey, result.companies);
       resolveSelection(result.companies);
     } catch (reason) {
       setCompanies([]);
       setCurrentCompany(undefined);
       window.localStorage.removeItem(activeCompanyStorageKey);
+      writeCached(companiesStorageKey, undefined);
       if (new URLSearchParams(window.location.search).has("company")) replaceCompanyLocation();
       setError(reason instanceof Error && reason.message === "Authentication required" ? "Unable to load companies" : "Unable to load companies");
     } finally {
@@ -93,13 +122,18 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     ]).then(([me, result]) => {
       if (cancelled) return;
       setUser(me.user);
-      setCompanies(sortCompanies(result.companies));
+      writeCached(userStorageKey, me.user);
+      const sorted = sortCompanies(result.companies);
+      setCompanies(sorted);
+      writeCached(companiesStorageKey, result.companies);
       resolveSelection(result.companies);
     }).catch((reason) => {
       if (cancelled) return;
       setCompanies([]);
       setCurrentCompany(undefined);
       window.localStorage.removeItem(activeCompanyStorageKey);
+      writeCached(companiesStorageKey, undefined);
+      writeCached(userStorageKey, undefined);
       setError(reason instanceof Error && reason.message === "Authentication required" ? "Unable to load companies" : "Unable to load companies");
     }).finally(() => {
       if (!cancelled) setLoading(false);

@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import type { ForgeConfig } from "../config.js";
 import type { HealthCheck } from "../health.js";
 import { isLegacyDurableIdentifier, runtimeIdentifiers } from "../runtime-identifiers.js";
-import { approvePlanUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, recordProgressUpdate, rejectPlanUpdate, requestSupplementalReviewUpdate, startDevelopmentUpdate, startPlanningUpdate } from "./workflows.js";
+import { approvePlanUpdate, cancelDevelopmentUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, recordProgressUpdate, rejectPlanUpdate, requestSupplementalReviewUpdate, retryDevelopmentUpdate, startDevelopmentUpdate, startPlanningUpdate } from "./workflows.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
@@ -251,6 +251,30 @@ export async function startIssueDevelopment(config: ForgeConfig, workflowId: str
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
     return IssueWorkflowStateSchema.parse(await handle.executeUpdate(startDevelopmentUpdate, { args: [validatedInput] }));
+  } finally { temporalClient.connection.close(); }
+}
+
+export async function retryIssueDevelopment(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  const validatedInput = StartPlanningInputSchema.parse(input);
+  assertPayloadWithinLimit("retry development command", validatedInput);
+  const temporalClient = await connectTemporal(config);
+  try {
+    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(retryDevelopmentUpdate, { args: [validatedInput] }));
+  } finally { temporalClient.connection.close(); }
+}
+
+export async function cancelIssueDevelopment(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  const validatedInput = StartPlanningInputSchema.parse(input);
+  assertPayloadWithinLimit("cancel development command", validatedInput);
+  const temporalClient = await connectTemporal(config);
+  try {
+    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(cancelDevelopmentUpdate, { args: [validatedInput] }));
   } finally { temporalClient.connection.close(); }
 }
 

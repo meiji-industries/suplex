@@ -129,9 +129,32 @@ export class WorktreeManager {
       throw new WorktreeFailure("delivery-inspection-failed", "Git could not inspect the exact Developer delivery");
     }
   }
+
+  async reuse(input: WorktreeInput): Promise<WorktreeRecord> {
+    if (!taskIdPattern.test(input.taskId) || !shaPattern.test(input.targetBaseSha)) throw new WorktreeFailure("invalid-reuse-coordinate", "Preserved worktree coordinates are invalid");
+    await canonicalDirectory(input.repositoryPath, "repository-unavailable");
+    const worktreeRoot = await canonicalDirectory(input.worktreeRoot, "worktree-root-unavailable");
+    const branchName = input.branchName ?? `forge/issue/${input.taskId}`;
+    const worktreePath = resolve(worktreeRoot, input.taskId);
+    if (!withinRoot(worktreeRoot, worktreePath)) throw new WorktreeFailure("worktree-escape", "Preserved worktree escaped the configured root");
+    const canonicalWorktree = await canonicalDirectory(worktreePath, "worktree-unavailable");
+    try {
+      const [actualRoot, actualBranch, baseCommit] = await Promise.all([
+        this.git.run(["rev-parse", "--show-toplevel"], canonicalWorktree),
+        this.git.run(["symbolic-ref", "--short", "HEAD"], canonicalWorktree),
+        this.git.run(["merge-base", "--is-ancestor", input.targetBaseSha, "HEAD"], canonicalWorktree).then(() => "ancestor").catch(() => "not-ancestor"),
+      ]);
+      if (actualRoot !== canonicalWorktree || actualBranch !== branchName || baseCommit !== "ancestor") throw new WorktreeFailure("worktree-reuse-mismatch", "Preserved worktree ownership or target base could not be proven");
+      return { branchName, worktreePath: canonicalWorktree, targetBaseSha: input.targetBaseSha };
+    } catch (error) {
+      if (error instanceof WorktreeFailure) throw error;
+      throw new WorktreeFailure("worktree-reuse-mismatch", "Preserved worktree ownership or target base could not be proven");
+    }
+  }
 }
 
 export interface GitCommandGuard {
+  directory: string;
   env: NodeJS.ProcessEnv;
   cleanup(): Promise<void>;
 }
@@ -159,6 +182,7 @@ exit 125
   await chmod(join(directory, "git"), 0o700);
   await chmod(join(directory, "gh"), 0o700);
   return {
+    directory,
     env: { ...process.env, PATH: `${directory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`, FORGE_GIT_REAL_BIN: gitBin },
     async cleanup() { await rm(directory, { recursive: true, force: true }); },
   };

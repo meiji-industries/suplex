@@ -56,6 +56,14 @@ interface DeveloperProfile {
   provider: string;
 }
 
+interface PriorDeveloperExecution {
+  id: string;
+  status: string;
+  branch_name: string;
+  worktree_path: string;
+  target_base_sha: string;
+}
+
 export interface DeveloperServiceOptions {
   command?: string;
   processRunner?: LeadProcessRunner;
@@ -103,6 +111,14 @@ function scopedRepository(root: string, candidate: string): Promise<string> {
   });
 }
 
+async function processStartIdentity(pid: number, fallback: string): Promise<string> {
+  try {
+    const result = await execFileAsync("ps", ["-p", String(pid), "-o", "lstart="], { maxBuffer: 4 * 1024 });
+    const value = result.stdout.trim();
+    return value ? `${pid}:${value}` : `${pid}:${fallback}`;
+  } catch { return `${pid}:${fallback}`; }
+}
+
 export class DeveloperService {
   private readonly artifacts: ArtifactStore;
   private readonly command: string;
@@ -140,27 +156,30 @@ export class DeveloperService {
     if (plan.kind !== "plan" || !Array.isArray(plan.steps) || !plan.steps.length) throw new AgentFailure("plan-unavailable", "A final Lead plan is required before development");
     const profile = this.database.authQuery((db) => db.prepare("SELECT id, model, provider FROM forge_profiles WHERE id = ?").get(input.roleProfiles.developer) as DeveloperProfile | undefined);
     if (!profile || profile.provider !== "codex") throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
-    const targetBaseSha = (await execFileAsync("git", ["rev-parse", "--verify", `refs/heads/${projectRevision.data.targetBranch}`], { cwd: repositoryPath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
+    const prior = input.supersedesExecutionId ? this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.supersedesExecutionId, input.taskId, input.companyId, input.workflowId) as PriorDeveloperExecution | undefined) : undefined;
+    if (input.supersedesExecutionId && (!prior || !["interrupted", "cancelled", "failed"].includes(prior.status))) throw new AgentFailure("retry-not-available", "Only an interrupted or cancelled Developer attempt can be retried");
+    const targetBaseSha = prior?.target_base_sha ?? (await execFileAsync("git", ["rev-parse", "--verify", `refs/heads/${projectRevision.data.targetBranch}`], { cwd: repositoryPath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
     const branchName = `forge/issue/${input.taskId}`;
     const worktreeRoot = await scopedRepository(this.config.worktreeRoot, projectRevision.data.worktreeRoot);
     const attempt = Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
     const executionId = `developer_${randomBytes(12).toString("hex")}`;
     let worktree;
     try {
-      worktree = await this.worktrees.create({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName });
+      worktree = input.reuseWorktree ? await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName }) : await this.worktrees.create({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName });
     } catch (error) {
       if (error instanceof Error && "code" in error) throw new AgentFailure(String((error as { code: string }).code), error.message);
       throw error;
     }
     const startedAt = this.now().toISOString();
-    this.database.authTransaction((db) => db.prepare(`INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, 1)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, startedAt, startedAt));
+    const wrapperId = `wrapper_${randomBytes(12).toString("hex")}`;
+    let guard: Awaited<ReturnType<typeof createGitCommandGuard>> | undefined;
+    guard = await createGitCommandGuard(this.config.runtimeRoot);
+    this.database.authTransaction((db) => db.prepare(`INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, 1)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, wrapperId, guard!.directory, prior?.id ?? null, startedAt, startedAt));
     const prompt = this.prompt(context.title, brief, planText, leadEvidence, worktree);
     const evidenceLines = [JSON.stringify({ type: "forge.prompt", text: redact(prompt) })];
     let sessionRef: string | undefined;
     let rawSessionId: string | undefined;
-    let guard: Awaited<ReturnType<typeof createGitCommandGuard>> | undefined;
     try {
-      guard = await createGitCommandGuard(this.config.runtimeRoot);
       const heartbeat = setInterval(() => void this.heartbeat(executionId), 5_000);
       try {
         const result = await this.processRunner({
@@ -168,7 +187,8 @@ export class DeveloperService {
           args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "--model", profile.model, prompt],
           cwd: worktree.worktreePath,
           env: guard.env,
-          onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
+          detached: true,
+          onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); },
           onLine: async (line) => {
             const sanitized = safeJsonLine(line);
             evidenceLines.push(sanitized);

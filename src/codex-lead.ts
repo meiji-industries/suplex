@@ -82,6 +82,7 @@ export interface LeadInvocation {
   args: string[];
   cwd: string;
   env?: NodeJS.ProcessEnv;
+  detached?: boolean;
   onStart: (pid: number, startedAt: string) => Promise<void>;
   onLine: (line: string) => Promise<void>;
 }
@@ -128,7 +129,7 @@ export class FileSessionStore implements SessionStore {
 
 function defaultProcessRunner(invocation: LeadInvocation): Promise<LeadProcessResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(invocation.command, invocation.args, { cwd: invocation.cwd, env: invocation.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(invocation.command, invocation.args, { cwd: invocation.cwd, env: invocation.env, detached: invocation.detached, stdio: ["ignore", "pipe", "pipe"] });
     const startedAt = new Date().toISOString();
     let stderr = "";
     let buffer = "";

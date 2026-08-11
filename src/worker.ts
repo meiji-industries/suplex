@@ -6,6 +6,7 @@ import { ForgeDatabase } from "./database.js";
 import { createActivities } from "./temporal/activities.js";
 import { StructuredLogger } from "./logging.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
+import { reconcileDeveloperExecutions } from "./developer-recovery.js";
 
 export async function runWorker(config: ForgeConfig = loadConfig()): Promise<void> {
   const database = new ForgeDatabase(config.databasePath);
@@ -16,6 +17,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   let worker: Worker | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
   try {
+    await reconcileDeveloperExecutions(database);
     connection = await NativeConnection.connect({ address: config.temporalAddress });
     worker = await Worker.create({
       connection,

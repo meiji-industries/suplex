@@ -6,6 +6,7 @@ import { ArtifactStore } from "../artifacts.js";
 import { redact } from "../logging.js";
 import { AgentService } from "../codex-lead.js";
 import { DeveloperService } from "../codex-developer.js";
+import { cancelDeveloperExecution } from "../developer-recovery.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { IssueWorkflowStateSchema, type IssueActivities, type IssueWorkflowState } from "./issue-contracts.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
@@ -84,6 +85,9 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     },
     async runDeveloperExecution(input) {
       return developer.run(input);
+    },
+    async cancelDeveloperExecution(input) {
+      return cancelDeveloperExecution(database, input.executionId);
     },
     async recordPlanDecision(input) {
       const actor = database.authQuery((db) => db.prepare("SELECT id, role, status FROM forge_users WHERE id = ?").get(input.actorUserId) as { id: string; role: string; status: string } | undefined);

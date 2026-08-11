@@ -19,6 +19,11 @@ const { runSupplementalReview, consolidateLeadPlan } = proxyActivities<IssueActi
 });
 const { runDeveloperExecution } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
+  retry: { maximumAttempts: 1 },
+});
+const { cancelDeveloperExecution } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "1 minute",
+  retry: { maximumAttempts: 1 },
 });
 const { recordPlanDecision } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
@@ -47,6 +52,8 @@ export const requestSupplementalReviewUpdate = defineUpdate<IssueWorkflowState, 
 export const approvePlanUpdate = defineUpdate<IssueWorkflowState, [PlanCommandInput]>("approvePlan");
 export const rejectPlanUpdate = defineUpdate<IssueWorkflowState, [PlanCommandInput]>("rejectPlan");
 export const startDevelopmentUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("startDevelopment");
+export const retryDevelopmentUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("retryDevelopment");
+export const cancelDevelopmentUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("cancelDevelopment");
 const leadPlanningPatch = "forge-lead-planning-v1";
 const planGovernancePatch = "forge-plan-governance-v1";
 
@@ -168,6 +175,35 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
     if (state.phase !== "ready_for_development") throw new Error("Development can only start after plan approval");
     if (!state.planMaterial || !state.leadOutputArtifactId || !state.leadSessionRef) throw new Error("An approved material Lead plan is required before development");
+  } });
+  setHandler(retryDevelopmentUpdate, async (rawInput) => {
+    assertPayloadWithinLimit("retry development command", rawInput);
+    const command = StartPlanningInputSchema.parse(rawInput);
+    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "development", owner: "lead", allowedCommands: [], pendingAction: "Developer retry", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    await projectIssueState(state);
+    const result = await runDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, supersedesExecutionId: state.developerExecutionId!, reuseWorktree: true });
+    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? [] : ["retry_development"], pendingAction: result.outcome === "completed" ? "Lead delivery review" : "Developer retry is available", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, worktreePath: result.worktreePath, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome });
+    await projectIssueState(state);
+    void command;
+    return state;
+  }, { validator(rawInput) {
+    const command = StartPlanningInputSchema.parse(rawInput);
+    if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
+    if (state.phase !== "development" && state.phase !== "delivery_blocked") throw new Error("Developer retry is not available in the current phase");
+    if (!state.developerExecutionId || !state.planMaterial || !state.leadOutputArtifactId || !state.leadSessionRef) throw new Error("A preserved Developer attempt and approved plan are required before retry");
+  } });
+  setHandler(cancelDevelopmentUpdate, async (rawInput) => {
+    assertPayloadWithinLimit("cancel development command", rawInput);
+    const command = StartPlanningInputSchema.parse(rawInput);
+    const result = await cancelDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, executionId: state.developerExecutionId! });
+    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: result.status === "cancelled" ? ["retry_development"] : [], pendingAction: result.status === "cancelled" ? "Developer turn cancelled; retry or continue" : "Operator must verify Developer ownership", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerOutcome: null });
+    await projectIssueState(state);
+    void command;
+    return state;
+  }, { validator(rawInput) {
+    const command = StartPlanningInputSchema.parse(rawInput);
+    if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
+    if (state.phase !== "development" || !state.developerExecutionId) throw new Error("Developer cancellation is not available in the current phase");
   } });
   setHandler(rejectPlanUpdate, async (rawInput) => {
     assertPayloadWithinLimit("plan revision command", rawInput);

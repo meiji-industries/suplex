@@ -28,7 +28,7 @@ test("initializes migrations in WAL mode and preserves probe state after reopeni
       companyId: "company-1",
       status: "running",
     });
-    expect(reopened.health().migrationVersion).toBe(7);
+    expect(reopened.health().migrationVersion).toBe(8);
     reopened.close();
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -70,7 +70,7 @@ test("adopts a pre-Drizzle database without rewriting existing probe state", asy
       companyId: "legacy-company",
       status: "running",
     });
-    expect(adopted.health()).toMatchObject({ walMode: true, migrationVersion: 7 });
+    expect(adopted.health()).toMatchObject({ walMode: true, migrationVersion: 8 });
     adopted.close();
 
     const reopened = new ForgeDatabase(filename);

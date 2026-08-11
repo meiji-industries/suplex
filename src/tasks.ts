@@ -8,7 +8,7 @@ import { ArtifactFailure, ArtifactStore, type StoredArtifact } from "./artifacts
 import { LeadOutputSchema, type LeadOutput } from "./codex-lead.js";
 import { ForgeDatabase } from "./database.js";
 import { ProjectFailure, ProjectService, type ProjectRole } from "./projects.js";
-import { approveIssuePlan, rejectIssuePlan, requestIssueSupplementalReview, startIssueDevelopment, startIssuePlanning, startIssueWorkflow } from "./temporal/service.js";
+import { approveIssuePlan, cancelIssueDevelopment, rejectIssuePlan, requestIssueSupplementalReview, retryIssueDevelopment, startIssueDevelopment, startIssuePlanning, startIssueWorkflow } from "./temporal/service.js";
 import type { IssueWorkflowInput, IssueWorkflowState, StartPlanningInput } from "./temporal/issue-contracts.js";
 
 export type TaskPhase = "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "delivery_blocked";
@@ -132,6 +132,8 @@ export interface IssueWorkflowPort {
   approvePlan?: (workflowId: string, input: StartPlanningInput & { note?: string }) => Promise<IssueWorkflowState>;
   rejectPlan?: (workflowId: string, input: StartPlanningInput & { note?: string }) => Promise<IssueWorkflowState>;
   startDevelopment?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
+  retryDevelopment?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
+  cancelDevelopment?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
 }
 
 interface TaskServiceOptions {
@@ -246,6 +248,8 @@ export class TaskService {
       approvePlan: (workflowId, input) => approveIssuePlan(config, workflowId, input),
       rejectPlan: (workflowId, input) => rejectIssuePlan(config, workflowId, input),
       startDevelopment: (workflowId, input) => startIssueDevelopment(config, workflowId, input),
+      retryDevelopment: (workflowId, input) => retryIssueDevelopment(config, workflowId, input),
+      cancelDevelopment: (workflowId, input) => cancelIssueDevelopment(config, workflowId, input),
     };
   }
 
@@ -364,6 +368,14 @@ export class TaskService {
 
   async startDevelopment(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
     return this.planCommand(actorUserId, taskId, expectedRevision, "start_development", (workflowId, input) => this.workflow.startDevelopment ? this.workflow.startDevelopment(workflowId, input) : Promise.reject(new Error("Developer workflow is unavailable")));
+  }
+
+  async retryDevelopment(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
+    return this.planCommand(actorUserId, taskId, expectedRevision, "retry_development", (workflowId, input) => this.workflow.retryDevelopment ? this.workflow.retryDevelopment(workflowId, input) : Promise.reject(new Error("Developer retry workflow is unavailable")));
+  }
+
+  async cancelDevelopment(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
+    return this.planCommand(actorUserId, taskId, expectedRevision, "cancel_development", (workflowId, input) => this.workflow.cancelDevelopment ? this.workflow.cancelDevelopment(workflowId, input) : Promise.reject(new Error("Developer cancellation workflow is unavailable")));
   }
 
   async approvePlan(actorUserId: string, taskId: string, expectedRevision: number, note?: string): Promise<ForgeTask> {

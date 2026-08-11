@@ -6,7 +6,7 @@ const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*
 
 export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "delivery_blocked"]);
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
-export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "record_progress", "start_development"]);
+export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "record_progress", "start_development", "retry_development", "cancel_development"]);
 export const IssuePlanDecisionSchema = z.enum(["approve", "reject"]);
 
 export const IssueContinuationStateSchema = z.object({
@@ -207,6 +207,8 @@ export interface DeveloperExecutionActivityInput {
   roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
   leadSessionRef: string;
   leadOutputArtifactId: string;
+  supersedesExecutionId?: string | undefined;
+  reuseWorktree?: boolean | undefined;
 }
 
 export interface DeveloperExecutionResult {
@@ -225,6 +227,12 @@ export interface DeveloperExecutionResult {
   outcome: "completed" | "blocked";
 }
 
+export interface DeveloperCancellationActivityInput {
+  taskId: string;
+  companyId: string;
+  executionId: string;
+}
+
 export interface IssueActivities {
   projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState>;
   runLeadPlanning(input: LeadPlanningActivityInput): Promise<LeadPlanningResult>;
@@ -232,4 +240,5 @@ export interface IssueActivities {
   consolidateLeadPlan(input: ConsolidateLeadPlanActivityInput): Promise<LeadPlanningResult>;
   recordPlanDecision(input: PlanDecisionActivityInput): Promise<{ decisionId: string }>;
   runDeveloperExecution(input: DeveloperExecutionActivityInput): Promise<DeveloperExecutionResult>;
+  cancelDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<{ status: "cancelled" | "ownership_ambiguous"; reason?: string | undefined }>;
 }

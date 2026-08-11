@@ -22,6 +22,7 @@ export const ForgeEnvironmentSchema = z.object({
   FORGE_TEMPORAL_NAMESPACE: z.string().min(1).optional(),
   FORGE_TASK_QUEUE: z.string().min(1).optional(),
   FORGE_DELIVERY_REPAIR_LIMIT: z.string().regex(/^\d+$/).optional(),
+  FORGE_CODEX_CAPACITY: z.string().regex(/^\d+$/).optional(),
 }).passthrough();
 
 export const ForgeConfigSchema = z.object({
@@ -40,6 +41,7 @@ export const ForgeConfigSchema = z.object({
   temporalNamespace: z.string().min(1),
   taskQueue: z.string().min(1),
   deliveryRepairCycleLimit: z.number().int().min(0).max(5),
+  externalTurnCapacity: z.number().int().min(1).max(64),
   installationId: z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/),
 });
 

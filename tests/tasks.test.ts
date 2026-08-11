@@ -110,3 +110,19 @@ test("company scope denies task discovery and mutation", async () => {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }
 });
+
+test("continues terminal work as a new linked issue without rewriting the original history", async () => {
+  const value = await fixture();
+  try {
+    const original = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Finished issue", description: "Preserve this history.", idempotencyKey: "continue-task-0001", images: [] });
+    value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'delivery_reviewed', owner = 'human', allowed_commands_json = '[]', pending_action = NULL, revision = 7 WHERE task_id = ?").run(original.task.id));
+    const continued = await value.tasks.continueWork(value.adminId, original.task.id);
+    expect(continued.original.phase).toBe("delivery_reviewed");
+    expect(continued.successor.predecessorTaskId).toBe(original.task.id);
+    expect(continued.successor.id).not.toBe(original.task.id);
+    expect(continued.successor.description).toContain(`Continued from Forge issue ${original.task.id}`);
+    expect(value.database.authQuery((db) => db.prepare("SELECT phase, revision FROM forge_issue_projections WHERE task_id = ?").get(original.task.id))).toEqual({ phase: "delivery_reviewed", revision: 7 });
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});

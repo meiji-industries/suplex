@@ -36,14 +36,14 @@ export function renderHealthPage(snapshot: HealthSnapshot): string {
 </html>`;
 }
 
-export function renderApplicationPage(view: "auth" | "admin" | "projects" | "tasks"): string {
+export function renderApplicationPage(view: "auth" | "admin" | "projects" | "tasks" | "attention"): string {
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f8f8fa">
-    <title>Forge · ${view === "auth" ? "Sign in" : view === "admin" ? "Administration" : view === "projects" ? "Projects" : "Tasks"}</title>
+    <title>Forge · ${view === "auth" ? "Sign in" : view === "admin" ? "Administration" : view === "projects" ? "Projects" : view === "tasks" ? "Tasks" : "Attention"}</title>
     <link rel="stylesheet" href="/assets/forge-ui.css">
   </head>
   <body>

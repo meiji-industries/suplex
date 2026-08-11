@@ -10,6 +10,7 @@ import { cancelDeveloperExecution } from "../developer-recovery.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { DeliveryDecisionActivityInputSchema, IssueWorkflowStateSchema, type IssueActivities, type IssueWorkflowState } from "./issue-contracts.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
+import { CapacityManager } from "../capacity.js";
 
 export interface ActivityOptions {
   agent?: Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery">>;
@@ -20,8 +21,18 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
   const logger = new StructuredLogger();
   const defaultAgent = new AgentService(database, config);
   const defaultDeveloper = new DeveloperService(database, config);
+  const capacity = new CapacityManager(database, config);
   const agent = options.agent;
   const developer = options.developer ?? defaultDeveloper;
+  const withCapacity = async <T>(input: { taskId: string; companyId: string; workflowId: string }, turnKind: "lead" | "developer" | "review", operation: () => Promise<T>): Promise<T> => {
+    const request = capacity.request({ ...input, turnKind });
+    let admitted = capacity.tryAcquire(request.id);
+    while (!admitted.acquired) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      admitted = capacity.tryAcquire(request.id);
+    }
+    try { return await operation(); } finally { capacity.release(request.id, "turn-completed"); }
+  };
   return {
     async recordProbeStarted(input: ProbeWorkflowInput): Promise<ProbeWorkflowState> {
       const validatedInput = ProbeWorkflowInputSchema.parse(input);
@@ -82,22 +93,22 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       return state;
     },
     async runLeadPlanning(input) {
-      return (agent?.runLeadPlanning ?? defaultAgent.runLeadPlanning.bind(defaultAgent))(input);
+      return withCapacity(input, "lead", () => (agent?.runLeadPlanning ?? defaultAgent.runLeadPlanning.bind(defaultAgent))(input));
     },
     async runSupplementalReview(input) {
-      return (agent?.runSupplementalReview ?? defaultAgent.runSupplementalReview.bind(defaultAgent))(input);
+      return withCapacity(input, "review", () => (agent?.runSupplementalReview ?? defaultAgent.runSupplementalReview.bind(defaultAgent))(input));
     },
     async consolidateLeadPlan(input) {
-      return (agent?.consolidateLeadPlan ?? defaultAgent.consolidateLeadPlan.bind(defaultAgent))(input);
+      return withCapacity(input, "lead", () => (agent?.consolidateLeadPlan ?? defaultAgent.consolidateLeadPlan.bind(defaultAgent))(input));
     },
     async reviewDelivery(input) {
-      return (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(input);
+      return withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(input));
     },
     async runDeveloperExecution(input) {
-      return (developer.run ?? defaultDeveloper.run.bind(defaultDeveloper))(input);
+      return withCapacity(input, "developer", () => (developer.run ?? defaultDeveloper.run.bind(defaultDeveloper))(input));
     },
     async runDeveloperRepair(input) {
-      return (developer.runRepair ?? defaultDeveloper.runRepair.bind(defaultDeveloper))(input);
+      return withCapacity(input, "developer", () => (developer.runRepair ?? defaultDeveloper.runRepair.bind(defaultDeveloper))(input));
     },
     async cancelDeveloperExecution(input) {
       return cancelDeveloperExecution(database, input.executionId);

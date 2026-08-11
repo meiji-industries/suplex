@@ -3,8 +3,8 @@ import { expect, test } from "vitest";
 import { createTestConfig } from "../src/config.js";
 import { healthProbeAddress, readinessProbePath } from "../src/runtime.js";
 
-test("uses the public auth status endpoint for startup readiness", () => {
-  expect(readinessProbePath()).toBe("/api/auth/status");
+test("probes the actual health page for startup readiness", () => {
+  expect(readinessProbePath()).toBe("/health");
 });
 
 test("probes the local backend when Tailscale Serve owns HTTPS", () => {

@@ -5,6 +5,7 @@ export const HEALTH_CHECK_IDS = [
   "worker",
   "codex-auth",
   "gh-auth",
+  "backup",
 ] as const;
 
 export type HealthCheckId = (typeof HEALTH_CHECK_IDS)[number];

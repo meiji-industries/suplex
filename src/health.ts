@@ -29,6 +29,7 @@ export interface HostHealthDependencies {
   worker: () => Promise<HealthCheck>;
   codexAuth: () => Promise<HealthCheck>;
   ghAuth: () => Promise<HealthCheck>;
+  backup?: () => Promise<HealthCheck>;
 }
 
 async function safelyCheck(id: HealthCheckId, label: string, check: () => Promise<HealthCheck>): Promise<HealthCheck> {
@@ -53,6 +54,7 @@ export async function inspectHostHealth(config: ForgeConfig, dependencies: HostH
     safelyCheck("worker", "Worker and task queue", dependencies.worker),
     safelyCheck("codex-auth", "Codex authentication", dependencies.codexAuth),
     safelyCheck("gh-auth", "GitHub CLI authentication", dependencies.ghAuth),
+    ...(dependencies.backup ? [safelyCheck("backup", "Backup verification", dependencies.backup)] : []),
   ]);
   return HealthSnapshotSchema.parse({
     generatedAt: new Date().toISOString(),

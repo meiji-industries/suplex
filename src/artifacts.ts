@@ -3,6 +3,8 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { basename, join, relative, resolve, sep } from "node:path";
 
+import { CompanyIdSchema } from "./schemas.js";
+
 export interface ArtifactInput {
   filename: string;
   mimeType: string;
@@ -53,15 +55,16 @@ export class ArtifactStore {
   constructor(private readonly root: string) {}
 
   async put(companyId: string, kind: StoredArtifact["kind"], input: ArtifactInput): Promise<StoredArtifact> {
+    const validatedCompanyId = CompanyIdSchema.parse(companyId);
     const filename = safeFilename(input.filename);
     if (!input.mimeType || input.mimeType.length > 120 || /[\r\n]/.test(input.mimeType)) throw new ArtifactFailure("invalid-mime-type", "Artifact type is invalid");
     if (input.bytes.length === 0 || input.bytes.length > 8 * 1024 * 1024) throw new ArtifactFailure("invalid-size", "Artifact size is invalid");
     const id = `artifact_${randomUUID().replaceAll("-", "")}`;
-    const storagePath = join(companyId, `${id}.bin`);
+    const storagePath = join(validatedCompanyId, `${id}.bin`);
     const absolutePath = safeStoragePath(this.root, storagePath);
     const sha256 = createHash("sha256").update(input.bytes).digest("hex");
     const temporaryPath = `${absolutePath}.${randomUUID()}.tmp`;
-    await mkdir(resolve(this.root, companyId), { recursive: true, mode: 0o700 });
+    await mkdir(resolve(this.root, validatedCompanyId), { recursive: true, mode: 0o700 });
     try {
       await writeFile(temporaryPath, input.bytes, { flag: "wx", mode: 0o600 });
       const written = await readFile(temporaryPath);
@@ -74,15 +77,21 @@ export class ArtifactStore {
     return { id, companyId, kind, filename, mimeType: input.mimeType, byteSize: input.bytes.length, sha256, storagePath, createdAt: new Date().toISOString() };
   }
 
-  async read(artifact: Pick<StoredArtifact, "storagePath" | "sha256">): Promise<Buffer> {
-    const bytes = await readFile(safeStoragePath(this.root, artifact.storagePath));
+  async read(artifact: Pick<StoredArtifact, "companyId" | "storagePath" | "sha256">): Promise<Buffer> {
+    const companyId = CompanyIdSchema.parse(artifact.companyId);
+    const absolutePath = safeStoragePath(this.root, artifact.storagePath);
+    if (relative(resolve(this.root, companyId), absolutePath).startsWith(`..${sep}`)) throw new ArtifactFailure("artifact-company-scope", "Artifact is outside the company root");
+    const bytes = await readFile(absolutePath);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     if (sha256 !== artifact.sha256) throw new ArtifactFailure("hash-mismatch", "Artifact hash verification failed");
     return bytes;
   }
 
-  readSync(artifact: Pick<StoredArtifact, "storagePath" | "sha256">): Buffer {
-    const bytes = readFileSync(safeStoragePath(this.root, artifact.storagePath));
+  readSync(artifact: Pick<StoredArtifact, "companyId" | "storagePath" | "sha256">): Buffer {
+    const companyId = CompanyIdSchema.parse(artifact.companyId);
+    const absolutePath = safeStoragePath(this.root, artifact.storagePath);
+    if (relative(resolve(this.root, companyId), absolutePath).startsWith(`..${sep}`)) throw new ArtifactFailure("artifact-company-scope", "Artifact is outside the company root");
+    const bytes = readFileSync(absolutePath);
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     if (sha256 !== artifact.sha256) throw new ArtifactFailure("hash-mismatch", "Artifact hash verification failed");
     return bytes;

@@ -202,7 +202,7 @@ export function healthProbeAddress(config: ForgeConfig): string {
 }
 
 export function readinessProbePath(): string {
-  return "/api/auth/status";
+  return "/health";
 }
 
 async function waitForHealthPage(config: ForgeConfig, timeoutMs = 30_000): Promise<void> {
@@ -210,8 +210,14 @@ async function waitForHealthPage(config: ForgeConfig, timeoutMs = 30_000): Promi
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${probeAddress}${readinessProbePath()}`, { signal: AbortSignal.timeout(2_000) });
-      if (response.ok) {
+      const response = await fetch(`${probeAddress}${readinessProbePath()}`, {
+        redirect: "manual",
+        signal: AbortSignal.timeout(2_000),
+      });
+      const redirectedToAuthentication = response.status >= 300
+        && response.status < 400
+        && (response.headers.get("location") ?? "").startsWith("/auth");
+      if (response.ok || redirectedToAuthentication) {
         return;
       }
     } catch {
@@ -260,7 +266,14 @@ async function spawnForgeProcess(name: string, script: string, config: ForgeConf
 
 export async function startForge(config: ForgeConfig, foreground: boolean): Promise<ProcessRegistry> {
   await mkdir(config.runtimeRoot, { recursive: true });
-  const existingRegistry = await readProcessRegistry(`${config.runtimeRoot}/owned-processes.json`).catch(() => undefined);
+  let existingRegistry: ProcessRegistry | undefined;
+  try {
+    existingRegistry = await readProcessRegistry(`${config.runtimeRoot}/owned-processes.json`);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error("Forge owned-process registry could not be read safely; inspect it before starting another runtime", { cause: error });
+    }
+  }
   if (existingRegistry?.processes.length) {
     throw new Error("Forge already has recorded owned processes; use restart or stop before starting another runtime");
   }

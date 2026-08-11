@@ -25,6 +25,7 @@ export interface ForgeConfig {
   temporalNamespace: string;
   taskQueue: string;
   deliveryRepairCycleLimit: number;
+  externalTurnCapacity: number;
   installationId: string;
 }
 
@@ -153,6 +154,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
   const temporalNamespace = parsedEnvironment.data.FORGE_TEMPORAL_NAMESPACE ?? identifiers.namespace;
   const taskQueue = parsedEnvironment.data.FORGE_TASK_QUEUE ?? identifiers.taskQueue;
   const deliveryRepairCycleLimit = Number(parsedEnvironment.data.FORGE_DELIVERY_REPAIR_LIMIT ?? "2");
+  const externalTurnCapacity = Number(parsedEnvironment.data.FORGE_CODEX_CAPACITY ?? "2");
   if ((isLegacyDurableIdentifier(temporalNamespace) || isLegacyDurableIdentifier(taskQueue)) && parsedEnvironment.data.FORGE_LEGACY_RUNTIME !== "1") {
     throw new UnsafeBindingError("Refusing legacy Forge namespace or task queue; preserve the legacy runtime and migrate explicitly");
   }
@@ -172,6 +174,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
     temporalNamespace,
     taskQueue,
     deliveryRepairCycleLimit,
+    externalTurnCapacity,
     installationId: stableInstallationId,
   });
 }
@@ -196,6 +199,7 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     temporalNamespace: overrides.temporalNamespace ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").namespace,
     taskQueue: overrides.taskQueue ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").taskQueue,
     deliveryRepairCycleLimit: overrides.deliveryRepairCycleLimit ?? 2,
+    externalTurnCapacity: overrides.externalTurnCapacity ?? 2,
     installationId: overrides.installationId ?? "test-installation",
   };
 }

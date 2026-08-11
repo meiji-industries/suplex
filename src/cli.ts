@@ -9,6 +9,7 @@ import { readProcessRegistry, stopOwnedProcesses } from "./process-manager.js";
 import { startForge } from "./runtime.js";
 import { StructuredLogger } from "./logging.js";
 import { runSetup } from "./setup.js";
+import { BackupService } from "./backup.js";
 
 const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
 const foreground = process.argv.includes("--foreground");
@@ -27,10 +28,26 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "help") {
-    process.stdout.write("Usage: pnpm run forge <setup|recover|start|stop|restart> [--foreground]\n");
+    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|restore|start|stop|restart> [--foreground]\n");
     return;
   }
   const config = loadConfig();
+  if (command === "backup" || command === "restore") {
+    const service = new BackupService(config);
+    const archive = process.argv[3];
+    if (command === "backup") {
+      const temporalPath = process.env.FORGE_TEMPORAL_DATA_PATH;
+      if (!archive || !temporalPath) throw new Error("backup requires an archive path and FORGE_TEMPORAL_DATA_PATH");
+      const result = await service.create({ destination: archive, temporalPersistencePath: temporalPath });
+      process.stdout.write(`Backup created at ${result.archivePath} (${result.manifest.entries.length} files, ${result.durationMs}ms)\n`);
+    } else {
+      const destination = process.argv[4];
+      if (!archive || !destination) throw new Error("restore requires an archive path and separate destination");
+      const result = await service.restore(archive, destination);
+      process.stdout.write(`Backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"}\n`);
+    }
+    return;
+  }
   if (command === "recover") {
     const database = new ForgeDatabase(config.databasePath);
     try {

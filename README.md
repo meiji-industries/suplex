@@ -32,7 +32,7 @@ Create Forge-native work from `/tasks`: each task starts as a company-scoped Bac
 
 If the wizard reports that the local Tailscale daemon is unavailable, start and sign in to the Tailscale app, verify `tailscale status`, and rerun setup. The selected Forge configuration is retained; no credentials are collected.
 
-Serve HTTPS is a tailnet endpoint. Verify it from another device joined to the same tailnet; the Forge host itself may not loop back through its own Tailscale IP during the TLS handshake. For local diagnostics, use `http://127.0.0.1:4111/health` and confirm `tailscale serve status` shows the HTTPS proxy.
+Serve HTTPS is a tailnet endpoint. Verify it from another device joined to the same tailnet; the Forge host itself may not loop back through its own Tailscale IP during the TLS handshake. For local diagnostics, use `http://127.0.0.1:4111/health` and confirm `tailscale serve status` shows the HTTPS proxy. The loopback bind is allowed only in this explicit Serve mode; direct mode must bind a Tailscale address.
 
 The command is otherwise intentionally strict: it refuses wildcard, public, LAN, and loopback direct bindings. Open the exact address printed by the command, then append `/health`. The page shows the configured MagicDNS/Tailscale address and separate state for Temporal, SQLite/WAL, artifact storage, the worker task queue, Codex authentication, and GitHub CLI authentication.
 

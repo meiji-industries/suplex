@@ -7,6 +7,13 @@ import { ForgeDatabase } from "../src/database.js";
 import { checkWorker } from "../src/host-health.js";
 import { CodexReadinessProbe, checkGithubAuthentication } from "../src/provider-readiness.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
+import { workerHasLivePollers } from "../src/worker.js";
+
+test("worker readiness requires both live Temporal pollers", () => {
+  expect(workerHasLivePollers({ runState: "RUNNING", workflowPollerState: "POLLING", activityPollerState: "POLLING" })).toBe(true);
+  expect(workerHasLivePollers({ runState: "RUNNING", workflowPollerState: "FAILED", activityPollerState: "POLLING" })).toBe(false);
+  expect(workerHasLivePollers({ runState: "STOPPED", workflowPollerState: "POLLING", activityPollerState: "POLLING" })).toBe(false);
+});
 
 test("worker readiness distinguishes missing, stale, and current registrations", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-worker-health-test-"));

@@ -1,0 +1,179 @@
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+import { expect, test } from "vitest";
+
+import { AcceptanceService } from "../src/acceptance.js";
+import { AttentionService } from "../src/attention.js";
+import { AuthService } from "../src/auth.js";
+import { BackupService, checkBackupHealth } from "../src/backup.js";
+import { CapacityManager } from "../src/capacity.js";
+import { CiService, type CheckSnapshot } from "../src/ci.js";
+import { createTestConfig } from "../src/config.js";
+import { ForgeDatabase } from "../src/database.js";
+import { ForwardMergeService } from "../src/forward-merge.js";
+import { ReleaseService, type GithubPullRequest, type GithubReleasePort } from "../src/github-release.js";
+import { ArtifactStore } from "../src/artifacts.js";
+
+const exec = promisify(execFile);
+const now = "2026-08-11T00:00:00.000Z";
+const baseSha = "a".repeat(40);
+const headSha = "b".repeat(40);
+const treeSha = "c".repeat(40);
+
+async function fixture(): Promise<{ root: string; database: ForgeDatabase; config: ReturnType<typeof createTestConfig> }> {
+  const root = await mkdtemp(join(tmpdir(), "forge-roadmap-slices-"));
+  const config = createTestConfig(root, { artifactRoot: join(root, "artifacts"), dataRoot: join(root, "data") });
+  await mkdir(config.artifactRoot, { recursive: true });
+  const database = new ForgeDatabase(config.databasePath);
+  database.authTransaction((db) => {
+    db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin', 'Admin', 'admin@forge.local', 'admin', 'active', ?, ?)").run(now, now);
+    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-a', 'Company A', 'active', ?)").run(now);
+    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-b', 'Company B', 'active', ?)").run(now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES ('project-a', 'company-a', 'Project A', ?, ?, 'main', 'main', 'pnpm install', 'pnpm test', '[]', '[]', '{}', 'active', 'revision-a', ?, ?)").run(join(root, "repo"), join(root, "worktrees"), now, now);
+    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, actor_user_id, created_at) VALUES ('revision-a', 'project-a', 1, 'identity-a', '{}', 'admin', ?)").run(now);
+    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-a', 'company-a', 'task-brief', 'task.md', 'text/markdown', 4, ?, 'company-a/brief-a', ?)").run("d".repeat(64), now);
+    db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-a', 'company-a', 'project-a', 'Task A', 'brief-a', '[]', '{}', 0, 'workflow-a', 'revision-a', 'task-a-key', ?, ?)").run(now, now);
+    db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task-a', 'company-a', 'project-a', 'workflow-a', 1, 'delivery_blocked', 'human', '[\"record_delivery_decision\"]', 'Decision required', ?, 'workflow-a:1')").run(now);
+  });
+  return { root, database, config };
+}
+
+function addReleaseFixtures(database: ForgeDatabase, status = "draft"): void {
+  database.authTransaction((db) => {
+    for (const [id, kind] of [["opinion-a", "agent-opinion"], ["evidence-a", "agent-evidence"]] as const) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company-a', ?, ?, 'text/markdown', 1, ?, ?, ?)").run(id, kind, `${id}.md`, "e".repeat(64), `company-a/${id}`, now);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES ('lead-a', 'task-a', 'company-a', 'workflow-a', 'lead', 'completed', 1, 'lead-session', ?)").run(now);
+    db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES ('review-a', 'task-a', 'company-a', 'workflow-a', 1, ?, ?, ?, 'lead-a', 'lead-session', 'approved', 'Approved exact delivery', 'opinion-a', 'evidence-a', 0, ?)").run(baseSha, headSha, treeSha, now);
+    db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, created_at, updated_at) VALUES ('release-a', 'task-a', 'company-a', 'workflow-a', 'workflow-a:main:bbbb', 'acme/forge', 'issue/task-a', 'main', ?, ?, ?, ?, 12, 'https://github.com/acme/forge/pull/12', 'Forge task', ?, ?)").run(baseSha, headSha, treeSha, status, now, now);
+  });
+}
+
+const pullRequest = (overrides: Partial<GithubPullRequest> = {}): GithubPullRequest => ({ number: 12, url: "https://github.com/acme/forge/pull/12", repository: "acme/forge", headBranch: "issue/task-a", baseBranch: "main", headSha, baseSha, isDraft: true, state: "open", mergedAt: null, ...overrides });
+
+function fakeGithub(checks: CheckSnapshot[] = []): GithubReleasePort & { pushed: number; ready: number } {
+  return {
+    pushed: 0,
+    ready: 0,
+    async checkAuthentication() {},
+    async getRemoteRepository() { return "acme/forge"; },
+    async pushNormal() { this.pushed += 1; },
+    async listPullRequests() { return []; },
+    async createDraftPullRequest() { return pullRequest(); },
+    async markReadyForReview() { this.ready += 1; },
+    async getPullRequest() { return pullRequest(); },
+    async listChecks() { return checks; },
+  } as GithubReleasePort & { pushed: number; ready: number };
+}
+
+test("capacity is durable, FIFO, bounded, and restart-reconcilable", async () => {
+  const value = await fixture();
+  try {
+    const capacity = new CapacityManager(value.database, { externalTurnCapacity: 1 });
+    const first = capacity.request({ companyId: "company-a", taskId: "task-a", workflowId: "workflow-a", turnKind: "lead", requestedAt: "2026-08-11T00:00:00.001Z" });
+    const second = capacity.request({ companyId: "company-a", taskId: "task-a", workflowId: "workflow-a", turnKind: "developer", requestedAt: "2026-08-11T00:00:00.002Z" });
+    expect(capacity.tryAcquire(first.id).acquired).toBe(true);
+    expect(capacity.tryAcquire(second.id).acquired).toBe(false);
+    expect(capacity.position(second.id)).toBe(1);
+    expect(capacity.release(first.id, "done")).toBe(true);
+    expect(capacity.tryAcquire(second.id).acquired).toBe(true);
+    expect(capacity.reconcile(new Set(), "worker-restart")).toBe(1);
+    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_capacity_requests WHERE id = ?").get(second.id))).toEqual({ status: "stale" });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("attention rebuild is deterministic, scoped, and quiet for ordinary work", async () => {
+  const value = await fixture();
+  try {
+    const auth = new AuthService(value.database, value.config);
+    const attention = new AttentionService(value.database, auth);
+    const first = attention.list("admin");
+    expect(first[0]).toMatchObject({ companyId: "company-a", attentionCount: 1, attention: [expect.objectContaining({ category: "member_decision", taskId: "task-a" })] });
+    value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'development', allowed_commands_json = '[]' WHERE task_id = 'task-a'").run());
+    const rebuilt = attention.list("admin");
+    expect(rebuilt.find((company) => company.companyId === "company-a")?.attention).toEqual([]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_attention_items WHERE company_id = 'company-a' AND active = 1").get())).toEqual({ count: 0 });
+    expect(() => attention.get("admin", "missing-task")).not.toThrow();
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("release publishes one exact reviewed draft and CI accepts only the exact head", async () => {
+  const value = await fixture();
+  try {
+    addReleaseFixtures(value.database);
+    const github = fakeGithub();
+    const service = new ReleaseService(value.database, new ArtifactStore(value.config.artifactRoot), github);
+    const release = await service.publish({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", repositoryPath: value.root, repository: "acme/forge", branchName: "issue/task-a", baseBranch: "main", targetBaseSha: baseSha, subjectCommit: headSha, subjectTree: treeSha, reviewId: "review-a", planSummary: "Authorized plan", deliverySummary: "Exact delivery", verificationSummary: "Local checks passed" });
+    expect(release.pullRequest.isDraft).toBe(true);
+    expect(github.pushed).toBe(1);
+    const checks = [{ name: "Tests / unit", headSha, status: "completed" as const, conclusion: "success" as const, summary: "passed" }];
+    const ci = new CiService(value.database, { async listChecks() { return checks; } });
+    expect((await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: release.releaseId, repository: "acme/forge", expectedHeadSha: headSha, requiredChecks: ["Tests / unit"] })).outcome).toBe("passed");
+    expect((await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: release.releaseId, repository: "acme/forge", expectedHeadSha: headSha, requiredChecks: ["Tests / unit", "Browser"] })).outcome).toBe("missing_required");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("acceptance records a decision, changes draft visibility only, and reconciles manual merge truth", async () => {
+  const value = await fixture();
+  try {
+    addReleaseFixtures(value.database);
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_ci_runs (id, task_id, company_id, release_id, expected_head_sha, status, attempt, summary, created_at, updated_at) VALUES ('ci-a', 'task-a', 'company-a', 'release-a', ?, 'passed', 1, 'passed', ?, ?)").run(headSha, now, now));
+    const github = fakeGithub();
+    const acceptance = new AcceptanceService(value.database, github);
+    const result = await acceptance.accept({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", reviewId: "review-a", ciRunId: "ci-a", repository: "acme/forge", baseBranch: "main", headSha, headTree: treeSha, actorUserId: "admin" });
+    expect(result.status).toBe("accepted");
+    expect(github.ready).toBe(1);
+    expect((await acceptance.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", repository: "acme/forge", number: 12, expectedHeadSha: headSha, expectedBaseBranch: "main" })).outcome).toBe("open");
+    const mergedGithub = { ...github, async getPullRequest() { return pullRequest({ isDraft: false, state: "merged", mergedAt: now }); } };
+    expect((await new AcceptanceService(value.database, mergedGithub).reconcile({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", repository: "acme/forge", number: 12, expectedHeadSha: headSha, expectedBaseBranch: "main" })).outcome).toBe("merged");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("backup archive verifies hashes and restores only into a separate clean location", async () => {
+  const value = await fixture();
+  const temporal = join(value.root, "temporal");
+  const restored = join(value.root, "restored");
+  const archive = join(value.root, "backup.tar.gz");
+  try {
+    await mkdir(temporal, { recursive: true });
+    await mkdir(join(value.config.artifactRoot, "company-a"), { recursive: true });
+    await writeFile(join(value.config.artifactRoot, "company-a", "brief-a"), "body");
+    await writeFile(temporal + "/history.db", "temporal");
+    value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET byte_size = 4, sha256 = ? WHERE id = 'brief-a'").run("d".repeat(64)));
+    const service = new BackupService(value.config);
+    const created = await service.create({ destination: archive, temporalPersistencePath: temporal });
+    expect(created.manifest.secretsExcluded).toContain("tokens");
+    const verification = await service.verify(archive);
+    expect(verification).toMatchObject({ valid: true, errors: [] });
+    expect((await checkBackupHealth(value.config)).status).toBe("healthy");
+    await service.restore(archive, restored);
+    expect(await readFile(join(restored, "forge-backup", "config", "config.json"), "utf8")).toContain("requiresReauthentication");
+    await expect(service.restore(archive, restored)).rejects.toMatchObject({ code: "exists" });
+    await writeFile(join(value.root, "truncated.tar.gz"), "not-an-archive");
+    expect((await service.verify(join(value.root, "truncated.tar.gz"))).valid).toBe(false);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("forward merge updates an issue branch only through a normal non-rewriting merge", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-forward-merge-"));
+  try {
+    await exec("git", ["init", "-b", "main"], { cwd: root });
+    await exec("git", ["config", "user.email", "forge@example.test"], { cwd: root });
+    await exec("git", ["config", "user.name", "Forge Test"], { cwd: root });
+    await writeFile(join(root, "base.txt"), "base\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "base"], { cwd: root });
+    const oldBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await exec("git", ["checkout", "-b", "issue/task-a"], { cwd: root });
+    await writeFile(join(root, "issue.txt"), "issue\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "issue"], { cwd: root });
+    const issueHead = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await exec("git", ["checkout", "main"], { cwd: root }); await writeFile(join(root, "base.txt"), "base updated\n"); await exec("git", ["add", "."], { cwd: root }); await exec("git", ["commit", "-m", "base-update"], { cwd: root });
+    const newBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
+    await exec("git", ["checkout", "issue/task-a"], { cwd: root });
+    const result = await new ForwardMergeService().reconcile({ worktreePath: root, expectedBaseSha: oldBase, currentBaseSha: newBase, branchName: "issue/task-a", repositoryPath: root });
+    expect(result.status).toBe("merged");
+    expect(result.priorHead).toBe(issueHead);
+    expect(result.mergeCommit).not.toBe(issueHead);
+    expect((await exec("git", ["status", "--porcelain"], { cwd: root })).stdout).toBe("");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

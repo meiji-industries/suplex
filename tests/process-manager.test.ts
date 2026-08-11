@@ -129,6 +129,24 @@ test("shutdown preserves an adopted legacy Temporal container", async () => {
   expect(report.containersStopped).toEqual([]);
 });
 
+test("shutdown does not claim a Temporal container stopped when Docker fails", async () => {
+  const controller: ProcessController = {
+    async inspect() {
+      return undefined;
+    },
+    async signal() {},
+    async stopContainer() {
+      throw new Error("Docker is unavailable");
+    },
+  };
+
+  await expect(stopOwnedProcesses({
+    version: 1,
+    processes: [],
+    temporalContainer: { id: "neutral-id", name: "forge-temporal-neutral" },
+  }, controller)).rejects.toThrow("Docker is unavailable");
+});
+
 test("rejects a tampered process registry", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-registry-schema-test-"));
   const filename = join(root, "owned-processes.json");

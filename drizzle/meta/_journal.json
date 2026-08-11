@@ -64,6 +64,27 @@
       "when": 1786426300000,
       "tag": "0008_delivery_review",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786426400000,
+      "tag": "0009_release_ci_capacity",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786426500000,
+      "tag": "0010_forward_merges",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786426600000,
+      "tag": "0011_capacity_status_index",
+      "breakpoints": true
     }
   ]
 }

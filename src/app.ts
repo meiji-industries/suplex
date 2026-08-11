@@ -4,6 +4,10 @@ import cookie from "@fastify/cookie";
 import Fastify, { type FastifyInstance } from "fastify";
 
 import { AuthFailure, AuthService, type AuthUser } from "./auth.js";
+import type { AttentionService } from "./attention.js";
+import type { AcceptanceService } from "./acceptance.js";
+import type { CiService } from "./ci.js";
+import type { ReleaseService } from "./github-release.js";
 import type { ForgeConfig } from "./config.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
 import { ProjectFailure, ProjectService, type ProjectInput, type ProjectRole } from "./projects.js";
@@ -33,6 +37,10 @@ export interface AppDependencies {
   auth?: AuthService;
   projects?: ProjectService;
   tasks?: TaskService;
+  attention?: AttentionService;
+  release?: ReleaseService;
+  ci?: CiService;
+  acceptance?: AcceptanceService;
 }
 
 export function createApp(dependencies: AppDependencies): FastifyInstance {
@@ -43,6 +51,10 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
   const auth = dependencies.auth;
   const projects = dependencies.projects;
   const tasks = dependencies.tasks;
+  const attention = dependencies.attention;
+  const release = dependencies.release;
+  const ci = dependencies.ci;
+  const acceptance = dependencies.acceptance;
   const sessionUser = async (request: { cookies: Record<string, string | undefined> }): Promise<AuthUser | undefined> => auth?.getUserBySession(request.cookies.forge_session ?? "");
   const sendAuthError = (reply: { code: (statusCode: number) => { send: (body: object) => unknown } }, error: unknown): unknown => {
     if (error instanceof AuthFailure) {
@@ -102,6 +114,10 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
       return reply.redirect("/auth");
     }
     return reply.type("text/html; charset=utf-8").send(renderApplicationPage("tasks"));
+  });
+  app.get("/attention", async (request, reply) => {
+    if (auth && !(await sessionUser(request))) return reply.redirect("/auth");
+    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("attention"));
   });
   app.get<{ Params: { taskId: string } }>("/tasks/:taskId", async (request, reply) => {
     if (auth && !(await sessionUser(request))) {
@@ -428,6 +444,11 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
         const body = requestBody(request);
         try { return reply.send(await tasks.rejectPlan(user.id, request.params.taskId, typeof body.expectedRevision === "number" ? body.expectedRevision : Number(body.expectedRevision), typeof body.note === "string" ? body.note : undefined)); } catch (error) { return sendTaskError(reply, error); }
       });
+      app.post<{ Params: { taskId: string } }>("/api/tasks/:taskId/continue-work", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try { return reply.send(await tasks.continueWork(user.id, request.params.taskId)); } catch (error) { return sendTaskError(reply, error); }
+      });
       app.post<{ Params: { taskId: string } }>("/api/tasks/:taskId/start-development", async (request, reply) => {
         const user = await requireUser(request, reply);
         if (!user) return reply;
@@ -479,6 +500,56 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
         return reply;
       });
     }
+  }
+  if (attention && auth) {
+    app.get("/api/attention", async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return reply;
+      try { return reply.send({ companies: attention.list(user.id) }); } catch (error) { return sendAuthError(reply, error); }
+    });
+    app.get<{ Params: { taskId: string } }>("/api/attention/:taskId", async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return reply;
+      try { return reply.send({ items: attention.get(user.id, request.params.taskId) }); } catch (error) { return sendAuthError(reply, error); }
+    });
+  }
+  if (tasks && projects && auth) {
+    const deliveryError = (reply: { code: (statusCode: number) => { send: (body: object) => unknown } }, error: unknown): unknown => {
+      if (error instanceof AuthFailure) return sendAuthError(reply, error);
+      return reply.code(400).send({ error: error instanceof Error ? error.message : "Delivery request failed" });
+    };
+    app.post<{ Params: { taskId: string } }>("/api/tasks/:taskId/publish-draft", async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user || !release) return reply;
+      try {
+        const task = tasks.getTask(user.id, request.params.taskId);
+        const project = projects.getProject(user.id, task.projectId);
+        const body = requestBody(request);
+        const text = (key: string): string => typeof body[key] === "string" ? body[key] as string : "";
+        return reply.send(await release.publish({ taskId: task.id, companyId: task.companyId, workflowId: task.workflowId, repositoryPath: project.repositoryPath, repository: project.repository ?? text("repository"), branchName: text("branchName"), baseBranch: project.baseBranch, targetBaseSha: text("targetBaseSha"), subjectCommit: text("subjectCommit"), subjectTree: text("subjectTree"), reviewId: text("reviewId"), planSummary: text("planSummary"), deliverySummary: text("deliverySummary"), verificationSummary: text("verificationSummary") }));
+      } catch (error) { return deliveryError(reply, error); }
+    });
+    app.post<{ Params: { taskId: string } }>("/api/tasks/:taskId/reconcile-ci", async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user || !ci) return reply;
+      try {
+        const task = tasks.getTask(user.id, request.params.taskId);
+        const project = projects.getProject(user.id, task.projectId);
+        const body = requestBody(request);
+        const requiredChecks = Array.isArray(body.requiredChecks) ? body.requiredChecks.filter((value): value is string => typeof value === "string") : project.requiredChecks;
+        return reply.send(await ci.reconcile({ taskId: task.id, companyId: task.companyId, releaseId: typeof body.releaseId === "string" ? body.releaseId : "", repository: project.repository ?? "", expectedHeadSha: typeof body.expectedHeadSha === "string" ? body.expectedHeadSha : "", requiredChecks }));
+      } catch (error) { return deliveryError(reply, error); }
+    });
+    app.post<{ Params: { taskId: string } }>("/api/tasks/:taskId/accept-delivery", async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user || !acceptance) return reply;
+      try {
+        const task = tasks.getTask(user.id, request.params.taskId);
+        const project = projects.getProject(user.id, task.projectId);
+        const body = requestBody(request);
+        return reply.send(await acceptance.accept({ taskId: task.id, companyId: task.companyId, releaseId: String(body.releaseId ?? ""), reviewId: String(body.reviewId ?? ""), ciRunId: String(body.ciRunId ?? ""), repository: project.repository ?? "", baseBranch: project.baseBranch, headSha: String(body.headSha ?? ""), headTree: String(body.headTree ?? ""), actorUserId: user.id, decision: body.decision === "request_changes" || body.decision === "cancel" ? body.decision : "accept" }));
+      } catch (error) { return deliveryError(reply, error); }
+    });
   }
   app.get("/assets/forge-ui.js", async (_request, reply) => {
     try {

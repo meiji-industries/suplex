@@ -6,6 +6,7 @@ import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import type { HealthCheck } from "./health.js";
 import { CodexReadinessProbe, checkGithubAuthentication } from "./provider-readiness.js";
+import { checkBackupHealth } from "./backup.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { TemporalHealthProbe } from "./temporal/service.js";
 
@@ -109,5 +110,6 @@ export function createHostHealthDependencies(config: ForgeConfig, database: Forg
     worker: () => checkWorker(database, config.taskQueue, config.installationId),
     codexAuth: () => codex.check(),
     ghAuth: checkGithubAuthentication(process.env.FORGE_GH_COMMAND ?? "gh"),
+    backup: () => checkBackupHealth(config),
   };
 }

@@ -4,6 +4,10 @@ import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 
 import { createApp } from "./app.js";
+import { AttentionService } from "./attention.js";
+import { ArtifactStore } from "./artifacts.js";
+import { AcceptanceService } from "./acceptance.js";
+import { CiService, createGithubCiProvider } from "./ci.js";
 import { AuthService } from "./auth.js";
 import { loadConfig, type ForgeConfig } from "./config.js";
 import { ForgeDatabase } from "./database.js";
@@ -11,6 +15,7 @@ import { createHostHealthDependencies } from "./host-health.js";
 import { StructuredLogger } from "./logging.js";
 import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
+import { createGithubReleasePort, ReleaseService } from "./github-release.js";
 
 export interface ForgeServer {
   app: FastifyInstance;
@@ -24,12 +29,21 @@ export async function createForgeServer(config: ForgeConfig = loadConfig()): Pro
   const auth = new AuthService(database, config);
   const projects = new ProjectService(database, auth, config);
   const tasks = new TaskService(database, auth, projects, config);
+  const attention = new AttentionService(database, auth);
+  const githubRelease = createGithubReleasePort();
+  const release = new ReleaseService(database, new ArtifactStore(config.artifactRoot), githubRelease);
+  const ci = new CiService(database, createGithubCiProvider());
+  const acceptance = new AcceptanceService(database, githubRelease);
   const app = createApp({
     config,
     health: createHostHealthDependencies(config, database),
     auth,
     projects,
     tasks,
+    attention,
+    release,
+    ci,
+    acceptance,
   });
   return { app, database };
 }

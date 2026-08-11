@@ -69,7 +69,7 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
     expect(sessions.get("session_opaque")).toBe("raw-session-1");
     expect(value.database.authQuery((db) => db.prepare("SELECT status, session_ref, process_start_identity FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ status: "completed", session_ref: "session_opaque", process_start_identity: "4321:2026-08-11T00:00:00.000Z" });
     const evidence = value.database.authQuery((db) => db.prepare("SELECT a.storage_path, a.sha256 FROM forge_artifacts a WHERE a.id = ?").get(result.leadEvidenceArtifactId) as { storage_path: string; sha256: string });
-    const evidenceText = await new ArtifactStore(value.config.artifactRoot).read({ storagePath: evidence.storage_path, sha256: evidence.sha256 });
+    const evidenceText = await new ArtifactStore(value.config.artifactRoot).read({ companyId: "company_1", storagePath: evidence.storage_path, sha256: evidence.sha256 });
     expect(evidenceText.toString("utf8")).not.toContain("gho_secret");
     expect(value.database.authQuery((db) => db.prepare("SELECT kind, revision, session_ref FROM forge_issue_outputs WHERE task_id = 'task_1'").get())).toEqual({ kind: "plan", revision: 1, session_ref: "session_opaque" });
   } finally {

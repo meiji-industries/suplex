@@ -385,14 +385,14 @@ export class AgentService {
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId, input.projectRevisionId, input.briefArtifactId) as PlanningRow | undefined);
     if (!row) throw new AgentFailure("scoped-input-missing", "Lead planning evidence is unavailable");
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(row.repository_path));
-    const brief = (await this.artifacts.read({ storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
+    const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
     const images = this.database.authQuery((db) => {
       if (!input.imageArtifactIds.length) return [] as ImageRow[];
       const placeholders = input.imageArtifactIds.map(() => "?").join(",");
       return db.prepare(`SELECT storage_path, sha256, filename FROM forge_artifacts WHERE company_id = ? AND kind = 'task-image' AND id IN (${placeholders})`).all(input.companyId, ...input.imageArtifactIds) as ImageRow[];
     });
     if (images.length !== input.imageArtifactIds.length) throw new AgentFailure("scoped-input-missing", "Lead image evidence is unavailable");
-    for (const image of images) await this.artifacts.read({ storagePath: image.storage_path, sha256: image.sha256 });
+    for (const image of images) await this.artifacts.read({ companyId: input.companyId, storagePath: image.storage_path, sha256: image.sha256 });
     const profileSettings = this.database.authQuery((db) => {
       const profileIds = Object.values(input.roleProfiles).filter((value): value is string => typeof value === "string");
       if (!profileIds.length) return [] as ProfileSettings[];
@@ -521,10 +521,10 @@ export class AgentService {
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(context.repositoryPath));
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
     const [brief, plan, delivery, developerEvidence, gitEvidence] = await Promise.all([
-      this.artifacts.read({ storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
-      this.artifacts.read({ storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
-      this.artifacts.read({ storagePath: context.deliveryStoragePath, sha256: context.deliverySha256 }).then((bytes) => bytes.toString("utf8")),
-      this.artifacts.read({ storagePath: context.evidenceStoragePath, sha256: context.evidenceSha256 }).then((bytes) => bytes.toString("utf8")),
+      this.artifacts.read({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
+      this.artifacts.read({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
+      this.artifacts.read({ companyId: input.companyId, storagePath: context.deliveryStoragePath, sha256: context.deliverySha256 }).then((bytes) => bytes.toString("utf8")),
+      this.artifacts.read({ companyId: input.companyId, storagePath: context.evidenceStoragePath, sha256: context.evidenceSha256 }).then((bytes) => bytes.toString("utf8")),
       readDeliveryGitEvidence(worktreePath, input.targetBaseSha, input.subjectCommit, repositoryPath),
     ]);
     if (gitEvidence.branch !== input.branchName || gitEvidence.head.toLowerCase() !== input.subjectCommit.toLowerCase() || gitEvidence.tree.toLowerCase() !== input.subjectTree.toLowerCase() || gitEvidence.status.trim()) {
@@ -590,9 +590,9 @@ export class AgentService {
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId, input.briefArtifactId) as { title: string; repository_path: string; normalized_json: string; brief_storage_path: string; brief_sha256: string; output_storage_path: string; output_sha256: string; evidence_storage_path: string; evidence_sha256: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Supplemental review evidence is unavailable");
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(context.repository_path));
-    const brief = (await this.artifacts.read({ storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
-    const draft = (await this.artifacts.read({ storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
-    const priorEvidence = (await this.artifacts.read({ storagePath: context.evidence_storage_path, sha256: context.evidence_sha256 })).toString("utf8");
+    const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
+    const draft = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
+    const priorEvidence = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.evidence_storage_path, sha256: context.evidence_sha256 })).toString("utf8");
     const executionId = `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES (?, ?, ?, ?, 'reviewer', 'starting', 1, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, startedAt));
@@ -645,8 +645,8 @@ export class AgentService {
     const review = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.supplementalReviewArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
     if (!draft || !review) throw new AgentFailure("scoped-input-missing", "Consolidation evidence is unavailable");
     const repositoryPath = await this.consolidationRepositoryPath(rawInput);
-    const draftText = (await this.artifacts.read(draft)).toString("utf8");
-    const reviewText = (await this.artifacts.read(review)).toString("utf8");
+    const draftText = (await this.artifacts.read({ ...draft, companyId: rawInput.companyId })).toString("utf8");
+    const reviewText = (await this.artifacts.read({ ...review, companyId: rawInput.companyId })).toString("utf8");
     const executionId = `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, rawInput.taskId, rawInput.companyId, rawInput.workflowId, rawInput.leadSessionRef, startedAt));

@@ -1,4 +1,4 @@
-import { Activity, ChevronRight, ClipboardList, FolderGit2, ShieldCheck } from "lucide-react";
+import { Activity, AlertTriangle, ChevronRight, ClipboardList, FolderGit2, ShieldCheck } from "lucide-react";
 import { useState, type ReactElement } from "react";
 
 import { Button } from "../ui/button.js";
@@ -8,13 +8,24 @@ function ForgeMark(): ReactElement {
   return <span className="flex size-5 items-center justify-center rounded-[5px] bg-foreground text-[10px] font-bold text-background">F</span>;
 }
 
+function isActive(path: string): boolean {
+  const currentPath = window.location.pathname;
+  return currentPath === path || currentPath.startsWith(`${path}/`);
+}
+
 function NavigationLinks({ close }: { close?: () => void }): ReactElement {
+  const links = [
+    { href: "/health", label: "Host health", icon: ShieldCheck },
+    { href: "/projects", label: "Projects", icon: FolderGit2 },
+    { href: "/tasks", label: "Tasks", icon: ClipboardList },
+    { href: "/attention", label: "Attention", icon: AlertTriangle },
+  ];
   return (
     <nav aria-label="Forge navigation" className="space-y-0.5 text-[13px]">
-      <a className="flex h-7 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground" href="/health" onClick={close}><Activity className="size-3.5" />Overview</a>
-      <a aria-current="page" className="flex h-7 items-center gap-2 rounded-md bg-sidebar-accent px-2 font-medium text-sidebar-foreground" href="/health" onClick={close}><ShieldCheck className="size-3.5 text-primary" />Host health</a>
-      <a className="flex h-7 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground" href="/projects" onClick={close}><FolderGit2 className="size-3.5" />Projects</a>
-      <a className="flex h-7 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground" href="/tasks" onClick={close}><ClipboardList className="size-3.5" />Tasks</a>
+      {links.map(({ href, label, icon: Icon }) => {
+        const active = isActive(href);
+        return <a aria-current={active ? "page" : undefined} className={active ? "flex h-7 items-center gap-2 rounded-md bg-sidebar-accent px-2 font-medium text-sidebar-foreground" : "flex h-7 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground"} href={href} onClick={close} key={href}><Icon className={active ? "size-3.5 text-primary" : "size-3.5"} />{label}</a>;
+      })}
     </nav>
   );
 }

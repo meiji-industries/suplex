@@ -91,6 +91,7 @@ export interface ForgeTask {
   supplementalReviewArtifactId?: string | null;
   decisionId?: string | null;
   deliveryDecisionArtifactId?: string | null;
+  predecessorTaskId?: string | null;
   deliveryReview?: {
     id: string;
     outcome: "approved" | "blocking";
@@ -150,6 +151,7 @@ export interface IssueWorkflowPort {
   startDevelopment?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   retryDevelopment?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   cancelDevelopment?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
+  continueWork?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   reviewDelivery?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   repairDelivery?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   recordDeliveryDecision?: (workflowId: string, input: StartPlanningInput & { note?: string }) => Promise<IssueWorkflowState>;
@@ -180,6 +182,7 @@ interface TaskRow {
   owner: "human" | "lead";
   allowed_commands_json: string;
   pending_action: string | null;
+  predecessor_task_id: string | null;
 }
 
 interface ArtifactRow {
@@ -203,6 +206,7 @@ interface TimelineRow {
 }
 
 interface LeadOutputRow {
+  company_id: string;
   kind: "plan" | "decision_blocker";
   summary: string;
   session_ref: string;
@@ -433,6 +437,14 @@ export class TaskService {
     return this.planCommand(actorUserId, taskId, expectedRevision, "reject_plan", (workflowId, input) => this.workflow.rejectPlan ? this.workflow.rejectPlan(workflowId, { ...input, ...(note !== undefined ? { note } : {}) }) : Promise.reject(new Error("Plan revision workflow is unavailable")));
   }
 
+  async continueWork(actorUserId: string, taskId: string): Promise<{ original: ForgeTask; successor: ForgeTask }> {
+    const original = this.getTask(actorUserId, taskId);
+    if (!(["delivery_reviewed", "delivery_blocked"].includes(original.phase) && original.allowedCommands.includes("record_delivery_decision") === false)) throw new TaskFailure("Continue work is not available", [finding("terminal-state-required", "phase", "Continue work requires a terminal or cancelled issue")], 409);
+    const result = await this.createTask(actorUserId, original.companyId, { projectId: original.projectId, title: `Continue: ${original.title}`.slice(0, 160), description: `${original.description}\n\nContinued from Forge issue ${original.id}.`, idempotencyKey: `continue_${original.id}_${original.revision}_${Date.now()}`, images: [], roleProfiles: original.roleProfiles, supplementalReview: original.supplementalReview });
+    this.database.authTransaction((db) => db.prepare("UPDATE forge_tasks SET predecessor_task_id = ?, updated_at = ? WHERE id = ? AND company_id = ?").run(original.id, this.now().toISOString(), result.task.id, original.companyId));
+    return { original: this.getTask(actorUserId, original.id), successor: this.getTask(actorUserId, result.task.id) };
+  }
+
   private async planCommand(actorUserId: string, taskId: string, expectedRevision: number, commandName: string, command: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
     if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409);
@@ -452,7 +464,7 @@ export class TaskService {
     const task = this.getTask(actorUserId, taskId);
     const artifact = this.database.authQuery((db) => db.prepare("SELECT id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-image'").get(artifactId, task.companyId) as ArtifactRow | undefined);
     if (!artifact || !parseImageIds(JSON.stringify(task.images.map((image) => image.artifactId))).includes(artifactId)) throw new TaskFailure("Not found", [], 404);
-    const bytes = await this.artifacts.read({ storagePath: artifact.storage_path, sha256: artifact.sha256 });
+    const bytes = await this.artifacts.read({ companyId: task.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 });
     return { artifact: { artifactId: artifact.id, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }, bytes };
   }
 
@@ -502,7 +514,7 @@ export class TaskService {
     const artifactById = new Map(artifacts.map((artifact) => [artifact.id, artifact]));
     const brief = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-brief'").get(row.brief_artifact_id, row.company_id) as Pick<ArtifactRow, "storage_path" | "sha256"> | undefined);
     if (!brief) throw new TaskFailure("Task artifact is unavailable", [], 500);
-    const description = this.artifacts.readSync({ storagePath: brief.storage_path, sha256: brief.sha256 }).toString("utf8");
+    const description = this.artifacts.readSync({ companyId: row.company_id, storagePath: brief.storage_path, sha256: brief.sha256 }).toString("utf8");
     void actorUserId;
     const timeline = this.database.authQuery((db) => db.prepare("SELECT id, revision, event_type, metadata_json, created_at FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision, id").all(row.id) as TimelineRow[]).map((entry) => ({ id: entry.id, revision: entry.revision, eventType: entry.event_type, metadata: parseMetadata(entry.metadata_json), createdAt: entry.created_at }));
     const leadOutput = this.leadOutput(row.id, row.company_id);
@@ -511,20 +523,20 @@ export class TaskService {
     const review = this.database.authQuery((db) => db.prepare("SELECT id, outcome, summary, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, opinion_artifact_id, evidence_artifact_id, repair_cycle FROM forge_delivery_reviews WHERE task_id = ? AND company_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id) as { id: string; outcome: "approved" | "blocking"; summary: string; plan_revision: number; base_sha: string; subject_commit: string; subject_tree: string; lead_execution_id: string; session_ref: string; opinion_artifact_id: string; evidence_artifact_id: string; repair_cycle: number } | undefined);
     const findings = review ? this.database.authQuery((db) => db.prepare("SELECT id, severity, rationale, evidence_ref, disposition, repair_instruction FROM forge_delivery_findings WHERE review_id = ? AND task_id = ? AND company_id = ? ORDER BY id").all(review.id, row.id, row.company_id) as Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidence_ref: string; disposition: string; repair_instruction: string | null }>) : [];
     const decision = this.database.authQuery((db) => db.prepare("SELECT artifact_id FROM forge_delivery_decisions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { artifact_id: string } | undefined);
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, timeline, ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, sessionRef: review.session_ref, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, worktreePath: developerExecution.worktree_path, targetBaseSha: developerExecution.target_base_sha, sessionRef: developerExecution.session_ref, currentStep: developerExecution.current_step, resultCommit: developerExecution.result_commit, resultTree: developerExecution.result_tree, dirtyState: developerExecution.dirty_state, deliveryArtifactId: developerExecution.delivery_artifact_id, evidenceArtifactId: developerExecution.evidence_artifact_id, failureCode: developerExecution.failure_code, failureSummary: developerExecution.failure_summary } } : {}) };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), timeline, ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, sessionRef: review.session_ref, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, worktreePath: developerExecution.worktree_path, targetBaseSha: developerExecution.target_base_sha, sessionRef: developerExecution.session_ref, currentStep: developerExecution.current_step, resultCommit: developerExecution.result_commit, resultTree: developerExecution.result_tree, dirtyState: developerExecution.dirty_state, deliveryArtifactId: developerExecution.delivery_artifact_id, evidenceArtifactId: developerExecution.evidence_artifact_id, failureCode: developerExecution.failure_code, failureSummary: developerExecution.failure_summary } } : {}) };
   }
 
   private leadOutput(taskId: string, companyId: string): ForgeTask["leadOutput"] {
-    const row = this.database.authQuery((db) => db.prepare(`SELECT o.kind, o.summary, o.session_ref, o.execution_id, o.output_artifact_id, o.evidence_artifact_id, a.storage_path, a.sha256
+    const row = this.database.authQuery((db) => db.prepare(`SELECT o.company_id, o.kind, o.summary, o.session_ref, o.execution_id, o.output_artifact_id, o.evidence_artifact_id, a.storage_path, a.sha256
       FROM forge_issue_outputs o JOIN forge_artifacts a ON a.id = o.output_artifact_id
       WHERE o.task_id = ? AND o.company_id = ? ORDER BY o.revision DESC LIMIT 1`).get(taskId, companyId) as LeadOutputRow | undefined);
     if (!row) return undefined;
-    const content = LeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
+    const content = LeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
     return { kind: row.kind, summary: row.summary, sessionRef: row.session_ref, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };
   }
 
   private taskQuery(scope: string): string {
-    return `SELECT t.id, t.company_id, t.project_id, t.title, t.brief_artifact_id, t.image_artifact_ids_json, t.role_profiles_json, t.supplemental_review, t.workflow_id, t.project_revision_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.phase, ip.owner, ip.allowed_commands_json, ip.pending_action, (SELECT a.filename FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS description FROM forge_tasks t JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope} ORDER BY t.created_at, t.id`;
+    return `SELECT t.id, t.company_id, t.project_id, t.title, t.brief_artifact_id, t.image_artifact_ids_json, t.role_profiles_json, t.supplemental_review, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.phase, ip.owner, ip.allowed_commands_json, ip.pending_action, (SELECT a.filename FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS description FROM forge_tasks t JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope} ORDER BY t.created_at, t.id`;
   }
 
   private deleteTask(taskId: string, artifacts: Array<StoredArtifact | undefined>): void {

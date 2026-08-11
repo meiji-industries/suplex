@@ -1,7 +1,6 @@
 import { Collapsible } from "./components/ui/collapsible.js";
 import { Button } from "./components/ui/button.js";
 import { Input } from "./components/ui/input.js";
-import { AppSidebar, MobileNavigation } from "./components/app/navigation.js";
 import { ApplicationFrame } from "./components/app/application-frame.js";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import type { HealthCheck, HealthSnapshot } from "../health.js";
@@ -56,6 +55,8 @@ type ApiUser = { id: string; displayName: string; username: string; role: "admin
 type ApiCompany = { id: string; name: string; status: string; createdAt: string };
 type ApiProfile = { id: string; name: string; model: string; reasoningLevel: string; servicePriority: string; capacity: number };
 type ApiProject = { id: string; companyId: string; name: string; repositoryPath: string; worktreeRoot: string; repository?: string; baseBranch: string; targetBranch: string; setupCommand: string; verificationCommand: string; requiredChecks: string[]; allowedProfileIds: string[]; roleDefaults: Record<string, string>; status: string; configurationRevision: number; configurationIdentity?: string };
+type ApiAttentionItem = { id: string; companyId: string; taskId: string; taskTitle: string; category: string; summary: string; action: string; evidenceRef?: string; updatedAt: string };
+type ApiAttentionCompany = { companyId: string; companyName: string; companyStatus: string; activeIssueCount: number; phases: Record<string, number>; attentionCount: number; attention: ApiAttentionItem[]; recentOutcomes: Array<{ taskId: string; taskTitle: string; phase: string; updatedAt: string }> };
 type ApiTask = { id: string; companyId: string; projectId: string; title: string; description: string; briefArtifactId: string; images: Array<{ artifactId: string; filename: string; mimeType: string; byteSize: number }>; roleProfiles: Record<string, string>; supplementalReview: boolean; workflowId: string; projectRevisionId: string; phase: "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "delivery_blocked"; revision: number; owner: "human" | "lead"; allowedCommands: string[]; pendingAction: string | null; createdAt: string; updatedAt: string; timeline: Array<{ id: string; revision: number; eventType: string; metadata: Record<string, string | number | boolean>; createdAt: string }>; planRevision?: number | null; planMaterial?: boolean | null; materialCategories?: string[]; supplementalReviewUsed?: boolean; supplementalReviewArtifactId?: string | null; decisionId?: string | null; deliveryReview?: { id: string; outcome: "approved" | "blocking"; summary: string; planRevision: number; baseSha: string; subjectCommit: string; subjectTree: string; findings: Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidenceRef: string; disposition: string; repairInstruction: string | null }> }; developerExecution?: { id: string; status: string; attempt: number; branchName: string; worktreePath: string; targetBaseSha: string; resultCommit?: string | null; resultTree?: string | null; dirtyState?: string | null; deliveryArtifactId?: string | null; deliverySummary?: string | null }; leadOutput?: { kind: "plan" | "decision_blocker"; summary: string; sessionRef: string; executionId: string; outputArtifactId: string; evidenceArtifactId: string; content: { kind: "plan"; summary: string; reproduction: string | null; rootCauseAnalysis: string | null; steps: Array<{ number: number; instruction: string; verification: string }>; compatibilityAnalysis: string; operationalAnalysis: string; verificationStrategy: string; unresolvedTechnicalQuestions: string[] } | { kind: "decision_blocker"; summary: string; evidence: string; owner: "human"; question: string; nextAction: string } } };
 
 function AuthView(): ReactElement {
@@ -229,8 +230,7 @@ function ProjectsView(): ReactElement {
   };
   return (
     <ApplicationFrame title="Projects">
-      <div className="min-h-screen bg-background text-foreground">
-        <header className="flex h-10 items-center justify-between border-b border-border/70 px-3 sm:px-4"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold">Projects</span><span className="text-xs text-muted-foreground">{projects.length}</span></div><a className="text-xs text-muted-foreground hover:text-foreground" href="/admin">Administration</a></header>
+      <div className="bg-background text-foreground">
         <div className="grid gap-px border-b border-border/70 bg-border lg:grid-cols-[minmax(260px,360px)_1fr]">
           <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">New project</span><span className="text-[11px] text-muted-foreground">Draft first</span></div>
             <label className="mb-1 block text-[11px] text-muted-foreground" htmlFor="project-company">Company</label><select id="project-company" className="mb-2 h-7 w-full border border-input bg-background px-2 text-xs" value={companyId} onChange={(event) => setCompanyId(event.target.value)}>{companies.map((company) => <option value={company.id} key={company.id}>{company.name} · {company.status}</option>)}</select>
@@ -320,8 +320,7 @@ function TasksView(): ReactElement {
 
   return (
     <ApplicationFrame title="Tasks">
-      <div className="min-h-screen bg-background text-foreground">
-        <header className="flex h-10 items-center justify-between border-b border-border/70 px-3 sm:px-4"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold">Tasks</span><span className="text-xs text-muted-foreground">{tasks.length}</span></div><a className="text-xs text-muted-foreground hover:text-foreground" href="/projects">Projects</a></header>
+      <div className="bg-background text-foreground">
         <div className="grid gap-px border-b border-border/70 bg-border lg:grid-cols-[minmax(280px,360px)_1fr]">
           <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">New task</span><span className="text-[11px] text-muted-foreground">Backlog first</span></div>
             <label className="mb-1 block text-[11px] text-muted-foreground" htmlFor="task-company">Company</label><select id="task-company" className="mb-2 h-7 w-full border border-input bg-background px-2 text-xs" value={companyId} onChange={(event) => { setCompanyId(event.target.value); setProjectId(""); }}>{companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select>
@@ -335,6 +334,31 @@ function TasksView(): ReactElement {
             {selected ? <article className="mt-4 border border-border/70"><div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 px-3 py-2"><div><span className="text-[13px] font-semibold">{selected.title}</span><span className="ml-2 text-[11px] text-muted-foreground">{selected.phase} · revision {selected.revision}</span></div><div className="flex flex-wrap gap-2">{selected.allowedCommands.includes("start_planning") ? <Button size="sm" onClick={() => void startPlanning()} disabled={busy}>{busy ? "Planning…" : "Start planning"}</Button> : null}{selected.allowedCommands.includes("request_supplemental_review") ? <Button size="sm" variant="outline" onClick={() => void planAction("request-supplemental-review")} disabled={busy}>Request review</Button> : null}{selected.allowedCommands.includes("approve_plan") ? <Button size="sm" onClick={() => void planAction("approve-plan", "Approved final plan")} disabled={busy}>Approve plan</Button> : null}{selected.allowedCommands.includes("reject_plan") ? <Button size="sm" variant="outline" onClick={() => void planAction("reject-plan", "Please revise the plan")} disabled={busy}>Request changes</Button> : null}{selected.allowedCommands.includes("start_development") ? <Button size="sm" onClick={() => void planAction("start-development")} disabled={busy}>{busy ? "Executing…" : "Start development"}</Button> : null}{selected.allowedCommands.includes("retry_development") ? <Button size="sm" onClick={() => void planAction("retry-development")} disabled={busy}>{busy ? "Retrying…" : "Retry development"}</Button> : null}{selected.allowedCommands.includes("cancel_development") ? <Button size="sm" variant="outline" onClick={() => void planAction("cancel-development")} disabled={busy}>Cancel development</Button> : null}{selected.allowedCommands.includes("review_delivery") ? <Button size="sm" onClick={() => void planAction("review-delivery")} disabled={busy}>{busy ? "Reviewing…" : "Review delivery"}</Button> : null}{selected.allowedCommands.includes("repair_delivery") ? <Button size="sm" onClick={() => void planAction("repair-delivery")} disabled={busy}>{busy ? "Repairing…" : "Repair delivery"}</Button> : null}{selected.allowedCommands.includes("record_delivery_decision") ? <Button size="sm" variant="outline" onClick={() => void planAction("record-delivery-decision", "Member decision recorded")} disabled={busy}>Record decision</Button> : null}</div></div><div className="grid gap-4 p-3 text-xs sm:grid-cols-[minmax(0,1fr)_220px]"><div className="min-w-0"><pre className="whitespace-pre-wrap font-sans leading-5">{selected.description}</pre>{selected.images.length ? <div className="mt-4 flex flex-wrap gap-2">{selected.images.map((image) => <a className="border border-border px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground" key={image.artifactId} href={`/api/tasks/${selected.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer">{image.filename}</a>)}</div> : null}{selected.leadOutput ? <div className="mt-4 border-t border-border/70 pt-3"><div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold">{selected.leadOutput.kind === "plan" ? "Lead plan" : "Decision blocker"}</span><span className="text-[11px] text-muted-foreground">{selected.leadOutput.summary}</span></div>{selected.leadOutput.content.kind === "plan" ? <><p className="mb-2 whitespace-pre-wrap">{selected.leadOutput.content.compatibilityAnalysis}</p><ol className="list-decimal space-y-2 pl-5">{selected.leadOutput.content.steps.map((step) => <li key={step.number}><div>{step.instruction}</div><div className="text-[11px] text-muted-foreground">Verify: {step.verification}</div></li>)}</ol><p className="mt-3 whitespace-pre-wrap">{selected.leadOutput.content.verificationStrategy}</p></> : <div className="space-y-2"><p className="whitespace-pre-wrap">{selected.leadOutput.content.evidence}</p><div><span className="font-medium">Question: </span>{selected.leadOutput.content.question}</div><div><span className="font-medium">Next: </span>{selected.leadOutput.content.nextAction}</div></div>}</div> : null}{selected.developerExecution ? <div className="mt-4 border-t border-border/70 pt-3"><div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold">Developer delivery</span><span className="text-[11px] text-muted-foreground">{selected.developerExecution.status}</span></div><div>{selected.developerExecution.deliverySummary ?? selected.pendingAction}</div><div className="mt-2 text-[11px] text-muted-foreground">{selected.developerExecution.branchName} · {selected.developerExecution.resultCommit ?? "no commit yet"}</div></div> : null}{selected.deliveryReview ? <div className="mt-4 border-t border-border/70 pt-3"><div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold">Delivery review</span><span className="text-[11px] text-muted-foreground">{selected.deliveryReview.outcome}</span></div><div>{selected.deliveryReview.summary}</div><div className="mt-2 space-y-2">{selected.deliveryReview.findings.map((finding) => <div className="border-l-2 border-border pl-2" key={finding.id}><div className="font-medium">{finding.severity} · {finding.disposition}</div><div className="text-[11px] text-muted-foreground">{finding.rationale}</div></div>)}</div></div> : null}</div><div className="border-l border-border/70 pl-3"><div className="mb-2 text-[11px] text-muted-foreground">Owner</div><div>{selected.owner}</div><div className="mb-2 mt-3 text-[11px] text-muted-foreground">Next action</div><div>{selected.pendingAction ?? "None"}</div><div className="mb-2 mt-3 text-[11px] text-muted-foreground">Timeline</div><div className="space-y-2">{selected.timeline.map((entry) => <div key={entry.id}><div>{entry.eventType}</div><div className="text-[11px] text-muted-foreground">revision {entry.revision}</div></div>)}</div></div></div></article> : null}
           </section>
         </div>
+      </div>
+    </ApplicationFrame>
+  );
+}
+
+function AttentionView(): ReactElement {
+  const [companies, setCompanies] = useState<ApiAttentionCompany[]>([]);
+  const [error, setError] = useState("");
+  const reload = useCallback(async (): Promise<void> => {
+    try { setCompanies((await readJson<{ companies: ApiAttentionCompany[] }>("/api/attention")).companies); }
+    catch (reason) { if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth"); else setError("Unable to load attention"); }
+  }, []);
+  useEffect(() => { void reload(); const timer = window.setInterval(() => void reload(), 15_000); return () => window.clearInterval(timer); }, [reload]);
+  return (
+    <ApplicationFrame title="Attention">
+      <div className="divide-y divide-border/70">
+        <div className="flex h-9 items-center justify-between border-b border-border/70 px-3 text-xs sm:px-4"><span className="font-medium">Agency attention</span><button className="text-muted-foreground hover:text-foreground" onClick={() => void reload()}>Refresh</button></div>
+        {companies.map((company) => <section className="bg-background p-3 sm:p-4" key={company.companyId}>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 pb-2"><div className="flex items-center gap-2 text-[13px] font-medium"><span className={company.attentionCount ? "size-1.5 rounded-full bg-amber-500" : "size-1.5 rounded-full bg-emerald-500"} />{company.companyName}</div><div className="text-[11px] text-muted-foreground">{company.activeIssueCount} active · {company.attentionCount} needs a person</div></div>
+          <div className="divide-y divide-border/70">{company.attention.map((item) => <details className="group py-3" key={item.id}><summary className="flex cursor-pointer list-none items-start justify-between gap-3 text-xs"><span className="min-w-0"><span className="mr-2 rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">{item.category.replaceAll("_", " ")}</span><span className="font-medium">{item.taskTitle}</span><span className="mt-1 block text-muted-foreground">{item.summary}</span></span><span className="shrink-0 text-[11px] text-muted-foreground group-open:rotate-90">›</span></summary><div className="mt-2 grid gap-2 border-l-2 border-amber-300 pl-3 text-[11px] text-muted-foreground sm:grid-cols-[1fr_auto] sm:items-center"><span>{item.action}{item.evidenceRef ? ` · Evidence ${item.evidenceRef}` : ""}</span><a className="text-foreground underline underline-offset-2" href={`/tasks/${item.taskId}`}>Open issue</a></div></details>)}</div>
+          {company.attention.length === 0 ? <div className="py-5 text-center text-xs text-muted-foreground">No decision needed.</div> : null}
+          {company.recentOutcomes.length ? <div className="mt-3 border-t border-border/70 pt-2 text-[11px] text-muted-foreground">Recent: {company.recentOutcomes.map((outcome) => `${outcome.taskTitle} · ${outcome.phase}`).join(" · ")}</div> : null}
+        </section>)}
+        {companies.length === 0 && !error ? <div className="p-8 text-center text-xs text-muted-foreground">No companies visible.</div> : null}
+        {error ? <p role="alert" className="px-4 py-3 text-xs text-rose-700">{error}</p> : null}
       </div>
     </ApplicationFrame>
   );
@@ -407,28 +431,17 @@ function Dashboard({ initialSnapshot }: { initialSnapshot: HealthSnapshot }): Re
   const failingCount = snapshot.checks.length - healthyCount;
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <div className="flex min-h-screen">
-        <AppSidebar />
-
-        <main className="min-w-0 flex-1">
-          <header className="flex h-10 items-center justify-between border-b border-border/70 px-3 sm:px-4">
-            <div className="flex min-w-0 items-center gap-2">
-              <span className="lg:hidden"><MobileNavigation /></span>
-              <span className="flex size-5 items-center justify-center rounded-[5px] bg-foreground text-[10px] font-bold text-background lg:hidden">F</span>
-              <h1 className="truncate text-[13px] font-semibold">Host health</h1>
-              <span className="text-border">/</span>
-              <span className={snapshot.ready ? "flex items-center gap-1.5 text-xs text-emerald-700" : "flex items-center gap-1.5 text-xs text-amber-700"}>
-                <span className={snapshot.ready ? "size-1.5 rounded-full bg-emerald-500" : "size-1.5 rounded-full bg-amber-500"} />
-                {snapshot.ready ? "Ready" : "Needs attention"}
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <a className="max-w-[34vw] truncate text-[11px] text-muted-foreground hover:text-foreground sm:max-w-64 sm:text-xs" href={snapshot.reachableAddress}>{snapshot.reachableAddress.replace(/^https?:\/\//, "")}</a>
-              <span className="hidden text-xs text-muted-foreground md:inline">{relativeTime(snapshot.generatedAt)}</span>
-              <Button aria-label="Refresh health" title="Refresh health" variant="ghost" size="icon" onClick={() => void refresh()} disabled={refreshing}><RefreshCw className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /></Button>
-            </div>
-          </header>
+    <ApplicationFrame title="Host health" headerRight={
+      <div className="flex items-center gap-2">
+        <span className={snapshot.ready ? "hidden items-center gap-1.5 text-xs text-emerald-700 sm:flex" : "hidden items-center gap-1.5 text-xs text-amber-700 sm:flex"}>
+          <span className={snapshot.ready ? "size-1.5 rounded-full bg-emerald-500" : "size-1.5 rounded-full bg-amber-500"} />
+          {snapshot.ready ? "Ready" : "Needs attention"}
+        </span>
+        <a className="max-w-[34vw] truncate text-[11px] text-muted-foreground hover:text-foreground sm:max-w-64 sm:text-xs" href={snapshot.reachableAddress}>{snapshot.reachableAddress.replace(/^https?:\/\//, "")}</a>
+        <span className="hidden text-xs text-muted-foreground md:inline">{relativeTime(snapshot.generatedAt)}</span>
+        <Button aria-label="Refresh health" title="Refresh health" variant="ghost" size="icon" onClick={() => void refresh()} disabled={refreshing}><RefreshCw className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /></Button>
+      </div>
+    }>
 
           <div className="flex h-9 items-center justify-between border-b border-border/70 bg-muted/20 px-3 sm:px-4">
             <div className="flex h-full items-center gap-4 text-xs">
@@ -457,11 +470,9 @@ function Dashboard({ initialSnapshot }: { initialSnapshot: HealthSnapshot }): Re
             </section>
           </div>
 
-        </main>
-      </div>
-    </div>
+    </ApplicationFrame>
   );
 }
 
 const view = window.__FORGE_VIEW__;
-createRoot(document.getElementById("forge-app")!).render(view === "auth" ? <AuthView /> : view === "admin" ? <AdminView /> : view === "projects" ? <ProjectsView /> : view === "tasks" ? <TasksView /> : <Dashboard initialSnapshot={window.__FORGE_HEALTH__} />);
+createRoot(document.getElementById("forge-app")!).render(view === "auth" ? <AuthView /> : view === "admin" ? <AdminView /> : view === "projects" ? <ProjectsView /> : view === "tasks" ? <TasksView /> : view === "attention" ? <AttentionView /> : <Dashboard initialSnapshot={window.__FORGE_HEALTH__} />);

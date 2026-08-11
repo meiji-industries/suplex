@@ -65,7 +65,7 @@ const defaultController: ProcessController = {
     process.kill(pid, signal);
   },
   async stopContainer(id) {
-    await execFileAsync("docker", ["stop", "--time", "10", id]).catch(() => undefined);
+    await execFileAsync("docker", ["stop", "--time", "10", id]);
   },
   async stopServe(serve) {
     try {

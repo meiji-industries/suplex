@@ -6,7 +6,7 @@ The health surface uses a source-owned shadcn/Rhea-style component layer with Ba
 
 ## Start Forge locally
 
-Forge owns the Temporal development container, API, and worker processes. Docker is required for the persistent local Temporal service. If the tailnet endpoint enforces HTTPS, use the idempotent setup wizard first:
+Forge owns the Temporal development container, API, and worker processes for its normal `start` command. Docker is required for the persistent local Temporal service. If the tailnet endpoint enforces HTTPS, use the idempotent setup wizard first:
 
 ```sh
 corepack enable
@@ -46,6 +46,14 @@ pnpm run forge restart
 Shutdown reads `.forge/data/runtime/owned-processes.json`, verifies each recorded PID's command identity, and stops only those PIDs plus a newly owned neutral Temporal container. A legacy `forge-temporal` service adopted during migration is preserved separately; Forge never searches by broad process name or port.
 
 For a foreground run suitable for local debugging, use `pnpm run forge start --foreground`.
+
+For day-to-day development, use the Compose-backed foreground loop instead:
+
+```sh
+mise run dev
+```
+
+This runs the pinned Temporal service through `compose.dev.yaml`, keeps the API and worker on the host so they can use local GitHub/Codex, Tailscale, and worktrees, and runs Vite's frontend build watcher in the same terminal. Press Ctrl-C to stop the host processes and the Compose service. The external Temporal mode is only used by this development task; normal `forge start` retains Forge-managed Temporal lifecycle and ownership checks.
 
 ## Manual backup and restore
 

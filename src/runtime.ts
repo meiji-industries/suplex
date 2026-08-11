@@ -303,11 +303,11 @@ async function waitForProcessIdentity(pid: number, attempts = 10, delayMs = 50):
   return undefined;
 }
 
-async function spawnForgeProcess(name: string, script: string, config: ForgeConfig, runtimeRoot: string): Promise<{ child: ChildProcess; owned: OwnedProcess }> {
+async function spawnForgeProcess(name: string, script: string, config: ForgeConfig, runtimeRoot: string, foreground: boolean): Promise<{ child: ChildProcess; owned: OwnedProcess }> {
   const tsxCli = new URL("../node_modules/tsx/dist/cli.mjs", import.meta.url);
   const command = process.execPath;
   const args = [tsxCli.pathname, script];
-  const logHandle = await open(`${runtimeRoot}/${name}.log`, "a", 0o600);
+  const logHandle = foreground ? undefined : await open(`${runtimeRoot}/${name}.log`, "a", 0o600);
   const child = spawn(command, args, {
     cwd: process.cwd(),
     detached: true,
@@ -320,14 +320,14 @@ async function spawnForgeProcess(name: string, script: string, config: ForgeConf
       FORGE_TASK_QUEUE: config.taskQueue,
       ...(config.temporalNamespace === "forge" ? { FORGE_LEGACY_RUNTIME: "1" } : {}),
     },
-    stdio: ["ignore", logHandle.fd, logHandle.fd],
+    stdio: foreground ? "inherit" : ["ignore", logHandle!.fd, logHandle!.fd],
   });
   child.unref();
   if (!child.pid) {
-    await logHandle.close();
+    await logHandle?.close();
     throw new Error(`Could not start Forge ${name}`);
   }
-  await logHandle.close();
+  await logHandle?.close();
   const identity = await waitForProcessIdentity(child.pid);
   const startedAt = new Date().toISOString();
   const startId = randomUUID();
@@ -468,24 +468,26 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
   let temporalContainer: TemporalContainer | undefined;
   let registry: ProcessRegistry | undefined;
   try {
-    temporalContainer = await startTemporalContainer(config);
-    if (temporalContainer.legacy) {
-      const legacyConfig = {
-        ...config,
-        temporalAddress: temporalContainer.address ?? config.temporalAddress,
-        temporalNamespace: "forge",
-        taskQueue: "forge",
-      };
-      await waitForTemporal(legacyConfig);
-      const legacyTemporal = await connectTemporal(legacyConfig);
-      try {
-        await assertLegacyNamespaceProbeOnly(legacyTemporal.client);
-      } finally {
-        legacyTemporal.connection.close();
+    if (config.temporalMode === "managed") {
+      temporalContainer = await startTemporalContainer(config);
+      if (temporalContainer.legacy) {
+        const legacyConfig = {
+          ...config,
+          temporalAddress: temporalContainer.address ?? config.temporalAddress,
+          temporalNamespace: "forge",
+          taskQueue: "forge",
+        };
+        await waitForTemporal(legacyConfig);
+        const legacyTemporal = await connectTemporal(legacyConfig);
+        try {
+          await assertLegacyNamespaceProbeOnly(legacyTemporal.client);
+        } finally {
+          legacyTemporal.connection.close();
+        }
+        temporalContainer = await migrateLegacyTemporalContainer(config, temporalContainer);
       }
-      temporalContainer = await migrateLegacyTemporalContainer(config, temporalContainer);
     }
-    const runtimeConfig = { ...config, temporalAddress: temporalContainer.address ?? config.temporalAddress };
+    const runtimeConfig = { ...config, temporalAddress: temporalContainer?.address ?? config.temporalAddress };
     await waitForTemporal(runtimeConfig);
     const temporal = await connectTemporal(runtimeConfig);
     try {
@@ -497,16 +499,16 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
     registry = {
       version: 1,
       processes: [],
-      temporalContainer,
+      ...(temporalContainer ? { temporalContainer } : {}),
       ...(config.tailscaleExposure === "serve" ? {
         tailscaleServe: { port: config.port, backend: `http://${config.bindAddress}:${config.port}` },
       } : {}),
     };
     await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
-    const worker = await spawnForgeProcess("worker", "src/worker.ts", runtimeConfig, config.runtimeRoot);
+    const worker = await spawnForgeProcess("worker", "src/worker.ts", runtimeConfig, config.runtimeRoot, foreground);
     registry.processes.push(worker.owned);
     await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
-    const server = await spawnForgeProcess("server", "src/server.ts", runtimeConfig, config.runtimeRoot);
+    const server = await spawnForgeProcess("server", "src/server.ts", runtimeConfig, config.runtimeRoot, foreground);
     registry.processes.push(server.owned);
     await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
     if (config.tailscaleExposure === "serve") {
@@ -538,7 +540,7 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
       : {
           version: 1 as const,
           processes: [],
-          ...(temporalContainer?.legacy ? {} : { temporalContainer }),
+          ...(temporalContainer && !temporalContainer.legacy ? { temporalContainer } : {}),
         };
     try {
       await reconcileExistingRegistry(cleanupRegistry, config);

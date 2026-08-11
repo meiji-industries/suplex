@@ -21,6 +21,7 @@ export interface ForgeConfig {
   runtimeRoot: string;
   repositoryRoot: string;
   worktreeRoot: string;
+  temporalMode: "managed" | "external";
   temporalAddress: string;
   temporalNamespace: string;
   temporalImage: string;
@@ -195,6 +196,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
     runtimeRoot: parsedEnvironment.data.FORGE_RUNTIME_ROOT ? resolve(parsedEnvironment.data.FORGE_RUNTIME_ROOT) : resolve(dataRoot, "runtime"),
     repositoryRoot: resolve(parsedEnvironment.data.FORGE_REPOSITORY_ROOT ?? process.cwd()),
     worktreeRoot: resolve(parsedEnvironment.data.FORGE_WORKTREE_ROOT ?? resolve(dataRoot, "worktrees")),
+    temporalMode: parsedEnvironment.data.FORGE_TEMPORAL_MODE ?? "managed",
     temporalAddress: parsedEnvironment.data.FORGE_TEMPORAL_ADDRESS ?? "127.0.0.1:7233",
     temporalNamespace,
     temporalImage,
@@ -221,6 +223,7 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     runtimeRoot: overrides.runtimeRoot ?? resolve(dataRoot, "runtime"),
     repositoryRoot: overrides.repositoryRoot ?? resolve(dataRoot, "repositories"),
     worktreeRoot: overrides.worktreeRoot ?? resolve(dataRoot, "worktrees"),
+    temporalMode: overrides.temporalMode ?? "managed",
     temporalAddress: overrides.temporalAddress ?? "127.0.0.1:7233",
     temporalNamespace: overrides.temporalNamespace ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").namespace,
     temporalImage: overrides.temporalImage ?? "temporalio/temporal:1.8.2@sha256:cf86707827fac99e4d1c4a47dc11b105382d796199c7bd41fb3213fb0471628e",

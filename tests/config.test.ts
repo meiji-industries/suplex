@@ -17,6 +17,10 @@ test("loads a Tailscale-only configuration and exposes the reachable address", (
   expect(config.taskQueue).toBe("tasks-test-installation");
 });
 
+test("supports an externally managed Temporal service", () => {
+  expect(loadConfig({ ...baseEnvironment, FORGE_TEMPORAL_MODE: "external" }).temporalMode).toBe("external");
+});
+
 for (const address of [
   "0.0.0.0",
   "::",

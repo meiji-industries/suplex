@@ -4,7 +4,7 @@ import { AppSidebar, MobileNavigation } from "./navigation.js";
 import { withCompany } from "../../lib/api.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 
-export function ApplicationFrame({ title, headerRight, children }: { title: string; headerRight?: ReactElement; children: ReactNode }): ReactElement {
+export function ApplicationFrame({ title, headerRight, children }: { title: string; headerRight?: ReactElement | null | undefined; children: ReactNode }): ReactElement {
   const context = useOptionalCompanyContext();
   return (
     <div className="min-h-screen bg-background text-foreground">

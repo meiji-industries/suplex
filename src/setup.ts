@@ -95,13 +95,13 @@ export async function runSetup(): Promise<void> {
       } catch (error) {
         if (isTailscaleDaemonUnavailable(error)) {
           output.write("Tailscale Serve was not configured because the local Tailscale daemon is not running.\n");
-          output.write("Start and sign in to the Tailscale app, verify `tailscale status`, then rerun: npm run forge -- setup\n");
+          output.write("Start and sign in to the Tailscale app, verify `tailscale status`, then rerun: pnpm run forge -- setup\n");
           return;
         }
         throw error;
       }
     }
-    output.write(`Start Forge with: npm run forge -- start\nOpen: ${config.reachableAddress}/health\n`);
+    output.write(`Start Forge with: pnpm run forge -- start\nOpen: ${config.reachableAddress}/health\n`);
   } finally {
     readline.close();
   }

@@ -1,3 +1,6 @@
+import { Context } from "@temporalio/activity";
+import pino, { type Logger } from "pino";
+
 const sensitiveKey = /(?:authorization|cookie|credential|password|private.?key|secret|token|api.?key)/i;
 const sensitiveValue = /Bearer\s+[^\s,;]+|(?:gho_|github_pat_|sk-)[A-Za-z0-9_-]+|\b(?:token|password|secret|api[_-]?key)=[^\s,;]+/gi;
 
@@ -26,10 +29,44 @@ export interface LogContext {
   projectId?: string;
   activityId?: string;
   turnId?: string;
+  installationId?: string;
 }
 
+const loggerOptions = {
+  base: null,
+  timestamp: false,
+  redact: {
+    paths: [
+      "authorization",
+      "cookie",
+      "credential",
+      "password",
+      "privateKey",
+      "secret",
+      "token",
+      "apiKey",
+      "*.headers.cookie",
+    ],
+    censor: "[REDACTED]",
+  },
+};
+
 export class StructuredLogger {
-  constructor(private readonly sink: (line: string) => void = console.log) {}
+  private logger: Logger;
+
+  constructor(sink?: (line: string) => void) {
+    this.logger = pino(loggerOptions, sink ? { write: sink } : process.stdout);
+  }
+
+  private static fromLogger(logger: Logger): StructuredLogger {
+    const instance = Object.create(StructuredLogger.prototype) as StructuredLogger;
+    instance.logger = logger;
+    return instance;
+  }
+
+  child(context: LogContext): StructuredLogger {
+    return StructuredLogger.fromLogger(this.logger.child(redact(context) as LogContext));
+  }
 
   info(message: string, context: LogContext = {}): void {
     this.write("info", message, context);
@@ -44,12 +81,25 @@ export class StructuredLogger {
   }
 
   private write(level: "info" | "warn" | "error", message: string, context: object): void {
-    const record = redact({
+    this.logger[level](redact({
       timestamp: new Date().toISOString(),
-      level,
       message,
       ...context,
-    });
-    this.sink(JSON.stringify(record));
+    }));
+  }
+}
+
+export function activityLogContext(): LogContext {
+  try {
+    const info = Context.current().info;
+    return {
+      activityId: info.activityId,
+      ...(info.workflowExecution ? {
+        workflowId: info.workflowExecution.workflowId,
+        runId: info.workflowExecution.runId,
+      } : {}),
+    };
+  } catch {
+    return {};
   }
 }

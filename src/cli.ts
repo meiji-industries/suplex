@@ -16,7 +16,7 @@ async function stopForge(config: ReturnType<typeof loadConfig>): Promise<void> {
   const registry = await readProcessRegistry(registryPath);
   const report = await stopOwnedProcesses(registry);
   await rm(registryPath, { force: true });
-  console.log(JSON.stringify({ stopped: report.stopped.length, containersStopped: report.containersStopped.length, skipped: report.skipped }));
+  process.stdout.write(`${JSON.stringify({ stopped: report.stopped.length, containersStopped: report.containersStopped.length, skipped: report.skipped })}\n`);
 }
 
 async function main(): Promise<void> {
@@ -25,13 +25,13 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "help") {
-    console.log("Usage: npm run forge -- <setup|start|stop|restart> [--foreground]");
+    process.stdout.write("Usage: pnpm run forge -- <setup|start|stop|restart> [--foreground]\n");
     return;
   }
   const config = loadConfig();
   if (command === "start") {
     const registry = await startForge(config, foreground);
-    console.log(`Forge started at ${config.reachableAddress}; owned processes: ${registry.processes.map((process) => `${process.name}#${process.pid}`).join(", ")}`);
+    process.stdout.write(`Forge started at ${config.reachableAddress}; owned processes: ${registry.processes.map((process) => `${process.name}#${process.pid}`).join(", ")}\n`);
     return;
   }
   if (command === "stop") {
@@ -47,7 +47,7 @@ async function main(): Promise<void> {
       }
     }
     const registry = await startForge(config, foreground);
-    console.log(`Forge restarted at ${config.reachableAddress}; owned processes: ${registry.processes.length}`);
+    process.stdout.write(`Forge restarted at ${config.reachableAddress}; owned processes: ${registry.processes.length}\n`);
     return;
   }
   throw new Error(`Unknown Forge command: ${command}`);

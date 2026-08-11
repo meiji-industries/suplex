@@ -27,6 +27,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
+    "@temporalio/activity": "^1.22.0",
     "@temporalio/client": "^1.14.0",
     "@temporalio/proto": "^1.22.0",
     "@temporalio/worker": "^1.14.0",

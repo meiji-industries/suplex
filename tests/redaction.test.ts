@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 
-import { redact } from "../src/logging.js";
+import { redact, StructuredLogger } from "../src/logging.js";
 
 test("redacts credential-shaped keys and values before serialization", () => {
   const result = redact({
@@ -29,4 +29,18 @@ test("does not mutate the object supplied by a caller", () => {
   redact(input);
 
   assert.deepEqual(input, { token: "secret", safe: "value" });
+});
+
+test("emits Pino JSON with correlation fields and redacted values", () => {
+  const lines: string[] = [];
+  new StructuredLogger((line) => lines.push(line)).child({ workflowId: "workflow-1", runId: "run-1" }).error("provider failed", {}, {
+    authorization: "Bearer secret-token",
+  });
+
+  const record = JSON.parse(lines[0] ?? "{}");
+  assert.equal(record.message, "provider failed");
+  assert.equal(record.workflowId, "workflow-1");
+  assert.equal(record.runId, "run-1");
+  assert.equal(record.authorization, "[REDACTED]");
+  assert.doesNotMatch(lines[0] ?? "", /secret-token/);
 });

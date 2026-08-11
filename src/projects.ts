@@ -151,6 +151,7 @@ const secretPattern = /(?:gh[pousr]_|github_pat_|token\s*=|password\s*=|secret\s
 const approvedSetupCommands = new Set(["pnpm install", "pnpm install --frozen-lockfile", "npm install", "npm ci", "yarn install", "yarn install --immutable", "bun install"]);
 const approvedVerificationCommands = new Set(["pnpm test", "pnpm typecheck", "pnpm lint", "npm test", "npm run typecheck", "npm run lint", "yarn test", "yarn typecheck", "yarn lint", "bun test", "mise run test", "mise run typecheck", "mise run lint", "make test", "make check"]);
 
+const projectRevisionColumns = `p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha`;
 
 function identifier(prefix: string): string {
   return `${prefix}_${randomBytes(12).toString("hex")}`;
@@ -447,8 +448,8 @@ export class ProjectService {
     const row = this.database.authQuery((db) => {
       const user = this.user(actorUserId);
       const result = user.role === "admin"
-        ? db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p WHERE p.id = ?").get(projectId)
-        : db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE p.id = ? AND m.user_id = ?").get(projectId, actorUserId);
+        ? db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p WHERE p.id = ?`).get(projectId)
+        : db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE p.id = ? AND m.user_id = ?`).get(projectId, actorUserId);
       return result as ProjectRow | undefined;
     });
     if (!row) throw new ProjectFailure("Not found", [], 404);
@@ -460,8 +461,8 @@ export class ProjectService {
       const user = this.user(actorUserId);
       if (companyId) this.auth.requireCompanyAccess(actorUserId, companyId);
       const query = user.role === "admin"
-        ? companyId ? db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p WHERE p.company_id = ? ORDER BY p.name") : db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p ORDER BY p.name")
-        : companyId ? db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? AND p.company_id = ? ORDER BY p.name") : db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? ORDER BY p.name");
+        ? companyId ? db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p WHERE p.company_id = ? ORDER BY p.name`) : db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p ORDER BY p.name`)
+        : companyId ? db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? AND p.company_id = ? ORDER BY p.name`) : db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? ORDER BY p.name`);
       const result = companyId ? user.role === "admin" ? query.all(companyId) : query.all(actorUserId, companyId) : user.role === "admin" ? query.all() : query.all(actorUserId);
       return result as ProjectRow[];
     });
@@ -537,7 +538,7 @@ export class ProjectService {
   }
 
   private rowForProject(db: import("better-sqlite3").Database, projectId: string): ProjectRow | undefined {
-    return db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p WHERE p.id = ?").get(projectId) as ProjectRow | undefined;
+    return db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p WHERE p.id = ?`).get(projectId) as ProjectRow | undefined;
   }
 
   private user(userId: string): AuthUser {

@@ -13,7 +13,7 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
     reachableAddress: "http://forge.tailnet.ts.net:4111",
     ready: true,
     checks: [
-      { id: "database", label: "SQLite database", status: "healthy", summary: "WAL is enabled", details: {} },
+      { id: "database", label: "SQLite database", status: "healthy", summary: "WAL is enabled", details: { walMode: true } },
       { id: "gh-auth", label: "GitHub CLI authentication", status: "unhealthy", summary: "Local authentication is unavailable", details: {} },
     ],
   };
@@ -45,6 +45,21 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
     assert.equal(await page.locator('[data-slot="health-row"]').count(), 2);
     assert.match(await page.locator("body").innerText(), /forge\.tailnet\.ts\.net/);
     assert.doesNotMatch(await page.locator("body").innerText(), /Truthful readiness/);
+
+    const navigationTrigger = page.getByRole("button", { name: "Open navigation" });
+    await navigationTrigger.click();
+    assert.equal(await page.locator('[data-slot="mobile-nav"]').isVisible(), true);
+    await page.keyboard.press("Escape");
+    assert.equal(await navigationTrigger.evaluate((element) => element === document.activeElement), true);
+
+    await page.locator('[data-slot="health-row"]').first().locator("button").click();
+    await assert.doesNotReject(() => page.getByText("walMode").waitFor());
+    const apiHealth = await page.evaluate(async () => {
+      const response = await fetch("/api/health");
+      return { status: response.status, body: await response.json() as { ready: boolean } };
+    });
+    assert.equal(apiHealth.status, 200);
+    assert.equal(apiHealth.body.ready, true);
 
     const desktop = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await desktop.goto(`http://127.0.0.1:${address.port}/health`);

@@ -1,6 +1,8 @@
 import { Collapsible } from "./components/ui/collapsible.js";
 import { Button } from "./components/ui/button.js";
+import { Dialog } from "./components/ui/dialog.js";
 import type { HealthCheck, HealthSnapshot } from "../health.js";
+import { isOwnedHealthCheck } from "../health-contract.js";
 import {
   Activity,
   ChevronRight,
@@ -76,9 +78,53 @@ function HealthRow({ check }: { check: HealthCheck }): ReactElement {
   );
 }
 
+function NavigationLinks({ close }: { close?: () => void }): ReactElement {
+  return (
+    <nav aria-label="Forge navigation" className="space-y-0.5 text-[13px]">
+      <a className="flex h-7 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground" href="/health" onClick={close}><Activity className="size-3.5" />Overview</a>
+      <a aria-current="page" className="flex h-7 items-center gap-2 rounded-md bg-sidebar-accent px-2 font-medium text-sidebar-foreground" href="/health" onClick={close}><ShieldCheck className="size-3.5 text-primary" />Host health</a>
+      <span className="flex h-7 cursor-not-allowed items-center gap-2 rounded-md px-2 text-muted-foreground/45"><Server className="size-3.5" />Projects</span>
+    </nav>
+  );
+}
+
+function AppSidebar(): ReactElement {
+  return (
+    <aside className="hidden w-52 shrink-0 border-r border-sidebar-border bg-sidebar px-2.5 py-2.5 lg:flex lg:flex-col">
+      <div className="flex h-8 items-center gap-2 px-2">
+        <span className="flex size-5 items-center justify-center rounded-[5px] bg-foreground text-[10px] font-bold text-background">F</span>
+        <span className="text-[13px] font-semibold tracking-[-0.02em]">Forge</span>
+      </div>
+      <div className="mt-3"><NavigationLinks /></div>
+      <div className="mt-auto border-t border-sidebar-border pt-2">
+        <div className="flex h-7 items-center gap-2 px-2 text-xs text-muted-foreground"><span className="size-1.5 rounded-full bg-emerald-500" />Local host</div>
+      </div>
+    </aside>
+  );
+}
+
+function MobileNavigation({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): ReactElement {
+  return (
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Trigger render={<Button variant="ghost" size="icon" aria-label="Open navigation" title="Open navigation"><Activity className="size-3.5" /></Button>} />
+      <Dialog.Portal>
+        <Dialog.Backdrop className="fixed inset-0 z-40 bg-black/20" />
+        <Dialog.Popup data-slot="mobile-nav" className="fixed inset-y-0 left-0 z-50 w-60 border-r border-sidebar-border bg-sidebar px-2.5 py-2.5 shadow-xl outline-none">
+          <div className="flex h-8 items-center justify-between px-2">
+            <div className="flex items-center gap-2"><span className="flex size-5 items-center justify-center rounded-[5px] bg-foreground text-[10px] font-bold text-background">F</span><span className="text-[13px] font-semibold">Forge</span></div>
+            <Dialog.Close render={<Button variant="ghost" size="icon" aria-label="Close navigation" title="Close navigation"><ChevronRight className="size-3.5 rotate-180" /></Button>} />
+          </div>
+          <div className="mt-3"><NavigationLinks close={() => onOpenChange(false)} /></div>
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
 function Dashboard({ initialSnapshot }: { initialSnapshot: HealthSnapshot }): ReactElement {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [refreshing, setRefreshing] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
@@ -98,33 +144,20 @@ function Dashboard({ initialSnapshot }: { initialSnapshot: HealthSnapshot }): Re
     return () => window.clearInterval(timer);
   }, [refresh]);
 
-  const ownedIds = ["temporal", "database", "artifact-root", "worker"];
-  const ownedChecks = useMemo(() => snapshot.checks.filter((check) => ownedIds.includes(check.id)), [snapshot.checks]);
-  const providerChecks = useMemo(() => snapshot.checks.filter((check) => !ownedIds.includes(check.id)), [snapshot.checks]);
+  const ownedChecks = useMemo(() => snapshot.checks.filter((check) => isOwnedHealthCheck(check.id)), [snapshot.checks]);
+  const providerChecks = useMemo(() => snapshot.checks.filter((check) => !isOwnedHealthCheck(check.id)), [snapshot.checks]);
   const healthyCount = snapshot.checks.filter((check) => check.status === "healthy").length;
   const failingCount = snapshot.checks.length - healthyCount;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen">
-        <aside className="hidden w-52 shrink-0 border-r border-sidebar-border bg-sidebar px-2.5 py-2.5 lg:flex lg:flex-col">
-          <div className="flex h-8 items-center gap-2 px-2">
-            <span className="flex size-5 items-center justify-center rounded-[5px] bg-foreground text-[10px] font-bold text-background">F</span>
-            <span className="text-[13px] font-semibold tracking-[-0.02em]">Forge</span>
-          </div>
-          <nav className="mt-3 space-y-0.5 text-[13px]">
-            <a className="flex h-7 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground" href="/health"><Activity className="size-3.5" />Overview</a>
-            <a className="flex h-7 items-center gap-2 rounded-md bg-sidebar-accent px-2 font-medium text-sidebar-foreground" href="/health"><ShieldCheck className="size-3.5 text-primary" />Host health</a>
-            <span className="flex h-7 cursor-not-allowed items-center gap-2 rounded-md px-2 text-muted-foreground/45"><Server className="size-3.5" />Projects</span>
-          </nav>
-          <div className="mt-auto border-t border-sidebar-border pt-2">
-            <div className="flex h-7 items-center gap-2 px-2 text-xs text-muted-foreground"><span className="size-1.5 rounded-full bg-emerald-500" />Local host</div>
-          </div>
-        </aside>
+        <AppSidebar />
 
         <main className="min-w-0 flex-1">
           <header className="flex h-10 items-center justify-between border-b border-border/70 px-3 sm:px-4">
             <div className="flex min-w-0 items-center gap-2">
+              <span className="lg:hidden"><MobileNavigation open={mobileNavOpen} onOpenChange={setMobileNavOpen} /></span>
               <span className="flex size-5 items-center justify-center rounded-[5px] bg-foreground text-[10px] font-bold text-background lg:hidden">F</span>
               <h1 className="truncate text-[13px] font-semibold">Host health</h1>
               <span className="text-border">/</span>
@@ -167,7 +200,6 @@ function Dashboard({ initialSnapshot }: { initialSnapshot: HealthSnapshot }): Re
             </section>
           </div>
 
-          <div className="flex min-h-8 items-center border-t border-border/70 px-3 text-[11px] text-muted-foreground sm:px-4">Credentials are checked locally.</div>
         </main>
       </div>
     </div>

@@ -9,10 +9,11 @@ The health surface uses a source-owned shadcn/Rhea-style component layer with Ba
 Forge owns the Temporal development container, API, and worker processes. Docker is required for the persistent local Temporal service. If the tailnet endpoint enforces HTTPS, use the idempotent setup wizard first:
 
 ```sh
-npm install
-npm run build
-npm run forge -- setup
-npm run forge -- start
+corepack enable
+pnpm install --frozen-lockfile
+pnpm run build
+pnpm run forge -- setup
+pnpm run forge -- start
 ```
 
 The wizard offers Tailscale Serve HTTPS (recommended) or direct Tailscale HTTP, discovers the local MagicDNS hostname when Tailscale is available, and upserts only Forge's keys in `.forge/forge.env`. Re-running it is safe. In Serve mode, Forge listens on `127.0.0.1` and Tailscale terminates HTTPS at the configured `https://<magicdns>:4111` URL; the loopback exception is accepted only because that proxy boundary is explicit and recorded.
@@ -26,22 +27,22 @@ The command is otherwise intentionally strict: it refuses wildcard, public, LAN,
 Use the recorded identities for lifecycle operations:
 
 ```sh
-npm run forge -- stop
-npm run forge -- restart
+pnpm run forge -- stop
+pnpm run forge -- restart
 ```
 
 Shutdown reads `.forge/data/runtime/owned-processes.json`, verifies each recorded PID's command identity, and stops only those PIDs plus the Forge-labeled Temporal container. It never searches by broad process name or port.
 
-For a foreground run suitable for local debugging, use `npm run forge -- start --foreground`.
+For a foreground run suitable for local debugging, use `pnpm run forge -- start --foreground`.
 
 After building the package, the same setup entry point is available as `npx forge setup`.
 
 ## Development checks
 
 ```sh
-npm run typecheck
-npm test
-npm run test:browser
+pnpm run typecheck
+pnpm run test
+pnpm run test:browser
 ```
 
 The browser proof uses a mobile viewport and the same responsive health page served by the API. The real Temporal lifecycle proof requires a running local Temporal service; start Forge first and run it with `FORGE_RUN_TEMPORAL_TESTS=1` when the local environment is ready.

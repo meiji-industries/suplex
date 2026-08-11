@@ -38,12 +38,12 @@ function cookieValue(name: string): string | undefined {
 export async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
   const method = init?.method?.toUpperCase() ?? "GET";
   const isSafe = method === "GET" || method === "HEAD" || method === "OPTIONS";
-  const originToken = !isSafe ? cookieValue("forge_origin") : undefined;
+  const originToken = !isSafe ? cookieValue("csrf_v1") : undefined;
   const response = await fetch(url, {
     ...init,
     headers: {
       ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...(originToken ? { "X-Forge-Origin": originToken } : {}),
+      ...(originToken ? { "X-CSRF-V1": originToken } : {}),
       ...(init?.headers ?? {}),
     },
   });

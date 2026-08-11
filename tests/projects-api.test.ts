@@ -11,6 +11,7 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { ProjectService } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
+import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 
 function webAuthn(): WebAuthnAdapter {
   let sequence = 0;
@@ -33,7 +34,7 @@ function sessionCookie(response: { headers: OutgoingHttpHeaders }): string {
   for (const setCookie of values) {
     const pair = setCookie.split(";", 1)[0] ?? "";
     const [name, value] = pair.split("=", 2);
-    if (name?.trim() === "forge_session" && value !== undefined) return `${name.trim()}=${value}`;
+    if (name?.trim() === SESSION_COOKIE_NAME && value !== undefined) return `${name.trim()}=${value}`;
   }
   return "";
 }

@@ -9,6 +9,7 @@ import { AuthService, type WebAuthnAdapter } from "../src/auth.js";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
+import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 
 function fakeWebAuthn(): WebAuthnAdapter {
   let sequence = 0;
@@ -45,7 +46,7 @@ function sessionCookie(response: { headers: OutgoingHttpHeaders }): string {
   for (const setCookie of values) {
     const pair = setCookie.split(";", 1)[0] ?? "";
     const [name, value] = pair.split("=", 2);
-    if (name?.trim() === "forge_session" && value !== undefined) return `${name.trim()}=${value}`;
+    if (name?.trim() === SESSION_COOKIE_NAME && value !== undefined) return `${name.trim()}=${value}`;
   }
   return "";
 }
@@ -65,7 +66,7 @@ test("API enrollment and authorization fail closed before company details are re
     const enrolled = await app.inject({ method: "POST", url: "/api/auth/bootstrap/verify", payload: { token: invitation.token, challengeId: ceremony.challengeId, response: { id: "admin-api-credential", type: "public-key" } } });
     expect(enrolled.statusCode).toBe(200);
     const adminCookie = sessionCookie(enrolled);
-    expect(adminCookie).toContain("forge_session=");
+    expect(adminCookie).toContain(`${SESSION_COOKIE_NAME}=`);
     expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: adminCookie } })).statusCode).toBe(200);
 
     const companyA = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "API A" } })).json() as { id: string };

@@ -8,6 +8,7 @@ import { AuthService, type WebAuthnAdapter } from "../src/auth.js";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
+import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 
 function fakeWebAuthn(): WebAuthnAdapter {
   let sequence = 0;
@@ -149,7 +150,7 @@ async function signInCookie(app: Awaited<ReturnType<typeof createApp>>, auth: Au
     url: "/api/auth/verify",
     payload: { challengeId: options.challengeId, response: { id: credentialId, type: "public-key" } },
   });
-  return parseCookie(response.headers["set-cookie"], "forge_session");
+  return parseCookie(response.headers["set-cookie"], SESSION_COOKIE_NAME);
 }
 
 function injectOptions(method: "GET" | "POST" | "PATCH" | "DELETE", url: string, cookie?: string, origin?: string, body?: Record<string, unknown>) {

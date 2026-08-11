@@ -7,8 +7,6 @@ import Database from "better-sqlite3";
 
 import { ForgeDatabase } from "../src/database.js";
 
-const expectedMigrationCount = 15;
-
 test("initializes migrations in WAL mode and preserves probe state after reopening", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-db-test-"));
   const filename = join(root, "forge.sqlite");
@@ -35,8 +33,7 @@ test("initializes migrations in WAL mode and preserves probe state after reopeni
     });
     const reopenedHealth = reopened.health();
     expect(reopenedHealth.schemaState).toBe("current");
-    expect(reopenedHealth.expectedMigrations).toBe(expectedMigrationCount);
-    expect(reopenedHealth.appliedMigrations).toBe(expectedMigrationCount);
+    expect(reopenedHealth.appliedMigrations).toBe(reopenedHealth.expectedMigrations);
     reopened.close();
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -79,7 +76,8 @@ test("adopts a pre-Drizzle database without rewriting existing probe state", asy
       status: "running",
     });
     const adoptedHealth = adopted.health();
-    expect(adoptedHealth).toMatchObject({ walMode: true, schemaState: "current", expectedMigrations: expectedMigrationCount, appliedMigrations: expectedMigrationCount });
+    expect(adoptedHealth).toMatchObject({ walMode: true, schemaState: "current" });
+    expect(adoptedHealth.appliedMigrations).toBe(adoptedHealth.expectedMigrations);
     adopted.close();
 
     const reopened = new ForgeDatabase(filename);
@@ -94,13 +92,25 @@ function lastAppliedHash(database: ForgeDatabase): string {
   return database.authQuery((db) => (db.prepare("SELECT hash FROM __drizzle_migrations ORDER BY created_at DESC LIMIT 1").get() as { hash: string }).hash);
 }
 
-test("schema health distinguishes current, behind, partial, and corrupt migration states", () => {
+test("schema health distinguishes empty, current, behind, ahead, partial, and corrupt migration states", () => {
   const root = mkdtempSync(join(tmpdir(), "forge-db-schema-test-"));
   const filename = join(root, "forge.sqlite");
 
   try {
     const database = new ForgeDatabase(filename);
     expect(database.health().schemaState).toBe("current");
+    const baselineMigrations = database.authQuery((db) => db.prepare("SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at ASC, hash ASC").all() as Array<{ hash: string; created_at: number }>);
+
+    database.authQuery((db) => {
+      db.prepare("DELETE FROM __drizzle_migrations").run();
+    });
+    expect(database.health()).toMatchObject({ schemaState: "behind", appliedMigrations: 0 });
+
+    database.authQuery((db) => {
+      const restore = db.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
+      for (const migration of baselineMigrations) restore.run(migration.hash, migration.created_at);
+    });
+    const expectedMigrationCount = database.health().expectedMigrations;
 
     const originalLastHash = lastAppliedHash(database);
     database.authQuery((db) => {
@@ -110,9 +120,20 @@ test("schema health distinguishes current, behind, partial, and corrupt migratio
 
     database.authQuery((db) => {
       db.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)").run(originalLastHash, Date.now() + 1);
-      db.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)").run(originalLastHash, Date.now() + 2);
+      db.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)").run("unknown-ahead-hash", Date.now() + 2);
     });
     expect(database.health().schemaState).toBe("ahead");
+
+    database.authQuery((db) => {
+      db.prepare("DELETE FROM __drizzle_migrations").run();
+      const restore = db.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
+      for (const migration of baselineMigrations) restore.run(migration.hash, migration.created_at);
+    });
+    database.authQuery((db) => {
+      const secondMigration = db.prepare("SELECT hash FROM __drizzle_migrations ORDER BY created_at ASC, hash ASC LIMIT 1 OFFSET 1").get() as { hash: string };
+      db.prepare("DELETE FROM __drizzle_migrations WHERE hash = ?").run(secondMigration.hash);
+    });
+    expect(database.health().schemaState).toBe("partial");
 
     database.authQuery((db) => {
       db.prepare("DELETE FROM __drizzle_migrations").run();
@@ -136,6 +157,54 @@ test("schema health is current but unhealthy when WAL is disabled", () => {
     const health = database.health();
     expect(health.schemaState).toBe("current");
     expect(health.walMode).toBe(false);
+    database.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reports a write lock without discarding readable schema health", () => {
+  const root = mkdtempSync(join(tmpdir(), "forge-db-lock-test-"));
+  const filename = join(root, "forge.sqlite");
+
+  try {
+    const database = new ForgeDatabase(filename);
+    const expectedMigrations = database.health().expectedMigrations;
+    database.authQuery((db) => db.pragma("busy_timeout = 1"));
+    const lockHolder = new Database(filename);
+    lockHolder.pragma("busy_timeout = 1");
+    lockHolder.exec("BEGIN IMMEDIATE");
+    try {
+      expect(database.health()).toMatchObject({
+        schemaState: "locked",
+        expectedMigrations,
+        appliedMigrations: expectedMigrations,
+        readable: true,
+        writable: false,
+      });
+    } finally {
+      lockHolder.exec("ROLLBACK");
+      lockHolder.close();
+    }
+    database.close();
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("retains exact readable schema health when writes are disabled", () => {
+  const root = mkdtempSync(join(tmpdir(), "forge-db-readonly-test-"));
+  const filename = join(root, "forge.sqlite");
+
+  try {
+    const database = new ForgeDatabase(filename);
+    database.authQuery((db) => db.pragma("query_only = ON"));
+
+    expect(database.health()).toMatchObject({
+      schemaState: "current",
+      readable: true,
+      writable: false,
+    });
     database.close();
   } finally {
     rmSync(root, { recursive: true, force: true });

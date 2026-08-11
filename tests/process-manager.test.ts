@@ -38,6 +38,8 @@ test("shutdown signals only the recorded owned process identities", async () => 
     startedAt: "2026-08-10T00:00:00.000Z",
     processGroup: 4101,
     startTime: "Tue 10 Aug 00:00:00 2026",
+    executable: "node",
+    argv: ["/usr/local/bin/node", "worker.js"],
   };
   const unrelated: OwnedProcess = {
     name: "unrelated-worker-like-process",
@@ -48,15 +50,17 @@ test("shutdown signals only the recorded owned process identities", async () => 
     startTime: "Tue 10 Aug 00:00:01 2026",
   };
   const signalled: number[] = [];
+  let ownedStopped = false;
   const controller = makeController({
     async inspect(pid) {
-      if (pid === owned.pid) return makeInspection(owned);
+      if (pid === owned.pid) return ownedStopped ? undefined : makeInspection(owned);
       if (pid === unrelated.pid) return makeInspection(unrelated);
       return undefined;
     },
     async signal(pid, signal) {
       expect(signal).toBe("SIGTERM");
       signalled.push(pid);
+      ownedStopped = true;
     },
     async stopContainer() {
       throw new Error("no container should be stopped in this test");
@@ -69,7 +73,7 @@ test("shutdown signals only the recorded owned process identities", async () => 
   expect(signalled.includes(unrelated.pid)).toBe(false);
 });
 
-test("shutdown refuses a reused PID whose process identity no longer matches", async () => {
+test("shutdown fails safely for a reused PID whose process identity no longer matches", async () => {
   const signalled: number[] = [];
   const controller = makeController({
     async inspect() {
@@ -83,7 +87,7 @@ test("shutdown refuses a reused PID whose process identity no longer matches", a
     },
   });
 
-  const report = await stopOwnedProcesses({
+  await expect(stopOwnedProcesses({
     version: 1,
     processes: [{
       name: "forge-worker",
@@ -94,13 +98,44 @@ test("shutdown refuses a reused PID whose process identity no longer matches", a
       startTime: "Tue 10 Aug 00:00:00 2026",
     }],
     temporalContainer: undefined,
-  }, controller);
+  }, controller)).rejects.toThrow(/ownership is ambiguous/i);
 
   expect(signalled).toEqual([]);
-  expect(report.skipped).toEqual([{ pid: 4101, reason: "ownership-ambiguous" }]);
 });
 
-test("shutdown preserves an unrelated process with a matching command but different start identity", async () => {
+test("shutdown fails safely for a legacy process record without exact identity fields", async () => {
+  const signalled: number[] = [];
+  const controller = makeController({
+    async inspect() {
+      return {
+        pid: 4101,
+        command: "/usr/local/bin/node worker.js",
+        executable: "/usr/local/bin/node",
+        argv: ["/usr/local/bin/node", "worker.js"],
+        processGroup: 4101,
+        startTime: "Tue 10 Aug 00:00:00 2026",
+      };
+    },
+    async signal(pid) {
+      signalled.push(pid);
+    },
+  });
+
+  await expect(stopOwnedProcesses({
+    version: 1,
+    processes: [{
+      name: "forge-worker",
+      pid: 4101,
+      command: "/usr/local/bin/node worker.js",
+      startedAt: "2026-08-10T00:00:00.000Z",
+      processGroup: 4101,
+    }],
+  }, controller)).rejects.toThrow(/ownership is ambiguous/i);
+
+  expect(signalled).toEqual([]);
+});
+
+test("shutdown fails safely for an unrelated process with a matching command but different start identity", async () => {
   const signalled: number[] = [];
   const controller = makeController({
     async inspect() {
@@ -111,7 +146,7 @@ test("shutdown preserves an unrelated process with a matching command but differ
     },
   });
 
-  const report = await stopOwnedProcesses({
+  await expect(stopOwnedProcesses({
     version: 1,
     processes: [{
       name: "forge-worker",
@@ -122,17 +157,41 @@ test("shutdown preserves an unrelated process with a matching command but differ
       startTime: "Tue 10 Aug 00:00:00 2026",
     }],
     temporalContainer: undefined,
-  }, controller);
+  }, controller)).rejects.toThrow(/ownership is ambiguous/i);
 
   expect(signalled).toEqual([]);
-  expect(report.skipped).toEqual([{ pid: 4101, reason: "ownership-ambiguous" }]);
+});
+
+test("shutdown retains ownership proof when a signalled process does not exit", async () => {
+  const owned: OwnedProcess = {
+    name: "forge-worker",
+    pid: 4101,
+    command: "/usr/local/bin/node worker.js",
+    startedAt: "2026-08-10T00:00:00.000Z",
+    processGroup: 4101,
+    startTime: "Tue 10 Aug 00:00:00 2026",
+    executable: "node",
+    argv: ["/usr/local/bin/node", "worker.js"],
+  };
+  const controller = makeController({
+    async inspect() {
+      return makeInspection(owned);
+    },
+  });
+
+  await expect(stopOwnedProcesses({ version: 1, processes: [owned] }, controller)).rejects.toThrow(/could not prove.*stopped/i);
 });
 
 test("shutdown passes the recorded Serve backend to cleanup", async () => {
   let stoppedBackend = "";
+  let configured = true;
   const controller = makeController({
     async stopServe(serve) {
       stoppedBackend = serve.backend;
+      configured = false;
+    },
+    async isServeConfigured() {
+      return configured;
     },
   });
 
@@ -167,11 +226,11 @@ test("shutdown does not claim a Temporal container stopped when Docker fails", a
   await expect(stopOwnedProcesses({
     version: 1,
     processes: [],
-    temporalContainer: { id: "neutral-id", name: "forge-temporal-neutral", image: "temporalio/temporal:1.8.2" },
+    temporalContainer: { id: "neutral-id", name: "forge-temporal-neutral", owner: "runtime-test", image: "temporalio/temporal:1.8.2" },
   }, controller)).rejects.toThrow("Docker is unavailable");
 });
 
-test("shutdown skips a Temporal container whose live identity does not match", async () => {
+test("shutdown fails safely when a Temporal container's live identity does not match", async () => {
   const controller = makeController({
     async inspectContainer() {
       return { id: "other-id", name: "forge-temporal-neutral", image: "temporalio/temporal:1.8.2", owner: "runtime-test", status: "running" };
@@ -181,14 +240,32 @@ test("shutdown skips a Temporal container whose live identity does not match", a
     },
   });
 
-  const report = await stopOwnedProcesses({
+  await expect(stopOwnedProcesses({
+    version: 1,
+    processes: [],
+    temporalContainer: { id: "neutral-id", name: "forge-temporal-neutral", owner: "runtime-test", image: "temporalio/temporal:1.8.2" },
+  }, controller)).rejects.toThrow(/ownership is ambiguous/i);
+
+});
+
+test("shutdown refuses to stop a Temporal container without its recorded installation owner", async () => {
+  let stopCalls = 0;
+  const controller = makeController({
+    async inspectContainer() {
+      return { id: "neutral-id", name: "forge-temporal-neutral", image: "temporalio/temporal:1.8.2", owner: "runtime-test", status: "running" };
+    },
+    async stopContainer() {
+      stopCalls += 1;
+    },
+  });
+
+  await expect(stopOwnedProcesses({
     version: 1,
     processes: [],
     temporalContainer: { id: "neutral-id", name: "forge-temporal-neutral", image: "temporalio/temporal:1.8.2" },
-  }, controller);
+  }, controller)).rejects.toThrow(/ownership is ambiguous/i);
 
-  expect(report.containersStopped).toEqual([]);
-  expect(report.ambiguousContainers).toEqual([{ id: "neutral-id", reason: "identity-mismatch" }]);
+  expect(stopCalls).toBe(0);
 });
 
 test("rejects a tampered process registry", async () => {

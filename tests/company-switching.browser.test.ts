@@ -167,7 +167,7 @@ test("a scoped not-found after membership removal selects another authorized com
     await page.route(`**/api/companies/${alpha.id}/projects`, async (route) => {
       if (!revoked) {
         revoked = true;
-        const response = await app.inject({ method: "DELETE", url: `/api/admin/companies/${alpha.id}/members/${member.id}`, headers: { cookie: `${adminCookie.name}=${adminCookie.value}` } });
+        const response = await app.inject({ method: "DELETE", url: `/api/admin/companies/${alpha.id}/members/${member.id}`, headers: { cookie: `${adminCookie.name}=${adminCookie.value}`, origin: config.reachableAddress } });
         expect(response.statusCode).toBe(204);
       }
       await route.continue();
@@ -180,7 +180,7 @@ test("a scoped not-found after membership removal selects another authorized com
     expect(await page.evaluate(() => window.localStorage.getItem("forge.activeCompanyId"))).toBe(beta.id);
     expect(await page.getByText("Alpha member project", { exact: true }).count()).toBe(0);
 
-    const finalRemoval = await app.inject({ method: "DELETE", url: `/api/admin/companies/${beta.id}/members/${member.id}`, headers: { cookie: `${adminCookie.name}=${adminCookie.value}` } });
+    const finalRemoval = await app.inject({ method: "DELETE", url: `/api/admin/companies/${beta.id}/members/${member.id}`, headers: { cookie: `${adminCookie.name}=${adminCookie.value}`, origin: config.reachableAddress } });
     expect(finalRemoval.statusCode).toBe(204);
     await page.reload();
     await page.getByText("No company access. Ask an administrator to assign a company.", { exact: true }).waitFor();

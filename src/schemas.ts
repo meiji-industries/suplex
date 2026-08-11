@@ -3,6 +3,9 @@ import { z } from "zod";
 import { HEALTH_CHECK_IDS } from "./health-contract.js";
 
 const primitive = z.union([z.string(), z.number(), z.boolean()]);
+export const ImmutableTemporalImageSchema = z.string()
+  .regex(/^[^:@\s]+\/[^:@\s]+:[^:@\s]+@sha256:[a-f0-9]{64}$/)
+  .refine((image) => !image.includes(":latest@"), { message: "Temporal image tags must be explicit releases, not latest" });
 
 export const ForgeEnvironmentSchema = z.object({
   FORGE_ACCESS_MODE: z.literal("tailscale").optional(),
@@ -20,7 +23,7 @@ export const ForgeEnvironmentSchema = z.object({
   FORGE_LEGACY_RUNTIME: z.literal("1").optional(),
   FORGE_TEMPORAL_ADDRESS: z.string().regex(/^[^:\s]+:\d+$/).optional(),
   FORGE_TEMPORAL_NAMESPACE: z.string().min(1).optional(),
-  FORGE_TEMPORAL_IMAGE: z.string().min(1).optional(),
+  FORGE_TEMPORAL_IMAGE: ImmutableTemporalImageSchema.optional(),
   FORGE_TASK_QUEUE: z.string().min(1).optional(),
   FORGE_DELIVERY_REPAIR_LIMIT: z.string().regex(/^\d+$/).optional(),
   FORGE_CODEX_CAPACITY: z.string().regex(/^\d+$/).optional(),
@@ -40,7 +43,7 @@ export const ForgeConfigSchema = z.object({
   worktreeRoot: z.string().min(1),
   temporalAddress: z.string().regex(/^[^:\s]+:\d+$/),
   temporalNamespace: z.string().min(1),
-  temporalImage: z.string().regex(/^[^:]+\/[^:]+(:[^:]+)?(@sha256:[a-f0-9]{64})?$/),
+  temporalImage: ImmutableTemporalImageSchema,
   taskQueue: z.string().min(1),
   deliveryRepairCycleLimit: z.number().int().min(0).max(5),
   externalTurnCapacity: z.number().int().min(1).max(64),
@@ -63,6 +66,7 @@ export const OwnedProcessSchema = z.object({
 export const TemporalContainerSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
+  owner: z.string().min(1).optional(),
   legacy: z.boolean().optional(),
   address: z.string().regex(/^[^:\s]+:\d+$/).optional(),
   image: z.string().min(1).optional(),

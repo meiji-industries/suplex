@@ -1,9 +1,13 @@
-import { randomBytes } from "node:crypto";
-
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 import type { AuthService, AuthUser } from "../auth.js";
 import type { ForgeConfig } from "../config.js";
+import {
+  CSRF_COOKIE_NAME,
+  LEGACY_SESSION_COOKIE_NAME,
+  SESSION_COOKIE_NAME,
+  newCsrfToken,
+} from "../auth-identifiers.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -11,12 +15,10 @@ declare module "fastify" {
   }
 }
 
-export const SESSION_COOKIE_NAME = "forge_session";
-export const ORIGIN_TOKEN_COOKIE_NAME = "forge_origin";
-export const ORIGIN_TOKEN_HEADER_NAME = "x-forge-origin";
-
 export async function sessionUser(auth: AuthService | undefined, request: Pick<FastifyRequest, "cookies">): Promise<AuthUser | undefined> {
-  return auth?.getUserBySession(request.cookies[SESSION_COOKIE_NAME] ?? "");
+  if (!auth) return undefined;
+  return auth.getUserBySession(request.cookies[SESSION_COOKIE_NAME] ?? "")
+    ?? auth.getUserBySession(request.cookies[LEGACY_SESSION_COOKIE_NAME] ?? "");
 }
 
 export function authenticatedUser(request: FastifyRequest): AuthUser {
@@ -34,7 +36,7 @@ export function setSessionCookie(config: ForgeConfig, reply: FastifyReply, sessi
     path: "/",
     maxAge: 7 * 24 * 60 * 60,
   });
-  reply.setCookie(ORIGIN_TOKEN_COOKIE_NAME, randomBytes(32).toString("base64url"), {
+  reply.setCookie(CSRF_COOKIE_NAME, newCsrfToken(), {
     httpOnly: false,
     sameSite: "strict",
     secure: config.reachableAddress.startsWith("https:"),
@@ -45,5 +47,6 @@ export function setSessionCookie(config: ForgeConfig, reply: FastifyReply, sessi
 
 export function clearSessionCookies(reply: FastifyReply): void {
   reply.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
-  reply.clearCookie(ORIGIN_TOKEN_COOKIE_NAME, { path: "/" });
+  reply.clearCookie(LEGACY_SESSION_COOKIE_NAME, { path: "/" });
+  reply.clearCookie(CSRF_COOKIE_NAME, { path: "/" });
 }

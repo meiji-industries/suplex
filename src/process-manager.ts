@@ -23,6 +23,7 @@ export interface OwnedProcess {
 export interface TemporalContainer {
   id: string;
   name: string;
+  owner?: string | undefined;
   legacy?: boolean | undefined;
   address?: string | undefined;
   image?: string | undefined;
@@ -63,6 +64,7 @@ export interface ProcessController {
   signal(pid: number, signal: "SIGTERM" | "SIGKILL"): Promise<void>;
   stopContainer(id: string): Promise<void>;
   stopServe?: (serve: TailscaleServe) => Promise<void>;
+  isServeConfigured?: (serve: TailscaleServe) => Promise<boolean>;
 }
 
 export interface StopReport {
@@ -71,6 +73,9 @@ export interface StopReport {
   skipped: Array<{ pid: number; reason: "missing" | "identity-mismatch" | "ownership-ambiguous" }>;
   ambiguousContainers: Array<{ id: string; reason: "missing" | "identity-mismatch" | "ownership-ambiguous" }>;
 }
+
+const shutdownVerificationAttempts = 10;
+const shutdownVerificationDelayMs = 100;
 
 function normalizeArgv(command: string): string[] {
   return command.split(/\s+/).filter(Boolean);
@@ -85,7 +90,7 @@ async function processField(pid: number, field: string): Promise<string | undefi
   }
 }
 
-const defaultController: ProcessController = {
+export const defaultProcessController: ProcessController = {
   async inspect(pid) {
     const command = await processField(pid, "command=");
     if (!command) return undefined;
@@ -117,29 +122,65 @@ const defaultController: ProcessController = {
     await execFileAsync("docker", ["stop", "--time", "10", id]);
   },
   async stopServe(serve) {
-    try {
-      const result = await execFileAsync("tailscale", ["serve", "status", "--json"], { maxBuffer: 64 * 1024 });
-      const status = TailscaleServeStatusSchema.parse(JSON.parse(result.stdout));
-      const route = Object.keys(status.Web ?? {}).find((key) => key.endsWith(`:${serve.port}`));
-      const proxy = route ? status.Web?.[route]?.Handlers?.["/"]?.Proxy : undefined;
-      if (proxy !== serve.backend) {
-        return;
-      }
-      await execFileAsync("tailscale", ["serve", `--https=${serve.port}`, "off"]);
-    } catch {
-      // Cleanup is idempotent when Tailscale is unavailable or already stopped.
-    }
+    await execFileAsync("tailscale", ["serve", `--https=${serve.port}`, "off"]);
+  },
+  async isServeConfigured(serve) {
+    const result = await execFileAsync("tailscale", ["serve", "status", "--json"], { maxBuffer: 64 * 1024 });
+    const status = TailscaleServeStatusSchema.parse(JSON.parse(result.stdout));
+    const route = Object.keys(status.Web ?? {}).find((key) => key.endsWith(`:${serve.port}`));
+    const proxy = route ? status.Web?.[route]?.Handlers?.["/"]?.Proxy : undefined;
+    return proxy === serve.backend;
   },
 };
 
-function processIdentityMatches(owned: OwnedProcess, inspection: ProcessInspection): boolean {
+export function processIdentityMatches(owned: OwnedProcess, inspection: ProcessInspection): boolean {
+  if (
+    owned.processGroup === undefined
+    || owned.startTime === undefined
+    || owned.executable === undefined
+    || owned.argv === undefined
+  ) {
+    return false;
+  }
   return inspection.pid === owned.pid
-    && inspection.processGroup === (owned.processGroup ?? owned.pid)
+    && inspection.processGroup === owned.processGroup
     && inspection.command === owned.command
-    && inspection.startTime === (owned.startTime ?? inspection.startTime);
+    && inspection.startTime === owned.startTime
+    && inspection.executable === owned.executable
+    && inspection.argv.length === owned.argv.length
+    && inspection.argv.every((argument, index) => argument === owned.argv![index]);
 }
 
-export async function stopOwnedProcesses(registry: ProcessRegistry, controller: ProcessController = defaultController): Promise<StopReport> {
+async function waitForOwnedProcessToStop(owned: OwnedProcess, controller: ProcessController): Promise<void> {
+  for (let attempt = 0; attempt < shutdownVerificationAttempts; attempt += 1) {
+    const inspection = await controller.inspect(owned.pid);
+    if (!inspection || !processIdentityMatches(owned, inspection)) return;
+    await new Promise((resolve) => setTimeout(resolve, shutdownVerificationDelayMs));
+  }
+  throw new Error(`Could not prove recorded Forge process ${owned.name} (${owned.pid}) stopped before removing its registry`);
+}
+
+async function waitForOwnedContainerToStop(container: TemporalContainer, controller: ProcessController): Promise<void> {
+  for (let attempt = 0; attempt < shutdownVerificationAttempts; attempt += 1) {
+    const inspection = await controller.inspectContainer(container.name);
+    if (!inspection || inspection.id !== container.id || inspection.status === "exited") return;
+    await new Promise((resolve) => setTimeout(resolve, shutdownVerificationDelayMs));
+  }
+  throw new Error(`Could not prove recorded Temporal container ${container.name} stopped before removing its registry`);
+}
+
+async function waitForServeToStop(serve: TailscaleServe, controller: ProcessController): Promise<void> {
+  if (!controller.isServeConfigured) {
+    throw new Error("Could not prove recorded Tailscale Serve route stopped because its status cannot be inspected");
+  }
+  for (let attempt = 0; attempt < shutdownVerificationAttempts; attempt += 1) {
+    if (!await controller.isServeConfigured(serve)) return;
+    await new Promise((resolve) => setTimeout(resolve, shutdownVerificationDelayMs));
+  }
+  throw new Error("Could not prove recorded Tailscale Serve route stopped before removing its registry");
+}
+
+export async function stopOwnedProcesses(registry: ProcessRegistry, controller: ProcessController = defaultProcessController): Promise<StopReport> {
   const report: StopReport = { stopped: [], containersStopped: [], skipped: [], ambiguousContainers: [] };
   for (const ownedProcess of registry.processes) {
     const inspection = await controller.inspect(ownedProcess.pid);
@@ -148,23 +189,38 @@ export async function stopOwnedProcesses(registry: ProcessRegistry, controller: 
       continue;
     }
     if (!processIdentityMatches(ownedProcess, inspection)) {
-      report.skipped.push({ pid: ownedProcess.pid, reason: "ownership-ambiguous" });
-      continue;
+      throw new Error(`Could not stop recorded Forge process ${ownedProcess.name}; ownership is ambiguous`);
     }
     await controller.signal(ownedProcess.pid, "SIGTERM");
+    await waitForOwnedProcessToStop(ownedProcess, controller);
     report.stopped.push(ownedProcess.pid);
   }
   if (registry.temporalContainer && !registry.temporalContainer.legacy) {
     const live = await controller.inspectContainer(registry.temporalContainer.name);
-    if (!live || live.id !== registry.temporalContainer.id || live.image !== (registry.temporalContainer.image ?? "")) {
+    if (!live) {
       report.ambiguousContainers.push({ id: registry.temporalContainer.id, reason: live ? "identity-mismatch" : "missing" });
+    } else if (
+      registry.temporalContainer.owner === undefined
+      || registry.temporalContainer.image === undefined
+      || live.id !== registry.temporalContainer.id
+      || live.owner !== registry.temporalContainer.owner
+      || live.image !== registry.temporalContainer.image
+    ) {
+      throw new Error(`Could not stop recorded Temporal container ${registry.temporalContainer.name}; ownership is ambiguous`);
     } else {
       await controller.stopContainer(registry.temporalContainer.id);
+      await waitForOwnedContainerToStop(registry.temporalContainer, controller);
       report.containersStopped.push(registry.temporalContainer.id);
     }
   }
-  if (registry.tailscaleServe && controller.stopServe) {
-    await controller.stopServe(registry.tailscaleServe);
+  if (registry.tailscaleServe) {
+    if (!controller.stopServe || !controller.isServeConfigured) {
+      throw new Error("Could not stop recorded Tailscale Serve route because its status cannot be inspected");
+    }
+    if (await controller.isServeConfigured(registry.tailscaleServe)) {
+      await controller.stopServe(registry.tailscaleServe);
+      await waitForServeToStop(registry.tailscaleServe, controller);
+    }
   }
   return report;
 }

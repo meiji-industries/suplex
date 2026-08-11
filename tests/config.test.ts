@@ -61,10 +61,27 @@ test("refuses legacy durable runtime names instead of silently migrating them", 
   expect(() => loadConfig({ ...baseEnvironment, FORGE_TEMPORAL_NAMESPACE: "forge", FORGE_TASK_QUEUE: "forge" })).toThrow(UnsafeBindingError);
 });
 
-test("pins the Temporal server image to an explicit versioned release", () => {
+test("pins the Temporal server image to an immutable versioned release", () => {
   const config = loadConfig(baseEnvironment);
   expect(config.temporalImage).not.toContain(":latest");
-  expect(config.temporalImage).toMatch(/^[^\s]+\/[^:]+:[^:@\s]+(@sha256:[a-f0-9]{64})?$/);
+  expect(config.temporalImage).toMatch(/^[^\s]+\/[^:@\s]+:[^:@\s]+@sha256:[a-f0-9]{64}$/);
+});
+
+for (const temporalImage of [
+  "temporalio/temporal",
+  "temporalio/temporal:latest",
+  "temporalio/temporal:latest@sha256:cf86707827fac99e4d1c4a47dc11b105382d796199c7bd41fb3213fb0471628e",
+  "temporalio/temporal:1.8.2",
+  "temporalio/temporal@sha256:cf86707827fac99e4d1c4a47dc11b105382d796199c7bd41fb3213fb0471628e",
+]) {
+  test(`rejects a non-immutable Temporal image override: ${temporalImage}`, () => {
+    expect(() => loadConfig({ ...baseEnvironment, FORGE_TEMPORAL_IMAGE: temporalImage })).toThrow(UnsafeBindingError);
+  });
+}
+
+test("accepts an explicit immutable Temporal image override", () => {
+  const temporalImage = "temporalio/temporal:1.8.3@sha256:cf86707827fac99e4d1c4a47dc11b105382d796199c7bd41fb3213fb0471628e";
+  expect(loadConfig({ ...baseEnvironment, FORGE_TEMPORAL_IMAGE: temporalImage }).temporalImage).toBe(temporalImage);
 });
 
 test("rejects an unsupported Node major before loading configuration", () => {
@@ -72,6 +89,16 @@ test("rejects an unsupported Node major before loading configuration", () => {
   Object.defineProperty(process.versions, "node", { value: "22.22.1", configurable: true });
   try {
     expect(() => loadConfig(baseEnvironment)).toThrow(UnsupportedRuntimeError);
+  } finally {
+    Object.defineProperty(process.versions, "node", { value: original, configurable: true });
+  }
+});
+
+test("requires the exact pinned Node release before loading configuration", () => {
+  const original = process.versions.node;
+  Object.defineProperty(process.versions, "node", { value: "26.7.1", configurable: true });
+  try {
+    expect(() => loadConfig(baseEnvironment)).toThrow(/26\.7\.0/);
   } finally {
     Object.defineProperty(process.versions, "node", { value: original, configurable: true });
   }

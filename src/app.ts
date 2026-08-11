@@ -14,8 +14,13 @@ import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } f
 import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
 import { HealthSnapshotSchema } from "./schemas.js";
+import {
+  CSRF_COOKIE_NAME,
+  CSRF_HEADER_NAME,
+  LEGACY_SESSION_COOKIE_NAME,
+  SESSION_COOKIE_NAME,
+} from "./auth-identifiers.js";
 import { installHttpErrorHandlers } from "./http/errors.js";
-import { ORIGIN_TOKEN_COOKIE_NAME, ORIGIN_TOKEN_HEADER_NAME, SESSION_COOKIE_NAME } from "./http/session.js";
 import authRoutes from "./http/routes/auth.js";
 import authenticated from "./http/routes/authenticated.js";
 import assets from "./http/routes/assets.js";
@@ -35,23 +40,27 @@ export interface AppDependencies {
   acceptance?: AcceptanceService;
   database?: ForgeDatabase;
   logger?: Logger | false;
+  https?: { key: Buffer; cert: Buffer };
 }
 
 export function createApp(dependencies: AppDependencies): FastifyInstance {
   const app = (dependencies.logger === undefined || dependencies.logger === false
-    ? Fastify({ logger: false })
-    : Fastify({ loggerInstance: dependencies.logger })) as unknown as FastifyInstance;
+    ? Fastify({ logger: false, ...(dependencies.https ? { https: dependencies.https } : {}) })
+    : Fastify({ loggerInstance: dependencies.logger, ...(dependencies.https ? { https: dependencies.https } : {}) })) as unknown as FastifyInstance;
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   void app.register(cookie);
   installHttpErrorHandlers(app);
+
+  const configuredOrigin = new URL(dependencies.config.reachableAddress).origin;
   app.addHook("preHandler", async (request: FastifyRequest, reply: FastifyReply) => {
     if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
-    if (typeof request.cookies[SESSION_COOKIE_NAME] !== "string" || request.cookies[SESSION_COOKIE_NAME] === "") return;
+    const hasSession = [SESSION_COOKIE_NAME, LEGACY_SESSION_COOKIE_NAME].some((name) => typeof request.cookies[name] === "string" && request.cookies[name] !== "");
+    if (!hasSession) return;
     const origin = Array.isArray(request.headers.origin) ? request.headers.origin[0] : request.headers.origin;
-    if (origin === dependencies.config.reachableAddress) return;
-    const token = Array.isArray(request.headers[ORIGIN_TOKEN_HEADER_NAME]) ? request.headers[ORIGIN_TOKEN_HEADER_NAME][0] : request.headers[ORIGIN_TOKEN_HEADER_NAME];
-    const cookieToken = request.cookies[ORIGIN_TOKEN_COOKIE_NAME];
+    if (typeof origin === "string" && origin === configuredOrigin) return;
+    const token = Array.isArray(request.headers[CSRF_HEADER_NAME]) ? request.headers[CSRF_HEADER_NAME][0] : request.headers[CSRF_HEADER_NAME];
+    const cookieToken = request.cookies[CSRF_COOKIE_NAME];
     if (typeof token === "string" && token === cookieToken && token.length >= 32) return;
     return reply.code(403).send({ error: "request_origin_invalid" });
   });

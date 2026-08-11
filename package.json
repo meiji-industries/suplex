@@ -14,7 +14,7 @@
     "components.json"
   ],
   "engines": {
-    "node": ">=26 <27"
+    "node": "26.7.0"
   },
   "scripts": {
     "forge": "tsx src/cli.ts",

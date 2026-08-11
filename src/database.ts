@@ -384,8 +384,23 @@ export class ForgeDatabase {
   }
 
   health(): DatabaseHealth {
+    let status: SchemaStatus;
     try {
-      const status = this.schemaStatus();
+      status = this.schemaStatus();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const busy = (error as NodeJS.ErrnoException).code === "SQLITE_BUSY" || /database is locked|busy/i.test(message);
+      return {
+        walMode: false,
+        schemaState: busy ? "locked" : "unavailable",
+        expectedMigrations: 0,
+        appliedMigrations: 0,
+        readable: false,
+        writable: false,
+      };
+    }
+
+    try {
       this.db.prepare("CREATE TABLE IF NOT EXISTS health_write_probe (id INTEGER PRIMARY KEY, checked_at TEXT NOT NULL)").run();
       this.db.prepare("DROP TABLE health_write_probe").run();
       return {
@@ -400,11 +415,11 @@ export class ForgeDatabase {
       const message = error instanceof Error ? error.message : String(error);
       const busy = (error as NodeJS.ErrnoException).code === "SQLITE_BUSY" || /database is locked|busy/i.test(message);
       return {
-        walMode: false,
-        schemaState: busy ? "locked" : "unavailable",
-        expectedMigrations: 0,
-        appliedMigrations: 0,
-        readable: false,
+        walMode: status.walMode,
+        schemaState: busy ? "locked" : status.state,
+        expectedMigrations: status.expected.length,
+        appliedMigrations: status.applied.length,
+        readable: true,
         writable: false,
       };
     }

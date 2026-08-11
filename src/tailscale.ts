@@ -31,6 +31,14 @@ export async function configureTailscaleServe(config: ForgeConfig, command = "ta
 }
 
 export async function verifyTailscaleServe(config: ForgeConfig, command = "tailscale"): Promise<void> {
+  if (!await isTailscaleServeConfigured(config, command)) {
+    const route = `${new URL(config.reachableAddress).hostname}:${config.port}`;
+    const expectedProxy = `http://${config.bindAddress}:${config.port}`;
+    throw new Error(`Tailscale Serve is not forwarding ${route} to ${expectedProxy}`);
+  }
+}
+
+export async function isTailscaleServeConfigured(config: ForgeConfig, command = "tailscale"): Promise<boolean> {
   const result = await execFileAsync(command, ["serve", "status", "--json"], { timeout: 10_000, maxBuffer: 64 * 1024 });
   let status: ReturnType<typeof TailscaleServeStatusSchema.parse>;
   try {
@@ -41,9 +49,7 @@ export async function verifyTailscaleServe(config: ForgeConfig, command = "tails
   const route = `${new URL(config.reachableAddress).hostname}:${config.port}`;
   const proxy = status.Web?.[route]?.Handlers?.["/"]?.Proxy;
   const expectedProxy = `http://${config.bindAddress}:${config.port}`;
-  if (proxy !== expectedProxy) {
-    throw new Error(`Tailscale Serve is not forwarding ${route} to ${expectedProxy}`);
-  }
+  return proxy === expectedProxy;
 }
 
 export function parseTailscaleServeStatus(raw: string): ReturnType<typeof TailscaleServeStatusSchema.parse> {

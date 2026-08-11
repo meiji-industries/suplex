@@ -14,6 +14,7 @@ import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js"
 import type { GithubAdapter } from "../src/github.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
 import type { IssueWorkflowInput, IssueWorkflowState, StartPlanningInput } from "../src/temporal/issue-contracts.js";
+import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 
 function fakeWebAuthn(): WebAuthnAdapter {
   return { async generateRegistrationOptions(input) { return { rp: { name: "Forge", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: "browser-task", pubKeyCredParams: [{ type: "public-key", alg: -7 }], attestation: "none" }; }, async verifyRegistrationResponse(input) { return { verified: true, credential: { id: input.response.id, publicKey: Uint8Array.from([1, 2, 3]), counter: 0 } }; }, async generateAuthenticationOptions(input) { return { challenge: "browser-auth", rpId: input.rpId, allowCredentials: input.allowCredentials.map((credential) => ({ type: "public-key" as const, ...credential })), userVerification: "required" }; }, async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; } };
@@ -67,15 +68,19 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
   if (!address || typeof address !== "object") throw new Error("Browser task server did not expose a port");
   const baseUrl = `http://127.0.0.1:${address.port}`;
   try {
-    const invitation = auth.createRecoveryInvitation();
+    const invitation = auth.createRecoveryInvitation({ confirmed: true, initiationMethod: "local-cli", installationId: config.installationId });
     const options = await app.inject({ method: "POST", url: "/api/auth/recovery/options", payload: { token: invitation.token } });
     const enrolled = await app.inject({ method: "POST", url: "/api/auth/recovery/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: "browser-task-admin", type: "public-key" } } });
-    const rawCookie = enrolled.headers["set-cookie"];
-    const cookie = (Array.isArray(rawCookie) ? rawCookie[0] : rawCookie)?.split(";", 1)[0] ?? "";
+    const values = Array.isArray(enrolled.headers["set-cookie"]) ? enrolled.headers["set-cookie"] : [enrolled.headers["set-cookie"] ?? ""];
+    const cookie = values.find((value) => value.split("=", 1)[0] === SESSION_COOKIE_NAME)?.split(";", 1)[0] ?? "";
+    const csrf = values.find((value) => value.split("=", 1)[0] === CSRF_COOKIE_NAME)?.split(";", 1)[0] ?? "";
     const browser = await chromium.launch({ headless: true });
     try {
       const context = await browser.newContext({ viewport: { width: 1100, height: 800 } });
-      await context.addCookies([{ name: "forge_session", value: cookie.split("=", 2)[1] ?? "", domain: "127.0.0.1", path: "/" }]);
+      await context.addCookies([
+        { name: SESSION_COOKIE_NAME, value: cookie.split("=", 2)[1] ?? "", domain: "127.0.0.1", path: "/" },
+        { name: CSRF_COOKIE_NAME, value: csrf.split("=", 2)[1] ?? "", domain: "127.0.0.1", path: "/" },
+      ]);
       const page = await context.newPage();
       await page.goto(`${baseUrl}/tasks`);
       await page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();

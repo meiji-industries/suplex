@@ -149,7 +149,7 @@ test("administrator recovery revokes old administrator access and creates a fres
   try {
     const bootstrap = value.auth.ensureBootstrapInvitation()!;
     const oldAdmin = await enrollBootstrap(value.auth, bootstrap.token);
-    const recovery = value.auth.createRecoveryInvitation();
+    const recovery = value.auth.createRecoveryInvitation({ confirmed: true, initiationMethod: "local-cli", installationId: createTestConfig(value.root).installationId });
     const recoveryOptions = await value.auth.beginRecoveryRegistration(recovery.token);
     const recovered = await value.auth.completeRecoveryRegistration({ token: recovery.token, challengeId: recoveryOptions.challengeId, response: { id: "recovery-credential", type: "public-key" } });
     expect(recovered.user.role).toBe("admin");

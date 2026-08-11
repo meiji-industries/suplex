@@ -9,55 +9,26 @@ import { TemporalInfrastructureError } from "./config.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { DockerContainerInspectionSchema } from "./schemas.js";
 import { assertLegacyNamespaceProbeOnly, connectTemporal, ensureTemporalFoundation } from "./temporal/service.js";
-import { readProcessRegistry, type OwnedProcess, type ProcessController, type ProcessInspection, type ProcessRegistry, type TemporalContainer, stopOwnedProcesses, writeProcessRegistry } from "./process-manager.js";
-import { configureTailscaleServe, disableTailscaleServe, verifyTailscaleServe } from "./tailscale.js";
+import { defaultProcessController, processIdentityMatches, readProcessRegistry, type OwnedProcess, type ProcessController, type ProcessInspection, type ProcessRegistry, type TemporalContainer, stopOwnedProcesses, writeProcessRegistry } from "./process-manager.js";
+import { configureTailscaleServe, disableTailscaleServe, isTailscaleServeConfigured, verifyTailscaleServe } from "./tailscale.js";
 
 const execFileAsync = promisify(execFile);
 
-const processController: ProcessController = {
-  async inspect(pid) {
-    try {
-      const [commandResult, pgidResult, lstartResult, commResult] = await Promise.all([
-        execFileAsync("ps", ["-p", String(pid), "-o", "command="]),
-        execFileAsync("ps", ["-p", String(pid), "-o", "pgid="]),
-        execFileAsync("ps", ["-p", String(pid), "-o", "lstart="]),
-        execFileAsync("ps", ["-p", String(pid), "-o", "comm="]),
-      ]);
-      const command = commandResult.stdout.trim();
-      if (!command) return undefined;
-      const pgid = Number(pgidResult.stdout.trim() || "0");
-      const startTime = lstartResult.stdout.trim();
-      const comm = commResult.stdout.trim();
-      const argv = command.split(/\s+/).filter(Boolean);
-      return { pid, command, executable: comm, argv, processGroup: pgid, startTime };
-    } catch {
-      return undefined;
-    }
-  },
-  async inspectContainer(name) {
-    try {
-      const result = await execFileAsync("docker", ["inspect", "--format", "{{json .}}", name]);
-      const inspection = DockerContainerInspectionSchema.parse(JSON.parse(result.stdout));
-      return {
-        id: inspection.Id,
-        name,
-        image: inspection.Config?.Image ?? "",
-        owner: inspection.Config?.Labels?.["com.forge.owner"] ?? "",
-        status: inspection.State.Status,
-      };
-    } catch {
-      return undefined;
-    }
-  },
-  async signal(pid, signal) {
-    process.kill(pid, signal);
-  },
-  async stopContainer(id) {
-    await execFileAsync("docker", ["stop", "--time", "10", id]);
-  },
+export interface RuntimeReconciliationController {
+  process: ProcessController;
+  serveIsConfigured(config: ForgeConfig): Promise<boolean>;
+  disableServe(port: number): Promise<void>;
+  wait(milliseconds: number): Promise<void>;
+}
+
+const runtimeReconciliationController: RuntimeReconciliationController = {
+  process: defaultProcessController,
+  serveIsConfigured: isTailscaleServeConfigured,
+  disableServe: disableTailscaleServe,
+  wait: async (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 };
 
-interface DockerMetadata {
+export interface TemporalContainerMetadata {
   id: string;
   owner: string;
   status: string;
@@ -69,7 +40,7 @@ interface DockerMetadata {
 const legacyTemporalContainerName = "forge-temporal";
 const legacyTemporalVolumeName = "forge-temporal-data";
 
-async function inspectTemporalContainer(name: string): Promise<DockerMetadata | undefined> {
+async function inspectTemporalContainer(name: string): Promise<TemporalContainerMetadata | undefined> {
   let result: { stdout: string };
   try {
     result = await execFileAsync("docker", ["inspect", "--format", "{{json .}}", name]);
@@ -87,6 +58,26 @@ async function inspectTemporalContainer(name: string): Promise<DockerMetadata | 
     volumeNames: (inspection.Mounts ?? []).flatMap((mount) => mount.Name ? [mount.Name] : []),
     image: inspection.Config?.Image,
   };
+}
+
+export function temporalContainerCompatibilityError(existing: TemporalContainerMetadata, config: ForgeConfig): string | undefined {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  if (existing.owner !== identifiers.ownerLabel) {
+    return "owner label does not match this Forge installation";
+  }
+  if (existing.image !== config.temporalImage) {
+    return "image does not match the configured digest-pinned Temporal image";
+  }
+  if (existing.namespace !== config.temporalNamespace) {
+    return "namespace does not match the configured Temporal namespace";
+  }
+  if (!existing.volumeNames.includes(identifiers.temporalVolumeName)) {
+    return "volume does not match this Forge installation's Temporal data volume";
+  }
+  if (existing.status !== "running" && existing.status !== "exited") {
+    return `runtime status ${existing.status} is not reusable`;
+  }
+  return undefined;
 }
 
 async function temporalVolumeExists(name: string): Promise<boolean> {
@@ -170,7 +161,7 @@ async function createTemporalContainer(config: ForgeConfig, temporalAddress: str
   }
   try {
     const address = temporalAddress ?? await publishedTemporalAddress(identifiers.temporalContainerName);
-    return { id, name: identifiers.temporalContainerName, address, image: config.temporalImage };
+    return { id, name: identifiers.temporalContainerName, owner: identifiers.ownerLabel, address, image: config.temporalImage };
   } catch (error) {
     await execFileAsync("docker", ["rm", "--force", identifiers.temporalContainerName]).catch(() => undefined);
     throw error;
@@ -181,13 +172,18 @@ async function startTemporalContainer(config: ForgeConfig): Promise<TemporalCont
   const identifiers = runtimeIdentifiers(config.installationId);
   const existing = await inspectTemporalContainer(identifiers.temporalContainerName);
   if (existing) {
-    if (existing.owner !== identifiers.ownerLabel) {
-      throw new Error(`Refusing to operate on unowned Docker container ${identifiers.temporalContainerName}`);
+    const compatibilityError = temporalContainerCompatibilityError(existing, config);
+    if (compatibilityError) {
+      throw new Error(`Refusing to reuse incompatible Docker container ${identifiers.temporalContainerName}: ${compatibilityError}`);
     }
     if (existing.status !== "running") {
       await execFileAsync("docker", ["start", identifiers.temporalContainerName]);
+      const restarted = await inspectTemporalContainer(identifiers.temporalContainerName);
+      if (!restarted || temporalContainerCompatibilityError(restarted, config) || restarted.status !== "running") {
+        throw new Error(`Temporal container ${identifiers.temporalContainerName} did not restart with the expected Forge runtime identity`);
+      }
     }
-    return { id: existing.id, name: identifiers.temporalContainerName, address: await publishedTemporalAddress(identifiers.temporalContainerName), image: existing.image };
+    return { id: existing.id, name: identifiers.temporalContainerName, owner: existing.owner, address: await publishedTemporalAddress(identifiers.temporalContainerName), image: config.temporalImage };
   }
 
   const legacy = await inspectTemporalContainer(legacyTemporalContainerName);
@@ -201,7 +197,7 @@ async function startTemporalContainer(config: ForgeConfig): Promise<TemporalCont
     if (legacy.status !== "running") {
       await execFileAsync("docker", ["start", legacyTemporalContainerName]);
     }
-    return { id: legacy.id, name: legacyTemporalContainerName, legacy: true, address: config.temporalAddress, image: legacy.image };
+    return { id: legacy.id, name: legacyTemporalContainerName, owner: legacy.owner, legacy: true, address: config.temporalAddress, image: legacy.image };
   }
 
   if (await temporalVolumeExists(legacyTemporalVolumeName)) {
@@ -300,7 +296,7 @@ async function waitForHealthPage(config: ForgeConfig, timeoutMs = 30_000): Promi
 
 async function waitForProcessIdentity(pid: number, attempts = 10, delayMs = 50): Promise<ProcessInspection | undefined> {
   for (let i = 0; i < attempts; i += 1) {
-    const inspection = await processController.inspect(pid);
+    const inspection = await defaultProcessController.inspect(pid);
     if (inspection) return inspection;
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
@@ -353,65 +349,105 @@ async function spawnForgeProcess(name: string, script: string, config: ForgeConf
   };
 }
 
-function identitiesMatch(recorded: OwnedProcess, live: ProcessInspection): boolean {
-  return (
-    live.pid === recorded.pid
-    && live.processGroup === recorded.processGroup
-    && live.startTime === recorded.startTime
-    && live.command === recorded.command
-  );
+const expectedForgeProcessNames = new Set(["worker", "server"]);
+
+function hasCompleteRunningProcessSet(registry: ProcessRegistry): boolean {
+  return registry.processes.length === expectedForgeProcessNames.size
+    && registry.processes.every((process) => process.ready === true && expectedForgeProcessNames.has(process.name))
+    && new Set(registry.processes.map((process) => process.name)).size === expectedForgeProcessNames.size;
 }
 
-async function reconcileExistingRegistry(registry: ProcessRegistry, config: ForgeConfig): Promise<boolean> {
+async function waitForRecordedProcessToStop(recorded: OwnedProcess, controller: RuntimeReconciliationController): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const live = await controller.process.inspect(recorded.pid);
+    if (!live || !processIdentityMatches(recorded, live)) {
+      return;
+    }
+    await controller.wait(100);
+  }
+  throw new Error(`Could not prove recorded Forge process ${recorded.name} (${recorded.pid}) stopped before replacement startup`);
+}
+
+async function waitForRecordedContainerToStop(container: TemporalContainer, controller: RuntimeReconciliationController): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const live = await controller.process.inspectContainer(container.name);
+    if (!live || live.id !== container.id || live.status !== "running") {
+      return;
+    }
+    await controller.wait(100);
+  }
+  throw new Error(`Could not prove recorded Temporal container ${container.name} stopped before replacement startup`);
+}
+
+async function waitForRecordedServeToStop(config: ForgeConfig, controller: RuntimeReconciliationController): Promise<void> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    if (!await controller.serveIsConfigured(config)) {
+      return;
+    }
+    await controller.wait(100);
+  }
+  throw new Error("Could not prove recorded Tailscale Serve route stopped before replacement startup");
+}
+
+export async function reconcileExistingRegistry(
+  registry: ProcessRegistry,
+  config: ForgeConfig,
+  controller: RuntimeReconciliationController = runtimeReconciliationController,
+): Promise<boolean> {
   const liveProcesses = await Promise.all(
     registry.processes.map(async (recorded) => {
-      const live = await processController.inspect(recorded.pid);
-      return { recorded, live, match: live !== undefined && identitiesMatch(recorded, live) };
+      const live = await controller.process.inspect(recorded.pid);
+      return { recorded, live, match: live !== undefined && processIdentityMatches(recorded, live) };
     }),
   );
-  const allAlive = liveProcesses.every((entry) => entry.match);
-  let containerAlive = false;
-  if (registry.temporalContainer) {
-    const live = await processController.inspectContainer(registry.temporalContainer.name);
-    containerAlive = live !== undefined
-      && live.id === registry.temporalContainer.id
-      && live.image === registry.temporalContainer.image
-      && live.status === "running";
+  const ambiguousProcess = liveProcesses.find((entry) => entry.live !== undefined && !entry.match);
+  if (ambiguousProcess) {
+    throw new Error(`Could not reconcile recorded Forge process ${ambiguousProcess.recorded.name}; ownership is ambiguous`);
   }
-  let serveAlive = false;
-  if (registry.tailscaleServe) {
-    try {
-      await verifyTailscaleServe(config);
-      serveAlive = true;
-    } catch {
-      serveAlive = false;
+
+  let containerAlive = false;
+  if (registry.temporalContainer && !registry.temporalContainer.legacy) {
+    const live = await controller.process.inspectContainer(registry.temporalContainer.name);
+    if (live) {
+      const expectedOwner = runtimeIdentifiers(config.installationId).ownerLabel;
+      if (
+        registry.temporalContainer.owner === undefined
+        || registry.temporalContainer.image === undefined
+        || live.id !== registry.temporalContainer.id
+        || live.image !== registry.temporalContainer.image
+        || live.owner !== registry.temporalContainer.owner
+        || live.owner !== expectedOwner
+      ) {
+        throw new Error(`Could not reconcile recorded Temporal container ${registry.temporalContainer.name}; ownership is ambiguous`);
+      }
+      containerAlive = live.status === "running";
     }
   }
-  if (allAlive && (!registry.temporalContainer || containerAlive) && (!registry.tailscaleServe || serveAlive)) {
+
+  let serveAlive = false;
+  if (registry.tailscaleServe) {
+    serveAlive = await controller.serveIsConfigured(config);
+  }
+  const allAlive = hasCompleteRunningProcessSet(registry) && liveProcesses.every((entry) => entry.match);
+  const currentTemporalIsVerified = registry.temporalContainer !== undefined
+    && !registry.temporalContainer.legacy
+    && containerAlive;
+  if (allAlive && currentTemporalIsVerified && (!registry.tailscaleServe || serveAlive)) {
     return true;
   }
   for (const entry of liveProcesses) {
     if (entry.match) {
-      try {
-        await processController.signal(entry.recorded.pid, "SIGTERM");
-      } catch {
-        // The process may have exited before the signal could be delivered.
-      }
+      await controller.process.signal(entry.recorded.pid, "SIGTERM");
+      await waitForRecordedProcessToStop(entry.recorded, controller);
     }
   }
   if (containerAlive) {
-    try {
-      await processController.stopContainer(registry.temporalContainer!.id);
-    } catch {
-      // If a leftover container cannot be stopped, do not block starting a fresh runtime.
-    }
+    await controller.process.stopContainer(registry.temporalContainer!.id);
+    await waitForRecordedContainerToStop(registry.temporalContainer!, controller);
   }
   if (serveAlive) {
-    try {
-      await disableTailscaleServe(registry.tailscaleServe!.port);
-    } catch {
-      // Serve may already be disabled; continue.
-    }
+    await controller.disableServe(registry.tailscaleServe!.port);
+    await waitForRecordedServeToStop(config, controller);
   }
   return false;
 }
@@ -504,8 +540,13 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
           processes: [],
           ...(temporalContainer?.legacy ? {} : { temporalContainer }),
         };
-    await stopOwnedProcesses(cleanupRegistry).catch(() => undefined);
-    await rm(`${config.runtimeRoot}/owned-processes.json`, { force: true });
+    try {
+      await reconcileExistingRegistry(cleanupRegistry, config);
+      await rm(`${config.runtimeRoot}/owned-processes.json`, { force: true });
+    } catch (cleanupError) {
+      const startupMessage = error instanceof Error ? error.message : "unknown startup error";
+      throw new Error(`Forge startup failed (${startupMessage}) and cleanup could not be proven; the owned-process registry was preserved`, { cause: cleanupError });
+    }
     throw error;
   }
 }

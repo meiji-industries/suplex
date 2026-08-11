@@ -98,7 +98,8 @@ function AuthView(): ReactElement {
       const response = await startRegistration({ optionsJSON: options.options });
       await readJson(`/api/auth/${registrationKind}/verify`, { method: "POST", body: JSON.stringify({ token, challengeId: options.challengeId, response }) });
       window.location.assign("/health");
-    } catch {
+    } catch (error) {
+      console.error("enroll error", error);
       setError("Passkey enrollment failed");
     } finally { setBusy(false); }
   };
@@ -110,7 +111,8 @@ function AuthView(): ReactElement {
       const response = await startAuthentication({ optionsJSON: options.options });
       await readJson("/api/auth/verify", { method: "POST", body: JSON.stringify({ challengeId: options.challengeId, response }) });
       window.location.assign("/health");
-    } catch {
+    } catch (error) {
+      console.error("signIn error", error);
       setError("Passkey sign-in failed");
     } finally { setBusy(false); }
   };
@@ -551,15 +553,22 @@ function HealthRow({ check }: { check: HealthCheck }): ReactElement {
 
 function Dashboard({ initialSnapshot }: { initialSnapshot: HealthSnapshot }): ReactElement {
   const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const [freshness, setFreshness] = useState<"checking" | "current" | "stale">("current");
+  const [lastSuccessfulCheckAt, setLastSuccessfulCheckAt] = useState(initialSnapshot.generatedAt);
   const [refreshing, setRefreshing] = useState(false);
   const refresh = useCallback(async () => {
     setRefreshing(true);
+    setFreshness("checking");
     try {
       const response = await fetch("/api/health", { headers: { Accept: "application/json" } });
       if (!response.ok) throw new Error("Health request failed");
-      setSnapshot(await response.json() as HealthSnapshot);
+      const nextSnapshot = await response.json() as HealthSnapshot;
+      setSnapshot(nextSnapshot);
+      setLastSuccessfulCheckAt(nextSnapshot.generatedAt);
+      setFreshness("current");
     } catch {
-      // Keep the last truthful snapshot visible when a refresh is interrupted.
+      // Retain the last successful snapshot, but never present it as current.
+      setFreshness("stale");
     } finally {
       setRefreshing(false);
     }
@@ -575,6 +584,16 @@ function Dashboard({ initialSnapshot }: { initialSnapshot: HealthSnapshot }): Re
   const providerChecks = useMemo(() => snapshot.checks.filter((check) => !isOwnedHealthCheck(check.id)), [snapshot.checks]);
   const healthyCount = snapshot.checks.filter((check) => check.status === "healthy").length;
   const failingCount = snapshot.checks.length - healthyCount;
+  const freshnessLabel = freshness === "checking"
+    ? "Checking health…"
+    : freshness === "stale"
+      ? `Refresh failed · Last successful check ${relativeTime(lastSuccessfulCheckAt)}`
+      : `Last successful check ${relativeTime(lastSuccessfulCheckAt)}`;
+  const compactFreshnessLabel = freshness === "checking"
+    ? "Checking…"
+    : freshness === "stale"
+      ? `Stale · ${relativeTime(lastSuccessfulCheckAt)}`
+      : `Checked ${relativeTime(lastSuccessfulCheckAt)}`;
 
   return (
     <ApplicationFrame title="Host health" headerRight={
@@ -584,7 +603,8 @@ function Dashboard({ initialSnapshot }: { initialSnapshot: HealthSnapshot }): Re
           {snapshot.ready ? "Ready" : "Needs attention"}
         </span>
         <a className="max-w-[34vw] truncate text-[11px] text-muted-foreground hover:text-foreground sm:max-w-64 sm:text-xs" href={snapshot.reachableAddress}>{snapshot.reachableAddress.replace(/^https?:\/\//, "")}</a>
-        <span className="hidden text-xs text-muted-foreground md:inline">{relativeTime(snapshot.generatedAt)}</span>
+        <span aria-live="polite" data-health-freshness={freshness} title={freshnessLabel} className={freshness === "stale" ? "max-w-[20vw] truncate text-[11px] text-amber-700 sm:hidden" : "max-w-[20vw] truncate text-[11px] text-muted-foreground sm:hidden"}>{compactFreshnessLabel}</span>
+        <span aria-live="polite" data-health-freshness={freshness} className={freshness === "stale" ? "hidden text-[11px] text-amber-700 md:inline" : "hidden text-[11px] text-muted-foreground md:inline"}>{freshnessLabel}</span>
         <Button aria-label="Refresh health" title="Refresh health" variant="ghost" size="icon" onClick={() => void refresh()} disabled={refreshing}><RefreshCw className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /></Button>
       </div>
     }>
@@ -596,7 +616,7 @@ function Dashboard({ initialSnapshot }: { initialSnapshot: HealthSnapshot }): Re
               <span className="text-emerald-700">{healthyCount} healthy</span>
               <span className={failingCount > 0 ? "text-rose-700" : "text-muted-foreground"}>{failingCount} issues</span>
             </div>
-            <span className="hidden items-center gap-1.5 text-[11px] text-muted-foreground sm:flex"><Clock3 className="size-3" />Updated {relativeTime(snapshot.generatedAt)}</span>
+            <span aria-live="polite" data-health-freshness={freshness} className={freshness === "stale" ? "hidden items-center gap-1.5 text-[11px] text-amber-700 sm:flex" : "hidden items-center gap-1.5 text-[11px] text-muted-foreground sm:flex"}><Clock3 className="size-3" />{freshnessLabel}</span>
           </div>
 
           <div>

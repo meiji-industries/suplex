@@ -5,6 +5,7 @@ import type { AuthService } from "../../auth.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { ProjectService } from "../../projects.js";
 import type { TaskService } from "../../tasks.js";
+import { sessionUser } from "../session.js";
 import administration from "./administration.js";
 import { authMe } from "./auth.js";
 import companies from "./companies.js";
@@ -23,7 +24,7 @@ export interface AuthenticatedRoutesOptions {
 const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app, options) => {
   app.decorateRequest("forgeUser", undefined as unknown as import("../../auth.js").AuthUser);
   app.addHook("preHandler", async (request, reply) => {
-    const user = await options.auth.getUserBySession(request.cookies.forge_session ?? "");
+    const user = await sessionUser(options.auth, request);
     if (!user) {
       reply.code(401).send({ error: "Authentication required" });
       return;

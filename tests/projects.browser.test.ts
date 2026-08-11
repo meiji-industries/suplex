@@ -14,6 +14,7 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { ProjectService } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
+import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -32,10 +33,11 @@ const github: GithubAdapter = {
   async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; },
 };
 
-function sessionCookie(response: { headers: OutgoingHttpHeaders }): { name: string; value: string } {
-  const raw = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"][0] : response.headers["set-cookie"];
-  const [name, value] = (raw ?? "").split(";", 1)[0]?.split("=", 2) ?? [];
-  return { name: name ?? "forge_session", value: value ?? "" };
+function responseCookie(response: { headers: OutgoingHttpHeaders }, name: string): { name: string; value: string } {
+  const values = Array.isArray(response.headers["set-cookie"]) ? response.headers["set-cookie"] : [response.headers["set-cookie"] ?? ""];
+  const raw = values.find((value) => value.split("=", 1)[0] === name) ?? "";
+  const [cookieName, cookieValue] = raw.split(";", 1)[0]?.split("=", 2) ?? [];
+  return { name: cookieName ?? name, value: cookieValue ?? "" };
 }
 
 test("projects desktop flow activates valid configuration and shows actionable validation findings", async () => {
@@ -88,9 +90,11 @@ test("projects desktop flow activates valid configuration and shows actionable v
     const browser = await chromium.launch({ headless: true });
     try {
       const context = await browser.newContext({ viewport: { width: 1100, height: 800 } });
-      await context.addCookies([{ ...sessionCookie(enrolled), domain: "127.0.0.1", path: "/" }]);
-      const profile = projects.createProfile((await auth.getUserBySession(sessionCookie(enrolled).value))!.id, { name: "Browser profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-      auth.createCompany((await auth.getUserBySession(sessionCookie(enrolled).value))!.id, "Browser Projects");
+      const session = responseCookie(enrolled, SESSION_COOKIE_NAME);
+      const csrf = responseCookie(enrolled, CSRF_COOKIE_NAME);
+      await context.addCookies([{ ...session, domain: "127.0.0.1", path: "/" }, { ...csrf, domain: "127.0.0.1", path: "/" }]);
+      const profile = projects.createProfile((await auth.getUserBySession(session.value))!.id, { name: "Browser profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
+      auth.createCompany((await auth.getUserBySession(session.value))!.id, "Browser Projects");
       const page = await context.newPage();
       await page.goto(`${baseUrl}/projects`);
       await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();

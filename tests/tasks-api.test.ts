@@ -12,6 +12,7 @@ import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js"
 import type { GithubAdapter } from "../src/github.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
 import type { IssueWorkflowInput, IssueWorkflowState, StartPlanningInput } from "../src/temporal/issue-contracts.js";
+import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 
 function fakeWebAuthn(): WebAuthnAdapter {
   return {
@@ -49,7 +50,7 @@ test("task API creates an idempotent backlog card and accepts only the current p
   const app = createApp({ config, auth, projects, tasks, health: {
     temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }), database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }), artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }), worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }), codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }), ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
   } });
-  const invitation = auth.createRecoveryInvitation();
+  const invitation = auth.createRecoveryInvitation({ confirmed: true, initiationMethod: "local-cli", installationId: config.installationId });
   const options = await app.inject({ method: "POST", url: "/api/auth/recovery/options", payload: { token: invitation.token } });
   const enrolled = await app.inject({ method: "POST", url: "/api/auth/recovery/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: "api-admin", type: "public-key" } } });
   const rawCookie = enrolled.headers["set-cookie"];
@@ -58,7 +59,7 @@ test("task API creates an idempotent backlog card and accepts only the current p
     for (const setCookie of values) {
       const pair = setCookie.split(";", 1)[0] ?? "";
       const [name, value] = pair.split("=", 2);
-      if (name?.trim() === "forge_session" && value !== undefined) return `${name.trim()}=${value}`;
+      if (name?.trim() === SESSION_COOKIE_NAME && value !== undefined) return `${name.trim()}=${value}`;
     }
     return "";
   })();

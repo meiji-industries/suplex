@@ -3,9 +3,10 @@ import { type ZodTypeProvider } from "@fastify/type-provider-zod";
 
 import { AuthService } from "../../auth.js";
 import type { ForgeConfig } from "../../config.js";
+import { LEGACY_SESSION_COOKIE_NAME, SESSION_COOKIE_NAME } from "../../auth-identifiers.js";
 import type { FastifyReply } from "fastify";
 import { AuthEnvelopeSchema, AuthOptionsResponseSchema, AuthStatusResponseSchema, ErrorResponseSchema, SignOutResponseSchema, TokenBodySchema, RegistrationVerificationBodySchema, AuthenticationVerificationBodySchema } from "../contracts/common.js";
-import { authenticatedUser, clearSessionCookies, SESSION_COOKIE_NAME, setSessionCookie, sessionUser } from "../session.js";
+import { authenticatedUser, clearSessionCookies, setSessionCookie, sessionUser } from "../session.js";
 
 export interface AuthRoutesOptions {
   auth: AuthService;
@@ -48,7 +49,7 @@ const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, options) =
   });
   typed.post("/sign-out", { schema: { response: { 200: SignOutResponseSchema, 401: ErrorResponseSchema } } }, async (request, reply) => {
     if (!(await sessionUser(auth, request))) return reply.code(401).send({ error: "Authentication required" });
-    auth.signOut(request.cookies[SESSION_COOKIE_NAME] ?? "");
+    auth.signOut(request.cookies[SESSION_COOKIE_NAME] ?? request.cookies[LEGACY_SESSION_COOKIE_NAME] ?? "");
     clearSessionCookies(reply);
     return reply.send({ signedOut: true });
   });

@@ -94,9 +94,12 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "recover") {
+    if (!process.argv.includes("--confirm-recovery")) {
+      throw new Error("recover requires --confirm-recovery");
+    }
     const database = new ForgeDatabase(config.databasePath);
     try {
-      const invitation = new AuthService(database, config).createRecoveryInvitation();
+      const invitation = new AuthService(database, config).createRecoveryInvitation({ confirmed: true, initiationMethod: "local-cli", installationId: config.installationId });
       process.stdout.write(`Recovery enrollment (showing once): ${config.reachableAddress}/auth?mode=recovery&invite=${invitation.token}\n`);
     } finally {
       database.close();

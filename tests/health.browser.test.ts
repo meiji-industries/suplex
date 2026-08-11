@@ -39,8 +39,10 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await page.goto(`http://127.0.0.1:${address.port}/health`);
     await assert.doesNotReject(() => page.locator("h1").waitFor());
+    await assert.doesNotReject(() => page.getByRole("heading", { name: "Owned services", exact: true }).waitFor());
     assert.equal(await page.locator('[data-status="healthy"]').count(), 1);
     assert.equal(await page.locator('[data-status="unhealthy"]').count(), 1);
+    assert.equal(await page.locator('[data-slot="card"]').count(), 1);
     assert.match(await page.locator("body").innerText(), /forge\.tailnet\.ts\.net/);
   } finally {
     await browser?.close();

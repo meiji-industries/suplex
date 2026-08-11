@@ -2,12 +2,15 @@
 
 Forge is a local-first, Tailscale-only software-delivery control plane.
 
+The health surface uses a source-owned shadcn/Rhea-style component layer with Base UI primitives, Tailwind v4 design tokens, and a dense Linear-inspired operations layout.
+
 ## Start Forge locally
 
 Forge owns the Temporal development container, API, and worker processes. Docker is required for the persistent local Temporal service. If the tailnet endpoint enforces HTTPS, use the idempotent setup wizard first:
 
 ```sh
 npm install
+npm run build
 npm run forge -- setup
 npm run forge -- start
 ```

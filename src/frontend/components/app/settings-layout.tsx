@@ -26,7 +26,7 @@ function useSettingsGroups(companyId: string, user?: ApiUser): SettingsNavGroup[
       ])},
       ...(user?.role === "admin" ? [{ title: "Administration", items: [
         { label: "Users", href: withCompany("/admin", companyId), icon: Users },
-        { label: "Profiles", href: withCompany("/admin", companyId), icon: Terminal },
+        { label: "Profiles", href: withCompany("/admin/profiles", companyId), icon: Terminal },
         { label: "Security", icon: Shield },
         { label: "API", icon: Key },
       ]}] : []),
@@ -104,10 +104,9 @@ function SettingsMobileNavigation({ title, groups, activeHref, backHref }: { tit
   );
 }
 
-export function SettingsLayout({ title, companyId, backHref, children }: { title: string; companyId: string; backHref: string; children: ReactNode }): ReactElement {
+export function SettingsLayout({ title, companyId, backHref, activeHref, contentClassName = "max-w-3xl px-4 py-6 lg:px-8", children }: { title: string; companyId: string; backHref: string; activeHref: string; contentClassName?: string; children: ReactNode }): ReactElement {
   const context = useOptionalCompanyContext();
   const groups = useSettingsGroups(companyId, context?.user);
-  const activeHref = companySettingsPath(companyId);
   const [search, setSearch] = useState("");
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -120,7 +119,7 @@ export function SettingsLayout({ title, companyId, backHref, children }: { title
             <div className="lg:hidden"><SettingsMobileNavigation title={title} groups={groups} activeHref={activeHref} backHref={backHref} /></div>
             <h1 className="text-lg font-semibold">{title}</h1>
           </header>
-          <div className="max-w-3xl px-4 py-6 lg:px-8">{children}</div>
+          <div className={contentClassName}>{children}</div>
         </main>
       </div>
     </div>

@@ -52,9 +52,7 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
   const projects = dependencies.projects;
   const tasks = dependencies.tasks;
   const attention = dependencies.attention;
-  const release = dependencies.release;
-  const ci = dependencies.ci;
-  const acceptance = dependencies.acceptance;
+  const database = dependencies.database;
   const sessionUser = async (request: { cookies: Record<string, string | undefined> }): Promise<AuthUser | undefined> => auth?.getUserBySession(request.cookies.forge_session ?? "");
   const sendAuthError = (reply: { code: (statusCode: number) => { send: (body: object) => unknown } }, error: unknown): unknown => {
     if (error instanceof AuthFailure) {

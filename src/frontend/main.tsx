@@ -5,7 +5,7 @@ import { Dialog } from "./components/ui/dialog.js";
 import { ApplicationFrame } from "./components/app/application-frame.js";
 import { CompanyProvider, useCompanyContext } from "./components/app/company-context.js";
 import { SettingsLayout, SettingsSection, SettingRow } from "./components/app/settings-layout.js";
-import { isApiError, readJson, withCompany, type ApiUser, type CompanyStatus } from "./lib/api.js";
+import { companySettingsPath, isApiError, readJson, withCompany, type ApiUser, type CompanyStatus } from "./lib/api.js";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import type { HealthCheck, HealthSnapshot } from "../health.js";
 import { isOwnedHealthCheck } from "../health-contract.js";
@@ -114,7 +114,7 @@ function AuthView(): ReactElement {
 }
 
 function AdminView(): ReactElement {
-  const { user, companies, loading } = useCompanyContext();
+  const { user, companies, currentCompany, loading } = useCompanyContext();
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   const [displayName, setDisplayName] = useState("");
@@ -153,26 +153,37 @@ function AdminView(): ReactElement {
     } catch { setError("Unable to change membership"); }
   };
   const signOut = async (): Promise<void> => { await readJson("/api/auth/sign-out", { method: "POST", body: "{}" }); window.localStorage.removeItem("forge.activeCompanyId"); window.location.assign("/auth"); };
+  const isProfiles = window.location.pathname.endsWith("/profiles");
+  const activeHref = withCompany(window.location.pathname, currentCompany?.id);
+  const backHref = withCompany("/projects", currentCompany?.id);
 
   if (loading) {
-    return <ApplicationFrame title="Administration"><div className="p-4 text-xs text-muted-foreground">Loading administration…</div></ApplicationFrame>;
+    return (
+      <SettingsLayout title={isProfiles ? "Profiles" : "Users"} companyId={currentCompany?.id ?? ""} backHref={backHref} activeHref={activeHref} contentClassName="">
+        <div className="p-4 text-xs text-muted-foreground">Loading administration…</div>
+      </SettingsLayout>
+    );
   }
   if (user?.role !== "admin") {
-    return <ApplicationFrame title="Administration"><div className="p-4 text-xs text-muted-foreground">Administration is unavailable.</div></ApplicationFrame>;
+    return (
+      <SettingsLayout title={isProfiles ? "Profiles" : "Users"} companyId={currentCompany?.id ?? ""} backHref={backHref} activeHref={activeHref} contentClassName="">
+        <div className="p-4 text-xs text-muted-foreground">Administration is unavailable.</div>
+      </SettingsLayout>
+    );
   }
 
   return (
-    <ApplicationFrame title="Administration">
-      <div className="divide-y divide-border/70">
+    <SettingsLayout title={isProfiles ? "Profiles" : "Users"} companyId={currentCompany?.id ?? ""} backHref={backHref} activeHref={activeHref} contentClassName="">
+      <div className="divide-y divide-border/70">{!isProfiles ? (<>
         <section className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 px-3 py-3 sm:px-4"><span className="text-xs text-muted-foreground">{user?.displayName ?? ""} · {user?.role ?? ""}</span><Button variant="ghost" size="sm" onClick={() => void signOut()}>Sign out</Button></section>
         <section className="grid gap-px border-b border-border/70 bg-border sm:grid-cols-2">
           <div className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Users</span><span className="text-[11px] text-muted-foreground">{users.length}</span></div><div className="mb-3 flex gap-2"><Input className="h-7 flex-1" placeholder="Display name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /><Button size="sm" onClick={() => void invite()}>Invite</Button></div>{inviteToken ? <code className="block break-all border border-border bg-muted/30 p-2 text-[11px]">{inviteToken}</code> : null}<div className="mt-3 divide-y divide-border/70 border-y border-border/70">{users.map((candidate) => <div className="flex min-h-8 items-center justify-between gap-2 text-xs" key={candidate.id}><span className="truncate">{candidate.displayName} <span className="text-muted-foreground">{candidate.status}</span></span>{candidate.role !== "admin" && candidate.status === "active" ? <Button variant="ghost" size="sm" onClick={() => void readJson(`/api/admin/users/${candidate.id}/revoke`, { method: "POST", body: "{}" }).then(() => reload()).catch(() => setError("Unable to revoke user"))}>Revoke</Button> : null}</div>)}</div></div>
           <div className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Companies</span><span className="text-[11px] text-muted-foreground">{companies.length}</span></div><div className="divide-y divide-border/70 border-y border-border/70">{companies.map((company) => <div className="py-2 text-xs" key={company.id}><div className="mb-2 flex flex-wrap items-center justify-between gap-2"><span className="min-w-0 truncate"><span>{company.name}</span> <span className="text-muted-foreground">{company.status}</span></span><a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={withCompany(`/companies/${encodeURIComponent(company.id)}/settings`, company.id)}>Settings</a></div><div className="flex flex-wrap gap-1.5">{users.filter((candidate) => candidate.role === "member" && candidate.status === "active").map((candidate) => { const assigned = candidate.companyIds.includes(company.id); return <Button key={candidate.id} variant={assigned ? "secondary" : "outline"} size="sm" onClick={() => void changeMembership(company.id, candidate.id, !assigned)}>{assigned ? "− " : "+ "}{candidate.displayName}</Button>; })}</div></div>)}</div></div>
-        </section>
-        <section className="border-b border-border/70 bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Codex profiles</span><span className="text-[11px] text-muted-foreground">{profiles.length} configured</span></div><div className="mb-3 flex flex-wrap gap-2"><Input className="h-7 w-36" placeholder="Profile name" value={profileName} onChange={(event) => setProfileName(event.target.value)} /><Input className="h-7 w-36" placeholder="Model" value={profileModel} onChange={(event) => setProfileModel(event.target.value)} /><Input className="h-7 w-20" aria-label="Reasoning level" placeholder="Reasoning" value={profileReasoning} onChange={(event) => setProfileReasoning(event.target.value)} /><Input className="h-7 w-24" aria-label="Service priority" placeholder="Priority" value={profilePriority} onChange={(event) => setProfilePriority(event.target.value)} /><Input className="h-7 w-20" placeholder="Capacity" inputMode="numeric" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><Button size="sm" onClick={() => void createProfile()}>Create profile</Button></div><div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">{profiles.map((profile) => <span className="border border-border px-2 py-1" key={profile.id}>{profile.name} · {profile.model} · {profile.reasoningLevel} · {profile.servicePriority} · {profile.capacity} slots · {profile.id}</span>)}</div></section>
+        </section></>) : null}
+        {isProfiles ? (<section className="border-b border-border/70 bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Codex profiles</span><span className="text-[11px] text-muted-foreground">{profiles.length} configured</span></div><div className="mb-3 flex flex-wrap gap-2"><Input className="h-7 w-36" placeholder="Profile name" value={profileName} onChange={(event) => setProfileName(event.target.value)} /><Input className="h-7 w-36" placeholder="Model" value={profileModel} onChange={(event) => setProfileModel(event.target.value)} /><Input className="h-7 w-20" aria-label="Reasoning level" placeholder="Reasoning" value={profileReasoning} onChange={(event) => setProfileReasoning(event.target.value)} /><Input className="h-7 w-24" aria-label="Service priority" placeholder="Priority" value={profilePriority} onChange={(event) => setProfilePriority(event.target.value)} /><Input className="h-7 w-20" placeholder="Capacity" inputMode="numeric" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><Button size="sm" onClick={() => void createProfile()}>Create profile</Button></div><div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">{profiles.map((profile) => <span className="border border-border px-2 py-1" key={profile.id}>{profile.name} · {profile.model} · {profile.reasoningLevel} · {profile.servicePriority} · {profile.capacity} slots · {profile.id}</span>)}</div></section>) : null}
         {error ? <p role="alert" className="px-4 py-3 text-xs text-rose-700">{error}</p> : null}
       </div>
-    </ApplicationFrame>
+    </SettingsLayout>
   );
 }
 
@@ -446,7 +457,7 @@ function CompanySettingsView(): ReactElement {
   const backHref = withCompany("/projects", company.id);
 
   return (
-    <SettingsLayout title="Workspace" companyId={company.id} backHref={backHref}>
+    <SettingsLayout title="Workspace" companyId={company.id} backHref={backHref} activeHref={companySettingsPath(company.id)}>
       <SettingsSection title="Profile">
         <SettingRow label="Company name" description="Public workspace name.">
           <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void save(); }}>

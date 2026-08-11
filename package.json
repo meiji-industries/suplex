@@ -20,9 +20,10 @@
     "build": "tsc && vite build",
     "dev": "tsx src/cli.ts start --foreground",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/app.test.ts tests/config.test.ts tests/database.test.ts tests/health.test.ts tests/process-manager.test.ts tests/redaction.test.ts tests/runtime.test.ts tests/setup.test.ts tests/temporal.integration.test.ts",
-    "test:browser": "npm run build && tsx --test tests/health.browser.test.ts",
-    "test:all": "npm run typecheck && npm test && npm run test:browser"
+    "test": "vitest run --exclude tests/temporal.integration.test.ts --exclude tests/*.browser.test.ts",
+    "test:temporal": "vitest run tests/temporal.integration.test.ts",
+    "test:browser": "pnpm run build && vitest run tests/health.browser.test.ts",
+    "test:all": "pnpm run typecheck && pnpm run test && pnpm run test:temporal && pnpm run test:browser"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

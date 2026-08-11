@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { stopOwnedProcesses, type OwnedProcess, type ProcessController } from "../src/process-manager.js";
 

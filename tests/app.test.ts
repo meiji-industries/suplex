@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";

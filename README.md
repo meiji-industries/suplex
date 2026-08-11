@@ -45,4 +45,4 @@ pnpm run test
 pnpm run test:browser
 ```
 
-The browser proof uses a mobile viewport and the same responsive health page served by the API. The real Temporal lifecycle proof requires a running local Temporal service; start Forge first and run it with `FORGE_RUN_TEMPORAL_TESTS=1` when the local environment is ready.
+The browser proof uses Playwright at narrow and desktop viewports against the same responsive health page served by the API. The Temporal lifecycle proof provisions a uniquely named Docker container on a dynamic host port and runs with `pnpm run test:temporal`; it does not touch Forge's live container.

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "vitest";
 
 import { createTestConfig } from "../src/config.js";
 import { inspectHostHealth, type HealthCheck } from "../src/health.js";

@@ -1,8 +1,7 @@
 import { access, constants, mkdir, statfs, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
 
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
@@ -11,7 +10,6 @@ import { GhAuthStatusSchema } from "./schemas.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { TemporalHealthProbe } from "./temporal/service.js";
 
-const execFileAsync = promisify(execFile);
 const minimumFreeBytes = 100 * 1024 * 1024;
 const workerHeartbeatMaxAgeMs = 30_000;
 const codexReadinessCacheMs = 5 * 60_000;
@@ -106,10 +104,46 @@ export async function checkWorker(database: ForgeDatabase, taskQueue: string, in
 type CommandResult = { stdout: string; stderr: string };
 type CommandRunner = (command: string, args: string[], options: { timeout: number; maxBuffer: number }) => Promise<CommandResult>;
 
-const runCommand: CommandRunner = async (command, args, options) => {
-  const result = await execFileAsync(command, args, options);
-  return { stdout: String(result.stdout), stderr: String(result.stderr) };
-};
+const runCommand: CommandRunner = (command, args, options) => new Promise((resolve, reject) => {
+  const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
+  let stdout = "";
+  let stderr = "";
+  let settled = false;
+  const timer = setTimeout(() => {
+    child.kill("SIGTERM");
+    if (!settled) {
+      settled = true;
+      reject(new Error(`${command} timed out`));
+    }
+  }, options.timeout);
+  const append = (target: "stdout" | "stderr", chunk: Buffer): void => {
+    if (settled) return;
+    if (target === "stdout") stdout += chunk.toString();
+    else stderr += chunk.toString();
+    if (stdout.length + stderr.length > options.maxBuffer) {
+      child.kill("SIGTERM");
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`${command} exceeded its output limit`));
+    }
+  };
+  child.stdout.on("data", (chunk: Buffer) => append("stdout", chunk));
+  child.stderr.on("data", (chunk: Buffer) => append("stderr", chunk));
+  child.once("error", (error) => {
+    if (!settled) {
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    }
+  });
+  child.once("close", (code) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    if (code === 0) resolve({ stdout, stderr });
+    else reject(new Error(`${command} exited with status ${code ?? "unknown"}`));
+  });
+});
 
 export function checkCommandAuthentication(id: "codex-auth" | "gh-auth", label: string, command: string, args: string[], runner: CommandRunner = runCommand): () => Promise<HealthCheck> {
   return async () => {

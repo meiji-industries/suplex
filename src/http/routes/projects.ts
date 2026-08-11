@@ -4,7 +4,7 @@ import { type ZodTypeProvider } from "@fastify/type-provider-zod";
 import type { ProjectService } from "../../projects.js";
 import type { ProjectRole } from "../../projects.js";
 import { CompanyIdParamsSchema, ProjectIdParamsSchema } from "../contracts/common.js";
-import { ModelListResponseSchema, ProfileListResponseSchema, ProjectBodySchema, ProjectCheckListResponseSchema, ProjectCreateBodySchema, ProjectListResponseSchema, ProjectResponseSchema } from "../contracts/projects.js";
+import { ModelListResponseSchema, ProfileListResponseSchema, ProjectBodySchema, ProjectCheckListResponseSchema, ProjectCreateBodySchema, ProjectListResponseSchema, ProjectRepositoryDefaultsResponseSchema, ProjectResponseSchema } from "../contracts/projects.js";
 
 export interface ProjectRoutesOptions {
   projects: ProjectService;
@@ -33,6 +33,7 @@ const projects: FastifyPluginAsync<ProjectRoutesOptions> = async (app, options) 
   });
   typed.get("/api/projects/:projectId", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => reply.send(projects.getProject(request.forgeUser.id, request.params.projectId)));
   typed.get("/api/projects/:projectId/checks", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectCheckListResponseSchema } } }, async (request, reply) => reply.send({ checks: await projects.listProjectChecks(request.forgeUser.id, request.params.projectId) }));
+  typed.get("/api/projects/:projectId/repository-defaults", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectRepositoryDefaultsResponseSchema } } }, async (request, reply) => reply.send(await projects.getProjectRepositoryDefaults(request.forgeUser.id, request.params.projectId)));
   typed.patch("/api/projects/:projectId", { schema: { params: ProjectIdParamsSchema, body: ProjectBodySchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => reply.send(await projects.updateProject(request.forgeUser.id, request.params.projectId, { ...request.body, roleDefaults: roleDefaults(request.body.roleDefaults) })));
   typed.post("/api/projects/:projectId/activate", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => reply.send(await projects.activateProject(request.forgeUser.id, request.params.projectId)));
   typed.post("/api/projects/:projectId/pause", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => reply.send(await projects.pauseProject(request.forgeUser.id, request.params.projectId)));

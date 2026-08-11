@@ -411,7 +411,7 @@ function activationRequirements(input: { requiredChecks: string[]; allowedProfil
   ];
 }
 
-function settingsForm(project: ApiProject): ProjectSettingsForm {
+function settingsForm(project: ApiProject, profiles: ApiProfile[]): ProjectSettingsForm {
   return {
     name: project.name,
     baseBranch: project.baseBranch,
@@ -419,7 +419,7 @@ function settingsForm(project: ApiProject): ProjectSettingsForm {
     setupCommand: project.setupCommand,
     verificationCommand: project.verificationCommand,
     requiredChecks: project.requiredChecks.join(", "),
-    allowedProfileIds: project.allowedProfileIds,
+    allowedProfileIds: project.allowedProfileIds.length ? project.allowedProfileIds : profiles.map((profile) => profile.id),
     leadProfile: project.roleDefaults.lead ?? "",
     developerProfile: project.roleDefaults.developer ?? "",
     reviewerProfile: project.roleDefaults.reviewer ?? "",
@@ -445,7 +445,8 @@ function ProjectSettingsDialog({
   const [checksLoading, setChecksLoading] = useState(false);
 
   useEffect(() => {
-    setForm(project ? settingsForm(project) : undefined);
+    let cancelled = false;
+    setForm(project ? settingsForm(project, profiles) : undefined);
     setFindings([]);
     setError("");
     setBusy(false);
@@ -453,11 +454,25 @@ function ProjectSettingsDialog({
     if (project) {
       setChecksLoading(true);
       void readJson<{ checks: ApiCheck[] }>(`/api/projects/${project.id}/checks`)
-        .then((result) => setCheckOptions(result.checks))
-        .catch(() => setCheckOptions([]))
-        .finally(() => setChecksLoading(false));
+        .then((result) => {
+          if (cancelled) return;
+          setCheckOptions(result.checks);
+          setForm((current) => current && current.requiredChecks.trim().length === 0
+            ? { ...current, requiredChecks: result.checks.map((check) => check.name).join(", ") }
+            : current);
+        })
+        .catch(() => { if (!cancelled) setCheckOptions([]); })
+        .finally(() => { if (!cancelled) setChecksLoading(false); });
+      if (project.status === "draft" && project.setupCommand === "pnpm install" && project.verificationCommand === "pnpm test") {
+        void readJson<{ setupCommand: string; verificationCommand: string }>(`/api/projects/${project.id}/repository-defaults`)
+          .then((defaults) => {
+            if (!cancelled) setForm((current) => current ? { ...current, ...defaults } : current);
+          })
+          .catch(() => undefined);
+      }
     }
-  }, [project]);
+    return () => { cancelled = true; };
+  }, [project, profiles]);
 
   const setField = <Key extends keyof ProjectSettingsForm>(key: Key, value: ProjectSettingsForm[Key]): void => {
     setForm((current) => current ? { ...current, [key]: value } : current);
@@ -545,7 +560,7 @@ function ProjectSettingsDialog({
             <label className="grid gap-1 text-[11px] text-muted-foreground">Setup command<Input value={form.setupCommand} onChange={(event) => setField("setupCommand", event.target.value)} /></label>
             <label className="grid gap-1 text-[11px] text-muted-foreground">Verification command<Input value={form.verificationCommand} onChange={(event) => setField("verificationCommand", event.target.value)} /></label>
             <fieldset className="grid gap-1.5 sm:col-span-2"><legend className="mb-1 text-[11px] text-muted-foreground">Required GitHub checks</legend>{checksLoading ? <p className="text-[11px] text-muted-foreground">Loading checks from {project.targetBranch}…</p> : availableChecks.length ? <div className="flex flex-wrap gap-x-4 gap-y-2">{availableChecks.map((check) => <label className="flex items-center gap-1.5 text-xs" key={check.name}><input type="checkbox" checked={selectedChecks.includes(check.name)} onChange={() => toggleCheck(check.name)} /><span>{check.name}</span>{check.conclusion ? <span className="text-[10px] text-muted-foreground">{check.conclusion}</span> : null}</label>)}</div> : <p className="border border-border bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground">No check runs were found on <span className="font-mono">{project.targetBranch}</span>. Run the repository workflows once, then reopen settings.</p>}<span className="text-[11px] text-muted-foreground">Exact check names fetched from GitHub for the target branch.</span></fieldset>
-            <fieldset className="grid gap-1.5 sm:col-span-2"><legend className="mb-1 text-[11px] text-muted-foreground">Allowed profiles</legend>{profiles.length ? <div className="flex flex-wrap gap-x-4 gap-y-2">{profiles.map((profile) => <label className="flex items-center gap-1.5 text-xs" key={profile.id}><input type="checkbox" checked={form.allowedProfileIds.includes(profile.id)} onChange={() => toggleProfile(profile.id)} />{profile.name}</label>)}</div> : <p className="border border-amber-200 bg-amber-50/70 px-2 py-1.5 text-[11px] text-amber-800">No Codex profiles configured. <a className="font-medium underline underline-offset-2" href={withCompany("/admin/profiles", project.companyId)}>Create a profile</a> before activating this project.</p>}</fieldset>
+            <fieldset className="grid gap-1.5 sm:col-span-2"><legend className="mb-1 text-[11px] text-muted-foreground">Profiles</legend>{profiles.length ? <div className="flex flex-wrap gap-x-4 gap-y-2">{profiles.map((profile) => <label className="flex items-center gap-1.5 text-xs" key={profile.id}><input type="checkbox" checked={form.allowedProfileIds.includes(profile.id)} onChange={() => toggleProfile(profile.id)} />{profile.name}</label>)}</div> : <p className="border border-amber-200 bg-amber-50/70 px-2 py-1.5 text-[11px] text-amber-800">No Codex profiles configured. <a className="font-medium underline underline-offset-2" href={withCompany("/admin/profiles", project.companyId)}>Create a profile</a> before activating this project.</p>}</fieldset>
             {(["leadProfile", "developerProfile", "reviewerProfile"] as const).map((key) => <label className="grid gap-1 text-[11px] text-muted-foreground" key={key}>{key === "leadProfile" ? "Lead default" : key === "developerProfile" ? "Developer default" : "Reviewer default (optional)"}<select className="h-8 border border-input bg-background px-2 text-xs" value={form[key]} onChange={(event) => setField(key, event.target.value)}><option value="">None</option>{allowedProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>)}
             <div className="mt-1 flex items-center justify-end gap-2 sm:col-span-2">{missingRequirements.length ? <span className="mr-auto text-[11px] text-amber-800">Complete the missing requirements to save.</span> : null}<Dialog.Close render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || missingRequirements.length > 0}>{busy ? "Saving…" : "Save settings"}</Button></div>
           </form> : null}

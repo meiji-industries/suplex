@@ -188,8 +188,8 @@ const branchPattern = /^(?![./])(?!.*(?:\.\.|\.$|\.lock$|\/\/|\s|[~^:?*\[\\]))[A
 const checkPattern = /^[\p{L}\p{N}][\p{L}\p{N} ._:/()\[\]-]{0,119}$/u;
 const secretPattern = /(?:gh[pousr]_|github_pat_|token\s*=|password\s*=|secret\s*=|BEGIN [A-Z ]+ PRIVATE KEY|sk-[A-Za-z0-9])/i;
 const modelIdPattern = /^[a-z0-9][a-z0-9._-]{1,119}$/;
-const approvedSetupCommands = new Set(["pnpm install", "pnpm install --frozen-lockfile", "npm install", "npm ci", "yarn install", "yarn install --immutable", "bun install"]);
-const approvedVerificationCommands = new Set(["pnpm test", "pnpm typecheck", "pnpm lint", "npm test", "npm run typecheck", "npm run lint", "yarn test", "yarn typecheck", "yarn lint", "bun test", "mise run test", "mise run typecheck", "mise run lint", "make test", "make check"]);
+const approvedSetupCommands = new Set(["pnpm install", "pnpm install --frozen-lockfile", "npm install", "npm ci", "yarn install", "yarn install --immutable", "bun install", "mise run setup", "cargo fetch --locked"]);
+const approvedVerificationCommands = new Set(["pnpm test", "pnpm typecheck", "pnpm lint", "npm test", "npm run typecheck", "npm run lint", "yarn test", "yarn typecheck", "yarn lint", "bun test", "mise run test", "mise run typecheck", "mise run lint", "cargo test", "make test", "make check"]);
 
 const projectRevisionColumns = `p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha`;
 
@@ -283,6 +283,81 @@ function finding(code: string, field: string, message: string): ProjectFinding {
 
 function isApprovedCommand(command: string, kind: "setup" | "verification"): boolean {
   return (kind === "setup" ? approvedSetupCommands : approvedVerificationCommands).has(command.trim()) && !secretPattern.test(command);
+}
+
+async function readableFile(path: string): Promise<string | undefined> {
+  try {
+    return await (await import("node:fs/promises")).readFile(path, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function hasMiseTask(configuration: string, task: string): boolean {
+  const escaped = task.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^\\[tasks\\.(?:${escaped}|["']${escaped}["'])\\]`, "m").test(configuration);
+}
+
+export async function inferRepositoryCommands(repositoryPath: string): Promise<{ setupCommand: string; verificationCommand: string }> {
+  const miseConfiguration = await readableFile(join(repositoryPath, "mise.toml")) ?? await readableFile(join(repositoryPath, ".mise.toml"));
+  const packageText = await readableFile(join(repositoryPath, "package.json"));
+  let packageJson: { packageManager?: string; scripts?: Record<string, string> } | undefined;
+  try {
+    packageJson = packageText ? JSON.parse(packageText) as typeof packageJson : undefined;
+  } catch {}
+
+  let packageManager: "pnpm" | "npm" | "yarn" | "bun" | undefined;
+  let setupCommand: string | undefined;
+  if (await fileExists(join(repositoryPath, "pnpm-lock.yaml"))) {
+    packageManager = "pnpm";
+    setupCommand = "pnpm install --frozen-lockfile";
+  } else if (await fileExists(join(repositoryPath, "package-lock.json")) || await fileExists(join(repositoryPath, "npm-shrinkwrap.json"))) {
+    packageManager = "npm";
+    setupCommand = "npm ci";
+  } else if (await fileExists(join(repositoryPath, "yarn.lock"))) {
+    packageManager = "yarn";
+    setupCommand = "yarn install --immutable";
+  } else if (await fileExists(join(repositoryPath, "bun.lock")) || await fileExists(join(repositoryPath, "bun.lockb"))) {
+    packageManager = "bun";
+    setupCommand = "bun install";
+  } else if (packageJson) {
+    const declaredManager = packageJson.packageManager?.split("@")[0];
+    packageManager = declaredManager === "pnpm" || declaredManager === "yarn" || declaredManager === "bun" ? declaredManager : "npm";
+    setupCommand = packageManager === "pnpm" ? "pnpm install" : packageManager === "npm" ? "npm install" : packageManager === "yarn" ? "yarn install" : "bun install";
+  } else if (miseConfiguration && hasMiseTask(miseConfiguration, "setup")) {
+    setupCommand = "mise run setup";
+  } else if (await fileExists(join(repositoryPath, "Cargo.lock"))) {
+    setupCommand = "cargo fetch --locked";
+  }
+
+  const scripts = packageJson?.scripts ?? {};
+  const script = ["test", "typecheck", "lint"].find((name) => Boolean(scripts[name]));
+  let verificationCommand: string | undefined;
+  if (script && packageManager) {
+    verificationCommand = packageManager === "npm" ? (script === "test" ? "npm test" : `npm run ${script}`) : `${packageManager} ${script}`;
+  } else if (miseConfiguration) {
+    const miseTask = ["test", "typecheck", "lint"].find((name) => hasMiseTask(miseConfiguration, name));
+    if (miseTask) verificationCommand = `mise run ${miseTask}`;
+  } else if (await fileExists(join(repositoryPath, "Cargo.toml"))) {
+    verificationCommand = "cargo test";
+  } else {
+    const makefile = await readableFile(join(repositoryPath, "Makefile"));
+    if (makefile && /^test\s*:/m.test(makefile)) verificationCommand = "make test";
+    else if (makefile && /^check\s*:/m.test(makefile)) verificationCommand = "make check";
+  }
+
+  return {
+    setupCommand: setupCommand ?? "pnpm install",
+    verificationCommand: verificationCommand ?? "pnpm test",
+  };
 }
 
 function githubRepositoryCoordinate(rawUrl: string): GithubRepositoryCoordinate | undefined {
@@ -521,6 +596,11 @@ export class ProjectService {
     }
   }
 
+  async getProjectRepositoryDefaults(actorUserId: string, projectId: string): Promise<{ setupCommand: string; verificationCommand: string }> {
+    const project = this.getProject(actorUserId, projectId);
+    return inferRepositoryCommands(project.repositoryPath);
+  }
+
   createProject(actorUserId: string, companyId: string, input: ProjectInput): Promise<Project> {
     return this.mutateProject(actorUserId, companyId, input, false);
   }
@@ -537,6 +617,14 @@ export class ProjectService {
       throw new ProjectFailure("Repository provisioning failed", [finding("path-outside-root", "repositoryUrl", "Derived project paths escaped the configured Forge roots")], 422);
     }
     await this.repositoryProvisioner.ensure({ cloneUrl: coordinate.cloneUrl, repository: coordinate.repository, repositoryPath, worktreeRoot });
+    const commands = await inferRepositoryCommands(repositoryPath);
+    let requiredChecks: string[] = [];
+    try {
+      await this.github.checkAuthentication();
+      requiredChecks = this.github.listChecks
+        ? [...new Set((await this.github.listChecks({ cwd: repositoryPath, nameWithOwner: coordinate.repository, ref: "main" })).map((check) => check.name))]
+        : [];
+    } catch {}
     const profiles = this.listProfiles(actorUserId).slice(0, 16);
     const defaultProfileId = profiles[0]?.id;
     return this.mutateProject(actorUserId, companyId, {
@@ -546,9 +634,9 @@ export class ProjectService {
       repository: coordinate.repository,
       baseBranch: "main",
       targetBranch: "main",
-      setupCommand: "pnpm install",
-      verificationCommand: "pnpm test",
-      requiredChecks: [],
+      setupCommand: commands.setupCommand,
+      verificationCommand: commands.verificationCommand,
+      requiredChecks,
       allowedProfileIds: profiles.map((profile) => profile.id),
       roleDefaults: defaultProfileId ? { lead: defaultProfileId, developer: defaultProfileId } : {},
     }, false, undefined, true);

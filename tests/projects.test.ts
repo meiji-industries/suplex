@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -113,7 +113,7 @@ test("creates a minimal draft from a GitHub URL under the configured Forge roots
   }), {
     localRepository,
     github,
-    repositoryProvisioner: { async ensure(coordinate) { provisioned.push(coordinate); await mkdir(coordinate.repositoryPath, { recursive: true }); await mkdir(coordinate.worktreeRoot, { recursive: true }); } },
+    repositoryProvisioner: { async ensure(coordinate) { provisioned.push(coordinate); await mkdir(coordinate.repositoryPath, { recursive: true }); await mkdir(coordinate.worktreeRoot, { recursive: true }); await writeFile(join(coordinate.repositoryPath, "mise.toml"), "[tasks.setup]\nrun = \"cargo fetch --locked\"\n[tasks.test]\nrun = \"cargo test\"\n"); } },
   });
   try {
     const project = await projects.createProjectFromRepository(value.adminId, value.companyId, "https://github.com/meiji-industries/sampler.git");
@@ -124,8 +124,10 @@ test("creates a minimal draft from a GitHub URL under the configured Forge roots
       worktreeRoot: await realpath(join(value.worktreeRoot, "meiji-industries", "sampler")),
       baseBranch: "main",
       targetBranch: "main",
+      setupCommand: "mise run setup",
+      verificationCommand: "mise run test",
       status: "draft",
-      requiredChecks: [],
+      requiredChecks: ["Tests / unit"],
       allowedProfileIds: [value.profileId],
       roleDefaults: { lead: value.profileId, developer: value.profileId },
     });

@@ -38,6 +38,7 @@ export const ModelBodySchema = z.object({ id: z.string().default(""), displayNam
 export const ModelStatusBodySchema = z.object({ status: z.enum(["active", "retired"]) }).strict();
 export const ModelIdParamsSchema = z.object({ modelId: z.string() });
 export const ProjectCheckListResponseSchema = z.object({ checks: z.array(z.object({ name: z.string(), status: z.string(), conclusion: z.string().optional() })) });
+export const ProjectRepositoryDefaultsResponseSchema = z.object({ setupCommand: z.string(), verificationCommand: z.string() });
 export const ProjectResponseSchema = z.object({
   id: z.string(), companyId: z.string(), name: z.string(), repositoryPath: z.string(), worktreeRoot: z.string(), repository: z.string().optional(), baseBranch: z.string(), targetBranch: z.string(), setupCommand: z.string(), verificationCommand: z.string(), requiredChecks: z.array(z.string()), allowedProfileIds: z.array(z.string()), roleDefaults: ProjectRoleDefaultsSchema, status: z.enum(["draft", "active", "paused", "archived"]), activeRevisionId: z.string().optional(), configurationRevision: z.number(), configurationIdentity: z.string().optional(), baseSha: z.string().optional(), targetSha: z.string().optional(), createdAt: z.string(), updatedAt: z.string(),
 });

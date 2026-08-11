@@ -87,6 +87,7 @@ test("project API activates valid configuration, redacts typed failures, and pre
     const project = draft.json() as { id: string; status: string };
     expect(project.status).toBe("draft");
     expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}/checks`, headers: { cookie: adminCookie } })).json()).toEqual({ checks: [{ name: "Tests / unit", status: "completed", conclusion: "success" }] });
+    expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}/repository-defaults`, headers: { cookie: adminCookie } })).json()).toEqual({ setupCommand: "pnpm install", verificationCommand: "pnpm test" });
     const activated = await app.inject({ method: "POST", url: `/api/projects/${project.id}/activate`, headers: { cookie: adminCookie, origin }, payload: {} });
     expect(activated.statusCode).toBe(200);
     expect(activated.json()).toMatchObject({ status: "active", configurationRevision: 2, repository: "acme/forge" });

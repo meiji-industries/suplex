@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactElement, type ReactNode } from "react";
+import { flushSync } from "react-dom";
 
 import { companySettingsPath, readJson, withCompany, type ApiCompany, type ApiUser, type CompanyStatus } from "../../lib/api.js";
 
@@ -116,8 +117,8 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
       window.location.assign(withCompany(detailRoot, selected.id));
       return;
     }
+    flushSync(() => setCurrentCompany(selected));
     replaceCompanyLocation(selected.id, detailRoot);
-    setCurrentCompany(selected);
     window.dispatchEvent(new Event("forge:company-change"));
   }, [companies, currentCompany?.id]);
 

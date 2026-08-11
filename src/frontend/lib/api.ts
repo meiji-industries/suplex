@@ -16,6 +16,18 @@ export type ApiCompany = {
   createdAt: string;
 };
 
+export class ApiError extends Error {
+  readonly statusCode: number;
+  readonly findings?: Array<{ field: string; message: string }>;
+
+  constructor(message: string, statusCode: number, findings?: Array<{ field: string; message: string }>) {
+    super(message);
+    this.name = "ApiError";
+    this.statusCode = statusCode;
+    if (findings) this.findings = findings;
+  }
+}
+
 export async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -32,11 +44,13 @@ export async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
     body = {} as T & { error?: string; findings?: Array<{ field: string; message: string }> };
   }
   if (!response.ok) {
-    const error = new Error(body.error ?? "Request failed") as Error & { findings?: Array<{ field: string; message: string }> };
-    if (body.findings) error.findings = body.findings;
-    throw error;
+    throw new ApiError(body.error ?? "Request failed", response.status, body.findings);
   }
   return body;
+}
+
+export function isApiError(error: unknown, statusCode?: number): error is ApiError {
+  return error instanceof ApiError && (statusCode === undefined || error.statusCode === statusCode);
 }
 
 export function withCompany(path: string, companyId?: string): string {

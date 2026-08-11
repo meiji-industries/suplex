@@ -4,7 +4,7 @@ import { Input } from "./components/ui/input.js";
 import { Dialog } from "./components/ui/dialog.js";
 import { ApplicationFrame } from "./components/app/application-frame.js";
 import { CompanyProvider, useCompanyContext } from "./components/app/company-context.js";
-import { readJson, withCompany, type ApiUser, type CompanyStatus } from "./lib/api.js";
+import { isApiError, readJson, withCompany, type ApiUser, type CompanyStatus } from "./lib/api.js";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import type { HealthCheck, HealthSnapshot } from "../health.js";
 import { isOwnedHealthCheck } from "../health-contract.js";
@@ -51,6 +51,12 @@ type ApiProject = { id: string; companyId: string; name: string; repositoryPath:
 type ApiAttentionItem = { id: string; companyId: string; taskId: string; taskTitle: string; category: string; summary: string; action: string; evidenceRef?: string; updatedAt: string };
 type ApiAttentionCompany = { companyId: string; companyName: string; companyStatus: string; activeIssueCount: number; phases: Record<string, number>; attentionCount: number; attention: ApiAttentionItem[]; recentOutcomes: Array<{ taskId: string; taskTitle: string; phase: string; updatedAt: string }> };
 type ApiTask = { id: string; companyId: string; projectId: string; title: string; description: string; briefArtifactId: string; images: Array<{ artifactId: string; filename: string; mimeType: string; byteSize: number }>; roleProfiles: Record<string, string>; supplementalReview: boolean; workflowId: string; projectRevisionId: string; phase: "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "delivery_blocked"; revision: number; owner: "human" | "lead"; allowedCommands: string[]; pendingAction: string | null; createdAt: string; updatedAt: string; timeline: Array<{ id: string; revision: number; eventType: string; metadata: Record<string, string | number | boolean>; createdAt: string }>; planRevision?: number | null; planMaterial?: boolean | null; materialCategories?: string[]; supplementalReviewUsed?: boolean; supplementalReviewArtifactId?: string | null; decisionId?: string | null; deliveryReview?: { id: string; outcome: "approved" | "blocking"; summary: string; planRevision: number; baseSha: string; subjectCommit: string; subjectTree: string; findings: Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidenceRef: string; disposition: string; repairInstruction: string | null }> }; developerExecution?: { id: string; status: string; attempt: number; branchName: string; worktreePath: string; targetBaseSha: string; resultCommit?: string | null; resultTree?: string | null; dirtyState?: string | null; deliveryArtifactId?: string | null; deliverySummary?: string | null }; leadOutput?: { kind: "plan" | "decision_blocker"; summary: string; sessionRef: string; executionId: string; outputArtifactId: string; evidenceArtifactId: string; content: { kind: "plan"; summary: string; reproduction: string | null; rootCauseAnalysis: string | null; steps: Array<{ number: number; instruction: string; verification: string }>; compatibilityAnalysis: string; operationalAnalysis: string; verificationStrategy: string; unresolvedTechnicalQuestions: string[] } | { kind: "decision_blocker"; summary: string; evidence: string; owner: "human"; question: string; nextAction: string } } };
+
+async function reconcileScopedNotFound(reason: unknown, reloadCompanies: () => Promise<void>): Promise<boolean> {
+  if (!isApiError(reason, 404)) return false;
+  await reloadCompanies();
+  return true;
+}
 
 function AuthView(): ReactElement {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -170,9 +176,10 @@ function AdminView(): ReactElement {
 }
 
 function ProjectsView(): ReactElement {
-  const { currentCompany, loading, user, error: companyError } = useCompanyContext();
+  const { currentCompany, loading, user, error: companyError, reloadCompanies } = useCompanyContext();
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   const [projects, setProjects] = useState<ApiProject[]>([]);
+  const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [form, setForm] = useState({ name: "", repositoryPath: "", worktreeRoot: "", repository: "", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: "", allowedProfileIds: "", leadProfile: "", developerProfile: "", reviewerProfile: "" });
   const [findings, setFindings] = useState<Array<{ field: string; message: string }>>([]);
   const [error, setError] = useState("");
@@ -181,6 +188,7 @@ function ProjectsView(): ReactElement {
 
   const reload = useCallback(async (): Promise<void> => {
     const token = ++requestToken.current;
+    setLoadedCompanyId("");
     setProjects([]);
     setProfiles([]);
     setError("");
@@ -191,17 +199,21 @@ function ProjectsView(): ReactElement {
         readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
       ]);
       if (token !== requestToken.current) return;
-      setProfiles(profileResult.profiles); setProjects(projectResult.projects);
+      setProfiles(profileResult.profiles); setProjects(projectResult.projects); setLoadedCompanyId(companyId);
     } catch (reason) {
+      if (token !== requestToken.current) return;
       if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
+      else if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
       else setError("Unable to load projects");
     }
-  }, [companyId, loading]);
+  }, [companyId, loading, reloadCompanies]);
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
     setForm({ name: "", repositoryPath: "", worktreeRoot: "", repository: "", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: "", allowedProfileIds: "", leadProfile: "", developerProfile: "", reviewerProfile: "" });
     setFindings([]);
   }, [companyId]);
+
+  const visibleProjects = loadedCompanyId === companyId ? projects : [];
 
   const setField = (key: keyof typeof form, value: string): void => setForm((current) => ({ ...current, [key]: value }));
   const createProject = async (): Promise<void> => {
@@ -219,6 +231,7 @@ function ProjectsView(): ReactElement {
       });
       await reload();
     } catch (reason) {
+      if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
       setError(reason instanceof Error ? reason.message : "Project configuration failed");
       if (reason instanceof Error && "findings" in reason) setFindings((reason as Error & { findings?: Array<{ field: string; message: string }> }).findings ?? []);
     }
@@ -226,7 +239,7 @@ function ProjectsView(): ReactElement {
   const changeStatus = async (projectId: string, status: "activate" | "pause" | "archive"): Promise<void> => {
     setError(""); setFindings([]);
     try { await readJson(`/api/projects/${projectId}/${status}`, { method: "POST", body: "{}" }); await reload(); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Project update failed"); if (reason instanceof Error && "findings" in reason) setFindings((reason as Error & { findings?: Array<{ field: string; message: string }> }).findings ?? []); }
+    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Project update failed"); if (reason instanceof Error && "findings" in reason) setFindings((reason as Error & { findings?: Array<{ field: string; message: string }> }).findings ?? []); }
   };
   return (
     <ApplicationFrame title="Projects">
@@ -238,7 +251,7 @@ function ProjectsView(): ReactElement {
             {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
             {findings.length ? <ul className="mt-3 space-y-1 text-xs text-rose-700">{findings.map((item, index) => <li key={`${item.field}-${index}`}>{item.field}: {item.message}</li>)}</ul> : null}
           </section>
-          <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Configured projects</span><span className="text-[11px] text-muted-foreground">Profiles: {profiles.length}</span></div><div className="divide-y divide-border/70 border-y border-border/70">{projects.map((project) => <article className="py-3" key={project.id}><div className="flex flex-wrap items-center justify-between gap-2"><div><span className="text-[13px] font-medium">{project.name}</span><span className="ml-2 text-[11px] text-muted-foreground">{project.status} · revision {project.configurationRevision}</span></div><div className="flex gap-1.5">{project.status === "draft" ? <Button size="sm" onClick={() => void changeStatus(project.id, "activate")}>Activate</Button> : null}{project.status === "active" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "pause")}>Pause</Button> : null}{project.status !== "archived" && project.status !== "draft" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "archive")}>Archive</Button> : null}<a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></div><div className="mt-2 grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Base {project.baseBranch}</span><span>Target {project.targetBranch}</span></div></article>)}{!loading && currentCompany && projects.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">No projects configured.</div> : null}</div></section>
+          <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Configured projects</span><span className="text-[11px] text-muted-foreground">Profiles: {profiles.length}</span></div><div className="divide-y divide-border/70 border-y border-border/70">{visibleProjects.map((project) => <article className="py-3" key={project.id}><div className="flex flex-wrap items-center justify-between gap-2"><div><span className="text-[13px] font-medium">{project.name}</span><span className="ml-2 text-[11px] text-muted-foreground">{project.status} · revision {project.configurationRevision}</span></div><div className="flex gap-1.5">{project.status === "draft" ? <Button size="sm" onClick={() => void changeStatus(project.id, "activate")}>Activate</Button> : null}{project.status === "active" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "pause")}>Pause</Button> : null}{project.status !== "archived" && project.status !== "draft" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "archive")}>Archive</Button> : null}<a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></div><div className="mt-2 grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Base {project.baseBranch}</span><span>Target {project.targetBranch}</span></div></article>)}{!loading && currentCompany && loadedCompanyId === companyId && visibleProjects.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">No projects configured.</div> : null}</div></section>
         </div>
       </div>
     </ApplicationFrame>
@@ -255,10 +268,11 @@ async function fileAsImage(file: File): Promise<{ filename: string; mimeType: st
 }
 
 function TasksView(): ReactElement {
-  const { currentCompany, loading, user, error: companyError } = useCompanyContext();
+  const { currentCompany, loading, user, error: companyError, reloadCompanies } = useCompanyContext();
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [tasks, setTasks] = useState<ApiTask[]>([]);
-  const [selected, setSelected] = useState<ApiTask>();
+  const [loadedCompanyId, setLoadedCompanyId] = useState("");
+  const [selectedState, setSelected] = useState<ApiTask>();
   const [projectId, setProjectId] = useState("");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
@@ -270,10 +284,11 @@ function TasksView(): ReactElement {
   const requestToken = useRef(0);
   const companyId = currentCompany?.id ?? "";
 
-  useEffect(() => { selectedRef.current = selected; }, [selected]);
+  useEffect(() => { selectedRef.current = selectedState; }, [selectedState]);
 
   const reload = useCallback(async (): Promise<void> => {
     const token = ++requestToken.current;
+    setLoadedCompanyId("");
     setProjects([]); setTasks([]); setError("");
     if (!companyId || loading) return;
     try {
@@ -288,11 +303,14 @@ function TasksView(): ReactElement {
       const nextSelected = routeTaskId ? taskResult.tasks.find((task) => task.id === routeTaskId) : selectedRef.current ? taskResult.tasks.find((task) => task.id === selectedRef.current!.id) : undefined;
       setSelected(nextSelected);
       setDetailNotFound(Boolean(routeTaskId) && !nextSelected);
+      setLoadedCompanyId(companyId);
     } catch (reason) {
+      if (token !== requestToken.current) return;
       if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
+      else if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
       else setError("Unable to load tasks");
     }
-  }, [companyId, loading]);
+  }, [companyId, loading, reloadCompanies]);
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
     selectedRef.current = undefined;
@@ -304,7 +322,11 @@ function TasksView(): ReactElement {
     return () => events.close();
   }, [reload]);
 
-  const availableProjects = projects.filter((project) => project.companyId === companyId && project.status === "active");
+  const scopeLoaded = loadedCompanyId === companyId;
+  const visibleProjects = scopeLoaded ? projects : [];
+  const visibleTasks = scopeLoaded ? tasks : [];
+  const selected = scopeLoaded ? selectedState : undefined;
+  const availableProjects = visibleProjects.filter((project) => project.companyId === companyId && project.status === "active");
   const selectTask = (task: ApiTask): void => { setSelected(task); selectedRef.current = task; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`/tasks/${encodeURIComponent(task.id)}`, companyId)); };
   const create = async (): Promise<void> => {
     if (!companyId || currentCompany?.status !== "active") return;
@@ -312,21 +334,21 @@ function TasksView(): ReactElement {
     try {
       const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, idempotencyKey: crypto.randomUUID() }) });
       setTitle(""); setDescription(""); setImages([]); selectedRef.current = result; setSelected(result); await reload();
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to create task"); }
+    } catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to create task"); }
     finally { setBusy(false); }
   };
   const startPlanning = async (): Promise<void> => {
     if (!selected) return;
     setBusy(true); setError("");
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); selectedRef.current = updated; setSelected(updated); await reload(); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
+    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
     finally { setBusy(false); }
   };
   const planAction = async (path: "request-supplemental-review" | "approve-plan" | "reject-plan" | "start-development" | "retry-development" | "cancel-development" | "review-delivery" | "repair-delivery" | "record-delivery-decision", note?: string): Promise<void> => {
     if (!selected) return;
     setBusy(true); setError("");
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/${path}`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision, ...(note ? { note } : {}) }) }); selectedRef.current = updated; setSelected(updated); await reload(); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to update the plan"); }
+    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to update the plan"); }
     finally { setBusy(false); }
   };
 
@@ -342,7 +364,7 @@ function TasksView(): ReactElement {
             {currentCompany?.status === "active" ? <Button className="mt-3 w-full" onClick={() => void create()} disabled={busy || !companyId || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button> : null}
             {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
           </section>
-          <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Board</span><span className="text-[11px] text-muted-foreground">Read-only state</span></div><div className="grid gap-3 md:grid-cols-4 xl:grid-cols-7">{(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "delivery_blocked"] as const).map((phase) => <div className="border border-border/70" key={phase}><div className="flex h-8 items-center justify-between border-b border-border/70 px-3 text-[11px] font-semibold text-muted-foreground"><span>{phase === "ready_for_development" ? "Ready" : phase === "delivery_ready" ? "Delivered" : phase === "reviewing_delivery" ? "Reviewing" : phase === "repair_required" ? "Repair" : phase === "delivery_reviewed" ? "Reviewed" : phase === "delivery_blocked" ? "Blocked" : phase[0]!.toUpperCase() + phase.slice(1)}</span><span>{tasks.filter((task) => task.phase === phase).length}</span></div><div className="divide-y divide-border/70">{tasks.filter((task) => task.phase === phase).map((task) => <button className="block w-full px-3 py-3 text-left text-xs hover:bg-muted/40" key={task.id} onClick={() => selectTask(task)}><span className="block font-medium">{task.title}</span><span className="mt-1 block text-[11px] text-muted-foreground">{task.pendingAction}</span></button>)}</div></div>)}</div>
+          <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Board</span><span className="text-[11px] text-muted-foreground">Read-only state</span></div><div className="grid gap-3 md:grid-cols-4 xl:grid-cols-7">{(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "delivery_blocked"] as const).map((phase) => <div className="border border-border/70" key={phase}><div className="flex h-8 items-center justify-between border-b border-border/70 px-3 text-[11px] font-semibold text-muted-foreground"><span>{phase === "ready_for_development" ? "Ready" : phase === "delivery_ready" ? "Delivered" : phase === "reviewing_delivery" ? "Reviewing" : phase === "repair_required" ? "Repair" : phase === "delivery_reviewed" ? "Reviewed" : phase === "delivery_blocked" ? "Blocked" : phase[0]!.toUpperCase() + phase.slice(1)}</span><span>{visibleTasks.filter((task) => task.phase === phase).length}</span></div><div className="divide-y divide-border/70">{visibleTasks.filter((task) => task.phase === phase).map((task) => <button className="block w-full px-3 py-3 text-left text-xs hover:bg-muted/40" key={task.id} onClick={() => selectTask(task)}><span className="block font-medium">{task.title}</span><span className="mt-1 block text-[11px] text-muted-foreground">{task.pendingAction}</span></button>)}</div></div>)}</div>
             {detailNotFound ? <div className="mt-4 border border-border/70 p-4 text-xs text-muted-foreground">Task not found for this company.</div> : null}
             {selected ? <article className="mt-4 border border-border/70"><div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 px-3 py-2"><div><span className="text-[13px] font-semibold">{selected.title}</span><span className="ml-2 text-[11px] text-muted-foreground">{selected.phase} · revision {selected.revision}</span></div><div className="flex flex-wrap gap-2">{selected.allowedCommands.includes("start_planning") ? <Button size="sm" onClick={() => void startPlanning()} disabled={busy}>{busy ? "Planning…" : "Start planning"}</Button> : null}{selected.allowedCommands.includes("request_supplemental_review") ? <Button size="sm" variant="outline" onClick={() => void planAction("request-supplemental-review")} disabled={busy}>Request review</Button> : null}{selected.allowedCommands.includes("approve_plan") ? <Button size="sm" onClick={() => void planAction("approve-plan", "Approved final plan")} disabled={busy}>Approve plan</Button> : null}{selected.allowedCommands.includes("reject_plan") ? <Button size="sm" variant="outline" onClick={() => void planAction("reject-plan", "Please revise the plan")} disabled={busy}>Request changes</Button> : null}{selected.allowedCommands.includes("start_development") ? <Button size="sm" onClick={() => void planAction("start-development")} disabled={busy}>{busy ? "Executing…" : "Start development"}</Button> : null}{selected.allowedCommands.includes("retry_development") ? <Button size="sm" onClick={() => void planAction("retry-development")} disabled={busy}>{busy ? "Retrying…" : "Retry development"}</Button> : null}{selected.allowedCommands.includes("cancel_development") ? <Button size="sm" variant="outline" onClick={() => void planAction("cancel-development")} disabled={busy}>Cancel development</Button> : null}{selected.allowedCommands.includes("review_delivery") ? <Button size="sm" onClick={() => void planAction("review-delivery")} disabled={busy}>{busy ? "Reviewing…" : "Review delivery"}</Button> : null}{selected.allowedCommands.includes("repair_delivery") ? <Button size="sm" onClick={() => void planAction("repair-delivery")} disabled={busy}>{busy ? "Repairing…" : "Repair delivery"}</Button> : null}{selected.allowedCommands.includes("record_delivery_decision") ? <Button size="sm" variant="outline" onClick={() => void planAction("record-delivery-decision", "Member decision recorded")} disabled={busy}>Record decision</Button> : null}</div></div><div className="grid gap-4 p-3 text-xs sm:grid-cols-[minmax(0,1fr)_220px]"><div className="min-w-0"><pre className="whitespace-pre-wrap font-sans leading-5">{selected.description}</pre>{selected.images.length ? <div className="mt-4 flex flex-wrap gap-2">{selected.images.map((image) => <a className="border border-border px-2 py-1 text-[11px] text-muted-foreground hover:text-foreground" key={image.artifactId} href={`/api/tasks/${selected.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer">{image.filename}</a>)}</div> : null}{selected.leadOutput ? <div className="mt-4 border-t border-border/70 pt-3"><div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold">{selected.leadOutput.kind === "plan" ? "Lead plan" : "Decision blocker"}</span><span className="text-[11px] text-muted-foreground">{selected.leadOutput.summary}</span></div>{selected.leadOutput.content.kind === "plan" ? <><p className="mb-2 whitespace-pre-wrap">{selected.leadOutput.content.compatibilityAnalysis}</p><ol className="list-decimal space-y-2 pl-5">{selected.leadOutput.content.steps.map((step) => <li key={step.number}><div>{step.instruction}</div><div className="text-[11px] text-muted-foreground">Verify: {step.verification}</div></li>)}</ol><p className="mt-3 whitespace-pre-wrap">{selected.leadOutput.content.verificationStrategy}</p></> : <div className="space-y-2"><p className="whitespace-pre-wrap">{selected.leadOutput.content.evidence}</p><div><span className="font-medium">Question: </span>{selected.leadOutput.content.question}</div><div><span className="font-medium">Next: </span>{selected.leadOutput.content.nextAction}</div></div>}</div> : null}{selected.developerExecution ? <div className="mt-4 border-t border-border/70 pt-3"><div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold">Developer delivery</span><span className="text-[11px] text-muted-foreground">{selected.developerExecution.status}</span></div><div>{selected.developerExecution.deliverySummary ?? selected.pendingAction}</div><div className="mt-2 text-[11px] text-muted-foreground">{selected.developerExecution.branchName} · {selected.developerExecution.resultCommit ?? "no commit yet"}</div></div> : null}{selected.deliveryReview ? <div className="mt-4 border-t border-border/70 pt-3"><div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold">Delivery review</span><span className="text-[11px] text-muted-foreground">{selected.deliveryReview.outcome}</span></div><div>{selected.deliveryReview.summary}</div><div className="mt-2 space-y-2">{selected.deliveryReview.findings.map((finding) => <div className="border-l-2 border-border pl-2" key={finding.id}><div className="font-medium">{finding.severity} · {finding.disposition}</div><div className="text-[11px] text-muted-foreground">{finding.rationale}</div></div>)}</div></div> : null}</div><div className="border-l border-border/70 pl-3"><div className="mb-2 text-[11px] text-muted-foreground">Owner</div><div>{selected.owner}</div><div className="mb-2 mt-3 text-[11px] text-muted-foreground">Next action</div><div>{selected.pendingAction ?? "None"}</div><div className="mb-2 mt-3 text-[11px] text-muted-foreground">Timeline</div><div className="space-y-2">{selected.timeline.map((entry) => <div key={entry.id}><div>{entry.eventType}</div><div className="text-[11px] text-muted-foreground">revision {entry.revision}</div></div>)}</div></div></div></article> : null}
           </section>

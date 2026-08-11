@@ -332,6 +332,9 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
         if (error instanceof ProjectFailure) {
           return reply.code(error.statusCode).send({ error: error.publicMessage, findings: error.findings });
         }
+        if (error instanceof AuthFailure) {
+          return sendAuthError(reply, error);
+        }
         return reply.code(400).send({ error: "Project request failed" });
       };
       const projectInput = (request: { body: unknown }): ProjectInput => {

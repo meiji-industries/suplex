@@ -428,6 +428,12 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
         const body = requestBody(request);
         try { return reply.send(await tasks.rejectPlan(user.id, request.params.taskId, typeof body.expectedRevision === "number" ? body.expectedRevision : Number(body.expectedRevision), typeof body.note === "string" ? body.note : undefined)); } catch (error) { return sendTaskError(reply, error); }
       });
+      app.post<{ Params: { taskId: string } }>("/api/tasks/:taskId/start-development", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        const body = requestBody(request);
+        try { return reply.send(await tasks.startDevelopment(user.id, request.params.taskId, typeof body.expectedRevision === "number" ? body.expectedRevision : Number(body.expectedRevision))); } catch (error) { return sendTaskError(reply, error); }
+      });
       app.get<{ Params: { taskId: string; artifactId: string } }>("/api/tasks/:taskId/images/:artifactId", async (request, reply) => {
         const user = await requireUser(request, reply);
         if (!user) return reply;

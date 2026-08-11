@@ -43,6 +43,13 @@
       "when": 1786426000000,
       "tag": "0005_plan_governance",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786426100000,
+      "tag": "0006_developer_execution",
+      "breakpoints": true
     }
   ]
 }

@@ -4,9 +4,9 @@ import { PlanMaterialCategorySchema, type PlanMaterialCategory } from "../plan-g
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
-export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development"]);
+export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "delivery_blocked"]);
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
-export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "record_progress"]);
+export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "record_progress", "start_development"]);
 export const IssuePlanDecisionSchema = z.enum(["approve", "reject"]);
 
 export const IssueContinuationStateSchema = z.object({
@@ -30,6 +30,19 @@ export const IssueContinuationStateSchema = z.object({
   supplementalReviewUsed: z.boolean().optional(),
   supplementalReviewArtifactId: durableId.nullable().optional(),
   decisionId: durableId.nullable().optional(),
+  developerExecutionId: durableId.nullable().optional(),
+  developerSessionRef: durableId.nullable().optional(),
+  worktreePath: z.string().max(1_000).nullable().optional(),
+  branchName: z.string().max(256).nullable().optional(),
+  targetBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
+  currentStep: z.number().int().positive().nullable().optional(),
+  resultCommit: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
+  resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
+  dirtyState: z.enum(["clean", "dirty"]).nullable().optional(),
+  deliveryArtifactId: durableId.nullable().optional(),
+  developerEvidenceArtifactId: durableId.nullable().optional(),
+  deliverySummary: z.string().max(2_000).nullable().optional(),
+  developerOutcome: z.enum(["completed", "blocked"]).nullable().optional(),
 });
 
 export const IssueWorkflowInputWithContinuationSchema = z.object({
@@ -76,6 +89,19 @@ export const IssueWorkflowStateSchema = z.object({
   supplementalReviewUsed: z.boolean().optional(),
   supplementalReviewArtifactId: durableId.nullable().optional(),
   decisionId: durableId.nullable().optional(),
+  developerExecutionId: durableId.nullable().optional(),
+  developerSessionRef: durableId.nullable().optional(),
+  worktreePath: z.string().max(1_000).nullable().optional(),
+  branchName: z.string().max(256).nullable().optional(),
+  targetBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
+  currentStep: z.number().int().positive().nullable().optional(),
+  resultCommit: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
+  resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
+  dirtyState: z.enum(["clean", "dirty"]).nullable().optional(),
+  deliveryArtifactId: durableId.nullable().optional(),
+  developerEvidenceArtifactId: durableId.nullable().optional(),
+  deliverySummary: z.string().max(2_000).nullable().optional(),
+  developerOutcome: z.enum(["completed", "blocked"]).nullable().optional(),
 });
 
 export const StartPlanningInputSchema = z.object({
@@ -171,10 +197,39 @@ export interface PlanDecisionActivityInput {
   note: string;
 }
 
+export interface DeveloperExecutionActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  projectId: string;
+  projectRevisionId: string;
+  planRevision: number;
+  roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
+  leadSessionRef: string;
+  leadOutputArtifactId: string;
+}
+
+export interface DeveloperExecutionResult {
+  developerExecutionId: string;
+  developerSessionRef: string;
+  worktreePath: string;
+  branchName: string;
+  targetBaseSha: string;
+  currentStep: number | null;
+  resultCommit: string | null;
+  resultTree: string | null;
+  dirtyState: "clean" | "dirty";
+  deliveryArtifactId: string;
+  evidenceArtifactId: string;
+  deliverySummary: string;
+  outcome: "completed" | "blocked";
+}
+
 export interface IssueActivities {
   projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState>;
   runLeadPlanning(input: LeadPlanningActivityInput): Promise<LeadPlanningResult>;
   runSupplementalReview(input: SupplementalReviewActivityInput): Promise<SupplementalReviewResult>;
   consolidateLeadPlan(input: ConsolidateLeadPlanActivityInput): Promise<LeadPlanningResult>;
   recordPlanDecision(input: PlanDecisionActivityInput): Promise<{ decisionId: string }>;
+  runDeveloperExecution(input: DeveloperExecutionActivityInput): Promise<DeveloperExecutionResult>;
 }

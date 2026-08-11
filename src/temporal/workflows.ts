@@ -17,6 +17,9 @@ const { runLeadPlanning } = proxyActivities<IssueActivities>({
 const { runSupplementalReview, consolidateLeadPlan } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
 });
+const { runDeveloperExecution } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "60 minutes",
+});
 const { recordPlanDecision } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
 });
@@ -43,6 +46,7 @@ export const recordProgressUpdate = defineUpdate<IssueWorkflowState, [RecordProg
 export const requestSupplementalReviewUpdate = defineUpdate<IssueWorkflowState, [PlanCommandInput]>("requestSupplementalReview");
 export const approvePlanUpdate = defineUpdate<IssueWorkflowState, [PlanCommandInput]>("approvePlan");
 export const rejectPlanUpdate = defineUpdate<IssueWorkflowState, [PlanCommandInput]>("rejectPlan");
+export const startDevelopmentUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("startDevelopment");
 const leadPlanningPatch = "forge-lead-planning-v1";
 const planGovernancePatch = "forge-plan-governance-v1";
 
@@ -105,7 +109,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       if (patched(planGovernancePatch)) {
         state = leadResult.material
           ? IssueWorkflowStateSchema.parse({ ...state, phase: "approval", owner: "human", allowedCommands: ["approve_plan", "reject_plan", ...(validatedInput.supplementalReview ? ["request_supplemental_review" as const] : [])], pendingAction: "Approve final plan" })
-          : IssueWorkflowStateSchema.parse({ ...state, phase: "ready_for_development", owner: "lead", allowedCommands: [], pendingAction: null });
+          : IssueWorkflowStateSchema.parse({ ...state, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development"], pendingAction: "Start development" });
       }
       assertPayloadWithinLimit("Issue Workflow result", state);
       await projectIssueState(state);
@@ -143,11 +147,28 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     assertPayloadWithinLimit("plan approval command", rawInput);
     const command = validatePlanCommand(rawInput);
     const decision = await recordPlanDecision({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, planRevision: state.planRevision ?? state.revision, actorUserId: command.actorUserId, decision: "approve", note: command.note ?? "Approved final plan" });
-    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: [], pendingAction: null, lastEventId: `${state.workflowId}:${state.revision + 1}`, decisionId: decision.decisionId });
+    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development"], pendingAction: "Start development", lastEventId: `${state.workflowId}:${state.revision + 1}`, decisionId: decision.decisionId });
     if (shouldContinueAsNew(state.revision)) continuationRequested = true;
     await projectIssueState(state);
     return state;
   }, { validator(rawInput) { validatePlanCommand(rawInput); if (!state.planMaterial) throw new Error("Routine plans do not require approval"); } });
+  setHandler(startDevelopmentUpdate, async (rawInput) => {
+    assertPayloadWithinLimit("start development command", rawInput);
+    const command = StartPlanningInputSchema.parse(rawInput);
+    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "development", owner: "lead", allowedCommands: [], pendingAction: "Developer execution", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    await projectIssueState(state);
+    const result = await runDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId! });
+    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: [], pendingAction: result.outcome === "completed" ? "Lead delivery review" : "Resolve Developer blocker", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, worktreePath: result.worktreePath, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome });
+    if (shouldContinueAsNew(state.revision)) continuationRequested = true;
+    await projectIssueState(state);
+    void command;
+    return state;
+  }, { validator(rawInput) {
+    const command = StartPlanningInputSchema.parse(rawInput);
+    if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
+    if (state.phase !== "ready_for_development") throw new Error("Development can only start after plan approval");
+    if (!state.planMaterial || !state.leadOutputArtifactId || !state.leadSessionRef) throw new Error("An approved material Lead plan is required before development");
+  } });
   setHandler(rejectPlanUpdate, async (rawInput) => {
     assertPayloadWithinLimit("plan revision command", rawInput);
     validatePlanCommand(rawInput);

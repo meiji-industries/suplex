@@ -8,6 +8,7 @@ import { expect, test } from "vitest";
 
 import { ArtifactStore } from "../src/artifacts.js";
 import { AgentService, LeadOutputSchema, runCodexProcess, type LeadProcessRunner, type SessionStore } from "../src/codex-lead.js";
+import { DeveloperService } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 
@@ -16,7 +17,9 @@ const execFileAsync = promisify(execFile);
 async function fixture(model = "gpt-5-codex"): Promise<{ root: string; database: ForgeDatabase; config: ReturnType<typeof createTestConfig>; briefId: string }> {
   const root = await mkdtemp(join(tmpdir(), "forge-codex-lead-test-"));
   const repositoryPath = join(root, "repo");
+  const worktreeRoot = join(root, "worktrees");
   await mkdir(repositoryPath, { recursive: true });
+  await mkdir(worktreeRoot, { recursive: true });
   await writeFile(join(repositoryPath, "README.md"), "fixture\n");
   await execFileAsync("git", ["init"], { cwd: repositoryPath });
   await execFileAsync("git", ["config", "user.email", "forge-test@example.invalid"], { cwd: repositoryPath });
@@ -33,7 +36,7 @@ async function fixture(model = "gpt-5-codex"): Promise<{ root: string; database:
     db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company_1', 'Company One', 'active', ?)").run(now);
     db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES ('profile_1', 'Lead', 'codex', ?, 'medium', 'standard', 1, ?, ?)").run(model, now, now);
     db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES ('project_1', 'company_1', 'Project One', ?, ?, 'acme/forge', 'main', 'main', 'pnpm install', 'pnpm test', '[]', '[\"profile_1\"]', '{\"lead\":\"profile_1\"}', 'active', 'revision_1', ?, ?)").run(repositoryPath, join(root, "worktrees"), now, now);
-    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, actor_user_id, created_at) VALUES ('revision_1', 'project_1', 1, 'identity_1', '{\"repository\":\"acme/forge\"}', 'user_1', ?)").run(now);
+    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, actor_user_id, created_at) VALUES ('revision_1', 'project_1', 1, 'identity_1', ?, 'user_1', ?)").run(JSON.stringify({ repository: "acme/forge", repositoryPath, worktreeRoot, targetBranch: "main" }), now);
     db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company_1', ?, ?, ?, ?, ?, ?, ?)").run(brief.id, brief.kind, brief.filename, brief.mimeType, brief.byteSize, brief.sha256, brief.storagePath, brief.createdAt);
     db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task_1', 'company_1', 'project_1', 'Fixture task', ?, '[]', '{\"lead\":\"profile_1\"}', 0, 'workflow-test-issue-task_1', 'revision_1', 'idempotency_1', ?, ?)").run(brief.id, now, now);
   });
@@ -156,6 +159,68 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
     await rm(value.root, { recursive: true, force: true });
   }
 });
+
+test("Developer execution creates an isolated delivery commit and stores an exact report", async () => {
+  const value = await fixture();
+  const artifactStore = new ArtifactStore(value.config.artifactRoot);
+  const sessions = new Map<string, string>();
+  const sessionStore: SessionStore = { async create(raw) { sessions.set("session_developer", raw); return "session_developer"; }, async read(ref) { return sessions.get(ref) ?? ""; } };
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "approved.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "A bounded developer fixture", reproduction: null, rootCauseAnalysis: "The fixture needs a marker.", steps: [{ number: 1, instruction: "Add the fixture marker", verification: "The marker is present" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the marker and commit.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
+  const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
+  value.database.authTransaction((db) => {
+    const now = new Date().toISOString();
+    for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_lead_for_developer', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
+    db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_lead_for_developer', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_lead_for_developer', 1, 'plan', ?, ?, 'session_lead', 'A bounded developer fixture', ?)").run(plan.id, leadEvidence.id, now);
+  });
+  const runner: LeadProcessRunner = async (invocation) => {
+    await invocation.onStart(4601, "2026-08-11T00:00:00.000Z");
+    await writeFile(join(invocation.cwd, "MARKER.md"), "developer delivery\n");
+    await execFileAsync("git", ["add", "MARKER.md"], { cwd: invocation.cwd });
+    await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Deliver fixture marker"], { cwd: invocation.cwd });
+    const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
+    const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
+    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer-session" }));
+    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery", summary: "Marker delivered", steps: [{ number: 1, status: "completed", filesChanged: ["MARKER.md"], commandsRun: ["git add MARKER.md", "git commit"], testResults: ["Marker inspected"], notes: "Committed locally." }], authorizedStepsNotCompleted: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
+    return { exitCode: 0, stderr: "" };
+  };
+  try {
+    const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore });
+    const result = await service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id });
+    expect(result).toMatchObject({ outcome: "completed", developerSessionRef: "session_developer", branchName: "forge/issue/task_1", targetBaseSha: expect.any(String), dirtyState: "clean" });
+    expect(result.developerSessionRef).not.toBe("session_lead");
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, attempt, session_ref, current_step, result_commit, dirty_state FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toMatchObject({ status: "completed", attempt: 1, session_ref: "session_developer", current_step: 1, dirty_state: "clean" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Developer executes a controlled fixture plan in a fresh issue worktree", async () => {
+  const value = await fixture(process.env.FORGE_CODEX_REAL_MODEL ?? "gpt-5.6-luna");
+  const artifactStore = new ArtifactStore(value.config.artifactRoot);
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "approved-real.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Create one owner-controlled proof marker", reproduction: null, rootCauseAnalysis: "The fixture intentionally lacks a marker.", steps: [{ number: 1, instruction: "Create REAL_DEVELOPER_PROOF.md containing exactly the text forge developer proof, then commit the file locally.", verification: "REAL_DEVELOPER_PROOF.md exists with the exact text and the worktree is clean." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No provider or deployment operation is authorized.", verificationStrategy: "Read the file, inspect git status, and report the exact commit and tree.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
+  const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead-real.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\",\"session\":\"real-lead\"}\n") });
+  value.database.authTransaction((db) => {
+    const now = new Date().toISOString();
+    for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_real_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'completed', 1, 'session_real_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
+    db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_real_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_real_lead', 1, 'plan', ?, ?, 'session_real_lead', 'Create one owner-controlled proof marker', ?)").run(plan.id, leadEvidence.id, now);
+  });
+  try {
+    const service = new DeveloperService(value.database, value.config);
+    const result = await service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: "session_real_lead", leadOutputArtifactId: plan.id });
+    expect(result.outcome).toBe("completed");
+    expect(result.developerSessionRef).toMatch(/^session_[a-f0-9]{24}$/);
+    expect(result.developerSessionRef).not.toBe("session_real_lead");
+    expect(result.resultCommit).toMatch(/^[a-f0-9]{40,64}$/);
+    expect(result.dirtyState).toBe("clean");
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, session_ref, result_commit, dirty_state FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toMatchObject({ status: "completed", session_ref: result.developerSessionRef, result_commit: result.resultCommit, dirty_state: "clean" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+}, 300_000);
 
 test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Codex produces a Lead result in the isolated fixture repository", async () => {
   const value = await fixture(process.env.FORGE_CODEX_REAL_MODEL ?? "gpt-5.6-luna");

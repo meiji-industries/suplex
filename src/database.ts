@@ -39,7 +39,7 @@ export interface IssueProjectionRecord {
   projectId: string;
   workflowId: string;
   revision: number;
-  phase: "backlog" | "planning" | "approval" | "ready_for_development";
+  phase: "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "delivery_blocked";
   owner: "human" | "lead";
   allowedCommands: string[];
   pendingAction: string | null;
@@ -179,9 +179,20 @@ export class ForgeDatabase {
 
   projectIssueState(state: IssueProjectionRecord): void {
     this.db.transaction(() => {
+      const updatedAt = new Date().toISOString();
+      this.db.prepare(`INSERT OR IGNORE INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        state.lastEventId,
+        state.taskId,
+        state.companyId,
+        state.workflowId,
+        state.revision,
+        state.phase === "backlog" ? "task_created" : "planning_started",
+        JSON.stringify({ revision: state.revision }),
+        updatedAt,
+      );
       const current = this.db.prepare("SELECT revision FROM forge_issue_projections WHERE task_id = ?").get(state.taskId) as { revision: number } | undefined;
       if (current && current.revision > state.revision) return;
-      const updatedAt = new Date().toISOString();
       this.db.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, project_id = excluded.project_id, workflow_id = excluded.workflow_id, revision = excluded.revision, phase = excluded.phase, owner = excluded.owner, allowed_commands_json = excluded.allowed_commands_json, pending_action = excluded.pending_action, updated_at = excluded.updated_at, last_event_id = excluded.last_event_id
@@ -197,17 +208,6 @@ export class ForgeDatabase {
         state.pendingAction,
         updatedAt,
         state.lastEventId,
-      );
-      this.db.prepare(`INSERT OR IGNORE INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        state.lastEventId,
-        state.taskId,
-        state.companyId,
-        state.workflowId,
-        state.revision,
-        state.phase === "backlog" ? "task_created" : "planning_started",
-        JSON.stringify({ revision: state.revision }),
-        updatedAt,
       );
       this.db.prepare(`INSERT INTO forge_issue_governance (task_id, company_id, plan_revision, plan_material, material_categories_json, supplemental_review_used, supplemental_review_artifact_id, decision_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)

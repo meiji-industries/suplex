@@ -5,18 +5,22 @@ import type { ForgeConfig } from "../config.js";
 import { ArtifactStore } from "../artifacts.js";
 import { redact } from "../logging.js";
 import { AgentService } from "../codex-lead.js";
+import { DeveloperService } from "../codex-developer.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { IssueWorkflowStateSchema, type IssueActivities, type IssueWorkflowState } from "./issue-contracts.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
 
 export interface ActivityOptions {
   agent?: Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan">>;
+  developer?: Pick<DeveloperService, "run">;
 }
 
 export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): ProbeActivities & IssueActivities {
   const logger = new StructuredLogger();
   const defaultAgent = new AgentService(database, config);
+  const defaultDeveloper = new DeveloperService(database, config);
   const agent = options.agent;
+  const developer = options.developer ?? defaultDeveloper;
   return {
     async recordProbeStarted(input: ProbeWorkflowInput): Promise<ProbeWorkflowState> {
       const validatedInput = ProbeWorkflowInputSchema.parse(input);
@@ -47,6 +51,25 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         allowedCommands: state.allowedCommands,
         pendingAction: state.pendingAction,
         lastEventId: state.lastEventId,
+        ...(state.planRevision !== undefined ? { planRevision: state.planRevision } : {}),
+        ...(state.planMaterial !== undefined ? { planMaterial: state.planMaterial } : {}),
+        ...(state.materialCategories !== undefined ? { materialCategories: state.materialCategories } : {}),
+        ...(state.supplementalReviewUsed !== undefined ? { supplementalReviewUsed: state.supplementalReviewUsed } : {}),
+        ...(state.supplementalReviewArtifactId !== undefined ? { supplementalReviewArtifactId: state.supplementalReviewArtifactId } : {}),
+        ...(state.decisionId !== undefined ? { decisionId: state.decisionId } : {}),
+        ...(state.developerExecutionId !== undefined ? { developerExecutionId: state.developerExecutionId } : {}),
+        ...(state.developerSessionRef !== undefined ? { developerSessionRef: state.developerSessionRef } : {}),
+        ...(state.worktreePath !== undefined ? { worktreePath: state.worktreePath } : {}),
+        ...(state.branchName !== undefined ? { branchName: state.branchName } : {}),
+        ...(state.targetBaseSha !== undefined ? { targetBaseSha: state.targetBaseSha } : {}),
+        ...(state.currentStep !== undefined ? { currentStep: state.currentStep } : {}),
+        ...(state.resultCommit !== undefined ? { resultCommit: state.resultCommit } : {}),
+        ...(state.resultTree !== undefined ? { resultTree: state.resultTree } : {}),
+        ...(state.dirtyState !== undefined ? { dirtyState: state.dirtyState } : {}),
+        ...(state.deliveryArtifactId !== undefined ? { deliveryArtifactId: state.deliveryArtifactId } : {}),
+        ...(state.developerEvidenceArtifactId !== undefined ? { developerEvidenceArtifactId: state.developerEvidenceArtifactId } : {}),
+        ...(state.deliverySummary !== undefined ? { deliverySummary: state.deliverySummary } : {}),
+        ...(state.developerOutcome !== undefined ? { developerOutcome: state.developerOutcome } : {}),
       });
       return state;
     },
@@ -58,6 +81,9 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     },
     async consolidateLeadPlan(input) {
       return (agent?.consolidateLeadPlan ?? defaultAgent.consolidateLeadPlan.bind(defaultAgent))(input);
+    },
+    async runDeveloperExecution(input) {
+      return developer.run(input);
     },
     async recordPlanDecision(input) {
       const actor = database.authQuery((db) => db.prepare("SELECT id, role, status FROM forge_users WHERE id = ?").get(input.actorUserId) as { id: string; role: string; status: string } | undefined);

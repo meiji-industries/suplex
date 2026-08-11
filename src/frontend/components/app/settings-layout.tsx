@@ -6,6 +6,7 @@ import { Dialog } from "../ui/dialog.js";
 import { Input } from "../ui/input.js";
 import { companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
 import { useOptionalCompanyContext } from "./company-context.js";
+import { CompanySwitcher } from "./company-switcher.js";
 
 type SettingsNavItem = { label: string; href?: string; icon: LucideIcon };
 
@@ -117,7 +118,8 @@ export function SettingsLayout({ title, companyId, backHref, activeHref, content
         <main className="min-w-0 flex-1">
           <header className="flex h-12 items-center gap-3 border-b border-border/70 px-4 lg:px-6">
             <div className="lg:hidden"><SettingsMobileNavigation title={title} groups={groups} activeHref={activeHref} backHref={backHref} /></div>
-            <h1 className="text-lg font-semibold">{title}</h1>
+            <h1 className="min-w-0 truncate text-lg font-semibold">{title}</h1>
+            <div className="ml-auto min-w-0 w-52 max-w-[50%]"><CompanySwitcher /></div>
           </header>
           <div className={contentClassName}>{children}</div>
         </main>

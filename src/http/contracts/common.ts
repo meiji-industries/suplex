@@ -5,6 +5,7 @@ export const CompanyIdParamsSchema = z.object({ companyId: IdSchema });
 export const ProjectIdParamsSchema = z.object({ projectId: IdSchema });
 export const TaskIdParamsSchema = z.object({ taskId: IdSchema });
 export const UserIdParamsSchema = z.object({ userId: IdSchema });
+export const CredentialIdParamsSchema = z.object({ credentialId: IdSchema });
 export const TaskArtifactParamsSchema = z.object({ taskId: IdSchema, artifactId: IdSchema });
 export const CompanyStatusParamsSchema = z.object({ companyId: IdSchema, status: z.enum(["active", "paused", "archived"]) });
 
@@ -18,7 +19,7 @@ export const RegistrationVerificationBodySchema = z.object({ token: z.string().d
 export const AuthenticationVerificationBodySchema = z.object({ challengeId: z.string().default(""), response: z.unknown() });
 
 export const FindingSchema = z.object({ code: z.string(), field: z.string(), message: z.string() });
-export const ErrorResponseSchema = z.object({ error: z.string(), findings: z.array(FindingSchema).optional() });
+export const ErrorResponseSchema = z.object({ error: z.string(), code: z.string().optional(), findings: z.array(FindingSchema).optional() });
 
 export const HealthSnapshotResponseSchema = z.object({
   generatedAt: z.string(),
@@ -33,6 +34,10 @@ export const CompanyListResponseSchema = z.object({ companies: z.array(CompanyRe
 export const UserResponseSchema = AuthUserResponseSchema;
 export const UserListResponseSchema = z.object({ users: z.array(UserResponseSchema) });
 export const InvitationResponseSchema = z.object({ token: z.string(), kind: z.enum(["bootstrap", "user", "recovery"]), expiresAt: z.string(), user: AuthUserResponseSchema.optional() });
+export const InvitationSummaryResponseSchema = z.object({ id: z.string(), kind: z.enum(["bootstrap", "user", "recovery"]), displayName: z.string(), expiresAt: z.string(), status: z.enum(["active", "expired", "consumed", "replaced"]), createdAt: z.string() });
+export const InvitationSummaryListResponseSchema = z.object({ invitations: z.array(InvitationSummaryResponseSchema) });
+export const CredentialResponseSchema = z.object({ id: z.string(), userId: z.string(), credentialId: z.string(), createdAt: z.string(), revokedAt: z.string().optional() });
+export const CredentialListResponseSchema = z.object({ credentials: z.array(CredentialResponseSchema) });
 export const AuditEventResponseSchema = z.object({ id: z.string(), actorUserId: z.string().optional(), action: z.string(), targetUserId: z.string().optional(), companyId: z.string().optional(), metadata: z.record(z.string(), z.string()), createdAt: z.string() });
 export const AuditEventListResponseSchema = z.object({ events: z.array(AuditEventResponseSchema) });
 

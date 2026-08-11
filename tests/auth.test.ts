@@ -1,4 +1,5 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -157,6 +158,9 @@ test("administrator recovery revokes old administrator access and creates a fres
     expect(await value.auth.getUserBySession(oldAdmin.sessionToken)).toBeUndefined();
     const actions = value.auth.listAuditEvents(recovered.user.id).map((event) => event.action);
     expect(actions).toEqual(expect.arrayContaining(["recovery_invitation_created", "recovery_completed"]));
+    const recoveryAudit = value.auth.listAuditEvents(recovered.user.id).find((event) => event.action === "recovery_completed");
+    expect(recoveryAudit?.metadata).toMatchObject({ initiationMethod: "local-cli", installationId: "test-installation" });
+    expect(recoveryAudit?.metadata.invitationId).toBeTruthy();
   } finally {
     await closeFixture(value);
   }
@@ -176,6 +180,7 @@ test("company access is membership-scoped and membership authority is audited", 
     expect(otherMember.user.status).toBe("active");
 
     value.auth.addMembership(admin.user.id, member.user.id, companyA.id);
+    expect(() => value.auth.addMembership(admin.user.id, member.user.id, companyA.id)).toThrowError("Membership already exists");
     expect(value.auth.requireCompanyAccess(member.user.id, companyA.id)).toMatchObject({ id: companyA.id });
     expect(value.auth.listVisibleCompanies(member.user.id).map((company) => company.id)).toEqual([companyA.id]);
     expect(() => value.auth.requireCompanyAccess(member.user.id, companyB.id)).toThrowError("Not found");
@@ -184,6 +189,39 @@ test("company access is membership-scoped and membership authority is audited", 
     value.auth.removeMembership(admin.user.id, member.user.id, companyA.id);
     expect(() => value.auth.requireCompanyAccess(member.user.id, companyA.id)).toThrowError("Not found");
     expect(value.auth.listAuditEvents(admin.user.id).map((event) => event.action)).toEqual(expect.arrayContaining(["membership_added", "membership_removed", "user_invited"]));
+  } finally {
+    await closeFixture(value);
+  }
+});
+
+test("legacy sessions roll over in place without creating a second active session", async () => {
+  const value = await fixture();
+  try {
+    const invitation = value.auth.ensureBootstrapInvitation()!;
+    const admin = await enrollBootstrap(value.auth, invitation.token);
+    const legacyToken = "legacy-session-secret";
+    const now = new Date().toISOString();
+    const sessionsBeforeLegacyInsert = value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_sessions WHERE user_id = ?").get(admin.user.id));
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_sessions (id, token_hash, user_id, expires_at, created_at, revoked_at, token_version) VALUES (?, ?, ?, ?, ?, NULL, 0)").run("legacy-session", createHash("sha256").update(legacyToken).digest("hex"), admin.user.id, new Date(Date.now() + 86_400_000).toISOString(), now));
+
+    const replacement = value.auth.rolloverLegacySession(legacyToken);
+    expect(replacement).toMatch(/^session_v1_/);
+    expect(await value.auth.getUserBySession(legacyToken)).toMatchObject({ id: admin.user.id });
+    expect(await value.auth.getUserBySession(replacement!)).toMatchObject({ id: admin.user.id });
+    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_sessions WHERE user_id = ?").get(admin.user.id))).toEqual({ count: (sessionsBeforeLegacyInsert as { count: number }).count + 1 });
+    expect(value.database.authQuery((db) => db.prepare("SELECT token_version FROM forge_sessions WHERE id = 'legacy-session'").get())).toEqual({ token_version: 1 });
+  } finally {
+    await closeFixture(value);
+  }
+});
+
+test("legacy product-named usernames are normalized before they cross the auth boundary", async () => {
+  const value = await fixture();
+  try {
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('legacy-user', 'Legacy user', 'legacy@forge.local', 'member', 'active', ?, ?, 0)").run(new Date().toISOString(), new Date().toISOString()));
+    const reopened = new AuthService(value.database, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111" }), { webAuthn: fakeWebAuthn() });
+    expect(reopened.getUserForAuthority("legacy-user")?.username).toBe("user_v1_legacy-user");
+    expect(value.database.authQuery((db) => db.prepare("SELECT identity_version FROM forge_users WHERE id = 'legacy-user'").get())).toEqual({ identity_version: 1 });
   } finally {
     await closeFixture(value);
   }

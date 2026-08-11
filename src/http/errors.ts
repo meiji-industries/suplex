@@ -26,7 +26,7 @@ function isValidationError(error: unknown): error is { validation?: ValidationIs
 
 function sendDomainFailure(reply: FastifyReply, error: AuthFailure | ProjectFailure | TaskFailure): void {
   const body = error instanceof AuthFailure
-    ? { error: error.publicMessage }
+    ? { error: error.publicMessage, ...(error.code !== "auth_failure" ? { code: error.code } : {}) }
     : { error: error.publicMessage, findings: error.findings };
   reply.code(error.statusCode).send(body);
 }

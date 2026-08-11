@@ -16,6 +16,7 @@ import { z } from "zod";
 
 import type { ForgeConfig } from "./config.js";
 import { ForgeDatabase } from "./database.js";
+import { AuthRepository } from "./auth-repository.js";
 import {
   INVITATION_TOKEN_PATTERN,
   LEGACY_INVITATION_TOKEN_PATTERN,
@@ -157,16 +158,8 @@ const responseSchema = z.object({ id: z.string().min(1).max(512), type: z.litera
 const displayNameSchema = z.string().trim().min(1).max(120);
 const companyNameSchema = z.string().trim().min(1).max(120);
 
-const invitationFailure = (): AuthFailure => new AuthFailure("Invitation is invalid or expired");
-const passkeyFailure = (): AuthFailure => new AuthFailure("Passkey could not be verified");
-
-interface UserRow {
-  id: string;
-  display_name: string;
-  username: string;
-  role: UserRole;
-  status: UserStatus;
-}
+const invitationFailure = (): AuthFailure => new AuthFailure("Invitation is invalid or expired", 400, "invitation_invalid");
+const passkeyFailure = (): AuthFailure => new AuthFailure("Passkey could not be verified", 400, "passkey_invalid");
 
 interface InvitationRow {
   id: string;
@@ -176,40 +169,7 @@ interface InvitationRow {
   expires_at: string;
   consumed_at: string | null;
   replaced_at: string | null;
-}
-
-interface ChallengeRow {
-  id: string;
-  challenge: string;
-  kind: string;
-  invitation_id: string | null;
-  user_id: string | null;
-  expires_at: string;
-  consumed_at: string | null;
-}
-
-interface CredentialRow {
-  id: string;
-  user_id: string;
-  credential_id: string;
-  public_key: Buffer;
-  counter: number;
-  transports: string;
-}
-
-interface SessionRow extends UserRow {
-  expires_at: string;
-}
-
-interface CompanyRow {
-  id: string;
-  name: string;
-  status: "active" | "paused" | "archived";
-  created_at: string;
-}
-
-interface CountRow {
-  count: number;
+  metadata_json: string;
 }
 
 interface AuthServiceOptions {
@@ -284,15 +244,14 @@ function safeJson(value: unknown): string {
   return JSON.stringify(value) ?? "{}";
 }
 
-function publicUser(row: UserRow, companyIds: string[] = []): AuthUser {
-  return {
-    id: row.id,
-    displayName: row.display_name,
-    username: row.username,
-    role: row.role,
-    status: row.status,
-    companyIds,
-  };
+function safeMetadata(value: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+  } catch {
+    return {};
+  }
 }
 
 function parseResponse(value: unknown): RegistrationResponseJSON & AuthenticationResponseJSON {
@@ -304,6 +263,7 @@ function parseResponse(value: unknown): RegistrationResponseJSON & Authenticatio
 }
 
 export class AuthService {
+  private readonly repository: AuthRepository;
   private readonly now: () => Date;
   private readonly invitationTtlMs: number;
   private readonly sessionTtlMs: number;
@@ -313,6 +273,7 @@ export class AuthService {
   private readonly installationId: string;
 
   constructor(private readonly database: ForgeDatabase, config: ForgeConfig, options: AuthServiceOptions = {}) {
+    this.repository = new AuthRepository(database.authOrm());
     this.now = options.now ?? (() => new Date());
     this.invitationTtlMs = options.invitationTtlMs ?? 72 * 60 * 60 * 1000;
     this.sessionTtlMs = options.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000;
@@ -324,11 +285,14 @@ export class AuthService {
     if (reachable.protocol === "http:" && !["127.0.0.1", "localhost", "[::1]"].includes(reachable.hostname)) {
       throw new Error("Forge passkey authentication requires an HTTPS reachable address");
     }
+    // A database can be upgraded while the process is stopped, or an older
+    // fixture can be attached after migrations have already run. Normalize any
+    // remaining version-zero usernames at the repository boundary as well.
+    this.repository.normalizeLegacyUsers();
   }
 
   getBootstrapState(): { required: boolean } {
-    const row = this.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_users WHERE role = 'admin' AND status != 'revoked'").get() as CountRow);
-    return { required: Number(row.count) === 0 };
+    return { required: this.repository.activeAdminCount() === 0 };
   }
 
   ensureBootstrapInvitation(): IssuedInvitation | undefined {
@@ -374,13 +338,7 @@ export class AuthService {
   }
 
   async beginAuthentication(): Promise<AuthOptions<PublicKeyCredentialRequestOptionsJSON>> {
-    const credentials = this.database.authQuery((db) => db.prepare(`
-      SELECT c.credential_id, c.transports
-      FROM forge_credentials c
-      JOIN forge_users u ON u.id = c.user_id
-      WHERE c.revoked_at IS NULL AND u.status = 'active'
-      ORDER BY c.created_at
-    `).all() as Array<{ credential_id: string; transports: string }>);
+    const credentials = this.repository.activeCredentialOptions();
     if (credentials.length === 0) {
       throw new AuthFailure("No passkey is enrolled", 400);
     }
@@ -388,15 +346,12 @@ export class AuthService {
       rpId: this.rpId,
       allowCredentials: credentials.map((credential) => {
         const transports = this.parseTransports(credential.transports);
-        return { id: credential.credential_id, ...(transports ? { transports } : {}) };
+        return { id: credential.credentialId, ...(transports ? { transports } : {}) };
       }),
     });
     const challengeId = id("challenge");
     const expiresAt = new Date(this.now().getTime() + 5 * 60 * 1000).toISOString();
-    this.database.authTransaction((db) => {
-      db.prepare(`INSERT INTO forge_challenges (id, challenge, kind, invitation_id, user_id, expires_at, consumed_at, created_at)
-        VALUES (?, ?, 'authentication', NULL, NULL, ?, NULL, ?)`).run(challengeId, options.challenge, expiresAt, this.now().toISOString());
-    });
+    this.repository.createChallenge({ id: challengeId, challenge: options.challenge, kind: "authentication", invitationId: null, userId: null, expiresAt, consumedAt: null, createdAt: this.now().toISOString() });
     return { challengeId, options };
   }
 
@@ -406,20 +361,15 @@ export class AuthService {
       throw passkeyFailure();
     }
     const response = parseResponse(input.response);
-    const challenge = this.database.authTransaction((db) => {
-      const row = db.prepare("SELECT * FROM forge_challenges WHERE id = ? AND kind = 'authentication'").get(input.challengeId) as ChallengeRow | undefined;
-      if (!row || row.consumed_at || Date.parse(row.expires_at) <= this.now().getTime()) {
+    const challenge = this.database.authTransaction(() => {
+      const row = this.repository.findChallenge(input.challengeId, "authentication");
+      if (!row || row.consumedAt || Date.parse(row.expiresAt) <= this.now().getTime()) {
         throw passkeyFailure();
       }
-      db.prepare("UPDATE forge_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").run(this.now().toISOString(), row.id);
+      if (!this.repository.consumeChallenge(row.id, this.now().toISOString())) throw passkeyFailure();
       return row;
     });
-    const credential = this.database.authQuery((db) => db.prepare(`
-      SELECT c.*, u.status AS user_status
-      FROM forge_credentials c
-      JOIN forge_users u ON u.id = c.user_id
-      WHERE c.credential_id = ? AND c.revoked_at IS NULL AND u.status = 'active'
-    `).get(response.id) as (CredentialRow & { user_status: UserStatus }) | undefined);
+    const credential = this.repository.findCredentialForAuthentication(response.id);
     if (!credential) {
       throw passkeyFailure();
     }
@@ -432,8 +382,8 @@ export class AuthService {
         expectedOrigin: this.origin,
         expectedRpId: this.rpId,
         credential: {
-          id: credential.credential_id,
-          publicKey: Uint8Array.from(credential.public_key),
+          id: credential.credentialId,
+          publicKey: Uint8Array.from(credential.publicKey),
           counter: credential.counter,
           ...(transports ? { transports } : {}),
         },
@@ -444,16 +394,15 @@ export class AuthService {
     if (!verification.verified || (credential.counter > 0 && verification.newCounter <= credential.counter)) {
       throw passkeyFailure();
     }
-    return this.database.authTransaction((db) => {
-      const updated = db.prepare("UPDATE forge_credentials SET counter = ? WHERE id = ? AND revoked_at IS NULL AND counter = ?").run(verification.newCounter, credential.id, credential.counter);
-      if (updated.changes !== 1) {
+    return this.database.authTransaction(() => {
+      if (!this.repository.updateCredentialCounter(credential.id, credential.counter, verification.newCounter)) {
         throw passkeyFailure();
       }
-      const user = db.prepare("SELECT id, display_name, username, role, status FROM forge_users WHERE id = ? AND status = 'active'").get(credential.user_id) as UserRow | undefined;
+      const user = this.repository.findUser(credential.userId, "active");
       if (!user) {
         throw passkeyFailure();
       }
-      return { user: this.userWithCompanies(db, user), sessionToken: this.createSession(db, user.id) };
+      return { user: this.publicRepositoryUser(user), sessionToken: this.createSession(user.id) };
     });
   }
 
@@ -461,38 +410,43 @@ export class AuthService {
     if (!rawToken) {
       return undefined;
     }
-    const row = this.database.authQuery((db) => db.prepare(`
-      SELECT u.id, u.display_name, u.username, u.role, u.status, s.expires_at
-      FROM forge_sessions s JOIN forge_users u ON u.id = s.user_id
-      WHERE s.token_hash = ? AND s.revoked_at IS NULL
-    `).get(hashSecret(rawToken)) as SessionRow | undefined);
-    if (!row || row.status !== "active" || Date.parse(row.expires_at) <= this.now().getTime()) {
+    const row = this.repository.findSessionUser(hashSecret(rawToken), this.now().toISOString());
+    if (!row || row.status !== "active" || Date.parse(row.expiresAt) <= this.now().getTime()) {
       return undefined;
     }
-    return this.database.authQuery((db) => this.userWithCompanies(db, row));
+    return this.publicRepositoryUser(row);
   }
 
   getUserForAuthority(userId: string): AuthUser | undefined {
-    return this.database.authQuery((db) => {
-      const row = db.prepare("SELECT id, display_name, username, role, status FROM forge_users WHERE id = ? AND status = 'active'").get(userId) as UserRow | undefined;
-      return row ? this.userWithCompanies(db, row) : undefined;
-    });
+    const row = this.repository.findUser(userId, "active");
+    return row ? this.publicRepositoryUser(row) : undefined;
   }
 
   recordAuditEvent(actorUserId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
-    this.database.authTransaction((db) => this.audit(db, actorUserId ?? null, action, targetUserId ?? null, companyId ?? null, metadata));
+    this.repository.recordAuditEvent({ id: id("audit"), actorUserId: actorUserId ?? null, action, targetUserId: targetUserId ?? null, companyId: companyId ?? null, metadataJson: safeJson(metadata), createdAt: this.now().toISOString() });
   }
 
-  recordAuditEventInTransaction(database: import("better-sqlite3").Database, actorUserId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
-    this.audit(database, actorUserId ?? null, action, targetUserId ?? null, companyId ?? null, metadata);
+  recordAuditEventInTransaction(_database: import("better-sqlite3").Database | undefined, actorUserId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
+    this.repository.recordAuditEvent({ id: id("audit"), actorUserId: actorUserId ?? null, action, targetUserId: targetUserId ?? null, companyId: companyId ?? null, metadataJson: safeJson(metadata), createdAt: this.now().toISOString() });
   }
 
   signOut(rawToken: string): void {
     if (!rawToken) {
       return;
     }
-    this.database.authQuery((db) => {
-      db.prepare("UPDATE forge_sessions SET revoked_at = ? WHERE token_hash = ? AND revoked_at IS NULL").run(this.now().toISOString(), hashSecret(rawToken));
+    this.repository.revokeSessionByToken(hashSecret(rawToken), this.now().toISOString());
+  }
+
+  /**
+   * Upgrade a pre-neutral session in place. The row identity is preserved so
+   * rollover cannot create a second active session for the same login.
+   */
+  rolloverLegacySession(rawToken: string): string | undefined {
+    if (!rawToken) return undefined;
+    return this.database.authTransaction(() => {
+      const nextToken = newSessionToken();
+      const legacyHash = hashSecret(rawToken);
+      return this.repository.rolloverLegacySession(legacyHash, hashSecret(nextToken), new Date(this.now().getTime() + this.sessionTtlMs).toISOString()) ? nextToken : undefined;
     });
   }
 
@@ -501,82 +455,64 @@ export class AuthService {
     if (!displayName.success) {
       throw new AuthFailure("Display name is invalid");
     }
-    return this.database.authTransaction((db) => {
-      this.requireAdmin(db, actorUserId);
+    return this.database.authTransaction(() => {
+      this.requireAdminById(actorUserId);
       const userId = id("user");
       const now = this.now().toISOString();
-      db.prepare(`INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at, identity_version)
-        VALUES (?, ?, ?, 'member', 'pending', ?, ?, 1)`).run(userId, displayName.data, neutralUsername(userId), now, now);
-      const invitation = this.issueInvitation(db, "user", displayName.data, userId);
-      this.audit(db, actorUserId, "user_invited", userId, null, {});
-      return { ...invitation, user: this.userWithCompanies(db, db.prepare("SELECT id, display_name, username, role, status FROM forge_users WHERE id = ?").get(userId) as UserRow) };
+      this.repository.createUser({ id: userId, displayName: displayName.data, username: neutralUsername(userId), role: "member", status: "pending", createdAt: now, updatedAt: now, identityVersion: 1 });
+      const invitation = this.issueInvitation(undefined, "user", displayName.data, userId);
+      this.recordAuditEventInTransaction(undefined, actorUserId, "user_invited", userId, undefined, {});
+      return { ...invitation, user: this.publicRepositoryUser(this.repository.findUser(userId)!) };
     });
   }
 
   listUsers(actorUserId: string): AuthUser[] {
-    return this.database.authQuery((db) => {
-      this.requireAdmin(db, actorUserId);
-      const rows = db.prepare("SELECT id, display_name, username, role, status FROM forge_users ORDER BY created_at").all() as UserRow[];
-      return rows.map((row) => this.userWithCompanies(db, row));
-    });
+    this.requireAdminById(actorUserId);
+    return this.repository.listUsers().map((row) => this.publicRepositoryUser(row));
   }
 
   listInvitations(actorUserId: string): InvitationSummary[] {
-    return this.database.authQuery((db) => {
-      this.requireAdmin(db, actorUserId);
-      const rows = db.prepare("SELECT id, kind, display_name, expires_at, consumed_at, replaced_at, created_at FROM forge_invitations ORDER BY created_at DESC, id DESC").all() as Array<{
-        id: string;
-        kind: InvitationKind;
-        display_name: string;
-        expires_at: string;
-        consumed_at: string | null;
-        replaced_at: string | null;
-        created_at: string;
-      }>;
-      return rows.map((row) => ({
-        id: row.id,
-        kind: row.kind,
-        displayName: row.display_name,
-        expiresAt: row.expires_at,
-        status: row.consumed_at ? "consumed" : row.replaced_at ? "replaced" : Date.parse(row.expires_at) <= this.now().getTime() ? "expired" : "active",
-        createdAt: row.created_at,
-      }));
-    });
+    this.requireAdminById(actorUserId);
+    return this.repository.listInvitations().map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      displayName: row.displayName,
+      expiresAt: row.expiresAt,
+      status: row.consumedAt ? "consumed" : row.replacedAt ? "replaced" : Date.parse(row.expiresAt) <= this.now().getTime() ? "expired" : "active",
+      createdAt: row.createdAt,
+    }));
   }
 
   listCredentials(actorUserId: string): AuthCredential[] {
-    return this.database.authQuery((db) => {
-      this.requireAdmin(db, actorUserId);
-      const rows = db.prepare("SELECT id, user_id, credential_id, created_at, revoked_at FROM forge_credentials ORDER BY created_at, id").all() as Array<{ id: string; user_id: string; credential_id: string; created_at: string; revoked_at: string | null }>;
-      return rows.map((row) => ({ id: row.id, userId: row.user_id, credentialId: row.credential_id, createdAt: row.created_at, ...(row.revoked_at ? { revokedAt: row.revoked_at } : {}) }));
-    });
+    this.requireAdminById(actorUserId);
+    return this.repository.listCredentials().map((row) => ({ id: row.id, userId: row.userId, credentialId: row.credentialId, createdAt: row.createdAt, ...(row.revokedAt ? { revokedAt: row.revokedAt } : {}) }));
   }
 
   revokeCredential(actorUserId: string, credentialId: string): void {
-    this.database.authTransaction((db) => {
-      this.requireAdmin(db, actorUserId);
-      const credential = db.prepare("SELECT id, user_id FROM forge_credentials WHERE id = ? AND revoked_at IS NULL").get(credentialId) as { id: string; user_id: string } | undefined;
-      if (!credential || credential.user_id === actorUserId) {
+    this.database.authTransaction(() => {
+      this.requireAdminById(actorUserId);
+      const credential = this.repository.findCredential(credentialId);
+      if (!credential || credential.revokedAt || credential.userId === actorUserId) {
         throw new AuthFailure("Not found", 404);
       }
       const now = this.now().toISOString();
-      db.prepare("UPDATE forge_credentials SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").run(now, credential.id);
-      this.audit(db, actorUserId, "credential_revoked", credential.user_id, null, {});
+      this.repository.revokeCredential(credential.id, now);
+      this.recordAuditEventInTransaction(undefined, actorUserId, "credential_revoked", credential.userId, undefined, {});
     });
   }
 
   revokeUser(actorUserId: string, targetUserId: string): void {
-    this.database.authTransaction((db) => {
-      this.requireAdmin(db, actorUserId);
-      const target = db.prepare("SELECT id, display_name, username, role, status FROM forge_users WHERE id = ?").get(targetUserId) as UserRow | undefined;
+    this.database.authTransaction(() => {
+      this.requireAdminById(actorUserId);
+      const target = this.repository.findUser(targetUserId);
       if (!target || target.id === actorUserId || target.status === "revoked") {
         throw new AuthFailure("Not found", 404);
       }
       const now = this.now().toISOString();
-      db.prepare("UPDATE forge_users SET status = 'revoked', updated_at = ? WHERE id = ?").run(now, target.id);
-      db.prepare("UPDATE forge_credentials SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").run(now, target.id);
-      db.prepare("UPDATE forge_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").run(now, target.id);
-      this.audit(db, actorUserId, "user_revoked", target.id, null, {});
+      this.repository.updateUserStatus(target.id, "revoked", now);
+      this.repository.revokeCredentialsForUsers([target.id], now);
+      this.repository.revokeSessionsForUsers([target.id], now);
+      this.recordAuditEventInTransaction(undefined, actorUserId, "user_revoked", target.id, undefined, {});
     });
   }
 
@@ -585,22 +521,22 @@ export class AuthService {
     if (!name.success) {
       throw new AuthFailure("Company name is invalid");
     }
-    return this.database.authTransaction((db) => {
-      this.requireAdmin(db, actorUserId);
+    return this.database.authTransaction(() => {
+      this.requireAdminById(actorUserId);
       const company = { id: id("company"), name: name.data, status: "active" as const, createdAt: this.now().toISOString() };
       try {
-        db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES (?, ?, 'active', ?)").run(company.id, company.name, company.createdAt);
+        this.repository.createCompany(company);
       } catch {
         throw new AuthFailure("Company name is already in use");
       }
-      this.audit(db, actorUserId, "company_created", null, company.id, {});
+      this.recordAuditEventInTransaction(undefined, actorUserId, "company_created", undefined, company.id, {});
       return company;
     });
   }
 
   renameCompany(actorUserId: string, companyId: string, rawName: string): Company {
-    return this.database.authTransaction((db) => {
-      this.requireAdmin(db, actorUserId);
+    return this.database.authTransaction(() => {
+      this.requireAdminById(actorUserId);
       if (!idSchema.safeParse(companyId).success) {
         throw new AuthFailure("Not found", 404);
       }
@@ -608,44 +544,40 @@ export class AuthService {
       if (!name.success) {
         throw new AuthFailure("Company name is invalid");
       }
-      const company = db.prepare("SELECT id, name, status, created_at FROM forge_companies WHERE id = ?").get(companyId) as CompanyRow | undefined;
+      const company = this.repository.findCompany(companyId);
       if (!company) {
         throw new AuthFailure("Not found", 404);
       }
       if (company.name === name.data) {
-        return { id: company.id, name: company.name, status: company.status, createdAt: company.created_at };
+        return { id: company.id, name: company.name, status: company.status, createdAt: company.createdAt };
       }
       try {
-        db.prepare("UPDATE forge_companies SET name = ? WHERE id = ?").run(name.data, companyId);
+        this.repository.updateCompany(companyId, { name: name.data });
       } catch {
         throw new AuthFailure("Company name is already in use");
       }
-      this.audit(db, actorUserId, "company_renamed", null, companyId, { previousName: company.name, newName: name.data });
-      return { id: company.id, name: name.data, status: company.status, createdAt: company.created_at };
+      this.recordAuditEventInTransaction(undefined, actorUserId, "company_renamed", undefined, companyId, { previousName: company.name, newName: name.data });
+      return { id: company.id, name: name.data, status: company.status, createdAt: company.createdAt };
     });
   }
 
   setCompanyStatus(actorUserId: string, companyId: string, status: "active" | "paused" | "archived"): Company {
     if (!["active", "paused", "archived"].includes(status)) throw new AuthFailure("Company status is invalid");
     if (!idSchema.safeParse(companyId).success) throw new AuthFailure("Not found", 404);
-    return this.database.authTransaction((db) => {
-      this.requireAdmin(db, actorUserId);
-      const company = db.prepare("SELECT id, name, status, created_at FROM forge_companies WHERE id = ?").get(companyId) as CompanyRow | undefined;
+    return this.database.authTransaction(() => {
+      this.requireAdminById(actorUserId);
+      const company = this.repository.findCompany(companyId);
       if (!company) throw new AuthFailure("Not found", 404);
-      db.prepare("UPDATE forge_companies SET status = ? WHERE id = ?").run(status, companyId);
-      this.audit(db, actorUserId, `company_${status}`, null, companyId, {});
-      return { id: company.id, name: company.name, status, createdAt: company.created_at };
+      this.repository.updateCompany(companyId, { status });
+      this.recordAuditEventInTransaction(undefined, actorUserId, `company_${status}`, undefined, companyId, {});
+      return { id: company.id, name: company.name, status, createdAt: company.createdAt };
     });
   }
 
   listVisibleCompanies(actorUserId: string): Company[] {
-    return this.database.authQuery((db) => {
-      const user = this.requireUser(db, actorUserId);
-      const rows = user.role === "admin"
-        ? db.prepare("SELECT id, name, status, created_at FROM forge_companies ORDER BY name").all()
-        : db.prepare("SELECT c.id, c.name, c.status, c.created_at FROM forge_companies c JOIN forge_memberships m ON m.company_id = c.id WHERE m.user_id = ? ORDER BY c.name").all(actorUserId);
-      return (rows as CompanyRow[]).map((row) => ({ id: row.id, name: row.name, status: row.status, createdAt: row.created_at }));
-    });
+    const user = this.repository.findUser(actorUserId, "active");
+    if (!user) throw new AuthFailure("Authentication required", 401);
+    return this.repository.listCompaniesForUser(actorUserId, user.role).map((row) => ({ id: row.id, name: row.name, status: row.status, createdAt: row.createdAt }));
   }
 
   requireCompanyAccess(actorUserId: string, companyId: string): Company {
@@ -653,65 +585,54 @@ export class AuthService {
     if (!parsedId.success) {
       throw new AuthFailure("Not found", 404);
     }
-    return this.database.authQuery((db) => {
-      const user = this.requireUser(db, actorUserId);
-      const row = user.role === "admin"
-        ? db.prepare("SELECT id, name, status, created_at FROM forge_companies WHERE id = ?").get(companyId)
-        : db.prepare("SELECT c.id, c.name, c.status, c.created_at FROM forge_companies c JOIN forge_memberships m ON m.company_id = c.id WHERE c.id = ? AND m.user_id = ?").get(companyId, actorUserId);
-      if (!row) {
-        throw new AuthFailure("Not found", 404);
-      }
-      const company = row as CompanyRow;
-      return { id: company.id, name: company.name, status: company.status, createdAt: company.created_at };
-    });
+    const user = this.repository.findUser(actorUserId, "active");
+    if (!user) throw new AuthFailure("Authentication required", 401);
+    const company = this.repository.findCompanyForUser(actorUserId, user.role, companyId);
+    if (!company) throw new AuthFailure("Not found", 404);
+    return { id: company.id, name: company.name, status: company.status, createdAt: company.createdAt };
   }
 
   addMembership(actorUserId: string, targetUserId: string, companyId: string): void {
-    this.database.authTransaction((db) => {
-      this.requireAdmin(db, actorUserId);
-      const target = db.prepare("SELECT id FROM forge_users WHERE id = ? AND status != 'revoked'").get(targetUserId) as { id: string } | undefined;
-      const company = db.prepare("SELECT id FROM forge_companies WHERE id = ?").get(companyId) as { id: string } | undefined;
-      if (!target || !company) {
+    this.database.authTransaction(() => {
+      this.requireAdminById(actorUserId);
+      const target = this.repository.findUser(targetUserId);
+      const company = this.repository.findCompany(companyId);
+      if (!target || target.status === "revoked" || !company) {
         throw new AuthFailure("Not found", 404);
       }
-      db.prepare("INSERT OR IGNORE INTO forge_memberships (user_id, company_id, created_at) VALUES (?, ?, ?)").run(targetUserId, companyId, this.now().toISOString());
-      this.audit(db, actorUserId, "membership_added", targetUserId, companyId, {});
+      try {
+        this.repository.addMembership(targetUserId, companyId, this.now().toISOString());
+      } catch (error) {
+        if (error instanceof Error && /UNIQUE constraint failed: forge_memberships/i.test(error.message)) {
+          throw new AuthFailure("Membership already exists", 409, "membership_duplicate");
+        }
+        throw error;
+      }
+      this.recordAuditEventInTransaction(undefined, actorUserId, "membership_added", targetUserId, companyId, {});
     });
   }
 
   removeMembership(actorUserId: string, targetUserId: string, companyId: string): void {
-    this.database.authTransaction((db) => {
-      this.requireAdmin(db, actorUserId);
-      const result = db.prepare("DELETE FROM forge_memberships WHERE user_id = ? AND company_id = ?").run(targetUserId, companyId);
-      if (result.changes === 0) {
+    this.database.authTransaction(() => {
+      this.requireAdminById(actorUserId);
+      if (!this.repository.removeMembership(targetUserId, companyId)) {
         throw new AuthFailure("Not found", 404);
       }
-      this.audit(db, actorUserId, "membership_removed", targetUserId, companyId, {});
+      this.recordAuditEventInTransaction(undefined, actorUserId, "membership_removed", targetUserId, companyId, {});
     });
   }
 
   listAuditEvents(actorUserId: string): AuditEvent[] {
-    return this.database.authQuery((db) => {
-      this.requireAdmin(db, actorUserId);
-      const rows = db.prepare("SELECT id, actor_user_id, action, target_user_id, company_id, metadata_json, created_at FROM forge_audit_events ORDER BY created_at, id").all() as Array<{
-        id: string;
-        actor_user_id: string | null;
-        action: string;
-        target_user_id: string | null;
-        company_id: string | null;
-        metadata_json: string;
-        created_at: string;
-      }>;
-      return rows.map((row) => ({
-        id: row.id,
-        ...(row.actor_user_id ? { actorUserId: row.actor_user_id } : {}),
-        action: row.action,
-        ...(row.target_user_id ? { targetUserId: row.target_user_id } : {}),
-        ...(row.company_id ? { companyId: row.company_id } : {}),
-        metadata: JSON.parse(row.metadata_json) as Record<string, string>,
-        createdAt: row.created_at,
-      }));
-    });
+    this.requireAdminById(actorUserId);
+    return this.repository.listAuditEvents().map((row) => ({
+      id: row.id,
+      ...(row.actorUserId ? { actorUserId: row.actorUserId } : {}),
+      action: row.action,
+      ...(row.targetUserId ? { targetUserId: row.targetUserId } : {}),
+      ...(row.companyId ? { companyId: row.companyId } : {}),
+      metadata: safeMetadata(row.metadataJson),
+      createdAt: row.createdAt,
+    }));
   }
 
   private async beginRegistration(kind: "bootstrap" | "user" | "recovery", rawToken: string): Promise<AuthOptions<PublicKeyCredentialCreationOptionsJSON>> {
@@ -719,7 +640,7 @@ export class AuthService {
     const userId = invitation.user_id ?? id("pending");
     const username = neutralUsername(userId);
     const existingCredentials = invitation.user_id
-      ? this.database.authQuery((db) => db.prepare("SELECT credential_id, transports FROM forge_credentials WHERE user_id = ? AND revoked_at IS NULL").all(invitation.user_id) as Array<{ credential_id: string; transports: string }>)
+      ? this.repository.credentialsForUser(invitation.user_id)
       : [];
     let options: PublicKeyCredentialCreationOptionsJSON;
     try {
@@ -730,7 +651,7 @@ export class AuthService {
         rpId: this.rpId,
         excludeCredentials: existingCredentials.map((credential) => {
           const transports = this.parseTransports(credential.transports);
-          return { id: credential.credential_id, ...(transports ? { transports } : {}) };
+          return { id: credential.credentialId, ...(transports ? { transports } : {}) };
         }),
       });
     } catch {
@@ -738,13 +659,12 @@ export class AuthService {
     }
     const challengeId = id("challenge");
     const expiresAt = new Date(this.now().getTime() + 5 * 60 * 1000).toISOString();
-    this.database.authTransaction((db) => {
-      const current = this.findValidInvitation(db, hashSecret(rawToken), kind);
+    this.database.authTransaction(() => {
+      const current = this.findValidInvitation(undefined, hashSecret(rawToken), kind);
       if (!current) {
         throw invitationFailure();
       }
-      db.prepare(`INSERT INTO forge_challenges (id, challenge, kind, invitation_id, user_id, expires_at, consumed_at, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`).run(challengeId, options.challenge, `registration:${kind}`, current.id, current.user_id, expiresAt, this.now().toISOString());
+      this.repository.createChallenge({ id: challengeId, challenge: options.challenge, kind: `registration:${kind}`, invitationId: current.id, userId: current.user_id, expiresAt, consumedAt: null, createdAt: this.now().toISOString() });
     });
     return { challengeId, options };
   }
@@ -757,13 +677,13 @@ export class AuthService {
     }
     const response = parseResponse(input.response);
     const tokenHash = hashSecret(input.token);
-    const ceremony = this.database.authTransaction((db) => {
-      const invitation = this.findValidInvitation(db, tokenHash, kind);
-      const challenge = db.prepare("SELECT * FROM forge_challenges WHERE id = ? AND kind = ?").get(input.challengeId, `registration:${kind}`) as ChallengeRow | undefined;
-      if (!invitation || !challenge || challenge.invitation_id !== invitation.id || challenge.consumed_at || Date.parse(challenge.expires_at) <= this.now().getTime()) {
+    const ceremony = this.database.authTransaction(() => {
+      const invitation = this.findValidInvitation(undefined, tokenHash, kind);
+      const challenge = this.repository.findChallenge(input.challengeId, `registration:${kind}`);
+      if (!invitation || !challenge || challenge.invitationId !== invitation.id || challenge.consumedAt || Date.parse(challenge.expiresAt) <= this.now().getTime()) {
         throw invitationFailure();
       }
-      db.prepare("UPDATE forge_challenges SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL").run(this.now().toISOString(), challenge.id);
+      if (!this.repository.consumeChallenge(challenge.id, this.now().toISOString())) throw invitationFailure();
       return { invitation, challenge };
     });
     let verification: RegistrationVerification;
@@ -780,62 +700,50 @@ export class AuthService {
     if (!verification.verified) {
       throw passkeyFailure();
     }
-    return this.database.authTransaction((db) => {
-      const invitation = this.findValidInvitation(db, tokenHash, kind);
+    return this.database.authTransaction(() => {
+      const invitation = this.findValidInvitation(undefined, tokenHash, kind);
       if (!invitation) {
         throw invitationFailure();
       }
-      let user: UserRow;
+      let userId: string;
       const now = this.now().toISOString();
       if (kind === "bootstrap") {
-        const admin = db.prepare("SELECT id FROM forge_users WHERE role = 'admin' AND status != 'revoked'").get() as { id: string } | undefined;
-        if (admin) {
-          throw invitationFailure();
-        }
-        const userId = id("user");
-        db.prepare(`INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at, identity_version)
-          VALUES (?, ?, ?, 'admin', 'active', ?, ?, 1)`).run(userId, invitation.display_name, neutralUsername(userId), now, now);
-        user = db.prepare("SELECT id, display_name, username, role, status FROM forge_users WHERE id = ?").get(userId) as UserRow;
+        if (this.repository.hasActiveAdmin()) throw invitationFailure();
+        userId = id("user");
+        this.repository.createUser({ id: userId, displayName: invitation.display_name, username: neutralUsername(userId), role: "admin", status: "active", createdAt: now, updatedAt: now, identityVersion: 1 });
       } else if (kind === "recovery") {
-        db.prepare("UPDATE forge_users SET status = 'revoked', updated_at = ? WHERE role = 'admin' AND status = 'active'").run(now);
-        db.prepare("UPDATE forge_credentials SET revoked_at = ? WHERE user_id IN (SELECT id FROM forge_users WHERE role = 'admin') AND revoked_at IS NULL").run(now);
-        db.prepare("UPDATE forge_sessions SET revoked_at = ? WHERE user_id IN (SELECT id FROM forge_users WHERE role = 'admin') AND revoked_at IS NULL").run(now);
-        const userId = id("user");
-        db.prepare(`INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at, identity_version)
-          VALUES (?, ?, ?, 'admin', 'active', ?, ?, 1)`).run(userId, invitation.display_name, neutralUsername(userId), now, now);
-        user = db.prepare("SELECT id, display_name, username, role, status FROM forge_users WHERE id = ?").get(userId) as UserRow;
+        const adminIds = this.repository.activeAdminIds();
+        for (const adminId of adminIds) this.repository.updateUserStatus(adminId, "revoked", now);
+        this.repository.revokeCredentialsForUsers(adminIds, now);
+        this.repository.revokeSessionsForUsers(adminIds, now);
+        userId = id("user");
+        this.repository.createUser({ id: userId, displayName: invitation.display_name, username: neutralUsername(userId), role: "admin", status: "active", createdAt: now, updatedAt: now, identityVersion: 1 });
       } else {
         if (!invitation.user_id) {
           throw invitationFailure();
         }
-        const pending = db.prepare("SELECT id, display_name, username, role, status FROM forge_users WHERE id = ? AND status = 'pending'").get(invitation.user_id) as UserRow | undefined;
+        const pending = this.repository.findUser(invitation.user_id, "pending");
         if (!pending) {
           throw invitationFailure();
         }
-        user = pending;
-        db.prepare("UPDATE forge_users SET status = 'active', updated_at = ? WHERE id = ?").run(now, user.id);
-        user = { ...user, status: "active" };
+        userId = pending.id;
+        this.repository.updateUserStatus(userId, "active", now);
       }
       try {
-        db.prepare(`INSERT INTO forge_credentials (id, user_id, credential_id, public_key, counter, transports, created_at, revoked_at)
-          VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`).run(
-          id("credential"),
-          user.id,
-          verification.credential.id,
-          Buffer.from(verification.credential.publicKey),
-          verification.credential.counter,
-          safeJson(verification.credential.transports ?? []),
-          now,
-        );
+        this.repository.createCredential({ id: id("credential"), userId, credentialId: verification.credential.id, publicKey: Buffer.from(verification.credential.publicKey), counter: verification.credential.counter, transports: safeJson(verification.credential.transports ?? []), createdAt: now, revokedAt: null });
       } catch (error) {
         if (error instanceof Error && /UNIQUE constraint failed: forge_credentials\.credential_id/i.test(error.message)) {
           throw new AuthFailure("Credential is already registered", 409, "credential_duplicate");
         }
         throw passkeyFailure();
       }
-      db.prepare("UPDATE forge_invitations SET consumed_at = ? WHERE id = ? AND consumed_at IS NULL AND replaced_at IS NULL").run(now, invitation.id);
-      this.audit(db, null, kind === "recovery" ? "recovery_completed" : "user_enrolled", user.id, null, {});
-      return { user: this.userWithCompanies(db, user), sessionToken: this.createSession(db, user.id) };
+      if (!this.repository.consumeInvitation(invitation.id, now)) throw invitationFailure();
+      this.recordAuditEventInTransaction(undefined, undefined, kind === "recovery" ? "recovery_completed" : "user_enrolled", userId, undefined, kind === "recovery"
+        ? { ...safeMetadata(invitation.metadata_json), invitationId: invitation.id }
+        : {});
+      const user = this.repository.findUser(userId, "active");
+      if (!user) throw passkeyFailure();
+      return { user: this.publicRepositoryUser(user), sessionToken: this.createSession(userId) };
     });
   }
 
@@ -850,66 +758,58 @@ export class AuthService {
     return row;
   }
 
-  private findValidInvitation(db: import("better-sqlite3").Database, tokenHash: string, kind: InvitationKind): InvitationRow | undefined {
-    const row = db.prepare("SELECT id, kind, display_name, user_id, expires_at, consumed_at, replaced_at FROM forge_invitations WHERE token_hash = ? AND kind = ?").get(tokenHash, kind) as InvitationRow | undefined;
-    if (!row || row.consumed_at || row.replaced_at || Date.parse(row.expires_at) <= this.now().getTime()) {
+  private findValidInvitation(_db: import("better-sqlite3").Database | undefined, tokenHash: string, kind: InvitationKind): InvitationRow | undefined {
+    const row = this.repository.findInvitation(tokenHash, kind);
+    if (!row || row.consumedAt || row.replacedAt || Date.parse(row.expiresAt) <= this.now().getTime()) {
       return undefined;
     }
-    if (kind === "bootstrap" && db.prepare("SELECT id FROM forge_users WHERE role = 'admin' AND status != 'revoked' LIMIT 1").get()) {
+    if (kind === "bootstrap" && this.repository.hasActiveAdmin()) {
       return undefined;
     }
-    if (kind === "user" && (!row.user_id || !db.prepare("SELECT id FROM forge_users WHERE id = ? AND status = 'pending'").get(row.user_id))) {
+    if (kind === "user" && (!row.userId || !this.repository.findUser(row.userId, "pending"))) {
       return undefined;
     }
-    return row;
+    return { id: row.id, kind: row.kind, display_name: row.displayName, user_id: row.userId, expires_at: row.expiresAt, consumed_at: row.consumedAt, replaced_at: row.replacedAt, metadata_json: row.metadataJson };
   }
 
-  private issueInvitation(db: import("better-sqlite3").Database, kind: InvitationKind, displayName: string, userId?: string, metadata: Record<string, string> = {}): IssuedInvitation {
+  private issueInvitation(_db: import("better-sqlite3").Database | undefined, kind: InvitationKind, displayName: string, userId?: string, metadata: Record<string, string> = {}): IssuedInvitation {
     const now = this.now();
     const nowIso = now.toISOString();
     if (kind !== "user") {
-      db.prepare("UPDATE forge_invitations SET replaced_at = ? WHERE kind = ? AND consumed_at IS NULL AND replaced_at IS NULL").run(nowIso, kind);
+      this.repository.replaceInvitations(kind, nowIso);
     }
     const rawToken = newInvitationToken(kind);
     const expiresAt = new Date(now.getTime() + this.invitationTtlMs).toISOString();
-    db.prepare(`INSERT INTO forge_invitations (id, token_hash, kind, display_name, user_id, expires_at, consumed_at, replaced_at, created_at, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)`).run(id("invitation"), hashSecret(rawToken), kind, displayName, userId ?? null, expiresAt, nowIso, safeJson(metadata));
-    this.audit(db, null, `${kind}_invitation_created`, userId ?? null, null, metadata);
+    this.repository.createInvitation({ id: id("invitation"), tokenHash: hashSecret(rawToken), kind, displayName, userId: userId ?? null, expiresAt, consumedAt: null, replacedAt: null, createdAt: nowIso, metadataJson: safeJson(metadata) });
+    this.recordAuditEventInTransaction(undefined, undefined, `${kind}_invitation_created`, userId, undefined, metadata);
     return { token: rawToken, kind, expiresAt };
   }
 
-  private requireUser(db: import("better-sqlite3").Database, userId: string): UserRow {
-    const user = db.prepare("SELECT id, display_name, username, role, status FROM forge_users WHERE id = ? AND status = 'active'").get(userId) as UserRow | undefined;
-    if (!user) {
-      throw new AuthFailure("Authentication required", 401);
-    }
-    return user;
+  private requireAdminById(userId: string): void {
+    const user = this.repository.findUser(userId, "active");
+    if (!user) throw new AuthFailure("Authentication required", 401);
+    if (user.role !== "admin") throw new AuthFailure("Not found", 404);
   }
 
-  private requireAdmin(db: import("better-sqlite3").Database, userId: string): UserRow {
-    const user = this.requireUser(db, userId);
-    if (user.role !== "admin") {
-      throw new AuthFailure("Not found", 404);
-    }
-    return user;
+  private publicRepositoryUser(row: { id: string; displayName: string; username: string; role: UserRole; status: UserStatus }): AuthUser {
+    return { id: row.id, displayName: row.displayName, username: row.username, role: row.role, status: row.status, companyIds: this.repository.userCompanyIds(row.id) };
   }
 
-  private userWithCompanies(db: import("better-sqlite3").Database, row: UserRow): AuthUser {
-    const companyRows = db.prepare("SELECT company_id FROM forge_memberships WHERE user_id = ? ORDER BY company_id").all(row.id) as Array<{ company_id: string }>;
-    return publicUser(row, companyRows.map((company) => company.company_id));
-  }
-
-  private createSession(db: import("better-sqlite3").Database, userId: string): string {
+  private createSession(userId: string): string {
     const rawToken = newSessionToken();
     const now = this.now();
-    db.prepare(`INSERT INTO forge_sessions (id, token_hash, user_id, expires_at, created_at, revoked_at, token_version)
-      VALUES (?, ?, ?, ?, ?, NULL, 1)`).run(id("session"), hashSecret(rawToken), userId, new Date(now.getTime() + this.sessionTtlMs).toISOString(), now.toISOString());
+    this.repository.createSession({
+      id: id("session"),
+      tokenHash: hashSecret(rawToken),
+      userId,
+      expiresAt: new Date(now.getTime() + this.sessionTtlMs).toISOString(),
+      createdAt: now.toISOString(),
+      revokedAt: null,
+      tokenVersion: 1,
+      legacyTokenHash: null,
+      legacyTokenExpiresAt: null,
+    });
     return rawToken;
-  }
-
-  private audit(db: import("better-sqlite3").Database, actorUserId: string | null, action: string, targetUserId: string | null, companyId: string | null, metadata: Record<string, string>): void {
-    db.prepare(`INSERT INTO forge_audit_events (id, actor_user_id, action, target_user_id, company_id, metadata_json, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?)`).run(id("audit"), actorUserId, action, targetUserId, companyId, safeJson(metadata), this.now().toISOString());
   }
 
   private parseTransports(value: string): AuthenticatorTransportFuture[] | undefined {

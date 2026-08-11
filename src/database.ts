@@ -9,6 +9,7 @@ import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { desc, eq } from "drizzle-orm";
 
 import { probeWorkflows, workerRegistrations } from "./database-schema.js";
+import { authSchema, type AuthSchema } from "./auth-schema.js";
 
 export type ProbeStatus = "running" | "completed";
 
@@ -153,7 +154,7 @@ function determineSchemaState(expected: ExpectedMigration[], applied: AppliedMig
 
 export class ForgeDatabase {
   private readonly db: Database.Database;
-  private readonly orm: BetterSQLite3Database;
+  private readonly orm: BetterSQLite3Database<AuthSchema & { probeWorkflows: typeof probeWorkflows; workerRegistrations: typeof workerRegistrations }>;
 
   constructor(filename: string) {
     mkdirSync(dirname(filename), { recursive: true });
@@ -161,7 +162,7 @@ export class ForgeDatabase {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = FULL");
     this.db.pragma("foreign_keys = ON");
-    this.orm = drizzle(this.db);
+    this.orm = drizzle(this.db, { schema: { ...authSchema, probeWorkflows, workerRegistrations } });
     migrate(this.orm, { migrationsFolder: migrationFolder() });
   }
 
@@ -240,6 +241,10 @@ export class ForgeDatabase {
 
   authTransaction<T>(operation: (database: Database.Database) => T): T {
     return this.db.transaction(() => operation(this.db))();
+  }
+
+  authOrm(): BetterSQLite3Database<AuthSchema> {
+    return this.orm;
   }
 
   authQuery<T>(operation: (database: Database.Database) => T): T {

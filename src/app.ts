@@ -69,11 +69,11 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
   const readHealth = async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth());
   const { auth, projects: projectService, tasks: taskService, attention: attentionService, database } = dependencies;
 
-  void app.register(pages, { readHealth, ...(auth ? { auth } : {}) });
-  void app.register(health, { readHealth, ...(auth ? { auth } : {}) });
+  void app.register(pages, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config });
+  void app.register(health, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config });
   if (auth) {
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
-    void app.register(authenticated, { auth, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}) });
+    void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}) });
   }
   void app.register(assets, { prefix: "/assets" });
 

@@ -15,10 +15,17 @@ declare module "fastify" {
   }
 }
 
-export async function sessionUser(auth: AuthService | undefined, request: Pick<FastifyRequest, "cookies">): Promise<AuthUser | undefined> {
+export async function sessionUser(auth: AuthService | undefined, request: Pick<FastifyRequest, "cookies">, reply?: FastifyReply, config?: ForgeConfig): Promise<AuthUser | undefined> {
   if (!auth) return undefined;
-  return auth.getUserBySession(request.cookies[SESSION_COOKIE_NAME] ?? "")
-    ?? auth.getUserBySession(request.cookies[LEGACY_SESSION_COOKIE_NAME] ?? "");
+  const current = await auth.getUserBySession(request.cookies[SESSION_COOKIE_NAME] ?? "");
+  if (current) return current;
+  const legacyToken = request.cookies[LEGACY_SESSION_COOKIE_NAME] ?? "";
+  const legacy = await auth.getUserBySession(legacyToken);
+  if (legacy && reply && config) {
+    const replacement = auth.rolloverLegacySession(legacyToken);
+    if (replacement) setSessionCookie(config, reply, replacement);
+  }
+  return legacy;
 }
 
 export function authenticatedUser(request: FastifyRequest): AuthUser {

@@ -22,7 +22,7 @@ const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, options) =
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const { auth, config } = options;
 
-  typed.get("/status", { schema: { response: { 200: AuthStatusResponseSchema } } }, async (request, reply) => reply.send({ ...auth.getBootstrapState(), authenticated: (await sessionUser(auth, request)) !== undefined }));
+  typed.get("/status", { schema: { response: { 200: AuthStatusResponseSchema } } }, async (request, reply) => reply.send({ ...auth.getBootstrapState(), authenticated: (await sessionUser(auth, request, reply, config)) !== undefined }));
 
   typed.post("/bootstrap/options", { schema: { body: TokenBodySchema, response: { 200: AuthOptionsResponseSchema } } }, async (request, reply) => reply.send({ ...(await auth.beginBootstrapRegistration(request.body.token)) }));
   typed.post("/invitation/options", { schema: { body: TokenBodySchema, response: { 200: AuthOptionsResponseSchema } } }, async (request, reply) => reply.send(await auth.beginInvitationRegistration(request.body.token)));

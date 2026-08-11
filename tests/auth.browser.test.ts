@@ -72,27 +72,6 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       await addVirtualAuthenticator(adminPage);
 
       await adminPage.goto(`${baseUrl}/auth?invite=${bootstrap.token}`);
-      const nav = await adminPage.evaluate(() => ({ navigator: typeof navigator, credentials: typeof navigator?.credentials, publicKey: typeof navigator?.credentials?.create, isSecureContext: window.isSecureContext }));
-      console.log("navigator check", nav);
-
-      const testCredential = await adminPage.evaluate(async () => {
-        try {
-          const credential = await navigator.credentials.create({
-            publicKey: {
-              challenge: new Uint8Array([1, 2, 3]).buffer,
-              rp: { name: "Forge", id: location.hostname },
-              user: { id: new Uint8Array([1]).buffer, name: "test", displayName: "Test" },
-              pubKeyCredParams: [{ type: "public-key", alg: -7 }],
-              authenticatorSelection: { authenticatorAttachment: "platform", userVerification: "required" },
-              attestation: "none",
-            },
-          });
-          return { ok: true, id: (credential as { id: string }).id };
-        } catch (error) {
-          return { ok: false, message: (error as Error).message };
-        }
-      });
-      console.log("testCredential", testCredential);
 
       const invalidInvitationStatuses = await adminPage.evaluate(async ({ replaced, expired }) => {
         const readStatus = async (token: string, endpoint: string): Promise<number> => (await fetch(endpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) })).status;
@@ -109,7 +88,7 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       await adminPage.getByRole("menuitem", { name: /Create company/ }).click();
       await adminPage.getByLabel("Company name", { exact: true }).fill("Browser Company");
       await adminPage.getByRole("button", { name: "Create", exact: true }).click();
-      await adminPage.getByRole("heading", { name: "Company settings", exact: true }).waitFor();
+      await adminPage.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
 
       await adminPage.goto(`${baseUrl}/admin`);
       const secondCompany = await postJson(adminPage, "/api/admin/companies", { name: "Second Browser Company" }) as { status: number; body: { id: string } };
@@ -125,6 +104,8 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       await adminPage.locator("code").waitFor();
       const invitationToken = await adminPage.locator("code").innerText();
       expect(invitationToken).toMatch(/^invite_v1_user_/);
+      await adminPage.getByText("Invitations", { exact: true }).waitFor();
+      await adminPage.getByText("Copy invitation", { exact: true }).waitFor();
 
       const memberContext = await browser.newContext({ viewport: { width: 390, height: 844 } });
       const memberPage = await memberContext.newPage();
@@ -133,8 +114,11 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       await memberPage.goto(`${baseUrl}/auth?invite=${encodeURIComponent(invitationToken)}`);
       await memberPage.getByRole("button", { name: "Enroll passkey" }).click();
       await memberPage.locator("h1").filter({ hasText: "Host health" }).waitFor();
+      expect(await memberPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
       await adminPage.reload();
+      expect(await adminPage.locator("body").innerText()).not.toContain(invitationToken);
+      await adminPage.getByText("Passkeys", { exact: true }).waitFor();
       await adminPage.getByRole("button", { name: /\+ Browser Member/ }).first().click();
       await adminPage.getByRole("button", { name: /− Browser Member/ }).first().waitFor();
       await adminPage.getByRole("button", { name: /− Browser Member/ }).first().click();
@@ -155,6 +139,7 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       await recoveryPage.goto(`${baseUrl}/auth?mode=recovery&invite=${recovery.token}`);
       await recoveryPage.getByRole("button", { name: "Enroll passkey" }).click();
       await recoveryPage.locator("h1").filter({ hasText: "Host health" }).waitFor();
+      expect(await recoveryPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       expect((await recoveryPage.evaluate(async () => (await fetch("/api/auth/me")).status))).toBe(200);
 
       await memberPage.close();

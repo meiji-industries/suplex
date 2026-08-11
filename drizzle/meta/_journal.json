@@ -113,6 +113,13 @@
       "when": 1786427000000,
       "tag": "0015_auth_neutral_identities",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786427100000,
+      "tag": "0016_auth_identity_rollover",
+      "breakpoints": true
     }
   ]
 }

@@ -6,7 +6,7 @@ import type { AttentionService } from "../../attention.js";
 import type { AuthService } from "../../auth.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { ProjectService } from "../../projects.js";
-import { AuditEventListResponseSchema, ErrorResponseSchema, InvitationResponseSchema, UserIdParamsSchema, UserListResponseSchema } from "../contracts/common.js";
+import { AuditEventListResponseSchema, CredentialIdParamsSchema, CredentialListResponseSchema, ErrorResponseSchema, InvitationResponseSchema, InvitationSummaryListResponseSchema, UserIdParamsSchema, UserListResponseSchema } from "../contracts/common.js";
 import { DisplayNameBodySchema } from "../contracts/auth.js";
 import { ProfileBodySchema, ProfileResponseSchema } from "../contracts/projects.js";
 
@@ -21,7 +21,13 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const { auth, projects, database, attention } = options;
   typed.post("/api/admin/invitations", { schema: { body: DisplayNameBodySchema, response: { 201: InvitationResponseSchema } } }, async (request, reply) => reply.code(201).send(auth.inviteUser(request.forgeUser.id, { displayName: request.body.displayName })));
+  typed.get("/api/admin/invitations", { schema: { response: { 200: InvitationSummaryListResponseSchema } } }, async (request, reply) => reply.send({ invitations: auth.listInvitations(request.forgeUser.id) }));
   typed.get("/api/admin/users", { schema: { response: { 200: UserListResponseSchema } } }, async (request, reply) => reply.send({ users: auth.listUsers(request.forgeUser.id) }));
+  typed.get("/api/admin/credentials", { schema: { response: { 200: CredentialListResponseSchema } } }, async (request, reply) => reply.send({ credentials: auth.listCredentials(request.forgeUser.id) }));
+  typed.post("/api/admin/credentials/:credentialId/revoke", { schema: { params: CredentialIdParamsSchema } }, async (request, reply) => {
+    auth.revokeCredential(request.forgeUser.id, request.params.credentialId);
+    return reply.code(204).send();
+  });
   typed.post("/api/admin/users/:userId/revoke", { schema: { params: UserIdParamsSchema } }, async (request, reply) => {
     auth.revokeUser(request.forgeUser.id, request.params.userId);
     return reply.code(204).send();

@@ -88,6 +88,18 @@ test("API enrollment and authorization fail closed before company details are re
 
     const membership = await app.inject({ method: "POST", url: `/api/admin/companies/${companyA.id}/members`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { userId: invite.user.id } });
     expect(membership.statusCode).toBe(204);
+    const invitations = await app.inject({ method: "GET", url: "/api/admin/invitations", headers: { cookie: adminCookie } });
+    expect(invitations.statusCode).toBe(200);
+    expect(JSON.stringify(invitations.json())).not.toContain(invite.token);
+    expect(invitations.json().invitations).toEqual(expect.arrayContaining([expect.objectContaining({ displayName: "API member", status: "consumed" })]));
+    const credentials = await app.inject({ method: "GET", url: "/api/admin/credentials", headers: { cookie: adminCookie } });
+    expect(credentials.statusCode).toBe(200);
+    const memberCredential = (credentials.json() as { credentials: Array<{ id: string; userId: string; revokedAt?: string }> }).credentials.find((credential) => credential.userId === invite.user.id);
+    expect(memberCredential).toBeDefined();
+    const revokedCredential = await app.inject({ method: "POST", url: `/api/admin/credentials/${memberCredential!.id}/revoke`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: {} });
+    expect(revokedCredential.statusCode).toBe(204);
+    expect((await app.inject({ method: "GET", url: "/api/admin/credentials", headers: { cookie: adminCookie } })).json().credentials).toEqual(expect.arrayContaining([expect.objectContaining({ id: memberCredential!.id, revokedAt: expect.any(String) })]));
+    expect((await app.inject({ method: "GET", url: "/api/admin/invitations", headers: { cookie: memberCookie } })).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: `/companies/${companyA.id}/settings`, headers: { cookie: adminCookie } })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: `/companies/${companyA.id}/settings`, headers: { cookie: memberCookie } })).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: `/api/companies/${companyA.id}`, headers: { cookie: memberCookie } })).statusCode).toBe(200);

@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 
 import type { AttentionService } from "../../attention.js";
 import type { AuthService } from "../../auth.js";
+import type { ForgeConfig } from "../../config.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { ProjectService } from "../../projects.js";
 import type { TaskService } from "../../tasks.js";
@@ -15,6 +16,7 @@ import tasks from "./tasks.js";
 
 export interface AuthenticatedRoutesOptions {
   auth: AuthService;
+  config?: ForgeConfig;
   projects?: ProjectService;
   tasks?: TaskService;
   attention?: AttentionService;
@@ -24,7 +26,7 @@ export interface AuthenticatedRoutesOptions {
 const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app, options) => {
   app.decorateRequest("forgeUser", undefined as unknown as import("../../auth.js").AuthUser);
   app.addHook("preHandler", async (request, reply) => {
-    const user = await sessionUser(options.auth, request);
+    const user = await sessionUser(options.auth, request, reply, options.config);
     if (!user) {
       reply.code(401).send({ error: "Authentication required" });
       return;

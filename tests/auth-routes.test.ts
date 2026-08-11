@@ -85,6 +85,8 @@ const policies: RoutePolicy[] = [
   { method: "GET", path: "/api/companies", kind: "read", allowed: ["admin", "member"], scope: "none" },
   { method: "GET", path: "/api/companies/:companyId", kind: "read", allowed: ["admin", "member"], scope: "company" },
   { method: "GET", path: "/api/admin/users", kind: "read", allowed: ["admin"], scope: "none" },
+  { method: "GET", path: "/api/admin/invitations", kind: "read", allowed: ["admin"], scope: "none" },
+  { method: "GET", path: "/api/admin/credentials", kind: "read", allowed: ["admin"], scope: "none" },
   { method: "GET", path: "/api/admin/audit", kind: "read", allowed: ["admin"], scope: "none" },
   { method: "GET", path: "/api/health", kind: "read", allowed: ["admin", "member"], scope: "none" },
 
@@ -94,11 +96,12 @@ const policies: RoutePolicy[] = [
   { method: "POST", path: "/api/admin/invitations", kind: "mutation", allowed: ["admin"], scope: "none", body: { displayName: "Invitee" }, successStatus: 201 },
   { method: "POST", path: "/api/admin/companies/:companyId/members", kind: "mutation", allowed: ["admin"], scope: "admin", body: { userId: ":userId" }, successStatus: 204 },
   { method: "DELETE", path: "/api/admin/companies/:companyId/members/:userId", kind: "mutation", allowed: ["admin"], scope: "admin", body: {}, successStatus: 204 },
+  { method: "POST", path: "/api/admin/credentials/:credentialId/revoke", kind: "mutation", allowed: ["admin"], scope: "admin", body: {}, successStatus: 204 },
   { method: "POST", path: "/api/admin/users/:userId/revoke", kind: "mutation", allowed: ["admin"], scope: "admin", body: {}, successStatus: 204 },
 ];
 
-function expandPath(path: string, companyId: string, userId: string): string {
-  return path.replace(":companyId", encodeURIComponent(companyId)).replace(":userId", encodeURIComponent(userId));
+function expandPath(path: string, companyId: string, userId: string, credentialId: string): string {
+  return path.replace(":companyId", encodeURIComponent(companyId)).replace(":userId", encodeURIComponent(userId)).replace(":credentialId", encodeURIComponent(credentialId));
 }
 
 function expandBody(body: Record<string, unknown> | undefined, companyId: string, userId: string): Record<string, unknown> | undefined {
@@ -170,12 +173,13 @@ test("route matrix is enforced: anonymous, role, company scope, and missing or w
 
     const adminCookie = await signInCookie(fixture.app, fixture.auth, "admin-policy-credential");
     const memberCookie = await signInCookie(fixture.app, fixture.auth, "member-policy-credential");
+    const memberCredential = fixture.auth.listCredentials(admin.user.id).find((credential) => credential.userId === member.user.id);
+    expect(memberCredential).toBeDefined();
 
     const company = fixture.auth.createCompany(admin.user.id, "Policy") as { id: string };
-    fixture.auth.addMembership(admin.user.id, member.user.id, company.id);
 
     for (const policy of policies) {
-      const target = expandPath(policy.path, company.id, member.user.id);
+      const target = expandPath(policy.path, company.id, member.user.id, memberCredential!.id);
       const body = expandBody(policy.body, company.id, member.user.id);
       const authSuccess = policy.authenticatedSuccessStatus ?? (policy.successStatus ?? 200);
 

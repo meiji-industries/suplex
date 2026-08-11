@@ -1,6 +1,6 @@
 [tools]
 node = "26.7.0"
-pnpm = "11.0.6"
+"npm:pnpm" = "11.0.6"
 
 [env]
 NODE_ENV = "development"

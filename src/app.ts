@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 import { AuthFailure, AuthService, type AuthUser } from "./auth.js";
 import type { ForgeConfig } from "./config.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
+import { ProjectFailure, ProjectService, type ProjectInput, type ProjectRole } from "./projects.js";
 import { HealthSnapshotSchema } from "./schemas.js";
 import { renderApplicationPage, renderHealthPage } from "./ui.js";
 
@@ -29,6 +30,7 @@ export interface AppDependencies {
   health: HostHealthDependencies;
   getHealth?: () => Promise<HealthSnapshot>;
   auth?: AuthService;
+  projects?: ProjectService;
 }
 
 export function createApp(dependencies: AppDependencies): FastifyInstance {
@@ -37,6 +39,7 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
   const getHealth = dependencies.getHealth ?? (() => inspectHostHealth(dependencies.config, dependencies.health));
   const readHealth = async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth());
   const auth = dependencies.auth;
+  const projects = dependencies.projects;
   const sessionUser = async (request: { cookies: Record<string, string | undefined> }): Promise<AuthUser | undefined> => auth?.getUserBySession(request.cookies.forge_session ?? "");
   const sendAuthError = (reply: { code: (statusCode: number) => { send: (body: object) => unknown } }, error: unknown): unknown => {
     if (error instanceof AuthFailure) {
@@ -84,6 +87,12 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
       return reply.redirect("/auth");
     }
     return reply.type("text/html; charset=utf-8").send(renderApplicationPage("admin"));
+  });
+  app.get("/projects", async (request, reply) => {
+    if (auth && !(await sessionUser(request))) {
+      return reply.redirect("/auth");
+    }
+    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("projects"));
   });
   app.get("/health", async (_request, reply) => {
     if (auth && !(await sessionUser(_request))) {
@@ -252,6 +261,87 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
         return sendAuthError(reply, error);
       }
     });
+    if (projects) {
+      const sendProjectError = (reply: { code: (statusCode: number) => { send: (body: object) => unknown } }, error: unknown): unknown => {
+        if (error instanceof ProjectFailure) {
+          return reply.code(error.statusCode).send({ error: error.publicMessage, findings: error.findings });
+        }
+        return reply.code(400).send({ error: "Project request failed" });
+      };
+      const projectInput = (request: { body: unknown }): ProjectInput => {
+        const body = requestBody(request);
+        const roleDefaults = body.roleDefaults && typeof body.roleDefaults === "object" && !Array.isArray(body.roleDefaults) ? body.roleDefaults as Record<string, unknown> : {};
+        return {
+          name: textBody(request, "name"),
+          repositoryPath: textBody(request, "repositoryPath"),
+          worktreeRoot: textBody(request, "worktreeRoot"),
+          repository: textBody(request, "repository"),
+          baseBranch: textBody(request, "baseBranch"),
+          targetBranch: textBody(request, "targetBranch"),
+          setupCommand: textBody(request, "setupCommand"),
+          verificationCommand: textBody(request, "verificationCommand"),
+          requiredChecks: Array.isArray(body.requiredChecks) ? body.requiredChecks.filter((value): value is string => typeof value === "string") : [],
+          allowedProfileIds: Array.isArray(body.allowedProfileIds) ? body.allowedProfileIds.filter((value): value is string => typeof value === "string") : [],
+          roleDefaults: Object.fromEntries(Object.entries(roleDefaults).filter(([role, value]) => ["lead", "developer", "reviewer"].includes(role) && typeof value === "string")) as Partial<Record<ProjectRole, string>>,
+        };
+      };
+      app.get("/api/profiles", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try { return reply.send({ profiles: projects.listProfiles(user.id) }); } catch (error) { return sendProjectError(reply, error); }
+      });
+      app.post("/api/admin/profiles", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        const body = requestBody(request);
+        try {
+          return reply.code(201).send(projects.createProfile(user.id, {
+            name: textBody(request, "name"),
+            model: textBody(request, "model"),
+            reasoningLevel: textBody(request, "reasoningLevel") as "low" | "medium" | "high",
+            servicePriority: textBody(request, "servicePriority") as "standard" | "priority",
+            capacity: typeof body.capacity === "number" ? body.capacity : Number(body.capacity),
+          }));
+        } catch (error) { return sendProjectError(reply, error); }
+      });
+      app.get("/api/projects", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try { return reply.send({ projects: projects.listProjects(user.id) }); } catch (error) { return sendProjectError(reply, error); }
+      });
+      app.get<{ Params: { companyId: string } }>("/api/companies/:companyId/projects", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try { return reply.send({ projects: projects.listProjects(user.id, request.params.companyId) }); } catch (error) { return sendProjectError(reply, error); }
+      });
+      app.post<{ Params: { companyId: string } }>("/api/companies/:companyId/projects", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try { return reply.code(201).send(await projects.createProject(user.id, request.params.companyId, projectInput(request))); } catch (error) { return sendProjectError(reply, error); }
+      });
+      app.get<{ Params: { projectId: string } }>("/api/projects/:projectId", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try { return reply.send(projects.getProject(user.id, request.params.projectId)); } catch (error) { return sendProjectError(reply, error); }
+      });
+      app.patch<{ Params: { projectId: string } }>("/api/projects/:projectId", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try { return reply.send(await projects.updateProject(user.id, request.params.projectId, projectInput(request))); } catch (error) { return sendProjectError(reply, error); }
+      });
+      for (const [path, action] of [["activate", "activateProject"], ["pause", "pauseProject"], ["archive", "archiveProject"]] as const) {
+        app.post<{ Params: { projectId: string } }>(`/api/projects/:projectId/${path}`, async (request, reply) => {
+          const user = await requireUser(request, reply);
+          if (!user) return reply;
+          try { return reply.send(await (action === "activateProject" ? projects.activateProject(user.id, request.params.projectId) : action === "pauseProject" ? projects.pauseProject(user.id, request.params.projectId) : projects.archiveProject(user.id, request.params.projectId))); } catch (error) { return sendProjectError(reply, error); }
+        });
+      }
+      app.post<{ Params: { companyId: string; status: "active" | "paused" | "archived" } }>("/api/admin/companies/:companyId/status/:status", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try { return reply.send(auth.setCompanyStatus(user.id, request.params.companyId, request.params.status)); } catch (error) { return sendAuthError(reply, error); }
+      });
+    }
   }
   app.get("/assets/forge-ui.js", async (_request, reply) => {
     try {

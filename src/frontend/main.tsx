@@ -43,15 +43,19 @@ function relativeTime(timestamp: string): string {
 async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}), ...(init?.headers ?? {}) } });
   const text = await response.text();
-  const body = (text ? JSON.parse(text) : {}) as T & { error?: string };
+  const body = (text ? JSON.parse(text) : {}) as T & { error?: string; findings?: Array<{ field: string; message: string }> };
   if (!response.ok) {
-    throw new Error(body.error ?? "Request failed");
+    const error = new Error(body.error ?? "Request failed") as Error & { findings?: Array<{ field: string; message: string }> };
+    if (body.findings) error.findings = body.findings;
+    throw error;
   }
   return body;
 }
 
 type ApiUser = { id: string; displayName: string; username: string; role: "admin" | "member"; status: string; companyIds: string[] };
-type ApiCompany = { id: string; name: string; createdAt: string };
+type ApiCompany = { id: string; name: string; status: string; createdAt: string };
+type ApiProfile = { id: string; name: string; model: string; reasoningLevel: string; servicePriority: string; capacity: number };
+type ApiProject = { id: string; companyId: string; name: string; repositoryPath: string; worktreeRoot: string; repository?: string; baseBranch: string; targetBranch: string; setupCommand: string; verificationCommand: string; requiredChecks: string[]; allowedProfileIds: string[]; roleDefaults: Record<string, string>; status: string; configurationRevision: number; configurationIdentity?: string };
 
 function AuthView(): ReactElement {
   const params = useMemo(() => new URLSearchParams(window.location.search), []);
@@ -111,8 +115,14 @@ function AdminView(): ReactElement {
   const [user, setUser] = useState<ApiUser>();
   const [users, setUsers] = useState<ApiUser[]>([]);
   const [companies, setCompanies] = useState<ApiCompany[]>([]);
+  const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   const [displayName, setDisplayName] = useState("");
   const [companyName, setCompanyName] = useState("");
+  const [profileName, setProfileName] = useState("");
+  const [profileModel, setProfileModel] = useState("gpt-5-codex");
+  const [profileReasoning, setProfileReasoning] = useState("medium");
+  const [profilePriority, setProfilePriority] = useState("standard");
+  const [profileCapacity, setProfileCapacity] = useState("2");
   const [inviteToken, setInviteToken] = useState("");
   const [error, setError] = useState("");
 
@@ -121,7 +131,8 @@ function AdminView(): ReactElement {
       const me = await readJson<{ user: ApiUser }>("/api/auth/me");
       setUser(me.user);
       const [userList, companyList] = await Promise.all([readJson<{ users: ApiUser[] }>("/api/admin/users"), readJson<{ companies: ApiCompany[] }>("/api/companies")]);
-      setUsers(userList.users); setCompanies(companyList.companies);
+      const profileList = await readJson<{ profiles: ApiProfile[] }>("/api/profiles").catch(() => ({ profiles: [] }));
+      setUsers(userList.users); setCompanies(companyList.companies); setProfiles(profileList.profiles);
     } catch (reason) {
       if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
       else setError("Unable to load administration");
@@ -134,6 +145,12 @@ function AdminView(): ReactElement {
   };
   const createCompany = async (): Promise<void> => {
     try { await readJson("/api/admin/companies", { method: "POST", body: JSON.stringify({ name: companyName }) }); setCompanyName(""); await reload(); } catch { setError("Unable to create company"); }
+  };
+  const createProfile = async (): Promise<void> => {
+    try { await readJson("/api/admin/profiles", { method: "POST", body: JSON.stringify({ name: profileName, model: profileModel, reasoningLevel: profileReasoning, servicePriority: profilePriority, capacity: Number(profileCapacity) }) }); setProfileName(""); await reload(); } catch { setError("Unable to create profile"); }
+  };
+  const changeCompanyStatus = async (companyId: string, status: "active" | "paused" | "archived"): Promise<void> => {
+    try { await readJson(`/api/admin/companies/${companyId}/status/${status}`, { method: "POST", body: "{}" }); await reload(); } catch { setError("Unable to change company status"); }
   };
   const changeMembership = async (companyId: string, targetUserId: string, add: boolean): Promise<void> => {
     try {
@@ -151,9 +168,78 @@ function AdminView(): ReactElement {
         <section className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 px-3 py-3 sm:px-4"><span className="text-xs text-muted-foreground">{user?.displayName ?? ""} · {user?.role ?? ""}</span><Button variant="ghost" size="sm" onClick={() => void signOut()}>Sign out</Button></section>
         <section className="grid gap-px border-b border-border/70 bg-border sm:grid-cols-2">
           <div className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Users</span><span className="text-[11px] text-muted-foreground">{users.length}</span></div><div className="mb-3 flex gap-2"><Input className="h-7 flex-1" placeholder="Display name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /><Button size="sm" onClick={() => void invite()}>Invite</Button></div>{inviteToken ? <code className="block break-all border border-border bg-muted/30 p-2 text-[11px]">{inviteToken}</code> : null}<div className="mt-3 divide-y divide-border/70 border-y border-border/70">{users.map((candidate) => <div className="flex min-h-8 items-center justify-between gap-2 text-xs" key={candidate.id}><span className="truncate">{candidate.displayName} <span className="text-muted-foreground">{candidate.status}</span></span>{candidate.role !== "admin" && candidate.status === "active" ? <Button variant="ghost" size="sm" onClick={() => void readJson(`/api/admin/users/${candidate.id}/revoke`, { method: "POST", body: "{}" }).then(() => reload()).catch(() => setError("Unable to revoke user"))}>Revoke</Button> : null}</div>)}</div></div>
-          <div className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Companies</span><span className="text-[11px] text-muted-foreground">{companies.length}</span></div><div className="mb-3 flex gap-2"><Input className="h-7 flex-1" placeholder="Company name" value={companyName} onChange={(event) => setCompanyName(event.target.value)} /><Button size="sm" onClick={() => void createCompany()}>Create</Button></div><div className="divide-y divide-border/70 border-y border-border/70">{companies.map((company) => <div className="py-2 text-xs" key={company.id}><div className="mb-2 flex items-center justify-between"><span>{company.name}</span><span className="text-muted-foreground">{company.id.slice(0, 8)}</span></div><div className="flex flex-wrap gap-1.5">{users.filter((candidate) => candidate.role === "member" && candidate.status === "active").map((candidate) => { const assigned = candidate.companyIds.includes(company.id); return <Button key={candidate.id} variant={assigned ? "secondary" : "outline"} size="sm" onClick={() => void changeMembership(company.id, candidate.id, !assigned)}>{assigned ? "− " : "+ "}{candidate.displayName}</Button>; })}</div></div>)}</div></div>
+          <div className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Companies</span><span className="text-[11px] text-muted-foreground">{companies.length}</span></div><div className="mb-3 flex gap-2"><Input className="h-7 flex-1" placeholder="Company name" value={companyName} onChange={(event) => setCompanyName(event.target.value)} /><Button size="sm" onClick={() => void createCompany()}>Create</Button></div><div className="divide-y divide-border/70 border-y border-border/70">{companies.map((company) => <div className="py-2 text-xs" key={company.id}><div className="mb-2 flex flex-wrap items-center justify-between gap-2"><span><span>{company.name}</span> <span className="text-muted-foreground">{company.status}</span></span><div className="flex items-center gap-1"><span className="text-muted-foreground">{company.id.slice(0, 8)}</span>{company.status === "active" ? <Button variant="ghost" size="sm" onClick={() => void changeCompanyStatus(company.id, "paused")}>Pause</Button> : null}{company.status !== "archived" ? <Button variant="ghost" size="sm" onClick={() => void changeCompanyStatus(company.id, "archived")}>Archive</Button> : null}</div></div><div className="flex flex-wrap gap-1.5">{users.filter((candidate) => candidate.role === "member" && candidate.status === "active").map((candidate) => { const assigned = candidate.companyIds.includes(company.id); return <Button key={candidate.id} variant={assigned ? "secondary" : "outline"} size="sm" onClick={() => void changeMembership(company.id, candidate.id, !assigned)}>{assigned ? "− " : "+ "}{candidate.displayName}</Button>; })}</div></div>)}</div></div>
         </section>
+        <section className="border-b border-border/70 bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Codex profiles</span><span className="text-[11px] text-muted-foreground">{profiles.length} configured</span></div><div className="mb-3 flex flex-wrap gap-2"><Input className="h-7 w-36" placeholder="Profile name" value={profileName} onChange={(event) => setProfileName(event.target.value)} /><Input className="h-7 w-36" placeholder="Model" value={profileModel} onChange={(event) => setProfileModel(event.target.value)} /><Input className="h-7 w-20" aria-label="Reasoning level" placeholder="Reasoning" value={profileReasoning} onChange={(event) => setProfileReasoning(event.target.value)} /><Input className="h-7 w-24" aria-label="Service priority" placeholder="Priority" value={profilePriority} onChange={(event) => setProfilePriority(event.target.value)} /><Input className="h-7 w-20" placeholder="Capacity" inputMode="numeric" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><Button size="sm" onClick={() => void createProfile()}>Create profile</Button></div><div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">{profiles.map((profile) => <span className="border border-border px-2 py-1" key={profile.id}>{profile.name} · {profile.model} · {profile.reasoningLevel} · {profile.servicePriority} · {profile.capacity} slots · {profile.id}</span>)}</div></section>
         {error ? <p role="alert" className="px-4 py-3 text-xs text-rose-700">{error}</p> : null}
+      </div>
+    </ApplicationFrame>
+  );
+}
+
+function ProjectsView(): ReactElement {
+  const [companies, setCompanies] = useState<ApiCompany[]>([]);
+  const [profiles, setProfiles] = useState<ApiProfile[]>([]);
+  const [projects, setProjects] = useState<ApiProject[]>([]);
+  const [companyId, setCompanyId] = useState("");
+  const [form, setForm] = useState({ name: "", repositoryPath: "", worktreeRoot: "", repository: "", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: "", allowedProfileIds: "", leadProfile: "", developerProfile: "", reviewerProfile: "" });
+  const [findings, setFindings] = useState<Array<{ field: string; message: string }>>([]);
+  const [error, setError] = useState("");
+
+  const reload = useCallback(async (): Promise<void> => {
+    try {
+      const [companyResult, profileResult, projectResult] = await Promise.all([
+        readJson<{ companies: ApiCompany[] }>("/api/companies"),
+        readJson<{ profiles: ApiProfile[] }>("/api/profiles"),
+        readJson<{ projects: ApiProject[] }>("/api/projects"),
+      ]);
+      setCompanies(companyResult.companies); setProfiles(profileResult.profiles); setProjects(projectResult.projects);
+      if (!companyId && companyResult.companies[0]) setCompanyId(companyResult.companies[0].id);
+    } catch (reason) {
+      if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
+      else setError("Unable to load projects");
+    }
+  }, [companyId]);
+  useEffect(() => { void reload(); }, [reload]);
+
+  const setField = (key: keyof typeof form, value: string): void => setForm((current) => ({ ...current, [key]: value }));
+  const createProject = async (): Promise<void> => {
+    setError(""); setFindings([]);
+    try {
+      await readJson<ApiProject>(`/api/companies/${companyId}/projects`, {
+        method: "POST",
+        body: JSON.stringify({
+          ...form,
+          requiredChecks: form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean),
+          allowedProfileIds: form.allowedProfileIds.split(",").map((value) => value.trim()).filter(Boolean),
+          roleDefaults: { lead: form.leadProfile, developer: form.developerProfile, reviewer: form.reviewerProfile },
+        }),
+      });
+      await reload();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Project configuration failed");
+      if (reason instanceof Error && "findings" in reason) setFindings((reason as Error & { findings?: Array<{ field: string; message: string }> }).findings ?? []);
+    }
+  };
+  const changeStatus = async (projectId: string, status: "activate" | "pause" | "archive"): Promise<void> => {
+    setError(""); setFindings([]);
+    try { await readJson(`/api/projects/${projectId}/${status}`, { method: "POST", body: "{}" }); await reload(); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Project update failed"); if (reason instanceof Error && "findings" in reason) setFindings((reason as Error & { findings?: Array<{ field: string; message: string }> }).findings ?? []); }
+  };
+  return (
+    <ApplicationFrame title="Projects">
+      <div className="min-h-screen bg-background text-foreground">
+        <header className="flex h-10 items-center justify-between border-b border-border/70 px-3 sm:px-4"><div className="flex items-center gap-2"><span className="text-[13px] font-semibold">Projects</span><span className="text-xs text-muted-foreground">{projects.length}</span></div><a className="text-xs text-muted-foreground hover:text-foreground" href="/admin">Administration</a></header>
+        <div className="grid gap-px border-b border-border/70 bg-border lg:grid-cols-[minmax(260px,360px)_1fr]">
+          <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">New project</span><span className="text-[11px] text-muted-foreground">Draft first</span></div>
+            <label className="mb-1 block text-[11px] text-muted-foreground" htmlFor="project-company">Company</label><select id="project-company" className="mb-2 h-7 w-full border border-input bg-background px-2 text-xs" value={companyId} onChange={(event) => setCompanyId(event.target.value)}>{companies.map((company) => <option value={company.id} key={company.id}>{company.name} · {company.status}</option>)}</select>
+            <div className="grid gap-2">{(["name", "repositoryPath", "worktreeRoot", "repository", "baseBranch", "targetBranch", "setupCommand", "verificationCommand", "requiredChecks", "allowedProfileIds", "leadProfile", "developerProfile", "reviewerProfile"] as const).map((field) => <Input key={field} aria-label={field} placeholder={field} value={form[field]} onChange={(event) => setField(field, event.target.value)} />)}</div>
+            <Button className="mt-3 w-full" onClick={() => void createProject()} disabled={!companyId}>Create draft</Button>
+            {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
+            {findings.length ? <ul className="mt-3 space-y-1 text-xs text-rose-700">{findings.map((item, index) => <li key={`${item.field}-${index}`}>{item.field}: {item.message}</li>)}</ul> : null}
+          </section>
+          <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Configured projects</span><span className="text-[11px] text-muted-foreground">Profiles: {profiles.length}</span></div><div className="divide-y divide-border/70 border-y border-border/70">{projects.map((project) => <article className="py-3" key={project.id}><div className="flex flex-wrap items-center justify-between gap-2"><div><span className="text-[13px] font-medium">{project.name}</span><span className="ml-2 text-[11px] text-muted-foreground">{project.status} · revision {project.configurationRevision}</span></div><div className="flex gap-1.5">{project.status === "draft" ? <Button size="sm" onClick={() => void changeStatus(project.id, "activate")}>Activate</Button> : null}{project.status === "active" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "pause")}>Pause</Button> : null}{project.status !== "archived" && project.status !== "draft" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "archive")}>Archive</Button> : null}<a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></div><div className="mt-2 grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Base {project.baseBranch}</span><span>Target {project.targetBranch}</span></div></article>)}{projects.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">No projects configured.</div> : null}</div></section>
+        </div>
       </div>
     </ApplicationFrame>
   );
@@ -283,4 +369,4 @@ function Dashboard({ initialSnapshot }: { initialSnapshot: HealthSnapshot }): Re
 }
 
 const view = window.__FORGE_VIEW__;
-createRoot(document.getElementById("forge-app")!).render(view === "auth" ? <AuthView /> : view === "admin" ? <AdminView /> : <Dashboard initialSnapshot={window.__FORGE_HEALTH__} />);
+createRoot(document.getElementById("forge-app")!).render(view === "auth" ? <AuthView /> : view === "admin" ? <AdminView /> : view === "projects" ? <ProjectsView /> : <Dashboard initialSnapshot={window.__FORGE_HEALTH__} />);

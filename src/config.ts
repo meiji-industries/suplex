@@ -19,6 +19,8 @@ export interface ForgeConfig {
   databasePath: string;
   artifactRoot: string;
   runtimeRoot: string;
+  repositoryRoot: string;
+  worktreeRoot: string;
   temporalAddress: string;
   temporalNamespace: string;
   taskQueue: string;
@@ -162,6 +164,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
     databasePath: parsedEnvironment.data.FORGE_DATABASE_PATH ? resolve(parsedEnvironment.data.FORGE_DATABASE_PATH) : resolve(dataRoot, "forge.sqlite"),
     artifactRoot: parsedEnvironment.data.FORGE_ARTIFACT_ROOT ? resolve(parsedEnvironment.data.FORGE_ARTIFACT_ROOT) : resolve(dataRoot, "artifacts"),
     runtimeRoot: parsedEnvironment.data.FORGE_RUNTIME_ROOT ? resolve(parsedEnvironment.data.FORGE_RUNTIME_ROOT) : resolve(dataRoot, "runtime"),
+    repositoryRoot: resolve(parsedEnvironment.data.FORGE_REPOSITORY_ROOT ?? process.cwd()),
+    worktreeRoot: resolve(parsedEnvironment.data.FORGE_WORKTREE_ROOT ?? resolve(dataRoot, "worktrees")),
     temporalAddress: parsedEnvironment.data.FORGE_TEMPORAL_ADDRESS ?? "127.0.0.1:7233",
     temporalNamespace,
     taskQueue,
@@ -183,6 +187,8 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     databasePath: overrides.databasePath ?? resolve(dataRoot, "forge.sqlite"),
     artifactRoot: overrides.artifactRoot ?? resolve(dataRoot, "artifacts"),
     runtimeRoot: overrides.runtimeRoot ?? resolve(dataRoot, "runtime"),
+    repositoryRoot: overrides.repositoryRoot ?? resolve(dataRoot, "repositories"),
+    worktreeRoot: overrides.worktreeRoot ?? resolve(dataRoot, "worktrees"),
     temporalAddress: overrides.temporalAddress ?? "127.0.0.1:7233",
     temporalNamespace: overrides.temporalNamespace ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").namespace,
     taskQueue: overrides.taskQueue ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").taskQueue,

@@ -33,6 +33,7 @@ export interface AuthUser {
 export interface Company {
   id: string;
   name: string;
+  status: "active" | "paused" | "archived";
   createdAt: string;
 }
 
@@ -171,6 +172,7 @@ interface SessionRow extends UserRow {
 interface CompanyRow {
   id: string;
   name: string;
+  status: "active" | "paused" | "archived";
   created_at: string;
 }
 
@@ -430,6 +432,21 @@ export class AuthService {
     return this.database.authQuery((db) => this.userWithCompanies(db, row));
   }
 
+  getUserForAuthority(userId: string): AuthUser | undefined {
+    return this.database.authQuery((db) => {
+      const row = db.prepare("SELECT id, display_name, username, role, status FROM forge_users WHERE id = ? AND status = 'active'").get(userId) as UserRow | undefined;
+      return row ? this.userWithCompanies(db, row) : undefined;
+    });
+  }
+
+  recordAuditEvent(actorUserId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
+    this.database.authTransaction((db) => this.audit(db, actorUserId ?? null, action, targetUserId ?? null, companyId ?? null, metadata));
+  }
+
+  recordAuditEventInTransaction(database: import("better-sqlite3").Database, actorUserId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
+    this.audit(database, actorUserId ?? null, action, targetUserId ?? null, companyId ?? null, metadata);
+  }
+
   signOut(rawToken: string): void {
     if (!rawToken) {
       return;
@@ -486,9 +503,9 @@ export class AuthService {
     }
     return this.database.authTransaction((db) => {
       this.requireAdmin(db, actorUserId);
-      const company = { id: id("company"), name: name.data, createdAt: this.now().toISOString() };
+      const company = { id: id("company"), name: name.data, status: "active" as const, createdAt: this.now().toISOString() };
       try {
-        db.prepare("INSERT INTO forge_companies (id, name, created_at) VALUES (?, ?, ?)").run(company.id, company.name, company.createdAt);
+        db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES (?, ?, 'active', ?)").run(company.id, company.name, company.createdAt);
       } catch {
         throw new AuthFailure("Company name is already in use");
       }
@@ -497,13 +514,25 @@ export class AuthService {
     });
   }
 
+  setCompanyStatus(actorUserId: string, companyId: string, status: "active" | "paused" | "archived"): Company {
+    if (!["active", "paused", "archived"].includes(status)) throw new AuthFailure("Company status is invalid");
+    return this.database.authTransaction((db) => {
+      this.requireAdmin(db, actorUserId);
+      const company = db.prepare("SELECT id, name, status, created_at FROM forge_companies WHERE id = ?").get(companyId) as CompanyRow | undefined;
+      if (!company) throw new AuthFailure("Not found", 404);
+      db.prepare("UPDATE forge_companies SET status = ? WHERE id = ?").run(status, companyId);
+      this.audit(db, actorUserId, `company_${status}`, null, companyId, {});
+      return { id: company.id, name: company.name, status, createdAt: company.created_at };
+    });
+  }
+
   listVisibleCompanies(actorUserId: string): Company[] {
     return this.database.authQuery((db) => {
       const user = this.requireUser(db, actorUserId);
       const rows = user.role === "admin"
-        ? db.prepare("SELECT id, name, created_at FROM forge_companies ORDER BY name").all()
-        : db.prepare("SELECT c.id, c.name, c.created_at FROM forge_companies c JOIN forge_memberships m ON m.company_id = c.id WHERE m.user_id = ? ORDER BY c.name").all(actorUserId);
-      return (rows as CompanyRow[]).map((row) => ({ id: row.id, name: row.name, createdAt: row.created_at }));
+        ? db.prepare("SELECT id, name, status, created_at FROM forge_companies ORDER BY name").all()
+        : db.prepare("SELECT c.id, c.name, c.status, c.created_at FROM forge_companies c JOIN forge_memberships m ON m.company_id = c.id WHERE m.user_id = ? ORDER BY c.name").all(actorUserId);
+      return (rows as CompanyRow[]).map((row) => ({ id: row.id, name: row.name, status: row.status, createdAt: row.created_at }));
     });
   }
 
@@ -515,13 +544,13 @@ export class AuthService {
     return this.database.authQuery((db) => {
       const user = this.requireUser(db, actorUserId);
       const row = user.role === "admin"
-        ? db.prepare("SELECT id, name, created_at FROM forge_companies WHERE id = ?").get(companyId)
-        : db.prepare("SELECT c.id, c.name, c.created_at FROM forge_companies c JOIN forge_memberships m ON m.company_id = c.id WHERE c.id = ? AND m.user_id = ?").get(companyId, actorUserId);
+        ? db.prepare("SELECT id, name, status, created_at FROM forge_companies WHERE id = ?").get(companyId)
+        : db.prepare("SELECT c.id, c.name, c.status, c.created_at FROM forge_companies c JOIN forge_memberships m ON m.company_id = c.id WHERE c.id = ? AND m.user_id = ?").get(companyId, actorUserId);
       if (!row) {
         throw new AuthFailure("Not found", 404);
       }
       const company = row as CompanyRow;
-      return { id: company.id, name: company.name, createdAt: company.created_at };
+      return { id: company.id, name: company.name, status: company.status, createdAt: company.created_at };
     });
   }
 

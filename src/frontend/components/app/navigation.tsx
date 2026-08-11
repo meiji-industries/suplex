@@ -1,4 +1,4 @@
-import { Activity, ChevronRight, Server, ShieldCheck } from "lucide-react";
+import { Activity, ChevronRight, FolderGit2, ShieldCheck } from "lucide-react";
 import { useState, type ReactElement } from "react";
 
 import { Button } from "../ui/button.js";
@@ -13,7 +13,7 @@ function NavigationLinks({ close }: { close?: () => void }): ReactElement {
     <nav aria-label="Forge navigation" className="space-y-0.5 text-[13px]">
       <a className="flex h-7 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground" href="/health" onClick={close}><Activity className="size-3.5" />Overview</a>
       <a aria-current="page" className="flex h-7 items-center gap-2 rounded-md bg-sidebar-accent px-2 font-medium text-sidebar-foreground" href="/health" onClick={close}><ShieldCheck className="size-3.5 text-primary" />Host health</a>
-      <span className="flex h-7 cursor-not-allowed items-center gap-2 rounded-md px-2 text-muted-foreground/45"><Server className="size-3.5" />Projects</span>
+      <a className="flex h-7 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground" href="/projects" onClick={close}><FolderGit2 className="size-3.5" />Projects</a>
     </nav>
   );
 }

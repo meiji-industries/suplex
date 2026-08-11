@@ -26,3 +26,14 @@ piece of information.
 
 Before finishing frontend work, run the app and inspect the changed interface
 with the Playwright browser proof at desktop and narrow viewport sizes.
+
+## Dev workflow
+
+Vite does not auto-reload all frontend changes in this repo. After editing
+`src/frontend/*.tsx`, `src/app.ts`, or other server/frontend files, stop and
+restart the dev server:
+
+```bash
+FORGE_TAILSCALE_ADDRESS="pro2.tail1234.ts.net" npm run forge -- stop
+mise run dev
+```

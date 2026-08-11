@@ -4,6 +4,7 @@ import { Input } from "./components/ui/input.js";
 import { Dialog } from "./components/ui/dialog.js";
 import { ApplicationFrame } from "./components/app/application-frame.js";
 import { CompanyProvider, useCompanyContext } from "./components/app/company-context.js";
+import { SettingsLayout, SettingsSection, SettingRow } from "./components/app/settings-layout.js";
 import { isApiError, readJson, withCompany, type ApiUser, type CompanyStatus } from "./lib/api.js";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import type { HealthCheck, HealthSnapshot } from "../health.js";
@@ -442,27 +443,33 @@ function CompanySettingsView(): ReactElement {
     finally { setBusy(""); }
   };
 
+  const backHref = withCompany("/projects", company.id);
+
   return (
-    <ApplicationFrame title="Company settings">
-      <div className="max-w-3xl divide-y divide-border/70">
-        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 px-3 py-3 sm:px-4"><div><div className="text-[13px] font-semibold">{company.name}</div><div className="mt-1 text-[11px] text-muted-foreground">Company settings · {company.status}</div></div><span className="text-[11px] text-muted-foreground">{company.id}</span></div>
-        <section className="p-3 sm:p-4">
-          <div className="border border-border/70">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 px-3 py-2"><span className="text-xs font-semibold">Details</span><span className="text-[11px] text-muted-foreground">Created {new Date(company.createdAt).toLocaleDateString()}</span></div>
-            <div className="grid gap-2 p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"><div><label className="mb-1 block text-[11px] text-muted-foreground" htmlFor="company-name">Company name</label><Input id="company-name" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} /></div><Button size="sm" onClick={() => void save()} disabled={busy !== "" || !name.trim() || name.trim() === company.name}><Save className="size-3.5" />{busy === "rename" ? "Saving…" : saved ? "Saved" : "Save"}</Button></div>
-            {error ? <p role="alert" className="px-3 pb-3 text-xs text-rose-700">{error}</p> : null}
-            <div className="grid gap-2 border-t border-border/70 px-3 py-3 text-xs sm:grid-cols-[max-content_1fr]"><span className="text-[11px] text-muted-foreground">Status</span><span>{company.status}</span><span className="text-[11px] text-muted-foreground">Company ID</span><code className="select-all text-[11px] text-muted-foreground">{company.id}</code></div>
-          </div>
-        </section>
-        <section className="p-3 sm:p-4"><div className="mb-2 text-xs font-semibold">Lifecycle</div><div className="divide-y divide-border/70 border border-border/70 text-xs">
-          {company.status === "active" ? <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3"><div><div className="font-medium">Pause company</div><div className="mt-1 text-[11px] text-muted-foreground">Existing records remain available; new projects and tasks are blocked.</div></div><Button variant="outline" size="sm" onClick={() => void mutateStatus("paused")} disabled={busy !== ""}><Pause className="size-3.5" />{busy === "paused" ? "Pausing…" : "Pause company"}</Button></div> : null}
-          {company.status === "paused" ? <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3"><div><div className="font-medium">Reactivate company</div><div className="mt-1 text-[11px] text-muted-foreground">Restore creation of new projects and tasks.</div></div><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Reactivating…" : "Reactivate company"}</Button></div> : null}
-          {company.status !== "archived" ? <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3"><div><div className="font-medium text-rose-700">Archive company</div><div className="mt-1 text-[11px] text-muted-foreground">Archive is reversible, retains history, and blocks new work.</div></div><Button variant="outline" size="sm" className="text-rose-700" onClick={() => setArchiveOpen(true)} disabled={busy !== ""}><Archive className="size-3.5" />Archive company</Button></div> : null}
-          {company.status === "archived" ? <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3"><div><div className="font-medium">Restore company</div><div className="mt-1 text-[11px] text-muted-foreground">Restore the company to active status.</div></div><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Restoring…" : "Restore company"}</Button></div> : null}
-        </div></section>
-      </div>
+    <SettingsLayout title="Workspace" companyId={company.id} backHref={backHref}>
+      <SettingsSection title="Profile">
+        <SettingRow label="Company name" description="Public workspace name.">
+          <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+            <Input id="company-name" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} className="w-56" />
+            <Button type="submit" size="sm" disabled={busy !== "" || !name.trim() || name.trim() === company.name}><Save className="size-3.5" />{busy === "rename" ? "Saving…" : saved ? "Saved" : "Save"}</Button>
+          </form>
+        </SettingRow>
+        <SettingRow label="Company ID" description="Unique identifier.">
+          <code className="select-all text-xs text-muted-foreground">{company.id}</code>
+        </SettingRow>
+        <SettingRow label="Created" description={new Date(company.createdAt).toLocaleDateString()}>
+          <span className="text-xs text-muted-foreground">{new Date(company.createdAt).toLocaleDateString()}</span>
+        </SettingRow>
+      </SettingsSection>
+      {error ? <p role="alert" className="mb-4 text-xs text-rose-700">{error}</p> : null}
+      <SettingsSection title="Lifecycle" description="Control workspace activity.">
+        {company.status === "active" ? <SettingRow label="Pause company" description="Existing records remain available; new projects and tasks are blocked."><Button variant="outline" size="sm" onClick={() => void mutateStatus("paused")} disabled={busy !== ""}><Pause className="size-3.5" />{busy === "paused" ? "Pausing…" : "Pause company"}</Button></SettingRow> : null}
+        {company.status === "paused" ? <SettingRow label="Reactivate company" description="Restore creation of new projects and tasks."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Reactivating…" : "Reactivate company"}</Button></SettingRow> : null}
+        {company.status !== "archived" ? <SettingRow label="Archive company" description="Archive is reversible, retains history, and blocks new work." destructive><Button variant="outline" size="sm" className="text-rose-700" onClick={() => setArchiveOpen(true)} disabled={busy !== ""}><Archive className="size-3.5" />Archive company</Button></SettingRow> : null}
+        {company.status === "archived" ? <SettingRow label="Restore company" description="Restore the company to active status."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Restoring…" : "Restore company"}</Button></SettingRow> : null}
+      </SettingsSection>
       <Dialog.Root open={archiveOpen} onOpenChange={setArchiveOpen}><Dialog.Portal><Dialog.Backdrop className="fixed inset-0 z-50 bg-black/20" /><Dialog.Popup className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,380px)] -translate-x-1/2 -translate-y-1/2 border border-border bg-background p-4 shadow-lg outline-none"><Dialog.Title className="text-[13px] font-semibold">Archive {company.name}?</Dialog.Title><Dialog.Description className="mt-2 text-xs text-muted-foreground">This is reversible. Project and task history remains readable, but new work is blocked.</Dialog.Description><div className="mt-4 flex justify-end gap-2"><Dialog.Close render={<Button variant="ghost" size="sm">Cancel</Button>} /><Button variant="outline" size="sm" className="text-rose-700" onClick={() => void mutateStatus("archived")} disabled={busy !== ""}>{busy === "archived" ? "Archiving…" : "Archive"}</Button></div></Dialog.Popup></Dialog.Portal></Dialog.Root>
-    </ApplicationFrame>
+    </SettingsLayout>
   );
 }
 

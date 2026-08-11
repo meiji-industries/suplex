@@ -3,6 +3,7 @@ import { useState, type FormEvent, type ReactElement } from "react";
 
 import { Button } from "../ui/button.js";
 import { Dialog } from "../ui/dialog.js";
+import { Field, FieldLabel } from "../ui/field.js";
 import { Menu } from "../ui/menu.js";
 import { Input } from "../ui/input.js";
 import { companyInitials, withCompany } from "../../lib/api.js";
@@ -45,8 +46,10 @@ function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChan
         <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,360px)] -translate-x-1/2 -translate-y-1/2 border border-border bg-background p-4 shadow-lg outline-none">
           <div className="mb-3 flex items-center justify-between"><Dialog.Title className="text-[13px] font-semibold">Create company</Dialog.Title><Dialog.Close render={<Button variant="ghost" size="icon" aria-label="Close"><X className="size-3.5" /></Button>} /></div>
           <form onSubmit={(event) => void submit(event)}>
-            <label className="mb-1 block text-[11px] text-muted-foreground" htmlFor="create-company-name">Company name</label>
-            <Input id="create-company-name" autoFocus className="w-full" value={name} onChange={(event) => setName(event.target.value)} />
+            <Field>
+              <FieldLabel htmlFor="create-company-name">Company name</FieldLabel>
+              <Input id="create-company-name" autoFocus value={name} onChange={(event) => setName(event.target.value)} />
+            </Field>
             {error ? <p role="alert" className="mt-2 text-xs text-rose-700">{error}</p> : null}
             <div className="mt-4 flex justify-end gap-2"><Dialog.Close render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || !name.trim()}>{busy ? "Creating…" : "Create"}</Button></div>
           </form>

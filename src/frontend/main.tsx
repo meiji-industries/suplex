@@ -1,8 +1,12 @@
 import { Collapsible } from "./components/ui/collapsible.js";
 import { Button } from "./components/ui/button.js";
 import { Badge } from "./components/ui/badge.js";
+import { Checkbox } from "./components/ui/checkbox.js";
+import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "./components/ui/field.js";
 import { Input } from "./components/ui/input.js";
 import { InlineAttachmentPicker } from "./components/ui/inline-attachment-picker.js";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select.js";
+import { Textarea } from "./components/ui/textarea.js";
 import { Dialog } from "./components/ui/dialog.js";
 import { CreateButton } from "./components/ui/create-button.js";
 import { ApplicationFrame } from "./components/app/application-frame.js";
@@ -118,7 +122,7 @@ function AuthView(): ReactElement {
       <div className="mx-auto max-w-md px-4 py-4 sm:px-8">
         <div className="border border-border bg-card p-4">
           <div className="mb-5 flex items-center justify-between"><span className="text-[13px] font-semibold">{enrollment ? "Passkey enrollment" : "Passkey sign-in"}</span><span className="text-xs text-muted-foreground">No password</span></div>
-          {enrollment ? <><label className="mb-1 block text-xs text-muted-foreground" htmlFor="invitation">Invitation token</label><Input id="invitation" className="mb-3 w-full" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} /><Button className="w-full" onClick={() => void enroll()} disabled={busy || token.length < 16}>{busy ? "Waiting for passkey…" : "Enroll passkey"}</Button></> : <Button className="w-full" onClick={() => void signIn()} disabled={busy}>{busy ? "Waiting for passkey…" : "Sign in with passkey"}</Button>}
+          {enrollment ? <FieldGroup><Field><FieldLabel htmlFor="invitation">Invitation token</FieldLabel><Input id="invitation" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} /></Field><Button onClick={() => void enroll()} disabled={busy || token.length < 16}>{busy ? "Waiting for passkey…" : "Enroll passkey"}</Button></FieldGroup> : <Button className="w-full" onClick={() => void signIn()} disabled={busy}>{busy ? "Waiting for passkey…" : "Sign in with passkey"}</Button>}
           {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
         </div>
       </div>
@@ -265,7 +269,13 @@ function AdminView(): ReactElement {
         <section className="grid gap-px border-b border-border/70 bg-border sm:grid-cols-2">
           <div className="bg-background p-4">
             <div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Users</span><span className="text-[11px] text-muted-foreground">{users.length}</span></div>
-            <div className="mb-3 flex gap-2"><Input className="h-7 flex-1" placeholder="Display name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /><Button size="sm" onClick={() => void invite()}>Invite</Button></div>
+            <FieldGroup>
+              <Field>
+                <FieldLabel htmlFor="invite-display-name">Display name</FieldLabel>
+                <Input id="invite-display-name" placeholder="Forge user" value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+              </Field>
+              <Button size="sm" onClick={() => void invite()}>Invite</Button>
+            </FieldGroup>
             {inviteToken ? <div className="border border-border bg-muted/30 p-2"><div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground"><span>Invitation · shown once</span><span>Expires {adminDate(inviteExpiresAt)}</span></div><code className="block break-all text-[11px]">{inviteToken}</code><Button className="mt-2" variant="outline" size="sm" onClick={() => void copyInvitation()}>{copied ? "Copied" : "Copy invitation"}</Button></div> : null}
             <div className="mt-3 divide-y divide-border/70 border-y border-border/70">{users.map((candidate) => <div className="flex min-h-8 items-center justify-between gap-2 text-xs" key={candidate.id}><span className="min-w-0 truncate">{candidate.displayName} <span className="text-muted-foreground">{candidate.status}</span></span>{candidate.role !== "admin" && candidate.status === "active" ? <span className="flex shrink-0 items-center gap-1">{pendingAction === `user:${candidate.id}` ? <span className="text-[11px] text-muted-foreground">Confirm</span> : null}<Button variant="ghost" size="sm" onClick={() => void revokeUser(candidate)}>{pendingAction === `user:${candidate.id}` ? "Confirm revoke" : "Revoke"}</Button>{pendingAction === `user:${candidate.id}` ? <Button variant="ghost" size="sm" onClick={() => setPendingAction("")}>Cancel</Button> : null}</span> : null}</div>)}</div>
           </div>
@@ -281,20 +291,24 @@ function AdminView(): ReactElement {
         {isProfiles ? (<>
           <section className="border-b border-border/70 bg-background p-4">
             <div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Codex profiles</span><span className="text-[11px] text-muted-foreground">{profiles.length} configured</span></div>
-            <div className="mb-3 flex flex-wrap gap-2">
-              <Input className="h-7 w-36" placeholder="Profile name" value={profileName} onChange={(event) => setProfileName(event.target.value)} />
-              <select aria-label="Model" className="h-7 min-w-44 border border-input bg-background px-2 text-xs" value={profileModel} onChange={(event) => setProfileModel(event.target.value)}>{models.filter((model) => model.status === "active").map((model) => <option key={model.id} value={model.id}>{model.displayName} · {model.id}</option>)}</select>
-              <select aria-label="Reasoning level" className="h-7 border border-input bg-background px-2 text-xs" value={profileReasoning} onChange={(event) => setProfileReasoning(event.target.value)}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
-              <select aria-label="Service priority" className="h-7 border border-input bg-background px-2 text-xs" value={profilePriority} onChange={(event) => setProfilePriority(event.target.value)}><option value="standard">Standard</option><option value="priority">Priority</option></select>
-              <Input className="h-7 w-20" aria-label="Capacity" placeholder="Capacity" inputMode="numeric" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} />
+            <FieldGroup>
+              <Field><FieldLabel htmlFor="profile-name">Profile name</FieldLabel><Input id="profile-name" value={profileName} onChange={(event) => setProfileName(event.target.value)} /></Field>
+              <Field><FieldLabel htmlFor="profile-model">Model</FieldLabel><Select value={profileModel || null} onValueChange={(value) => setProfileModel(value ?? "")}><SelectTrigger id="profile-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{models.filter((model) => model.status === "active").map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field>
+              <Field><FieldLabel htmlFor="profile-reasoning">Reasoning level</FieldLabel><Select value={profileReasoning} onValueChange={(value) => setProfileReasoning(value ?? "medium")}><SelectTrigger id="profile-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem></SelectContent></Select></Field>
+              <Field><FieldLabel htmlFor="profile-priority">Service priority</FieldLabel><Select value={profilePriority} onValueChange={(value) => setProfilePriority(value ?? "standard")}><SelectTrigger id="profile-priority"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="standard">Standard</SelectItem><SelectItem value="priority">Priority</SelectItem></SelectContent></Select></Field>
+              <Field><FieldLabel htmlFor="profile-capacity">Capacity</FieldLabel><Input id="profile-capacity" inputMode="numeric" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><FieldDescription>Maximum concurrent work slots.</FieldDescription></Field>
               <Button size="sm" onClick={() => void createProfile()} disabled={!profileName.trim() || !profileModel}>Create profile</Button>
-            </div>
+            </FieldGroup>
             <div className="divide-y divide-border/70 border-y border-border/70 text-xs">{profiles.map((profile) => <div className="flex min-h-9 items-center justify-between gap-3" key={profile.id}><span className="font-medium">{profile.name}</span><span className="truncate text-[11px] text-muted-foreground">{profile.model} · {profile.reasoningLevel} · {profile.servicePriority} · {profile.capacity} slots</span></div>)}</div>
           </section>
           <section className="border-b border-border/70 bg-background p-4">
             <div className="mb-1 flex items-center justify-between"><span className="text-xs font-semibold">Model catalog</span><span className="text-[11px] text-muted-foreground">Database backed</span></div>
             <p className="mb-3 text-[11px] text-muted-foreground">Models available when creating Codex profiles. Retiring a model preserves existing profiles.</p>
-            <div className="mb-3 flex flex-wrap gap-2"><Input className="h-7 w-44" placeholder="Model ID" value={modelId} onChange={(event) => setModelId(event.target.value)} /><Input className="h-7 w-44" placeholder="Display name" value={modelName} onChange={(event) => setModelName(event.target.value)} /><Button variant="outline" size="sm" onClick={() => void createModel()} disabled={!modelId.trim() || !modelName.trim()}>Add model</Button></div>
+            <FieldGroup>
+              <Field><FieldLabel htmlFor="model-id">Model ID</FieldLabel><Input id="model-id" placeholder="gpt-5-codex" value={modelId} onChange={(event) => setModelId(event.target.value)} /></Field>
+              <Field><FieldLabel htmlFor="model-display-name">Display name</FieldLabel><Input id="model-display-name" value={modelName} onChange={(event) => setModelName(event.target.value)} /></Field>
+              <Button variant="outline" size="sm" onClick={() => void createModel()} disabled={!modelId.trim() || !modelName.trim()}>Add model</Button>
+            </FieldGroup>
             <div className="divide-y divide-border/70 border-y border-border/70">{models.map((model) => <div className="flex min-h-10 items-center justify-between gap-3 text-xs" key={model.id}><div className="min-w-0"><div className="font-medium">{model.displayName} <code className="ml-1 text-[11px] font-normal text-muted-foreground">{model.id}</code></div><div className="truncate text-[11px] text-muted-foreground">{model.description || "No description"}</div></div><Button variant="ghost" size="sm" onClick={() => void toggleModel(model)}>{model.status === "active" ? "Retire" : "Restore"}</Button></div>)}</div>
           </section>
         </>) : null}
@@ -368,11 +382,11 @@ function CreateProjectDialog({
             <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p>
           ) : (
             <form className="grid gap-3" onSubmit={(event: FormEvent) => void submit(event)}>
-              <label className="grid gap-1 text-[11px] text-muted-foreground" htmlFor="project-repository-url">
-                GitHub repository URL
+              <Field>
+                <FieldLabel htmlFor="project-repository-url">GitHub repository URL</FieldLabel>
                 <Input id="project-repository-url" name="repositoryUrl" autoFocus autoComplete="off" spellCheck={false} placeholder="https://github.com/owner/repository" aria-describedby="project-repository-hint" value={repositoryUrl} onChange={(event) => setRepositoryUrl(event.target.value)} />
-              </label>
-              <p id="project-repository-hint" className="text-[11px] leading-4 text-muted-foreground">HTTPS and SSH URLs are supported. Forge clones into <span className="font-mono">~/forge/repos</span> and creates worktrees in <span className="font-mono">~/forge/worktrees</span>.</p>
+                <FieldDescription id="project-repository-hint">HTTPS and SSH URLs are supported. Forge clones into <span className="font-mono">~/forge/repos</span> and creates worktrees in <span className="font-mono">~/forge/worktrees</span>.</FieldDescription>
+              </Field>
               <div className="mt-1 flex justify-end gap-2">
                 <Dialog.Close render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} />
                 <Button type="submit" size="sm" disabled={busy || !companyId || !repositoryUrl.trim()}>{busy ? "Cloning…" : "Create project"}</Button>
@@ -549,20 +563,29 @@ function ProjectSettingsDialog({
             <div><Dialog.Title className="text-[13px] font-semibold">Project settings</Dialog.Title><p className="mt-0.5 text-[11px] text-muted-foreground">{project?.repository}</p></div>
             <Dialog.Close render={<Button variant="ghost" size="icon" aria-label="Close"><X className="size-3.5" /></Button>} />
           </div>
-          {project && form ? <form className="grid gap-3 sm:grid-cols-2" onSubmit={(event) => void submit(event)}>
-            <div className={`grid gap-2 border px-3 py-2 sm:col-span-2 ${missingRequirements.length ? "border-amber-200 bg-amber-50/70" : "border-emerald-200 bg-emerald-50/70"}`}>
-              <div className="flex items-center justify-between gap-2"><span className="text-xs font-medium">Activation requirements</span><span className={missingRequirements.length ? "text-[11px] font-medium text-amber-800" : "text-[11px] font-medium text-emerald-700"}>{missingRequirements.length ? `${missingRequirements.length} missing` : "Ready"}</span></div>
-              <ul className="grid gap-x-4 gap-y-1 sm:grid-cols-2">{requirements.map((requirement) => <li className={`flex items-center gap-1.5 text-[11px] ${requirement.complete ? "text-muted-foreground" : "font-medium text-amber-800"}`} key={requirement.key}><span className={`size-1.5 rounded-full ${requirement.complete ? "bg-emerald-500" : "bg-amber-500"}`} />{requirement.label}</li>)}</ul>
-            </div>
-            <label className="grid gap-1 text-[11px] text-muted-foreground sm:col-span-2">Project name<Input autoFocus value={form.name} onChange={(event) => setField("name", event.target.value)} /></label>
-            <label className="grid gap-1 text-[11px] text-muted-foreground">Base branch<Input value={form.baseBranch} onChange={(event) => setField("baseBranch", event.target.value)} /></label>
-            <label className="grid gap-1 text-[11px] text-muted-foreground">Target branch<Input value={form.targetBranch} onChange={(event) => setField("targetBranch", event.target.value)} /></label>
-            <label className="grid gap-1 text-[11px] text-muted-foreground">Setup command<Input value={form.setupCommand} onChange={(event) => setField("setupCommand", event.target.value)} /></label>
-            <label className="grid gap-1 text-[11px] text-muted-foreground">Verification command<Input value={form.verificationCommand} onChange={(event) => setField("verificationCommand", event.target.value)} /></label>
-            <fieldset className="grid gap-1.5 sm:col-span-2"><legend className="mb-1 text-[11px] text-muted-foreground">Required GitHub checks</legend>{checksLoading ? <p className="text-[11px] text-muted-foreground">Loading checks from {project.targetBranch}…</p> : availableChecks.length ? <div className="flex flex-wrap gap-x-4 gap-y-2">{availableChecks.map((check) => <label className="flex items-center gap-1.5 text-xs" key={check.name}><input type="checkbox" checked={selectedChecks.includes(check.name)} onChange={() => toggleCheck(check.name)} /><span>{check.name}</span>{check.conclusion ? <span className="text-[10px] text-muted-foreground">{check.conclusion}</span> : null}</label>)}</div> : <p className="border border-border bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground">No check runs were found on <span className="font-mono">{project.targetBranch}</span>. Run the repository workflows once, then reopen settings.</p>}<span className="text-[11px] text-muted-foreground">Exact check names fetched from GitHub for the target branch.</span></fieldset>
-            <fieldset className="grid gap-1.5 sm:col-span-2"><legend className="mb-1 text-[11px] text-muted-foreground">Profiles</legend>{profiles.length ? <div className="flex flex-wrap gap-x-4 gap-y-2">{profiles.map((profile) => <label className="flex items-center gap-1.5 text-xs" key={profile.id}><input type="checkbox" checked={form.allowedProfileIds.includes(profile.id)} onChange={() => toggleProfile(profile.id)} />{profile.name}</label>)}</div> : <p className="border border-amber-200 bg-amber-50/70 px-2 py-1.5 text-[11px] text-amber-800">No Codex profiles configured. <a className="font-medium underline underline-offset-2" href={withCompany("/admin/profiles", project.companyId)}>Create a profile</a> before activating this project.</p>}</fieldset>
-            {(["leadProfile", "developerProfile", "reviewerProfile"] as const).map((key) => <label className="grid gap-1 text-[11px] text-muted-foreground" key={key}>{key === "leadProfile" ? "Lead default" : key === "developerProfile" ? "Developer default" : "Reviewer default (optional)"}<select className="h-8 border border-input bg-background px-2 text-xs" value={form[key]} onChange={(event) => setField(key, event.target.value)}><option value="">None</option>{allowedProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>)}
-            <div className="mt-1 flex items-center justify-end gap-2 sm:col-span-2">{missingRequirements.length ? <span className="mr-auto text-[11px] text-amber-800">Complete the missing requirements to save.</span> : null}<Dialog.Close render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || missingRequirements.length > 0}>{busy ? "Saving…" : "Save settings"}</Button></div>
+          {project && form ? <form onSubmit={(event) => void submit(event)}>
+            <FieldGroup>
+              <div className={`grid gap-2 border px-3 py-2 ${missingRequirements.length ? "border-amber-200 bg-amber-50/70" : "border-emerald-200 bg-emerald-50/70"}`}>
+                <div className="flex items-center justify-between gap-2"><span className="text-xs font-medium">Activation requirements</span><span className={missingRequirements.length ? "text-[11px] font-medium text-amber-800" : "text-[11px] font-medium text-emerald-700"}>{missingRequirements.length ? `${missingRequirements.length} missing` : "Ready"}</span></div>
+                <ul className="grid gap-x-4 gap-y-1 sm:grid-cols-2">{requirements.map((requirement) => <li className={`flex items-center gap-1.5 text-[11px] ${requirement.complete ? "text-muted-foreground" : "font-medium text-amber-800"}`} key={requirement.key}><span className={`size-1.5 rounded-full ${requirement.complete ? "bg-emerald-500" : "bg-amber-500"}`} />{requirement.label}</li>)}</ul>
+              </div>
+              <Field><FieldLabel htmlFor="project-name">Project name</FieldLabel><Input id="project-name" autoFocus value={form.name} onChange={(event) => setField("name", event.target.value)} /></Field>
+              <Field><FieldLabel htmlFor="project-base-branch">Base branch</FieldLabel><Input id="project-base-branch" value={form.baseBranch} onChange={(event) => setField("baseBranch", event.target.value)} /></Field>
+              <Field><FieldLabel htmlFor="project-target-branch">Target branch</FieldLabel><Input id="project-target-branch" value={form.targetBranch} onChange={(event) => setField("targetBranch", event.target.value)} /></Field>
+              <Field><FieldLabel htmlFor="project-setup-command">Setup command</FieldLabel><Input id="project-setup-command" value={form.setupCommand} onChange={(event) => setField("setupCommand", event.target.value)} /></Field>
+              <Field><FieldLabel htmlFor="project-verification-command">Verification command</FieldLabel><Input id="project-verification-command" value={form.verificationCommand} onChange={(event) => setField("verificationCommand", event.target.value)} /></Field>
+              <FieldSet>
+                <FieldLegend variant="label">Required GitHub checks</FieldLegend>
+                {checksLoading ? <FieldDescription>Loading checks from {project.targetBranch}…</FieldDescription> : availableChecks.length ? <FieldGroup data-slot="checkbox-group">{availableChecks.map((check, index) => <Field orientation="horizontal" key={check.name}><Checkbox id={`project-check-${index}`} checked={selectedChecks.includes(check.name)} onCheckedChange={() => toggleCheck(check.name)} /><FieldLabel htmlFor={`project-check-${index}`}>{check.name}{check.conclusion ? ` · ${check.conclusion}` : ""}</FieldLabel></Field>)}</FieldGroup> : <FieldDescription>No check runs were found on {project.targetBranch}. Run the repository workflows once, then reopen settings.</FieldDescription>}
+                <FieldDescription>Exact check names fetched from GitHub for the target branch.</FieldDescription>
+              </FieldSet>
+              <FieldSet>
+                <FieldLegend variant="label">Profiles</FieldLegend>
+                {profiles.length ? <FieldGroup data-slot="checkbox-group">{profiles.map((profile) => <Field orientation="horizontal" key={profile.id}><Checkbox id={`project-profile-${profile.id}`} checked={form.allowedProfileIds.includes(profile.id)} onCheckedChange={() => toggleProfile(profile.id)} /><FieldLabel htmlFor={`project-profile-${profile.id}`}>{profile.name}</FieldLabel></Field>)}</FieldGroup> : <FieldDescription>No Codex profiles configured. <a href={withCompany("/admin/profiles", project.companyId)}>Create a profile</a> before activating this project.</FieldDescription>}
+              </FieldSet>
+              {(["leadProfile", "developerProfile", "reviewerProfile"] as const).map((key) => <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{key === "leadProfile" ? "Lead default" : key === "developerProfile" ? "Developer default" : "Reviewer default (optional)"}</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None" /></SelectTrigger><SelectContent><SelectItem value={null}>None</SelectItem>{allowedProfiles.map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>)}</SelectContent></Select></Field>)}
+              <div className="flex items-center justify-end gap-2">{missingRequirements.length ? <span className="mr-auto text-[11px] text-amber-800">Complete the missing requirements to save.</span> : null}<Dialog.Close render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || missingRequirements.length > 0}>{busy ? "Saving…" : "Save settings"}</Button></div>
+            </FieldGroup>
           </form> : null}
           {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
           {findings.length ? <ul className="mt-3 space-y-1 text-xs text-rose-700">{findings.map((item, index) => <li key={`${item.field}-${index}`}>{item.field}: {item.message}</li>)}</ul> : null}
@@ -747,8 +770,12 @@ function TasksView(): ReactElement {
         <div className="grid gap-px border-b border-border/70 bg-border lg:grid-cols-[minmax(280px,360px)_1fr]">
           <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">New task</span><span className="text-[11px] text-muted-foreground">Backlog first</span></div>
             {currentCompany ? <div className="mb-3 flex items-center gap-2 border-b border-border/70 pb-2 text-xs"><span className="font-medium truncate">{currentCompany.name}</span><span className="text-[11px] text-muted-foreground">{currentCompany.status}</span></div> : null}
-            {currentCompany?.status === "active" ? <><label className="mb-1 block text-[11px] text-muted-foreground" htmlFor="task-project">Project</label><select id="task-project" className="mb-2 h-7 w-full border border-input bg-background px-2 text-xs" value={projectId} onChange={(event) => setProjectId(event.target.value)}>{availableProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
-            <div className="grid gap-2"><Input aria-label="Task title" placeholder="Title" value={title} onChange={(event) => setTitle(event.target.value)} /><textarea aria-label="Task description" className="min-h-32 border border-input bg-background px-2 py-1.5 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring" placeholder="Markdown description" value={description} onChange={(event) => setDescription(event.target.value)} /><InlineAttachmentPicker attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} disabled={busy} /></div></> : currentCompany ? <p className="text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New tasks are unavailable." : "Company archived. New tasks are unavailable."}</p> : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
+            {currentCompany?.status === "active" ? <FieldGroup>
+              <Field><FieldLabel htmlFor="task-project">Project</FieldLabel><Select value={projectId || null} onValueChange={(value) => setProjectId(value ?? "")}><SelectTrigger id="task-project"><SelectValue placeholder="Select a project" /></SelectTrigger><SelectContent>{availableProjects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select></Field>
+              <Field><FieldLabel htmlFor="task-title">Task title</FieldLabel><Input id="task-title" value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
+              <Field><FieldLabel htmlFor="task-description">Task description</FieldLabel><Textarea id="task-description" placeholder="Markdown description" value={description} onChange={(event) => setDescription(event.target.value)} /></Field>
+              <InlineAttachmentPicker attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} disabled={busy} />
+            </FieldGroup> : currentCompany ? <p className="text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New tasks are unavailable." : "Company archived. New tasks are unavailable."}</p> : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
             {currentCompany?.status === "active" ? <Button className="mt-3 w-full" onClick={() => void create()} disabled={busy || !companyId || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button> : null}
             {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
           </section>
@@ -837,7 +864,7 @@ function CompanySettingsView(): ReactElement {
       <SettingsSection title="Profile">
         <SettingRow label="Company name" description="Public workspace name.">
           <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-            <Input id="company-name" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} className="w-56" />
+            <Input id="company-name" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} />
             <Button type="submit" size="sm" disabled={busy !== "" || !name.trim() || name.trim() === company.name}><Save className="size-3.5" />{busy === "rename" ? "Saving…" : saved ? "Saved" : "Save"}</Button>
           </form>
         </SettingRow>

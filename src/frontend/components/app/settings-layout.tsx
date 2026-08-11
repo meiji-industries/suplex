@@ -1,8 +1,9 @@
-import { ArrowLeft, Bell, Building2, CreditCard, Key, Menu, Palette, Search, Settings2, Shield, Terminal, Users, X, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Bell, Building2, CreditCard, Key, Menu, Palette, Settings2, Shield, Terminal, Users, X, type LucideIcon } from "lucide-react";
 import { useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import { Button } from "../ui/button.js";
 import { Dialog } from "../ui/dialog.js";
+import { Field, FieldLabel } from "../ui/field.js";
 import { Input } from "../ui/input.js";
 import { companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
 import { useOptionalCompanyContext } from "./company-context.js";
@@ -63,10 +64,10 @@ function SettingsNavContent({ groups, activeHref, search, setSearch, backHref }:
         </a>
       </div>
       <div className="px-3 pb-2">
-        <div className="relative">
-          <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search settings" className="h-7 w-full pl-7 text-xs" />
-        </div>
+        <Field>
+          <FieldLabel htmlFor="settings-search">Search settings</FieldLabel>
+          <Input id="settings-search" value={search} onChange={(event) => setSearch(event.target.value)} />
+        </Field>
       </div>
       <div className="flex-1 space-y-5 overflow-y-auto px-3 pb-4">
         {filtered.map((group) => (

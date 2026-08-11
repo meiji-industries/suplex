@@ -132,7 +132,9 @@ test("projects desktop flow activates valid configuration and shows actionable v
       await page.goto(`${baseUrl}/admin/profiles`);
       await page.getByRole("heading", { name: "Profiles", exact: true }).waitFor();
       await page.getByText("Model catalog", { exact: true }).waitFor();
-      expect(await page.getByLabel("Model").locator("option").allTextContents()).toEqual(expect.arrayContaining([expect.stringContaining("GPT-5.6 Sol"), expect.stringContaining("GPT-5.6 Terra")]));
+      await page.getByRole("combobox", { name: "Model" }).click();
+      await expect.poll(async () => page.getByRole("option").allTextContents()).toEqual(expect.arrayContaining([expect.stringContaining("GPT-5.6 Sol"), expect.stringContaining("GPT-5.6 Terra")]));
+      await page.keyboard.press("Escape");
 
       const narrow = await context.newPage();
       await narrow.setViewportSize({ width: 390, height: 844 });

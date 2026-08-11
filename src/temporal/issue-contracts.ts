@@ -516,6 +516,8 @@ export interface PublishReleaseActivityResult {
   baseDriftConflict?: boolean;
   forwardMergeId?: string;
   priorHead?: string;
+  mergeCommit?: string;
+  tree?: string;
   conflictFiles?: string[];
   conflictDiff?: string;
 }

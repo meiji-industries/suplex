@@ -117,6 +117,10 @@ test("Lead authors a complete conflict-resolution plan from both merge sides", a
     const result = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictFiles: ["shared.txt"], conflictDiff: "<<<<<<< HEAD\nissue\n=======\nbase\n>>>>>>> base" });
     expect(result).toMatchObject({ leadSessionRef: "session_lead", summary: "Resolve the shared file from both sides." });
     expect(value.database.authQuery((db) => db.prepare("SELECT status, lead_session_ref FROM forge_merge_conflict_resolutions WHERE id = ?").get(result.planId))).toEqual({ status: "planned", lead_session_ref: "session_lead" });
+    const second = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictFiles: ["shared.txt"], conflictDiff: "<<<<<<< HEAD\nissue\n=======\nbase\n>>>>>>> base" });
+    expect(second.planId).toBe(result.planId);
+    const count = value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_merge_conflict_resolutions WHERE workflow_id = 'workflow-test-issue-task_1' AND prior_head = ? AND target_base_sha = ?").get("a".repeat(40), "b".repeat(40))) as { count: number };
+    expect(count.count).toBe(1);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

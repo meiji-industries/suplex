@@ -9,7 +9,7 @@ import { DeveloperService } from "../codex-developer.js";
 import { cancelDeveloperExecution } from "../developer-recovery.js";
 import { AcceptanceService } from "../acceptance.js";
 import { CiService, createGithubCiProvider } from "../ci.js";
-import { createGithubReleasePort, ReleaseService } from "../github-release.js";
+import { createGithubReleasePort, ReleaseService, type GithubReleasePort } from "../github-release.js";
 import { ForwardMergeService } from "../forward-merge.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { DeliveryDecisionActivityInputSchema, IssueWorkflowStateSchema, type AcceptDeliveryActivityInput, type FinalReviewActivityInput, type IssueActivities, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput } from "./issue-contracts.js";
@@ -137,11 +137,11 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
           }
           const headSha = merged.mergeCommit ?? context.subjectCommit;
           const headTree = merged.tree ?? context.subjectTree;
-          return { releaseId: "", repository: context.repository, branchName: input.branchName || context.branchName, headSha, headTree, pullRequestNumber: 0, pullRequestUrl: "", isDraft: false, reused: false, baseDriftMerged: true, targetBaseSha: currentBaseSha };
+          return { releaseId: "", repository: context.repository, branchName: input.branchName || context.branchName, headSha, headTree, pullRequestNumber: 0, pullRequestUrl: "", isDraft: false, reused: false, baseDriftMerged: true, targetBaseSha: currentBaseSha, priorHead: merged.priorHead, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}) };
         }
       }
       const result = await release.publish({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, repositoryPath: context.worktreePath, repository: context.repository, branchName: input.branchName || context.branchName, baseBranch: context.baseBranch, targetBaseSha: input.targetBaseSha || context.targetBaseSha, subjectCommit: input.subjectCommit || context.subjectCommit, subjectTree: input.subjectTree || context.subjectTree, reviewId: input.reviewId, planSummary: input.planSummary || context.title, deliverySummary: input.deliverySummary || context.deliverySummary, verificationSummary: input.verificationSummary });
-      return { releaseId: result.releaseId, repository: result.repository, branchName: result.branchName, headSha: result.headSha, headTree: result.headTree, pullRequestNumber: result.pullRequest.number, pullRequestUrl: result.pullRequest.url, isDraft: result.pullRequest.isDraft, reused: result.reused };
+      return { releaseId: result.releaseId, repository: result.repository, branchName: result.branchName, headSha: result.headSha, headTree: result.headTree, pullRequestNumber: result.pullRequest.number, pullRequestUrl: result.pullRequest.url, isDraft: result.pullRequest.isDraft, reused: result.reused, targetBaseSha: input.targetBaseSha || context.targetBaseSha };
     },
     async reconcileCi(input: ReconcileCiActivityInput) {
       const context = database.authQuery((db) => db.prepare("SELECT p.repository_identity AS repository, p.required_checks_json AS requiredChecks FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id WHERE t.id = ? AND t.company_id = ?").get(input.taskId, input.companyId) as { repository: string | null; requiredChecks: string } | undefined);

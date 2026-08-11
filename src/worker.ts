@@ -5,10 +5,13 @@ import { loadConfig, type ForgeConfig } from "./config.js";
 import { ForgeDatabase } from "./database.js";
 import { createActivities } from "./temporal/activities.js";
 import { StructuredLogger } from "./logging.js";
+import { runtimeIdentifiers } from "./runtime-identifiers.js";
 
 export async function runWorker(config: ForgeConfig = loadConfig()): Promise<void> {
   const database = new ForgeDatabase(config.databasePath);
-  const workerId = `forge-worker-${process.pid}`;
+  const identifiers = runtimeIdentifiers(config.installationId);
+  const workerId = `${identifiers.workerPrefix}-${process.pid}`;
+  const buildId = identifiers.buildId;
   let connection: NativeConnection | undefined;
   let worker: Worker | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
@@ -19,15 +22,15 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       namespace: config.temporalNamespace,
       taskQueue: config.taskQueue,
       identity: workerId,
-      buildId: "forge-mvp-1",
+      buildId,
       workflowsPath: fileURLToPath(new URL("./temporal/workflows.ts", import.meta.url)),
       activities: createActivities(database),
       shutdownGraceTime: "10 seconds",
       shutdownForceTime: "20 seconds",
     });
-    database.registerWorker({ workerId, taskQueue: config.taskQueue, buildId: "forge-mvp-1" });
+    database.registerWorker({ workerId, taskQueue: config.taskQueue, buildId });
     heartbeat = setInterval(() => {
-      database.registerWorker({ workerId, taskQueue: config.taskQueue, buildId: "forge-mvp-1" });
+      database.registerWorker({ workerId, taskQueue: config.taskQueue, buildId });
     }, 10_000);
     heartbeat.unref();
   } catch (error) {

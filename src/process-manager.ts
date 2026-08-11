@@ -17,6 +17,7 @@ export interface OwnedProcess {
 export interface TemporalContainer {
   id: string;
   name: string;
+  legacy?: boolean | undefined;
 }
 
 export interface TailscaleServe {

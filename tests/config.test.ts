@@ -14,7 +14,8 @@ test("loads a Tailscale-only configuration and exposes the reachable address", (
   assert.equal(config.accessMode, "tailscale");
   assert.equal(config.bindAddress, "forge.tailnet.ts.net");
   assert.equal(config.reachableAddress, "http://forge.tailnet.ts.net:4111");
-  assert.equal(config.temporalNamespace, "forge");
+  assert.equal(config.temporalNamespace, "runtime-test-installation");
+  assert.equal(config.taskQueue, "tasks-test-installation");
 });
 
 for (const address of [
@@ -62,6 +63,13 @@ test("still rejects loopback direct production binding", () => {
 test("rejects a non-Tailscale access mode", () => {
   assert.throws(
     () => loadConfig({ ...baseEnvironment, FORGE_ACCESS_MODE: "lan" }),
+    (error: unknown) => error instanceof UnsafeBindingError,
+  );
+});
+
+test("refuses legacy durable runtime names instead of silently migrating them", () => {
+  assert.throws(
+    () => loadConfig({ ...baseEnvironment, FORGE_TEMPORAL_NAMESPACE: "forge", FORGE_TASK_QUEUE: "forge" }),
     (error: unknown) => error instanceof UnsafeBindingError,
   );
 });

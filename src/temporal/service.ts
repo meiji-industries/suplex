@@ -5,10 +5,12 @@ import { randomUUID } from "node:crypto";
 
 import type { ForgeConfig } from "../config.js";
 import type { HealthCheck } from "../health.js";
+import { runtimeIdentifiers } from "../runtime-identifiers.js";
 import { probeStateQuery, probeWorkflow } from "./workflows.js";
 import { ProbeWorkflowInputSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 
-export const REQUIRED_SEARCH_ATTRIBUTES = ["ForgeCompanyId", "ForgeProjectId", "ForgeIssueId"] as const;
+export const REQUIRED_SEARCH_ATTRIBUTES = ["CompanyId", "ProjectId", "IssueId"] as const;
+export const LEGACY_SEARCH_ATTRIBUTES = ["ForgeCompanyId", "ForgeProjectId", "ForgeIssueId"] as const;
 
 export interface TemporalClientConnection {
   connection: Connection;
@@ -119,7 +121,7 @@ export class TemporalHealthProbe {
 }
 
 export async function startProbeWorkflow(config: ForgeConfig, input: Omit<ProbeWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string }> {
-  const workflowId = input.workflowId ?? `forge-probe-${randomUUID()}`;
+  const workflowId = input.workflowId ?? `${runtimeIdentifiers(config.installationId).workflowPrefix}-${randomUUID()}`;
   const validatedInput = ProbeWorkflowInputSchema.parse({ ...input, workflowId });
   const temporalClient = await connectTemporal(config);
   try {
@@ -127,7 +129,7 @@ export async function startProbeWorkflow(config: ForgeConfig, input: Omit<ProbeW
       args: [validatedInput],
       taskQueue: config.taskQueue,
       workflowId,
-      searchAttributes: { ForgeCompanyId: [validatedInput.companyId] },
+      searchAttributes: { CompanyId: [validatedInput.companyId] },
     });
     return { workflowId: handle.workflowId, runId: handle.firstExecutionRunId };
   } finally {

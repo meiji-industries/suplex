@@ -3,8 +3,9 @@ import { mkdir, open, rm } from "node:fs/promises";
 import { promisify } from "node:util";
 
 import type { ForgeConfig } from "./config.js";
+import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { connectTemporal, ensureTemporalFoundation } from "./temporal/service.js";
-import { type OwnedProcess, type ProcessRegistry, type TemporalContainer, stopOwnedProcesses, writeProcessRegistry } from "./process-manager.js";
+import { readProcessRegistry, type OwnedProcess, type ProcessRegistry, type TemporalContainer, stopOwnedProcesses, writeProcessRegistry } from "./process-manager.js";
 import { configureTailscaleServe, verifyTailscaleServe } from "./tailscale.js";
 
 const execFileAsync = promisify(execFile);
@@ -15,11 +16,11 @@ interface DockerMetadata {
   status: string;
 }
 
-const temporalContainerName = "forge-temporal";
+const legacyTemporalContainerName = "forge-temporal";
 
-async function inspectTemporalContainer(): Promise<DockerMetadata | undefined> {
+async function inspectTemporalContainer(name: string): Promise<DockerMetadata | undefined> {
   try {
-    const result = await execFileAsync("docker", ["inspect", "--format", "{{.Id}} {{index .Config.Labels \"com.forge.owner\"}} {{.State.Status}}", temporalContainerName]);
+    const result = await execFileAsync("docker", ["inspect", "--format", "{{.Id}} {{index .Config.Labels \"com.forge.owner\"}} {{.State.Status}}", name]);
     const [id, owner, status] = result.stdout.trim().split(/\s+/, 3);
     if (!id) {
       return undefined;
@@ -31,34 +32,47 @@ async function inspectTemporalContainer(): Promise<DockerMetadata | undefined> {
 }
 
 async function startTemporalContainer(config: ForgeConfig): Promise<TemporalContainer> {
-  const existing = await inspectTemporalContainer();
+  const identifiers = runtimeIdentifiers(config.installationId);
+  const existing = await inspectTemporalContainer(identifiers.temporalContainerName);
   if (existing) {
-    if (existing.owner !== "forge") {
-      throw new Error(`Refusing to operate on unowned Docker container ${temporalContainerName}`);
+    if (existing.owner !== identifiers.ownerLabel) {
+      throw new Error(`Refusing to operate on unowned Docker container ${identifiers.temporalContainerName}`);
     }
-    if (existing.status === "running") {
-      return { id: existing.id, name: temporalContainerName };
+    if (existing.status !== "running") {
+      await execFileAsync("docker", ["start", identifiers.temporalContainerName]);
     }
-    await execFileAsync("docker", ["rm", "--force", temporalContainerName]);
+    return { id: existing.id, name: identifiers.temporalContainerName };
   }
 
+  const legacy = await inspectTemporalContainer(legacyTemporalContainerName);
+  if (legacy) {
+    if (legacy.owner !== "forge") {
+      throw new Error(`Refusing to operate on unowned legacy Docker container ${legacyTemporalContainerName}`);
+    }
+    if (legacy.status !== "running") {
+      await execFileAsync("docker", ["start", legacyTemporalContainerName]);
+    }
+    return { id: legacy.id, name: legacyTemporalContainerName, legacy: true };
+  }
+
+  const temporalPort = Number(config.temporalAddress.split(":").at(-1));
   const result = await execFileAsync("docker", [
     "run",
     "--detach",
     "--name",
-    temporalContainerName,
+    identifiers.temporalContainerName,
     "--label",
-    "com.forge.owner=forge",
+    `com.forge.owner=${identifiers.ownerLabel}`,
     "--label",
     "com.forge.service=temporal",
     "--user",
     "0:0",
     "--publish",
-    "127.0.0.1:7233:7233",
+    `127.0.0.1:${temporalPort}:7233`,
     "--publish",
     "127.0.0.1:8233:8233",
     "--volume",
-    "forge-temporal-data:/data",
+    `${identifiers.temporalVolumeName}:/data`,
     "temporalio/temporal:latest",
     "server",
     "start-dev",
@@ -73,7 +87,7 @@ async function startTemporalContainer(config: ForgeConfig): Promise<TemporalCont
   if (!id) {
     throw new Error("Temporal container did not return an identity");
   }
-  return { id, name: temporalContainerName };
+  return { id, name: identifiers.temporalContainerName };
 }
 
 async function waitForTemporal(config: ForgeConfig, timeoutMs = 30_000): Promise<void> {
@@ -147,6 +161,10 @@ async function spawnForgeProcess(name: string, script: string, config: ForgeConf
 
 export async function startForge(config: ForgeConfig, foreground: boolean): Promise<ProcessRegistry> {
   await mkdir(config.runtimeRoot, { recursive: true });
+  const existingRegistry = await readProcessRegistry(`${config.runtimeRoot}/owned-processes.json`).catch(() => undefined);
+  if (existingRegistry?.processes.length) {
+    throw new Error("Forge already has recorded owned processes; use restart or stop before starting another runtime");
+  }
   let temporalContainer: TemporalContainer | undefined;
   let registry: ProcessRegistry | undefined;
   try {

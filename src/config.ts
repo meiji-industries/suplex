@@ -4,6 +4,7 @@ import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
 
 import { ForgeConfigSchema, ForgeEnvironmentSchema } from "./schemas.js";
+import { isLegacyDurableIdentifier, runtimeIdentifiers } from "./runtime-identifiers.js";
 
 export type AccessMode = "tailscale";
 export type TailscaleExposure = "direct" | "serve";
@@ -84,12 +85,12 @@ function readEnvironmentFile(filename: string): Record<string, string> {
   }
 }
 
-function installationId(dataRoot: string, environment: NodeJS.ProcessEnv): string {
+function installationId(dataRoot: string, environment: { FORGE_INSTALLATION_ID?: string | undefined }, persist: boolean): string {
   const configured = environment.FORGE_INSTALLATION_ID?.trim();
   if (configured) {
     return configured;
   }
-  if (environment !== process.env) {
+  if (!persist) {
     return "test-installation";
   }
   const filename = resolve(dataRoot, "../installation-id");
@@ -144,6 +145,13 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
   const dataRoot = resolve(parsedEnvironment.data.FORGE_DATA_ROOT ?? ".forge/data");
   const reachableHost = configuredAddress ?? bindAddress;
   const scheme = tailscaleExposure === "serve" ? "https" : "http";
+  const stableInstallationId = installationId(dataRoot, parsedEnvironment.data, environment === process.env);
+  const identifiers = runtimeIdentifiers(stableInstallationId);
+  const temporalNamespace = parsedEnvironment.data.FORGE_TEMPORAL_NAMESPACE ?? identifiers.namespace;
+  const taskQueue = parsedEnvironment.data.FORGE_TASK_QUEUE ?? identifiers.taskQueue;
+  if (isLegacyDurableIdentifier(temporalNamespace) || isLegacyDurableIdentifier(taskQueue)) {
+    throw new UnsafeBindingError("Refusing legacy Forge namespace or task queue; preserve the legacy runtime and migrate explicitly");
+  }
   return ForgeConfigSchema.parse({
     accessMode,
     tailscaleExposure,
@@ -155,9 +163,9 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
     artifactRoot: parsedEnvironment.data.FORGE_ARTIFACT_ROOT ? resolve(parsedEnvironment.data.FORGE_ARTIFACT_ROOT) : resolve(dataRoot, "artifacts"),
     runtimeRoot: parsedEnvironment.data.FORGE_RUNTIME_ROOT ? resolve(parsedEnvironment.data.FORGE_RUNTIME_ROOT) : resolve(dataRoot, "runtime"),
     temporalAddress: parsedEnvironment.data.FORGE_TEMPORAL_ADDRESS ?? "127.0.0.1:7233",
-    temporalNamespace: parsedEnvironment.data.FORGE_TEMPORAL_NAMESPACE ?? "forge",
-    taskQueue: parsedEnvironment.data.FORGE_TASK_QUEUE ?? "forge",
-    installationId: installationId(dataRoot, environment),
+    temporalNamespace,
+    taskQueue,
+    installationId: stableInstallationId,
   });
 }
 
@@ -176,8 +184,8 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     artifactRoot: overrides.artifactRoot ?? resolve(dataRoot, "artifacts"),
     runtimeRoot: overrides.runtimeRoot ?? resolve(dataRoot, "runtime"),
     temporalAddress: overrides.temporalAddress ?? "127.0.0.1:7233",
-    temporalNamespace: overrides.temporalNamespace ?? "forge",
-    taskQueue: overrides.taskQueue ?? "forge",
+    temporalNamespace: overrides.temporalNamespace ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").namespace,
+    taskQueue: overrides.taskQueue ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").taskQueue,
     installationId: overrides.installationId ?? "test-installation",
   };
 }

@@ -4,6 +4,7 @@ import Fastify, { type FastifyInstance } from "fastify";
 
 import type { ForgeConfig } from "./config.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
+import { HealthSnapshotSchema } from "./schemas.js";
 import { renderHealthPage } from "./ui.js";
 
 async function readFrontendAsset(filename: string): Promise<Buffer> {
@@ -30,13 +31,14 @@ export interface AppDependencies {
 export function createApp(dependencies: AppDependencies): FastifyInstance {
   const app = Fastify({ logger: false });
   const getHealth = dependencies.getHealth ?? (() => inspectHostHealth(dependencies.config, dependencies.health));
+  const readHealth = async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth());
 
   app.get("/", async (_request, reply) => reply.redirect("/health"));
   app.get("/health", async (_request, reply) => {
-    const snapshot = await getHealth();
+    const snapshot = await readHealth();
     return reply.type("text/html; charset=utf-8").send(renderHealthPage(snapshot));
   });
-  app.get("/api/health", async (_request, reply) => reply.send(await getHealth()));
+  app.get("/api/health", async (_request, reply) => reply.send(await readHealth()));
   app.get("/assets/forge-ui.js", async (_request, reply) => {
     try {
       return reply.type("text/javascript; charset=utf-8").send(await readFrontendAsset("forge-ui.js"));

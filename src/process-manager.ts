@@ -3,6 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { promisify } from "node:util";
 
+import { ProcessRegistrySchema, TailscaleServeStatusSchema } from "./schemas.js";
+
 const execFileAsync = promisify(execFile);
 
 export interface OwnedProcess {
@@ -66,7 +68,7 @@ const defaultController: ProcessController = {
   async stopServe(serve) {
     try {
       const result = await execFileAsync("tailscale", ["serve", "status", "--json"], { maxBuffer: 64 * 1024 });
-      const status = JSON.parse(result.stdout) as { Web?: Record<string, { Handlers?: Record<string, { Proxy?: string }> }> };
+      const status = TailscaleServeStatusSchema.parse(JSON.parse(result.stdout));
       const route = Object.keys(status.Web ?? {}).find((key) => key.endsWith(`:${serve.port}`));
       const proxy = route ? status.Web?.[route]?.Handlers?.["/"]?.Proxy : undefined;
       if (proxy !== serve.backend) {
@@ -105,11 +107,16 @@ export async function stopOwnedProcesses(registry: ProcessRegistry, controller: 
 }
 
 export async function writeProcessRegistry(filename: string, registry: ProcessRegistry): Promise<void> {
+  ProcessRegistrySchema.parse(registry);
   await mkdir(dirname(filename), { recursive: true });
   await writeFile(filename, `${JSON.stringify(registry, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
 }
 
 export async function readProcessRegistry(filename: string): Promise<ProcessRegistry> {
   const content = await readFile(filename, "utf8");
-  return JSON.parse(content) as ProcessRegistry;
+  const parsed = ProcessRegistrySchema.safeParse(JSON.parse(content));
+  if (!parsed.success) {
+    throw new Error(`Forge process registry is invalid: ${parsed.error.issues[0]?.message ?? "unknown error"}`);
+  }
+  return parsed.data;
 }

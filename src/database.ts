@@ -1,7 +1,13 @@
-import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { existsSync, mkdirSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import Database from "better-sqlite3";
+import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
+import { migrate } from "drizzle-orm/better-sqlite3/migrator";
+import { sql } from "drizzle-orm";
+
+import { probeWorkflows, workerRegistrations } from "./database-schema.js";
 
 export type ProbeStatus = "running" | "completed";
 
@@ -16,6 +22,15 @@ export interface WorkerRegistration {
   workerId: string;
   taskQueue: string;
   buildId: string;
+  heartbeatAt?: string;
+}
+
+export interface WorkerHealth {
+  workerId: string;
+  taskQueue: string;
+  buildId: string;
+  heartbeatAt: string;
+  heartbeatAgeMs: number;
 }
 
 export interface DatabaseHealth {
@@ -25,12 +40,31 @@ export interface DatabaseHealth {
   writable: boolean;
 }
 
-interface ProbeRow extends ProbeRecord {
-  status: ProbeStatus;
+interface MigrationCountRow {
+  count: number;
+}
+
+function migrationFolder(): string {
+  const candidates = [
+    resolve(process.cwd(), "drizzle"),
+    resolve(dirname(fileURLToPath(import.meta.url)), "../drizzle"),
+  ];
+  const folder = candidates.find((candidate) => {
+    try {
+      return existsSync(`${candidate}/meta/_journal.json`);
+    } catch {
+      return false;
+    }
+  });
+  if (!folder) {
+    throw new Error("Forge database migrations are not installed");
+  }
+  return folder;
 }
 
 export class ForgeDatabase {
   private readonly db: Database.Database;
+  private readonly orm: BetterSQLite3Database;
 
   constructor(filename: string) {
     mkdirSync(dirname(filename), { recursive: true });
@@ -38,60 +72,92 @@ export class ForgeDatabase {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = FULL");
     this.db.pragma("foreign_keys = ON");
-    this.migrate();
+    this.orm = drizzle(this.db);
+    migrate(this.orm, { migrationsFolder: migrationFolder() });
   }
 
   recordProbe(record: ProbeRecord): void {
-    this.db
-      .prepare(
-        `INSERT INTO probe_workflows (probe_id, workflow_id, company_id, status)
-         VALUES (@probeId, @workflowId, @companyId, @status)
-         ON CONFLICT(probe_id) DO UPDATE SET
-           workflow_id = excluded.workflow_id,
-           company_id = excluded.company_id,
-           status = excluded.status`,
-      )
-      .run(record);
+    this.orm
+      .insert(probeWorkflows)
+      .values(record)
+      .onConflictDoUpdate({
+        target: probeWorkflows.probeId,
+        set: {
+          workflowId: record.workflowId,
+          companyId: record.companyId,
+          status: record.status,
+        },
+      })
+      .run();
   }
 
   getProbe(probeId: string): ProbeRecord | undefined {
-    const row = this.db.prepare("SELECT workflow_id AS workflowId, probe_id AS probeId, company_id AS companyId, status FROM probe_workflows WHERE probe_id = ?").get(probeId) as ProbeRow | undefined;
-    return row;
+    const row = this.orm
+      .select({
+        workflowId: probeWorkflows.workflowId,
+        probeId: probeWorkflows.probeId,
+        companyId: probeWorkflows.companyId,
+        status: probeWorkflows.status,
+      })
+      .from(probeWorkflows)
+      .where(sql`${probeWorkflows.probeId} = ${probeId}`)
+      .get();
+    return row as ProbeRecord | undefined;
   }
 
   registerWorker(registration: WorkerRegistration): void {
-    this.db
-      .prepare(
-        `INSERT INTO worker_registrations (worker_id, task_queue, build_id, heartbeat_at)
-         VALUES (@workerId, @taskQueue, @buildId, @heartbeatAt)
-         ON CONFLICT(worker_id) DO UPDATE SET
-           task_queue = excluded.task_queue,
-           build_id = excluded.build_id,
-           heartbeat_at = excluded.heartbeat_at`,
-      )
-      .run({ ...registration, heartbeatAt: new Date().toISOString() });
+    const heartbeatAt = registration.heartbeatAt ?? new Date().toISOString();
+    this.orm
+      .insert(workerRegistrations)
+      .values({ ...registration, heartbeatAt })
+      .onConflictDoUpdate({
+        target: workerRegistrations.workerId,
+        set: {
+          taskQueue: registration.taskQueue,
+          buildId: registration.buildId,
+          heartbeatAt,
+        },
+      })
+      .run();
   }
 
   unregisterWorker(workerId: string): void {
-    this.db.prepare("DELETE FROM worker_registrations WHERE worker_id = ?").run(workerId);
+    this.orm.delete(workerRegistrations).where(sql`${workerRegistrations.workerId} = ${workerId}`).run();
+  }
+
+  workerHealth(taskQueue: string): WorkerHealth | undefined {
+    const row = this.orm
+      .select({
+        workerId: workerRegistrations.workerId,
+        taskQueue: workerRegistrations.taskQueue,
+        buildId: workerRegistrations.buildId,
+        heartbeatAt: workerRegistrations.heartbeatAt,
+      })
+      .from(workerRegistrations)
+      .where(sql`${workerRegistrations.taskQueue} = ${taskQueue}`)
+      .orderBy(sql`${workerRegistrations.heartbeatAt} DESC`)
+      .get();
+    if (!row) {
+      return undefined;
+    }
+    const heartbeatAgeMs = Date.now() - Date.parse(row.heartbeatAt);
+    return { ...row, heartbeatAgeMs };
   }
 
   workerIsHealthy(taskQueue: string, maxAgeMs = 30_000): boolean {
-    const row = this.db
-      .prepare("SELECT heartbeat_at AS heartbeatAt FROM worker_registrations WHERE task_queue = ? ORDER BY heartbeat_at DESC LIMIT 1")
-      .get(taskQueue) as { heartbeatAt: string } | undefined;
-    return row !== undefined && Date.now() - Date.parse(row.heartbeatAt) <= maxAgeMs;
+    const worker = this.workerHealth(taskQueue);
+    return worker !== undefined && worker.heartbeatAgeMs <= maxAgeMs;
   }
 
   health(): DatabaseHealth {
-    const migrationVersion = Number(this.db.pragma("user_version", { simple: true }));
+    const migrationRow = this.orm.all(sql`SELECT COUNT(*) AS count FROM __drizzle_migrations`)[0] as MigrationCountRow | undefined;
     const journalMode = String(this.db.pragma("journal_mode", { simple: true })).toLowerCase();
-    this.db.prepare("SELECT 1").get();
-    this.db.prepare("CREATE TABLE IF NOT EXISTS health_write_probe (id INTEGER PRIMARY KEY, checked_at TEXT NOT NULL)").run();
-    this.db.prepare("DROP TABLE health_write_probe").run();
+    this.orm.all(sql`SELECT 1`);
+    this.orm.run(sql`CREATE TABLE IF NOT EXISTS health_write_probe (id INTEGER PRIMARY KEY, checked_at TEXT NOT NULL)`);
+    this.orm.run(sql`DROP TABLE health_write_probe`);
     return {
       walMode: journalMode === "wal",
-      migrationVersion,
+      migrationVersion: Number(migrationRow?.count ?? 0),
       readable: true,
       writable: true,
     };
@@ -99,30 +165,5 @@ export class ForgeDatabase {
 
   close(): void {
     this.db.close();
-  }
-
-  private migrate(): void {
-    const version = Number(this.db.pragma("user_version", { simple: true }));
-    if (version >= 1) {
-      return;
-    }
-    const migrate = this.db.transaction(() => {
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS probe_workflows (
-          probe_id TEXT PRIMARY KEY,
-          workflow_id TEXT NOT NULL UNIQUE,
-          company_id TEXT NOT NULL,
-          status TEXT NOT NULL CHECK (status IN ('running', 'completed'))
-        );
-        CREATE TABLE IF NOT EXISTS worker_registrations (
-          worker_id TEXT PRIMARY KEY,
-          task_queue TEXT NOT NULL,
-          build_id TEXT NOT NULL,
-          heartbeat_at TEXT NOT NULL
-        );
-        PRAGMA user_version = 1;
-      `);
-    });
-    migrate();
   }
 }

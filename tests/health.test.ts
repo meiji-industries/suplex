@@ -4,7 +4,7 @@ import { test } from "vitest";
 import { createTestConfig } from "../src/config.js";
 import { inspectHostHealth, type HealthCheck } from "../src/health.js";
 
-const check = (id: string, status: "healthy" | "unhealthy"): HealthCheck => ({
+const check = (id: HealthCheck["id"], status: "healthy" | "unhealthy"): HealthCheck => ({
   id,
   label: id,
   status,

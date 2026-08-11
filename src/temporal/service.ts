@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import type { ForgeConfig } from "../config.js";
 import type { HealthCheck } from "../health.js";
 import { probeStateQuery, probeWorkflow } from "./workflows.js";
-import type { ProbeWorkflowInput, ProbeWorkflowState } from "./contracts.js";
+import { ProbeWorkflowInputSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 
 export const REQUIRED_SEARCH_ATTRIBUTES = ["ForgeCompanyId", "ForgeProjectId", "ForgeIssueId"] as const;
 
@@ -120,13 +120,14 @@ export class TemporalHealthProbe {
 
 export async function startProbeWorkflow(config: ForgeConfig, input: Omit<ProbeWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string }> {
   const workflowId = input.workflowId ?? `forge-probe-${randomUUID()}`;
+  const validatedInput = ProbeWorkflowInputSchema.parse({ ...input, workflowId });
   const temporalClient = await connectTemporal(config);
   try {
     const handle = await temporalClient.client.workflow.start(probeWorkflow, {
-      args: [{ ...input, workflowId }],
+      args: [validatedInput],
       taskQueue: config.taskQueue,
       workflowId,
-      searchAttributes: { ForgeCompanyId: [input.companyId] },
+      searchAttributes: { ForgeCompanyId: [validatedInput.companyId] },
     });
     return { workflowId: handle.workflowId, runId: handle.firstExecutionRunId };
   } finally {

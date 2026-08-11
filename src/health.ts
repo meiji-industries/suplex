@@ -1,9 +1,14 @@
 import type { ForgeConfig } from "./config.js";
+import { HealthSnapshotSchema } from "./schemas.js";
+import { isOwnedHealthCheck, type HealthCheckId } from "./health-contract.js";
+
+export { HEALTH_CHECK_IDS, OWNED_HEALTH_CHECK_IDS, isOwnedHealthCheck } from "./health-contract.js";
+export type { HealthCheckId } from "./health-contract.js";
 
 export type HealthStatus = "healthy" | "unhealthy";
 
 export interface HealthCheck {
-  id: string;
+  id: HealthCheckId;
   label: string;
   status: HealthStatus;
   summary: string;
@@ -26,7 +31,7 @@ export interface HostHealthDependencies {
   ghAuth: () => Promise<HealthCheck>;
 }
 
-async function safelyCheck(id: string, label: string, check: () => Promise<HealthCheck>): Promise<HealthCheck> {
+async function safelyCheck(id: HealthCheckId, label: string, check: () => Promise<HealthCheck>): Promise<HealthCheck> {
   try {
     return await check();
   } catch {
@@ -49,11 +54,10 @@ export async function inspectHostHealth(config: ForgeConfig, dependencies: HostH
     safelyCheck("codex-auth", "Codex authentication", dependencies.codexAuth),
     safelyCheck("gh-auth", "GitHub CLI authentication", dependencies.ghAuth),
   ]);
-  const ownedServiceIds = new Set(["temporal", "database", "artifact-root", "worker"]);
-  return {
+  return HealthSnapshotSchema.parse({
     generatedAt: new Date().toISOString(),
     reachableAddress: config.reachableAddress,
-    ready: checks.filter((check) => ownedServiceIds.has(check.id)).every((check) => check.status === "healthy"),
+    ready: checks.filter((check) => isOwnedHealthCheck(check.id)).every((check) => check.status === "healthy"),
     checks,
-  };
+  });
 }

@@ -2,24 +2,13 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import type { ForgeConfig } from "./config.js";
+import { TailscaleServeStatusSchema, TailscaleStatusSchema } from "./schemas.js";
 
 const execFileAsync = promisify(execFile);
 
-interface TailscaleStatus {
-  Self?: {
-    DNSName?: string;
-  };
-}
-
-interface TailscaleServeStatus {
-  Web?: Record<string, {
-    Handlers?: Record<string, { Proxy?: string }>;
-  }>;
-}
-
 export async function discoverTailscaleHostname(command = "tailscale"): Promise<string> {
   const result = await execFileAsync(command, ["status", "--json"], { timeout: 5_000, maxBuffer: 256 * 1024 });
-  const status = JSON.parse(result.stdout) as TailscaleStatus;
+  const status = TailscaleStatusSchema.parse(JSON.parse(result.stdout));
   const hostname = status.Self?.DNSName?.replace(/\.$/, "");
   if (!hostname || !hostname.endsWith(".ts.net")) {
     throw new Error("Tailscale did not report a MagicDNS hostname");
@@ -38,9 +27,9 @@ export async function configureTailscaleServe(config: ForgeConfig, command = "ta
 
 export async function verifyTailscaleServe(config: ForgeConfig, command = "tailscale"): Promise<void> {
   const result = await execFileAsync(command, ["serve", "status", "--json"], { timeout: 10_000, maxBuffer: 64 * 1024 });
-  let status: TailscaleServeStatus;
+  let status: ReturnType<typeof TailscaleServeStatusSchema.parse>;
   try {
-    status = JSON.parse(result.stdout) as TailscaleServeStatus;
+    status = TailscaleServeStatusSchema.parse(JSON.parse(result.stdout));
   } catch {
     throw new Error("Tailscale Serve returned invalid status JSON");
   }

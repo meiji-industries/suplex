@@ -1,6 +1,6 @@
 import { condition, defineQuery, proxyActivities, setHandler } from "@temporalio/workflow";
 
-import type { ProbeActivities, ProbeWorkflowInput, ProbeWorkflowState } from "./contracts.js";
+import { ProbeWorkflowInputSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 
 const { recordProbeStarted } = proxyActivities<ProbeActivities>({
   startToCloseTimeout: "1 minute",
@@ -9,14 +9,15 @@ const { recordProbeStarted } = proxyActivities<ProbeActivities>({
 export const probeStateQuery = defineQuery<ProbeWorkflowState>("probeState");
 
 export async function probeWorkflow(input: ProbeWorkflowInput): Promise<ProbeWorkflowState> {
+  const validatedInput = ProbeWorkflowInputSchema.parse(input);
   let state: ProbeWorkflowState = {
-    workflowId: input.workflowId,
-    probeId: input.probeId,
-    companyId: input.companyId,
+    workflowId: validatedInput.workflowId,
+    probeId: validatedInput.probeId,
+    companyId: validatedInput.companyId,
     status: "starting",
   };
   setHandler(probeStateQuery, () => state);
-  state = await recordProbeStarted(input);
+  state = await recordProbeStarted(validatedInput);
   await condition(() => false);
   return state;
 }

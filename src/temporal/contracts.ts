@@ -1,15 +1,11 @@
-export interface ProbeWorkflowInput {
-  workflowId: string;
-  probeId: string;
-  companyId: string;
-}
+import { z } from "zod";
 
-export interface ProbeWorkflowState {
-  workflowId: string;
-  probeId: string;
-  companyId: string;
-  status: "starting" | "running";
-}
+import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema } from "../schemas.js";
+
+export { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema };
+
+export type ProbeWorkflowInput = z.infer<typeof ProbeWorkflowInputSchema>;
+export type ProbeWorkflowState = z.infer<typeof ProbeWorkflowStateSchema>;
 
 export interface ProbeActivities {
   recordProbeStarted(input: ProbeWorkflowInput): Promise<ProbeWorkflowState>;

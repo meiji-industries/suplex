@@ -1,6 +1,9 @@
 import { isIP } from "node:net";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { resolve } from "node:path";
+
+import { ForgeConfigSchema, ForgeEnvironmentSchema } from "./schemas.js";
 
 export type AccessMode = "tailscale";
 export type TailscaleExposure = "direct" | "serve";
@@ -18,6 +21,7 @@ export interface ForgeConfig {
   temporalAddress: string;
   temporalNamespace: string;
   taskQueue: string;
+  installationId: string;
 }
 
 export class UnsafeBindingError extends Error {
@@ -80,21 +84,48 @@ function readEnvironmentFile(filename: string): Record<string, string> {
   }
 }
 
+function installationId(dataRoot: string, environment: NodeJS.ProcessEnv): string {
+  const configured = environment.FORGE_INSTALLATION_ID?.trim();
+  if (configured) {
+    return configured;
+  }
+  if (environment !== process.env) {
+    return "test-installation";
+  }
+  const filename = resolve(dataRoot, "../installation-id");
+  try {
+    const existing = readFileSync(filename, "utf8").trim();
+    if (existing) {
+      return existing;
+    }
+  } catch {
+    // The first real startup creates the stable installation identity below.
+  }
+  const generated = randomBytes(12).toString("hex");
+  mkdirSync(resolve(dataRoot, ".."), { recursive: true });
+  writeFileSync(filename, `${generated}\n`, { encoding: "utf8", mode: 0o600 });
+  return generated;
+}
+
 export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeConfig {
   const environmentFile = environment.FORGE_ENV_FILE ?? (environment === process.env ? ".forge/forge.env" : undefined);
   const fileEnvironment = environmentFile ? readEnvironmentFile(environmentFile) : {};
   const configuredEnvironment: NodeJS.ProcessEnv = { ...fileEnvironment, ...environment };
-  const accessMode = configuredEnvironment.FORGE_ACCESS_MODE ?? "tailscale";
+  const parsedEnvironment = ForgeEnvironmentSchema.safeParse(configuredEnvironment);
+  if (!parsedEnvironment.success) {
+    throw new UnsafeBindingError(`Forge environment is invalid: ${parsedEnvironment.error.issues[0]?.message ?? "unknown error"}`);
+  }
+  const accessMode = parsedEnvironment.data.FORGE_ACCESS_MODE ?? "tailscale";
   if (accessMode !== "tailscale") {
     throw new UnsafeBindingError(`Forge only supports Tailscale-only access; received ${accessMode}`);
   }
 
-  const tailscaleExposure = configuredEnvironment.FORGE_TAILSCALE_EXPOSURE ?? "direct";
+  const tailscaleExposure = parsedEnvironment.data.FORGE_TAILSCALE_EXPOSURE ?? "direct";
   if (tailscaleExposure !== "direct" && tailscaleExposure !== "serve") {
     throw new UnsafeBindingError(`FORGE_TAILSCALE_EXPOSURE must be direct or serve; received ${tailscaleExposure}`);
   }
-  const configuredAddress = configuredEnvironment.FORGE_TAILSCALE_ADDRESS?.trim();
-  const bindAddress = configuredEnvironment.FORGE_BIND_ADDRESS?.trim() || configuredAddress;
+  const configuredAddress = parsedEnvironment.data.FORGE_TAILSCALE_ADDRESS?.trim();
+  const bindAddress = parsedEnvironment.data.FORGE_BIND_ADDRESS?.trim() || configuredAddress;
   if (!bindAddress) {
     throw new UnsafeBindingError("FORGE_TAILSCALE_ADDRESS is required for Tailscale-only startup");
   }
@@ -109,24 +140,25 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
   if (tailscaleExposure === "serve" && !configuredAddress) {
     throw new UnsafeBindingError("FORGE_TAILSCALE_ADDRESS is required when Tailscale Serve HTTPS is enabled");
   }
-  const port = parsePort(configuredEnvironment.FORGE_PORT);
-  const dataRoot = resolve(configuredEnvironment.FORGE_DATA_ROOT ?? ".forge/data");
+  const port = parsePort(parsedEnvironment.data.FORGE_PORT);
+  const dataRoot = resolve(parsedEnvironment.data.FORGE_DATA_ROOT ?? ".forge/data");
   const reachableHost = configuredAddress ?? bindAddress;
   const scheme = tailscaleExposure === "serve" ? "https" : "http";
-  return {
+  return ForgeConfigSchema.parse({
     accessMode,
     tailscaleExposure,
     bindAddress,
     reachableAddress: `${scheme}${formatReachableAddress(reachableHost, port).slice(4)}`,
     port,
     dataRoot,
-    databasePath: configuredEnvironment.FORGE_DATABASE_PATH ? resolve(configuredEnvironment.FORGE_DATABASE_PATH) : resolve(dataRoot, "forge.sqlite"),
-    artifactRoot: configuredEnvironment.FORGE_ARTIFACT_ROOT ? resolve(configuredEnvironment.FORGE_ARTIFACT_ROOT) : resolve(dataRoot, "artifacts"),
-    runtimeRoot: configuredEnvironment.FORGE_RUNTIME_ROOT ? resolve(configuredEnvironment.FORGE_RUNTIME_ROOT) : resolve(dataRoot, "runtime"),
-    temporalAddress: configuredEnvironment.FORGE_TEMPORAL_ADDRESS ?? "127.0.0.1:7233",
-    temporalNamespace: configuredEnvironment.FORGE_TEMPORAL_NAMESPACE ?? "forge",
-    taskQueue: configuredEnvironment.FORGE_TASK_QUEUE ?? "forge",
-  };
+    databasePath: parsedEnvironment.data.FORGE_DATABASE_PATH ? resolve(parsedEnvironment.data.FORGE_DATABASE_PATH) : resolve(dataRoot, "forge.sqlite"),
+    artifactRoot: parsedEnvironment.data.FORGE_ARTIFACT_ROOT ? resolve(parsedEnvironment.data.FORGE_ARTIFACT_ROOT) : resolve(dataRoot, "artifacts"),
+    runtimeRoot: parsedEnvironment.data.FORGE_RUNTIME_ROOT ? resolve(parsedEnvironment.data.FORGE_RUNTIME_ROOT) : resolve(dataRoot, "runtime"),
+    temporalAddress: parsedEnvironment.data.FORGE_TEMPORAL_ADDRESS ?? "127.0.0.1:7233",
+    temporalNamespace: parsedEnvironment.data.FORGE_TEMPORAL_NAMESPACE ?? "forge",
+    taskQueue: parsedEnvironment.data.FORGE_TASK_QUEUE ?? "forge",
+    installationId: installationId(dataRoot, environment),
+  });
 }
 
 export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfig> = {}): ForgeConfig {
@@ -146,5 +178,6 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     temporalAddress: overrides.temporalAddress ?? "127.0.0.1:7233",
     temporalNamespace: overrides.temporalNamespace ?? "forge",
     taskQueue: overrides.taskQueue ?? "forge",
+    installationId: overrides.installationId ?? "test-installation",
   };
 }

@@ -1,0 +1,16 @@
+export const HEALTH_CHECK_IDS = [
+  "temporal",
+  "database",
+  "artifact-root",
+  "worker",
+  "codex-auth",
+  "gh-auth",
+] as const;
+
+export type HealthCheckId = (typeof HEALTH_CHECK_IDS)[number];
+
+export const OWNED_HEALTH_CHECK_IDS = ["temporal", "database", "artifact-root", "worker"] as const satisfies readonly HealthCheckId[];
+
+export function isOwnedHealthCheck(id: HealthCheckId): boolean {
+  return (OWNED_HEALTH_CHECK_IDS as readonly string[]).includes(id);
+}

@@ -12,7 +12,7 @@ import { AuthService } from "./auth.js";
 import { loadConfig, type ForgeConfig } from "./config.js";
 import { ForgeDatabase } from "./database.js";
 import { createHostHealthDependencies } from "./host-health.js";
-import { StructuredLogger } from "./logging.js";
+import { createFastifyLogger, StructuredLogger } from "./logging.js";
 import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
 import { createGithubReleasePort, ReleaseService } from "./github-release.js";
@@ -45,6 +45,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig()): Pro
     release,
     ci,
     acceptance,
+    logger: createFastifyLogger(),
   });
   return { app, database };
 }

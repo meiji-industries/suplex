@@ -51,6 +51,34 @@ const loggerOptions = {
   },
 };
 
+const fastifyLoggerOptions = {
+  ...loggerOptions,
+  redact: {
+    ...loggerOptions.redact,
+    paths: [
+      ...loggerOptions.redact.paths,
+      "req.headers.authorization",
+      "req.headers.cookie",
+      "req.headers.x-api-key",
+    ],
+  },
+  serializers: {
+    req(request: { method: string; url: string; headers: Record<string, unknown>; host?: string; ip?: string; socket?: { remotePort?: number } }) {
+      return {
+        method: request.method,
+        url: request.url.split("?", 1)[0],
+        host: request.host,
+        remoteAddress: request.ip,
+        remotePort: request.socket?.remotePort,
+      };
+    },
+  },
+};
+
+export function createFastifyLogger(sink?: (line: string) => void): Logger {
+  return pino(fastifyLoggerOptions, sink ? { write: sink } : process.stdout);
+}
+
 export class StructuredLogger {
   private logger: Logger;
 

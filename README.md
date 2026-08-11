@@ -47,6 +47,33 @@ Shutdown reads `.forge/data/runtime/owned-processes.json`, verifies each recorde
 
 For a foreground run suitable for local debugging, use `pnpm run forge start --foreground`.
 
+## Manual backup and restore
+
+Backup and retention are deliberately operator-run in the MVP. Capture the Temporal persistence directory, then create and verify an archive:
+
+```sh
+export FORGE_TEMPORAL_DATA_PATH=/path/to/temporal-persistence
+pnpm run forge backup /path/to/forge-backup.tar.gz
+pnpm run forge verify-backup /path/to/forge-backup.tar.gz
+```
+
+The archive contains the application database, artifact store, Temporal persistence, and non-secret configuration. User records and company/project state are retained, but passkey registrations, sessions, challenges, invitation tokens, provider credentials, and generated environment files are removed. Reauthentication is required after restore.
+
+Restore only into a new empty directory. The command verifies the archive, rebuilds the durable issue projections and operator attention ledgers, reconciles recorded Developer executions and existing GitHub release state without mutating GitHub, and writes `forge-backup/restore-handoff.json` with measured timings and explicit next steps:
+
+```sh
+pnpm run forge restore /path/to/forge-backup.tar.gz /path/to/forge-restored
+```
+
+Recreate the restored `.forge/forge.env` with the restored host's Tailscale address and paths; preserve the non-secret `installationId`, `temporalNamespace`, and `taskQueue` values from `forge-backup/config/config.json` so Temporal can find the backed-up Workflow history. Do not copy the old generated environment or credentials. For a directory-form Temporal backup, point the first start at the restored persistence before starting Forge:
+
+```sh
+export FORGE_TEMPORAL_RESTORE_PATH=/path/to/forge-restored/forge-backup/temporal/persistence
+pnpm run forge start
+```
+
+Reauthenticate the Forge passkey, Codex, and GitHub CLI on the restored host. Run `verify-backup` again using the restored configuration before treating the backup health check as healthy. Forge does not schedule backups or rotate retained artifacts automatically.
+
 After building the package, the same setup entry point is available as `npx forge setup`.
 
 ## Development checks

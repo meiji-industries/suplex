@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { join } from "node:path";
-import { rm, writeFile } from "node:fs/promises";
+import { rm, stat, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { loadConfig } from "./config.js";
@@ -43,7 +43,7 @@ async function main(): Promise<void> {
       const temporalPath = process.env.FORGE_TEMPORAL_DATA_PATH;
       if (!archive || !temporalPath) throw new Error("backup requires an archive path and FORGE_TEMPORAL_DATA_PATH");
       const result = await service.create({ destination: archive, temporalPersistencePath: temporalPath });
-      process.stdout.write(`Backup created at ${result.archivePath} (${result.manifest.entries.length} files, ${result.durationMs}ms)\n`);
+      process.stdout.write(`Backup created at ${result.archivePath} (${result.manifest.entries.length} files, ${result.archiveBytes} bytes, ${result.durationMs}ms)\n`);
     } else if (command === "verify-backup") {
       if (!archive) throw new Error("verify-backup requires an archive path");
       const result = await service.verify(archive);
@@ -64,18 +64,21 @@ async function main(): Promise<void> {
           version: 1,
           restoredAt: new Date().toISOString(),
           archivePath: result.archivePath,
+          archiveBytes: (await stat(result.archivePath)).size,
+          backupDurationMs: result.durationMs,
+          restoreDurationMs: result.restoreDurationMs,
           verification: { valid: result.valid, verifiedAt: result.verifiedAt, errors: result.errors },
           projectionsRebuilt: rebuilt,
           companiesRebuilt: companies,
           reconciliation,
           requiresReauthentication: true,
-          nextSteps: ["Reauthenticate the restored host integrations", "Start Forge against the restored installation", "Inspect interrupted Developer turns before explicitly retrying or cancelling them"],
+          nextSteps: ["Recreate the restored installation configuration without copying secrets; preserve installationId, temporalNamespace, and taskQueue", "Set FORGE_TEMPORAL_RESTORE_PATH to the restored Temporal persistence directory before the first start", "Reauthenticate the restored host integrations", "Start Forge against the restored installation", "Inspect interrupted Developer turns before explicitly retrying or cancelling them"],
         };
         await writeFile(join(destination, "forge-backup", "restore-handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`, { mode: 0o600 });
         process.stdout.write(`Restored projection state (${rebuilt} issue snapshots, ${companies} companies); `);
         process.stdout.write(`reconciled ${reconciliation.developerExecutions.length} Developer executions and ${reconciliation.providers.length} provider releases; `);
       } finally { restoredDatabase.close(); }
-      process.stdout.write(`backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"}; see forge-backup/restore-handoff.json\n`);
+      process.stdout.write(`backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"} (${result.restoreDurationMs}ms); see forge-backup/restore-handoff.json\n`);
     }
     return;
   }

@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
@@ -12,7 +12,7 @@ import { AuthService } from "../src/auth.js";
 import { BackupService, checkBackupHealth, reconcileRestoredState } from "../src/backup.js";
 import { CapacityManager } from "../src/capacity.js";
 import { CiService, type CheckSnapshot } from "../src/ci.js";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
@@ -43,6 +43,17 @@ async function fixture(): Promise<{ root: string; database: ForgeDatabase; confi
     db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task-a', 'company-a', 'project-a', 'workflow-a', 1, 'delivery_blocked', 'human', '[\"record_delivery_decision\"]', 'Decision required', ?, 'workflow-a:1')").run(now);
   });
   return { root, database, config };
+}
+
+async function rewriteArchive(source: string, destination: string, mutate: (root: string) => Promise<void>): Promise<void> {
+  const staging = await mkdtemp(join(tmpdir(), "forge-backup-mutate-"));
+  try {
+    await exec("tar", ["-xzf", source, "-C", staging]);
+    await mutate(join(staging, "forge-backup"));
+    await exec("tar", ["-czf", destination, "-C", staging, "forge-backup"]);
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
 }
 
 function addReleaseFixtures(database: ForgeDatabase, status = "draft"): void {
@@ -144,18 +155,131 @@ test("backup archive verifies hashes and restores only into a separate clean loc
     await mkdir(join(value.config.artifactRoot, "company-a"), { recursive: true });
     await writeFile(join(value.config.artifactRoot, "company-a", "brief-a"), "body");
     await writeFile(temporal + "/history.db", "temporal");
-    value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET byte_size = 4, sha256 = ? WHERE id = 'brief-a'").run("d".repeat(64)));
+    value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET byte_size = 4, sha256 = ? WHERE id = 'brief-a'").run(createHash("sha256").update("body").digest("hex")));
     const service = new BackupService(value.config);
     const created = await service.create({ destination: archive, temporalPersistencePath: temporal });
-    expect(created.manifest.secretsExcluded).toContain("tokens");
+    expect(created.manifest.secretsExcluded).toContain("provider tokens");
+    expect(created.archiveBytes).toBeGreaterThan(0);
     const verification = await service.verify(archive);
     expect(verification).toMatchObject({ valid: true, errors: [] });
     expect((await checkBackupHealth(value.config)).status).toBe("healthy");
-    await service.restore(archive, restored);
+    const restoredResult = await service.restore(archive, restored);
+    expect(restoredResult.restoreDurationMs).toBeGreaterThanOrEqual(0);
     expect(await readFile(join(restored, "forge-backup", "config", "config.json"), "utf8")).toContain("requiresReauthentication");
     await expect(service.restore(archive, restored)).rejects.toMatchObject({ code: "exists" });
     await writeFile(join(value.root, "truncated.tar.gz"), "not-an-archive");
     expect((await service.verify(join(value.root, "truncated.tar.gz"))).valid).toBe(false);
+
+    const tampered = join(value.root, "tampered.tar.gz");
+    await rewriteArchive(archive, tampered, async (root) => writeFile(join(root, "app", "artifacts", "company-a", "brief-a"), "changed"));
+    expect((await service.verify(tampered)).errors).toContain("hash mismatch: app/artifacts/company-a/brief-a");
+
+    const missingComponent = join(value.root, "missing-component.tar.gz");
+    await rewriteArchive(archive, missingComponent, async (root) => rm(join(root, "temporal", "persistence", "history.db")));
+    expect((await service.verify(missingComponent)).errors).toContain("missing entry: temporal/persistence/history.db");
+
+    const wrongVersion = join(value.root, "wrong-version.tar.gz");
+    await rewriteArchive(archive, wrongVersion, async (root) => {
+      const manifestPath = join(root, "manifest.json");
+      const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { version: number };
+      manifest.version = 999;
+      await writeFile(manifestPath, JSON.stringify(manifest));
+    });
+    expect((await service.verify(wrongVersion)).errors).toContain("unsupported backup version");
+
+    expect((await service.verify(archive)).valid).toBe(true);
+    expect((await checkBackupHealth(value.config)).status).toBe("healthy");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("restore drill preserves users, completed work, artifacts, and draft releases while interrupting in-flight work", async () => {
+  const value = await fixture();
+  const temporal = join(value.root, "temporal");
+  const archive = join(value.root, "restore-drill.tar.gz");
+  const restored = join(value.root, "restore-drill");
+  try {
+    await mkdir(join(value.config.artifactRoot, "company-a"), { recursive: true });
+    await mkdir(join(temporal, "persistence"), { recursive: true });
+    await writeFile(join(value.config.artifactRoot, "company-a", "brief-a"), "brief body");
+    await writeFile(join(temporal, "persistence", "temporal.db"), "temporal persistence");
+
+    const additionalArtifacts = [
+      ["completed-delivery", "developer-delivery", "completed.json", "completed delivery"],
+      ["completed-evidence", "agent-evidence", "completed.md", "completed evidence"],
+      ["draft-body", "agent-evidence", "draft.md", "draft pull request"],
+    ] as const;
+    for (const [id, , , content] of additionalArtifacts) {
+      await writeFile(join(value.config.artifactRoot, "company-a", id), content);
+    }
+    value.database.authTransaction((db) => {
+      db.prepare("UPDATE forge_artifacts SET byte_size = ?, sha256 = ? WHERE id = 'brief-a'").run(10, createHash("sha256").update("brief body").digest("hex"));
+      for (const [id, kind, filename, content] of additionalArtifacts) {
+        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company-a', ?, ?, 'text/plain', ?, ?, ?, ?)").run(id, kind, filename, content.length, createHash("sha256").update(content).digest("hex"), `company-a/${id}`, now);
+      }
+      db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('member-a', 'Member A', 'member-a@forge.local', 'member', 'active', ?, ?)").run(now, now);
+      db.prepare("INSERT INTO forge_memberships (user_id, company_id, created_at) VALUES ('member-a', 'company-a', ?)").run(now);
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-completed', 'company-a', 'project-a', 'Completed task', 'brief-a', '[]', '{}', 0, 'workflow-completed', 'revision-a', 'task-completed-key', ?, ?)").run(now, now);
+      db.prepare("UPDATE forge_issue_projections SET phase = 'development', owner = 'human', allowed_commands_json = '[\"cancel_development\"]', pending_action = 'Developer execution' WHERE task_id = 'task-a'").run();
+      db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task-completed', 'company-a', 'project-a', 'workflow-completed', 4, 'done', 'system', '[]', NULL, ?, 'workflow-completed:4')").run(now);
+      for (const [taskId, workflowId, revision, phase, owner, commands, pendingAction] of [
+        ["task-a", "workflow-a", 5, "development", "human", ["cancel_development"], "Developer execution"],
+        ["task-completed", "workflow-completed", 4, "done", "system", [], null],
+      ] as const) {
+        db.prepare("INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, 'company-a', ?, ?, ?, ?)").run(taskId, workflowId, revision, JSON.stringify({ taskId, companyId: "company-a", projectId: "project-a", workflowId, revision, phase, owner, allowedCommands: commands, pendingAction, lastEventId: `${workflowId}:${revision}` }), now);
+      }
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-completed', 'task-completed', 'company-a', 'workflow-completed', 1, 1, 'completed', 'issue/task-completed', '/worktrees/task-completed', ?, 'completed-session', ?, ?, ?, ?, 'clean', 'completed-delivery', 'completed-evidence')").run(baseSha, now, now, headSha, treeSha);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, heartbeat_at) VALUES ('developer-in-flight', 'task-a', 'company-a', 'workflow-a', 1, 1, 'running', 'issue/task-a', '/worktrees/task-a', ?, 'in-flight-session', ?, ?)").run(baseSha, now, now);
+      db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, body_artifact_id, created_at, updated_at) VALUES ('release-drill', 'task-a', 'company-a', 'workflow-a', 'workflow-a:release-drill', 'acme/forge', 'issue/task-a', 'main', ?, ?, ?, 'draft', 42, 'https://github.com/acme/forge/pull/42', 'Restore drill draft', 'draft-body', ?, ?)").run(baseSha, headSha, treeSha, now, now);
+      db.prepare("INSERT INTO forge_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at) VALUES ('invite-a', 'invitation-hash', 'user', 'Member A', 'member-a', '2099-01-01T00:00:00.000Z', ?)").run(now);
+      db.prepare("INSERT INTO forge_challenges (id, challenge, kind, invitation_id, user_id, expires_at, created_at) VALUES ('challenge-a', 'challenge', 'user', 'invite-a', 'member-a', '2099-01-01T00:00:00.000Z', ?)").run(now);
+      db.prepare("INSERT INTO forge_credentials (id, user_id, credential_id, public_key, counter, transports, created_at) VALUES ('credential-a', 'member-a', 'credential-id', ?, 0, '[]', ?)").run(Buffer.from("public-key"), now);
+      db.prepare("INSERT INTO forge_sessions (id, token_hash, user_id, expires_at, created_at) VALUES ('session-a', 'session-hash', 'member-a', '2099-01-01T00:00:00.000Z', ?)").run(now);
+    });
+
+    const service = new BackupService(value.config);
+    const created = await service.create({ destination: archive, temporalPersistencePath: temporal });
+    expect(created.archiveBytes).toBe((await stat(archive)).size);
+    expect(created.durationMs).toBeGreaterThanOrEqual(0);
+    const restoredResult = await service.restore(archive, restored);
+    expect(restoredResult.restoreDurationMs).toBeGreaterThanOrEqual(0);
+
+    const restoredDatabase = new ForgeDatabase(join(restored, "forge-backup", "app", "forge.sqlite"));
+    try {
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_users").get())).toEqual({ count: 2 });
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_projects").get())).toEqual({ count: 1 });
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks").get())).toEqual({ count: 2 });
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_credentials WHERE revoked_at IS NULL").get())).toEqual({ count: 0 });
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_sessions WHERE revoked_at IS NULL").get())).toEqual({ count: 0 });
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_invitations").get())).toEqual({ count: 0 });
+
+      restoredDatabase.authTransaction((db) => {
+        db.prepare("DELETE FROM forge_issue_projections").run();
+        db.prepare("DELETE FROM forge_attention_items").run();
+      });
+      expect(restoredDatabase.rebuildIssueProjections()).toBe(2);
+      expect(new AttentionService(restoredDatabase, new AuthService(restoredDatabase, value.config)).rebuildAll()).toBe(2);
+      new CapacityManager(restoredDatabase, value.config).reconcileFromLedgers();
+
+      let providerReads = 0;
+      let providerMutations = 0;
+      const reconciliation = await reconcileRestoredState(restoredDatabase, {
+        async checkAuthentication() { providerMutations += 1; },
+        async getRemoteRepository() { return "acme/forge"; },
+        async getBranchHead() { providerReads += 1; return headSha; },
+        async pushNormal() { providerMutations += 1; },
+        async listPullRequests() { providerMutations += 1; return []; },
+        async createDraftPullRequest() { providerMutations += 1; return pullRequest({ number: 42, headSha, baseSha }); },
+        async getPullRequest() { providerReads += 1; return pullRequest({ number: 42, headSha, baseSha }); },
+      });
+      expect(reconciliation.developerExecutions).toEqual([{ executionId: "developer-in-flight", status: "interrupted", reason: "restore-invalidated-process-ownership" }]);
+      expect(reconciliation.providers).toEqual([expect.objectContaining({ releaseId: "release-drill", status: "matched", pullRequestNumber: 42 })]);
+      expect(providerReads).toBe(2);
+      expect(providerMutations).toBe(0);
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = 'developer-in-flight'").get())).toEqual({ status: "interrupted", failure_code: "restore-process-invalidated" });
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT task_id, phase FROM forge_issue_projections ORDER BY task_id").all())).toEqual([{ task_id: "task-a", phase: "development" }, { task_id: "task-completed", phase: "done" }]);
+    } finally {
+      restoredDatabase.close();
+    }
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

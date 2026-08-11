@@ -41,6 +41,10 @@ export interface BackupVerification {
   durationMs: number;
 }
 
+export interface BackupRestoreResult extends BackupVerification {
+  restoreDurationMs: number;
+}
+
 export interface BackupCreateInput {
   destination: string;
   temporalPersistencePath: string;
@@ -98,7 +102,14 @@ async function emptyDirectory(path: string): Promise<boolean> {
 }
 
 function safeArchiveName(path: string): boolean {
-  return (path === backupRoot || path.startsWith(`${backupRoot}/`)) && !path.split("/").includes("..") && !path.startsWith("/");
+  return (path === backupRoot || path.startsWith(`${backupRoot}/`))
+    && !path.includes("\\")
+    && !path.split("/").includes("..")
+    && !path.startsWith("/");
+}
+
+function safeManifestPath(path: string): boolean {
+  return Boolean(path) && safeArchiveName(`${backupRoot}/${path}`);
 }
 
 function configuration(config: ForgeConfig): Record<string, string | number | boolean> {
@@ -125,13 +136,27 @@ function configuration(config: ForgeConfig): Record<string, string | number | bo
 
 async function recordVerification(config: ForgeConfig, verification: BackupVerification): Promise<void> {
   await mkdir(config.dataRoot, { recursive: true });
-  await writeFile(join(config.dataRoot, "backup-status.json"), JSON.stringify({ verifiedAt: verification.verifiedAt, valid: verification.valid, archivePath: verification.archivePath, errors: verification.errors }, null, 2), { mode: 0o600 });
+  await writeFile(join(config.dataRoot, "backup-status.json"), JSON.stringify({ verifiedAt: verification.verifiedAt, valid: verification.valid, archivePath: verification.archivePath, errors: verification.errors, durationMs: verification.durationMs }, null, 2), { mode: 0o600 });
+}
+
+function removeAuthenticationState(snapshotPath: string): void {
+  const snapshot = new Database(snapshotPath);
+  try {
+    snapshot.transaction(() => {
+      snapshot.prepare("DELETE FROM forge_challenges").run();
+      snapshot.prepare("DELETE FROM forge_sessions").run();
+      snapshot.prepare("DELETE FROM forge_credentials").run();
+      snapshot.prepare("DELETE FROM forge_invitations").run();
+    })();
+  } finally {
+    snapshot.close();
+  }
 }
 
 export class BackupService {
   constructor(private readonly config: ForgeConfig) {}
 
-  async create(input: BackupCreateInput): Promise<{ archivePath: string; manifest: BackupManifest; durationMs: number }> {
+  async create(input: BackupCreateInput): Promise<{ archivePath: string; manifest: BackupManifest; archiveBytes: number; durationMs: number }> {
     const started = Date.now();
     const destination = resolve(input.destination);
     if (await exists(destination)) throw new BackupFailure("exists");
@@ -148,6 +173,7 @@ export class BackupService {
       const snapshotPath = join(root, "app", "forge.sqlite");
       const database = new Database(this.config.databasePath, { readonly: true });
       try { await database.backup(snapshotPath); } finally { database.close(); }
+      removeAuthenticationState(snapshotPath);
       await cp(this.config.artifactRoot, join(root, "app", "artifacts"), { recursive: true, force: false });
       const temporalStats = await stat(input.temporalPersistencePath);
       if (temporalStats.isDirectory()) await cp(input.temporalPersistencePath, join(root, "temporal", "persistence"), { recursive: true, force: false });
@@ -166,12 +192,12 @@ export class BackupService {
         },
         entries,
         database: { path: "app/forge.sqlite", integrity: "ok" },
-        secretsExcluded: ["credentials", "passkeys", "sessions", "cookies", "private keys", "tokens", "generated environment files"],
+        secretsExcluded: ["credential registrations", "passkeys", "sessions", "challenges", "invitation tokens", "cookies", "private keys", "provider tokens", "generated environment files"],
         requiredConfiguration: ["accessMode", "reachableAddress", "databasePath", "artifactRoot", "temporalAddress", "temporalNamespace", "taskQueue", "installationId"],
       };
       await writeFile(join(root, "manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });
       await execFileAsync("tar", ["-czf", destination, "-C", staging, backupRoot], { timeout: 60_000, maxBuffer: 64 * 1024 });
-      return { archivePath: destination, manifest, durationMs: Date.now() - started };
+      return { archivePath: destination, manifest, archiveBytes: (await stat(destination)).size, durationMs: Date.now() - started };
     } finally {
       await rm(staging, { recursive: true, force: true });
     }
@@ -186,12 +212,30 @@ export class BackupService {
     try {
       if (!(await exists(archive))) throw new BackupFailure("invalid");
       const listing = (await execFileAsync("tar", ["-tzf", archive], { timeout: 30_000, maxBuffer: 512 * 1024 })).stdout.split(/\r?\n/).filter(Boolean);
-      if (listing.some((name) => !safeArchiveName(name.replace(/\/$/, "")))) errors.push("archive contains an unsafe path");
+      if (listing.some((name) => !safeArchiveName(name.replace(/\/$/, "")))) {
+        errors.push("archive contains an unsafe path");
+        throw new BackupFailure("unsafe");
+      }
       await execFileAsync("tar", ["-xzf", archive, "-C", staging, "--no-same-owner"], { timeout: 60_000, maxBuffer: 64 * 1024 });
       const root = join(staging, backupRoot);
       manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as BackupManifest;
       if (manifest.version !== backupVersion) errors.push("unsupported backup version");
-      for (const entry of manifest.entries ?? []) {
+      const manifestEntries = Array.isArray(manifest.entries) ? manifest.entries : [];
+      const actualEntries = (await filesUnder(root)).filter((entry) => entry.path !== "manifest.json");
+      const expectedPaths = new Set<string>();
+      for (const entry of manifestEntries) {
+        if (!safeManifestPath(entry.path)) {
+          errors.push(`unsafe manifest path: ${entry.path}`);
+          continue;
+        }
+        if (expectedPaths.has(entry.path)) errors.push(`duplicate manifest entry: ${entry.path}`);
+        expectedPaths.add(entry.path);
+      }
+      const actualPaths = new Set(actualEntries.map((entry) => entry.path));
+      for (const path of expectedPaths) if (!actualPaths.has(path)) errors.push(`missing entry: ${path}`);
+      for (const path of actualPaths) if (!expectedPaths.has(path)) errors.push(`unexpected entry: ${path}`);
+      for (const entry of manifestEntries) {
+        if (!safeManifestPath(entry.path)) continue;
         const path = join(root, entry.path);
         try {
           const bytes = await readFile(path);
@@ -202,13 +246,27 @@ export class BackupService {
       const configValue = JSON.parse(await readFile(configPath, "utf8")) as { version?: number; config?: Record<string, unknown>; requiresReauthentication?: boolean };
       if (configValue.version !== backupVersion || !configValue.requiresReauthentication) errors.push("required configuration is missing");
       for (const required of manifest.requiredConfiguration ?? []) if (configValue.config?.[required] === undefined) errors.push(`missing configuration: ${required}`);
-      const databasePath = join(root, manifest.database?.path ?? "app/forge.sqlite");
+      const databaseRelativePath = manifest.database?.path ?? "app/forge.sqlite";
+      if (!safeManifestPath(databaseRelativePath)) throw new BackupFailure("unsafe");
+      const databasePath = join(root, databaseRelativePath);
       const database = new Database(databasePath, { readonly: true });
       try {
         const integrity = database.pragma("integrity_check", { simple: true });
         if (integrity !== "ok") errors.push("database integrity check failed");
-        const artifacts = database.prepare("SELECT storage_path FROM forge_artifacts").all() as Array<{ storage_path: string }>;
-        for (const artifact of artifacts) if (!(await exists(join(root, "app", "artifacts", artifact.storage_path)))) errors.push(`missing artifact: ${artifact.storage_path}`);
+        const artifacts = database.prepare("SELECT storage_path, byte_size, sha256 FROM forge_artifacts").all() as Array<{ storage_path: string; byte_size: number; sha256: string }>;
+        for (const artifact of artifacts) {
+          const relativeArtifactPath = `app/artifacts/${artifact.storage_path}`;
+          if (!safeManifestPath(relativeArtifactPath)) {
+            errors.push(`unsafe artifact path: ${artifact.storage_path}`);
+            continue;
+          }
+          try {
+            const bytes = await readFile(join(root, relativeArtifactPath));
+            if (bytes.byteLength !== artifact.byte_size || sha256(bytes) !== artifact.sha256) errors.push(`artifact hash mismatch: ${artifact.storage_path}`);
+          } catch {
+            errors.push(`missing artifact: ${artifact.storage_path}`);
+          }
+        }
       } finally { database.close(); }
     } catch (error) {
       errors.push(error instanceof Error ? error.message : "backup could not be read");
@@ -220,14 +278,15 @@ export class BackupService {
     return verification;
   }
 
-  async restore(archivePath: string, destination: string): Promise<BackupVerification> {
+  async restore(archivePath: string, destination: string): Promise<BackupRestoreResult> {
+    const started = Date.now();
     const target = resolve(destination);
     if (await exists(target) && !(await emptyDirectory(target))) throw new BackupFailure("exists");
     const verification = await this.verify(archivePath);
     if (!verification.valid) throw new BackupFailure("verification");
     await mkdir(target, { recursive: true });
     await execFileAsync("tar", ["-xzf", resolve(archivePath), "-C", target, "--no-same-owner"], { timeout: 60_000, maxBuffer: 64 * 1024 });
-    return verification;
+    return { ...verification, restoreDurationMs: Date.now() - started };
   }
 }
 

@@ -1,5 +1,6 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { mkdir, open, rm } from "node:fs/promises";
+import { mkdir, open, rm, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 
 import type { ForgeConfig } from "./config.js";
@@ -62,6 +63,11 @@ async function publishedTemporalAddress(name: string): Promise<string> {
 async function createTemporalContainer(config: ForgeConfig, temporalAddress: string | undefined): Promise<TemporalContainer> {
   const identifiers = runtimeIdentifiers(config.installationId);
   const temporalPort = temporalAddress?.split(":").at(-1);
+  const restoredTemporalPath = process.env.FORGE_TEMPORAL_RESTORE_PATH?.trim();
+  if (restoredTemporalPath && !(await stat(resolve(restoredTemporalPath))).isDirectory()) {
+    throw new Error("FORGE_TEMPORAL_RESTORE_PATH must point to a restored Temporal persistence directory");
+  }
+  const temporalVolume = restoredTemporalPath ? `${resolve(restoredTemporalPath)}:/data` : `${identifiers.temporalVolumeName}:/data`;
   let result: { stdout: string };
   try {
     result = await execFileAsync("docker", [
@@ -80,7 +86,7 @@ async function createTemporalContainer(config: ForgeConfig, temporalAddress: str
       "--publish",
       temporalPort ? "127.0.0.1:8233:8233" : "127.0.0.1::8233",
       "--volume",
-      `${identifiers.temporalVolumeName}:/data`,
+      temporalVolume,
       "temporalio/temporal:latest",
       "server",
       "start-dev",

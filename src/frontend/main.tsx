@@ -2,6 +2,7 @@ import { Collapsible } from "./components/ui/collapsible.js";
 import { Button } from "./components/ui/button.js";
 import { Input } from "./components/ui/input.js";
 import { Dialog } from "./components/ui/dialog.js";
+import { CreateButton } from "./components/ui/create-button.js";
 import { ApplicationFrame } from "./components/app/application-frame.js";
 import { CompanyProvider, useCompanyContext } from "./components/app/company-context.js";
 import { SettingsLayout, SettingsSection, SettingRow } from "./components/app/settings-layout.js";
@@ -24,6 +25,7 @@ import {
   Terminal,
   Pause,
   Workflow,
+  X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
@@ -205,51 +207,43 @@ function AdminView(): ReactElement {
   );
 }
 
-function ProjectsView(): ReactElement {
-  const { currentCompany, loading, user, error: companyError, reloadCompanies } = useCompanyContext();
-  const [profiles, setProfiles] = useState<ApiProfile[]>([]);
-  const [projects, setProjects] = useState<ApiProject[]>([]);
-  const [loadedCompanyId, setLoadedCompanyId] = useState("");
+function CreateProjectDialog({
+  open,
+  onOpenChange,
+  companyId,
+  companyStatus,
+  onCreated,
+  reloadCompanies,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  companyId: string;
+  companyStatus: CompanyStatus | undefined;
+  onCreated: () => Promise<void>;
+  reloadCompanies: () => Promise<void>;
+}): ReactElement {
   const [form, setForm] = useState({ name: "", repositoryPath: "", worktreeRoot: "", repository: "", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: "", allowedProfileIds: "", leadProfile: "", developerProfile: "", reviewerProfile: "" });
   const [findings, setFindings] = useState<Array<{ field: string; message: string }>>([]);
   const [error, setError] = useState("");
-  const requestToken = useRef(0);
-  const companyId = currentCompany?.id ?? "";
+  const [busy, setBusy] = useState(false);
 
-  const reload = useCallback(async (): Promise<void> => {
-    const token = ++requestToken.current;
-    setLoadedCompanyId("");
-    setProjects([]);
-    setProfiles([]);
-    setError("");
-    if (!companyId || loading) return;
-    try {
-      const [profileResult, projectResult] = await Promise.all([
-        readJson<{ profiles: ApiProfile[] }>("/api/profiles"),
-        readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
-      ]);
-      if (token !== requestToken.current) return;
-      setProfiles(profileResult.profiles); setProjects(projectResult.projects); setLoadedCompanyId(companyId);
-    } catch (reason) {
-      if (token !== requestToken.current) return;
-      if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
-      else if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
-      else setError("Unable to load projects");
-    }
-  }, [companyId, loading, reloadCompanies]);
-  useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
-    setForm({ name: "", repositoryPath: "", worktreeRoot: "", repository: "", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: "", allowedProfileIds: "", leadProfile: "", developerProfile: "", reviewerProfile: "" });
-    setFindings([]);
-  }, [companyId]);
-
-  const visibleProjects = loadedCompanyId === companyId ? projects : [];
+    if (open) {
+      setForm({ name: "", repositoryPath: "", worktreeRoot: "", repository: "", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: "", allowedProfileIds: "", leadProfile: "", developerProfile: "", reviewerProfile: "" });
+      setFindings([]);
+      setError("");
+      setBusy(false);
+    }
+  }, [open]);
 
   const setField = (key: keyof typeof form, value: string): void => setForm((current) => ({ ...current, [key]: value }));
-  const createProject = async (event?: React.FormEvent): Promise<void> => {
+
+  const submit = async (event?: FormEvent): Promise<void> => {
     if (event) event.preventDefault();
-    if (!companyId || currentCompany?.status !== "active") return;
-    setError(""); setFindings([]);
+    if (!companyId || companyStatus !== "active") return;
+    setBusy(true);
+    setError("");
+    setFindings([]);
     try {
       await readJson<ApiProject>(`/api/companies/${companyId}/projects`, {
         method: "POST",
@@ -260,38 +254,114 @@ function ProjectsView(): ReactElement {
           roleDefaults: { lead: form.leadProfile, developer: form.developerProfile, reviewer: form.reviewerProfile },
         }),
       });
-      await reload();
+      await onCreated();
+      onOpenChange(false);
     } catch (reason) {
       if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
       setError(reason instanceof Error ? reason.message : "Project configuration failed");
       if (reason instanceof Error && "findings" in reason) setFindings((reason as Error & { findings?: Array<{ field: string; message: string }> }).findings ?? []);
+    } finally {
+      setBusy(false);
     }
   };
-  const changeStatus = async (projectId: string, status: "activate" | "pause" | "archive"): Promise<void> => {
-    setError(""); setFindings([]);
-    try { await readJson(`/api/projects/${projectId}/${status}`, { method: "POST", body: "{}" }); await reload(); }
-    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Project update failed"); if (reason instanceof Error && "findings" in reason) setFindings((reason as Error & { findings?: Array<{ field: string; message: string }> }).findings ?? []); }
-  };
+
   return (
-    <ApplicationFrame title="Projects">
+    <Dialog.Root open={open} onOpenChange={onOpenChange}>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="fixed inset-0 z-50 bg-black/20" />
+        <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 max-h-[85vh] w-[min(92vw,640px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto border border-border bg-background p-4 shadow-lg outline-none">
+          <div className="mb-3 flex items-center justify-between">
+            <Dialog.Title className="text-[13px] font-semibold">New project</Dialog.Title>
+            <Dialog.Close render={<Button variant="ghost" size="icon" aria-label="Close"><X className="size-3.5" /></Button>} />
+          </div>
+          {companyStatus !== "active" ? (
+            <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p>
+          ) : (
+            <form className="grid gap-3 overflow-y-auto pr-1 sm:grid-cols-2" onSubmit={(event: FormEvent) => void submit(event)}>
+              {projectFormFields.map((field, index) => {
+                const fullWidth = field.key === "name" || field.key === "repositoryPath" || field.key === "worktreeRoot" || field.key === "repository";
+                return (
+                  <label key={field.key} className={`grid gap-0.5 text-[11px] text-muted-foreground ${fullWidth ? "sm:col-span-2" : ""}`}>
+                    {field.label}
+                    <Input name={field.key} autoFocus={index === 0} value={form[field.key as keyof typeof form]} onChange={(event) => setField(field.key as keyof typeof form, event.target.value)} />
+                  </label>
+                );
+              })}
+              <div className="mt-2 flex justify-end gap-2 sm:col-span-2">
+                <Dialog.Close render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} />
+                <Button type="submit" size="sm" disabled={busy || !companyId}>{busy ? "Creating…" : "Create project"}</Button>
+              </div>
+            </form>
+          )}
+          {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
+          {findings.length ? <ul className="mt-3 space-y-1 text-xs text-rose-700">{findings.map((item, index) => <li key={`${item.field}-${index}`}>{item.field}: {item.message}</li>)}</ul> : null}
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+function ProjectsView(): ReactElement {
+  const { currentCompany, loading, user, error: companyError, reloadCompanies } = useCompanyContext();
+  const [profiles, setProfiles] = useState<ApiProfile[]>([]);
+  const [projects, setProjects] = useState<ApiProject[]>([]);
+  const [loadedCompanyId, setLoadedCompanyId] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [createOpen, setCreateOpen] = useState(false);
+  const requestToken = useRef(0);
+  const loadedCompanyIdRef = useRef("");
+  const companyId = currentCompany?.id ?? "";
+
+  const reload = useCallback(async (): Promise<void> => {
+    const token = ++requestToken.current;
+    setLoadError("");
+    if (companyId !== loadedCompanyIdRef.current) {
+      loadedCompanyIdRef.current = "";
+      setLoadedCompanyId("");
+      setProjects([]);
+      setProfiles([]);
+    }
+    if (!companyId || loading) return;
+    try {
+      const [profileResult, projectResult] = await Promise.all([
+        readJson<{ profiles: ApiProfile[] }>("/api/profiles"),
+        readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
+      ]);
+      if (token !== requestToken.current) return;
+      loadedCompanyIdRef.current = companyId;
+      setProfiles(profileResult.profiles); setProjects(projectResult.projects); setLoadedCompanyId(companyId);
+    } catch (reason) {
+      if (token !== requestToken.current) return;
+      if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
+      else if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
+      else setLoadError("Unable to load projects");
+    }
+  }, [companyId, loading, reloadCompanies]);
+  useEffect(() => { void reload(); }, [reload]);
+
+  const visibleProjects = loadedCompanyId === companyId ? projects : [];
+
+  const changeStatus = async (projectId: string, status: "activate" | "pause" | "archive"): Promise<void> => {
+    setLoadError("");
+    try { await readJson(`/api/projects/${projectId}/${status}`, { method: "POST", body: "{}" }); await reload(); }
+    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setLoadError(reason instanceof Error ? reason.message : "Project update failed"); }
+  };
+
+  return (
+    <ApplicationFrame title="Projects" headerRight={currentCompany?.status === "active" ? <CreateButton onClick={() => setCreateOpen(true)} disabled={!companyId}>Create</CreateButton> : undefined}>
       <div className="bg-background text-foreground">
-        <div className="grid gap-px border-b border-border/70 bg-border lg:grid-cols-[minmax(260px,360px)_1fr]">
-          <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">New project</span><span className="text-[11px] text-muted-foreground">Draft first</span></div>
-            {currentCompany ? <div className="mb-3 flex items-center gap-2 border-b border-border/70 pb-2 text-xs"><span className="font-medium truncate">{currentCompany.name}</span><span className="text-[11px] text-muted-foreground">{currentCompany.status}</span></div> : null}
-            {currentCompany?.status === "active" ? <form className="grid gap-2" onSubmit={(event: FormEvent) => void createProject(event)}>
-              {projectFormFields.map((field) => (
-                <label key={field.key} className="grid gap-0.5 text-[11px] text-muted-foreground">
-                  {field.label}
-                  <Input name={field.key} value={form[field.key as keyof typeof form]} onChange={(event) => setField(field.key as keyof typeof form, event.target.value)} />
-                </label>
-              ))}
-              <Button className="mt-3 w-full" type="submit" disabled={!companyId}>Create draft</Button>
-            </form> : currentCompany ? <p className="text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p> : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
-            {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
-            {findings.length ? <ul className="mt-3 space-y-1 text-xs text-rose-700">{findings.map((item, index) => <li key={`${item.field}-${index}`}>{item.field}: {item.message}</li>)}</ul> : null}
-          </section>
-          <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Configured projects</span><span className="text-[11px] text-muted-foreground">Profiles: {profiles.length}</span></div><div className="divide-y divide-border/70 border-y border-border/70">{visibleProjects.map((project) => <article className="py-3" key={project.id}><div className="flex flex-wrap items-center justify-between gap-2"><div><span className="text-[13px] font-medium">{project.name}</span><span className="ml-2 text-[11px] text-muted-foreground">{project.status} · revision {project.configurationRevision}</span></div><div className="flex gap-1.5">{project.status === "draft" ? <Button size="sm" onClick={() => void changeStatus(project.id, "activate")}>Activate</Button> : null}{project.status === "active" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "pause")}>Pause</Button> : null}{project.status !== "archived" && project.status !== "draft" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "archive")}>Archive</Button> : null}<a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></div><div className="mt-2 grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Base {project.baseBranch}</span><span>Target {project.targetBranch}</span></div></article>)}{!loading && currentCompany && loadedCompanyId === companyId && visibleProjects.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">No projects configured.</div> : null}</div></section>
-        </div>
+        <section className="p-4">
+          <div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Configured projects</span><span className="text-[11px] text-muted-foreground">Profiles: {profiles.length}</span></div>
+          {currentCompany && currentCompany.status !== "active" ? <p className="mb-3 text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p> : null}
+          {currentCompany ? (
+            <div className="divide-y divide-border/70 border-y border-border/70">
+              {visibleProjects.map((project) => <article className="py-3" key={project.id}><div className="flex flex-wrap items-center justify-between gap-2"><div><span className="text-[13px] font-medium">{project.name}</span><span className="ml-2 text-[11px] text-muted-foreground">{project.status} · revision {project.configurationRevision}</span></div><div className="flex gap-1.5">{project.status === "draft" ? <Button size="sm" onClick={() => void changeStatus(project.id, "activate")}>Activate</Button> : null}{project.status === "active" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "pause")}>Pause</Button> : null}{project.status !== "archived" && project.status !== "draft" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "archive")}>Archive</Button> : null}<a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></div><div className="mt-2 grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Base {project.baseBranch}</span><span>Target {project.targetBranch}</span></div></article>)}
+              {!loading && loadedCompanyId === companyId && visibleProjects.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">No projects configured.</div> : null}
+            </div>
+          ) : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
+          {loadError ? <p role="alert" className="mt-3 text-xs text-rose-700">{loadError}</p> : null}
+        </section>
+        <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} companyId={companyId} companyStatus={currentCompany?.status} onCreated={reload} reloadCompanies={reloadCompanies} />
       </div>
     </ApplicationFrame>
   );

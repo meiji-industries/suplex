@@ -99,16 +99,19 @@ test("projects desktop flow activates valid configuration and shows actionable v
       await page.goto(`${baseUrl}/projects`);
       await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
       const fill = async (field: string, value: string): Promise<void> => { await page.getByLabel(field, { exact: true }).fill(value); };
+      await page.getByRole("button", { name: "Create", exact: true }).click();
       await fill("Project name", "Browser project"); await fill("Repository path", repositoryPath); await fill("Worktree root", worktreeRoot); await fill("GitHub repository (owner/name)", "acme/forge"); await fill("Base branch", "main"); await fill("Target branch", "main"); await fill("Setup command", "pnpm install"); await fill("Verification command", "pnpm test"); await fill("Required checks (comma separated)", "Tests / unit"); await fill("Allowed profiles (comma separated)", profile.id); await fill("Lead default", profile.id); await fill("Developer default", profile.id);
-      await page.getByRole("button", { name: "Create draft" }).click();
+      await page.getByRole("button", { name: "Create project" }).click();
       await page.getByText("Browser project", { exact: true }).waitFor();
       await page.getByRole("button", { name: "Activate" }).click();
       await page.getByText(/active · revision 2/).waitFor();
+      await page.getByRole("button", { name: "Create", exact: true }).click();
       await fill("Project name", "Unsafe project"); await fill("Repository path", unsafeRepository); await fill("Worktree root", unsafeWorktree); await fill("Setup command", "pnpm test && curl https://example.com");
-      await page.getByRole("button", { name: "Create draft" }).click();
+      await page.getByRole("button", { name: "Create project" }).click();
       await page.getByRole("alert").filter({ hasText: "Project configuration is invalid" }).waitFor();
       await page.getByText(/setupCommand: Setup must be one approved literal command/).waitFor();
       expect(await page.locator("body").innerText()).not.toMatch(/token@|ghp_/);
+      await page.getByRole("button", { name: "Cancel" }).click();
       const projectsNav = page.getByRole("link", { name: "Projects" }).first();
       expect(await projectsNav.getAttribute("aria-current")).toBe("page");
       const healthNav = page.getByRole("link", { name: "Host health" }).first();
@@ -123,6 +126,7 @@ test("projects desktop flow activates valid configuration and shows actionable v
       const narrowProjects = narrowNav.getByRole("link", { name: "Projects" });
       expect(await narrowProjects.getAttribute("aria-current")).toBe("page");
       await narrowNav.getByRole("button", { name: "Close navigation" }).click();
+      await narrow.getByRole("button", { name: "Create", exact: true }).click();
       await narrow.getByLabel("Project name").fill("Narrow project");
       await narrow.getByLabel("Repository path").fill(narrowRepository);
       await narrow.getByLabel("Worktree root").fill(narrowWorktree);
@@ -135,13 +139,14 @@ test("projects desktop flow activates valid configuration and shows actionable v
       await narrow.getByLabel("Allowed profiles (comma separated)").fill(profile.id);
       await narrow.getByLabel("Base branch").fill("main");
       await narrow.getByLabel("Target branch").fill("main");
+      // The form submits via the dialog footer button; pressing Enter in the last input also submits.
       await narrow.getByLabel("Target branch").press("Enter");
       await narrow.getByText("Narrow project", { exact: true }).waitFor();
       await narrow.getByRole("button", { name: "Activate" }).click();
       await narrow.getByText(/active · revision 2/).waitFor();
-      expect(await narrow.getByText("Browser project", { exact: true }).isVisible()).toBe(true);
-      expect(await narrow.getByRole("button", { name: "Pause" }).isVisible()).toBe(true);
-      expect(await narrow.getByRole("button", { name: "Archive" }).isVisible()).toBe(true);
+      await expect.poll(async () => narrow.getByText("Browser project", { exact: true }).isVisible({ timeout: 1000 })).toBe(true);
+      await expect.poll(async () => narrow.getByRole("button", { name: "Pause" }).first().isVisible({ timeout: 1000 })).toBe(true);
+      await expect.poll(async () => narrow.getByRole("button", { name: "Archive" }).first().isVisible({ timeout: 1000 })).toBe(true);
       await narrow.close(); await page.close(); await context.close();
     } finally {
       await browser.close();

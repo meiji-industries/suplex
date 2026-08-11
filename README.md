@@ -31,7 +31,7 @@ pnpm run forge stop
 pnpm run forge restart
 ```
 
-Shutdown reads `.forge/data/runtime/owned-processes.json`, verifies each recorded PID's command identity, and stops only those PIDs plus the Forge-labeled Temporal container. It never searches by broad process name or port.
+Shutdown reads `.forge/data/runtime/owned-processes.json`, verifies each recorded PID's command identity, and stops only those PIDs plus a newly owned neutral Temporal container. A legacy `forge-temporal` service adopted during migration is preserved separately; Forge never searches by broad process name or port.
 
 For a foreground run suitable for local debugging, use `pnpm run forge start --foreground`.
 

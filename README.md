@@ -12,8 +12,8 @@ Forge owns the Temporal development container, API, and worker processes. Docker
 corepack enable
 pnpm install --frozen-lockfile
 pnpm run build
-pnpm run forge -- setup
-pnpm run forge -- start
+pnpm run forge setup
+pnpm run forge start
 ```
 
 The wizard offers Tailscale Serve HTTPS (recommended) or direct Tailscale HTTP, discovers the local MagicDNS hostname when Tailscale is available, and upserts only Forge's keys in `.forge/forge.env`. Re-running it is safe. In Serve mode, Forge listens on `127.0.0.1` and Tailscale terminates HTTPS at the configured `https://<magicdns>:4111` URL; the loopback exception is accepted only because that proxy boundary is explicit and recorded.
@@ -27,13 +27,13 @@ The command is otherwise intentionally strict: it refuses wildcard, public, LAN,
 Use the recorded identities for lifecycle operations:
 
 ```sh
-pnpm run forge -- stop
-pnpm run forge -- restart
+pnpm run forge stop
+pnpm run forge restart
 ```
 
 Shutdown reads `.forge/data/runtime/owned-processes.json`, verifies each recorded PID's command identity, and stops only those PIDs plus the Forge-labeled Temporal container. It never searches by broad process name or port.
 
-For a foreground run suitable for local debugging, use `pnpm run forge -- start --foreground`.
+For a foreground run suitable for local debugging, use `pnpm run forge start --foreground`.
 
 After building the package, the same setup entry point is available as `npx forge setup`.
 

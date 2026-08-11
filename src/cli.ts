@@ -8,7 +8,7 @@ import { startForge } from "./runtime.js";
 import { StructuredLogger } from "./logging.js";
 import { runSetup } from "./setup.js";
 
-const command = process.argv[2] ?? "help";
+const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
 const foreground = process.argv.includes("--foreground");
 
 async function stopForge(config: ReturnType<typeof loadConfig>): Promise<void> {
@@ -25,7 +25,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "help") {
-    process.stdout.write("Usage: pnpm run forge -- <setup|start|stop|restart> [--foreground]\n");
+    process.stdout.write("Usage: pnpm run forge <setup|start|stop|restart> [--foreground]\n");
     return;
   }
   const config = loadConfig();

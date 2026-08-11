@@ -18,6 +18,14 @@ pnpm run forge start
 
 The wizard offers Tailscale Serve HTTPS (recommended) or direct Tailscale HTTP, discovers the local MagicDNS hostname when Tailscale is available, and upserts only Forge's keys in `.forge/forge.env`. Re-running it is safe. In Serve mode, Forge listens on `127.0.0.1` and Tailscale terminates HTTPS at the configured `https://<magicdns>:4111` URL; the loopback exception is accepted only because that proxy boundary is explicit and recorded.
 
+Setup prints one bootstrap enrollment URL once. It is a 72-hour, one-time passkey invitation; Forge stores only its hash and replacing an unused invitation invalidates the predecessor. There are no password or anonymous Forge accounts. Complete enrollment at `/auth`, manage users and company membership at `/admin`, and use the explicit local recovery command when needed:
+
+```sh
+pnpm run forge recover
+```
+
+Recovery also prints a one-time passkey URL and revokes existing administrator access after the replacement passkey is enrolled.
+
 If the wizard reports that the local Tailscale daemon is unavailable, start and sign in to the Tailscale app, verify `tailscale status`, and rerun setup. The selected Forge configuration is retained; no credentials are collected.
 
 Serve HTTPS is a tailnet endpoint. Verify it from another device joined to the same tailnet; the Forge host itself may not loop back through its own Tailscale IP during the TLS handshake. For local diagnostics, use `http://127.0.0.1:4111/health` and confirm `tailscale serve status` shows the HTTPS proxy.
@@ -43,6 +51,7 @@ After building the package, the same setup entry point is available as `npx forg
 pnpm run typecheck
 pnpm run test
 pnpm run test:browser
+pnpm run test:temporal
 ```
 
-The browser proof uses Playwright at narrow and desktop viewports against the same responsive health page served by the API. The Temporal lifecycle proof provisions a uniquely named Docker container on a dynamic host port and runs with `pnpm run test:temporal`; it does not touch Forge's live container.
+The browser proof uses Playwright at narrow and desktop viewports against the same responsive application served by the API, including passkey enrollment, sign-in/out, membership, and recovery. The Temporal lifecycle proof provisions a uniquely named Docker container on a dynamic host port and runs with `pnpm run test:temporal`; it does not touch Forge's live container.

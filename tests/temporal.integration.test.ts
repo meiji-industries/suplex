@@ -109,7 +109,7 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     });
     workerRun = worker.run();
     api = await createForgeServer(config);
-    expect((await api.app.inject({ method: "GET", url: "/api/health" })).statusCode).toBe(200);
+    expect((await api.app.inject({ method: "GET", url: "/api/auth/status" })).statusCode).toBe(200);
 
     const started = await startProbeWorkflow(config, { probeId: "probe-restart", companyId: "company-1" });
     workflowId = started.workflowId;
@@ -150,7 +150,7 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     });
     workerRun = worker.run();
     api = await createForgeServer(config);
-    expect((await api.app.inject({ method: "GET", url: "/api/health" })).statusCode).toBe(200);
+    expect((await api.app.inject({ method: "GET", url: "/api/auth/status" })).statusCode).toBe(200);
     const afterRestart = await queryProbeWorkflow(config, workflowId, started.runId);
     expect(afterRestart.status).toBe("running");
     expect(reopenedDatabase.getProbe("probe-restart")?.workflowId).toBe(workflowId);

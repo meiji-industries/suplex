@@ -35,3 +35,22 @@ export function renderHealthPage(snapshot: HealthSnapshot): string {
   </body>
 </html>`;
 }
+
+export function renderApplicationPage(view: "auth" | "admin"): string {
+  return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#f8f8fa">
+    <title>Forge · ${view === "auth" ? "Sign in" : "Administration"}</title>
+    <link rel="stylesheet" href="/assets/forge-ui.css">
+  </head>
+  <body>
+    <div id="forge-app"></div>
+    <noscript>Forge requires JavaScript for passkey authentication.</noscript>
+    <script>window.__FORGE_VIEW__ = ${JSON.stringify(view)};</script>
+    <script type="module" src="/assets/forge-ui.js"></script>
+  </body>
+</html>`;
+}

@@ -4,6 +4,8 @@ import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 
 import { loadConfig } from "./config.js";
+import { AuthService } from "./auth.js";
+import { ForgeDatabase } from "./database.js";
 import { configureTailscaleServe, discoverTailscaleHostname, verifyTailscaleServe } from "./tailscale.js";
 
 const managedKeys = new Set([
@@ -88,6 +90,18 @@ export async function runSetup(): Promise<void> {
     const config = loadConfig({ ...process.env, ...values, FORGE_ENV_FILE: envFile });
     await upsertForgeEnvironment(envFile, values);
     output.write(`\nSaved idempotent Forge configuration to ${envFile}\n`);
+    const database = new ForgeDatabase(config.databasePath);
+    let bootstrapInvitation: ReturnType<AuthService["ensureBootstrapInvitation"]>;
+    try {
+      bootstrapInvitation = new AuthService(database, config).ensureBootstrapInvitation();
+    } finally {
+      database.close();
+    }
+    if (bootstrapInvitation) {
+      output.write(`Bootstrap enrollment (showing once): ${config.reachableAddress}/auth?invite=${bootstrapInvitation.token}\n`);
+    } else {
+      output.write("Bootstrap administrator is already enrolled. Use `pnpm run forge recover` for explicit recovery.\n");
+    }
     if (exposure === "serve") {
       try {
         await configureTailscaleServe(config, process.env.FORGE_TAILSCALE_COMMAND ?? "tailscale");

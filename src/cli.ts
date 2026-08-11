@@ -3,6 +3,8 @@ import { rm } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 import { loadConfig } from "./config.js";
+import { AuthService } from "./auth.js";
+import { ForgeDatabase } from "./database.js";
 import { readProcessRegistry, stopOwnedProcesses } from "./process-manager.js";
 import { startForge } from "./runtime.js";
 import { StructuredLogger } from "./logging.js";
@@ -25,10 +27,20 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "help") {
-    process.stdout.write("Usage: pnpm run forge <setup|start|stop|restart> [--foreground]\n");
+    process.stdout.write("Usage: pnpm run forge <setup|recover|start|stop|restart> [--foreground]\n");
     return;
   }
   const config = loadConfig();
+  if (command === "recover") {
+    const database = new ForgeDatabase(config.databasePath);
+    try {
+      const invitation = new AuthService(database, config).createRecoveryInvitation();
+      process.stdout.write(`Recovery enrollment (showing once): ${config.reachableAddress}/auth?mode=recovery&invite=${invitation.token}\n`);
+    } finally {
+      database.close();
+    }
+    return;
+  }
   if (command === "start") {
     const registry = await startForge(config, foreground);
     process.stdout.write(`Forge started at ${config.reachableAddress}; owned processes: ${registry.processes.map((process) => `${process.name}#${process.pid}`).join(", ")}\n`);

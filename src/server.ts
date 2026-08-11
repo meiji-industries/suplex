@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 
 import { createApp } from "./app.js";
+import { AuthService } from "./auth.js";
 import { loadConfig, type ForgeConfig } from "./config.js";
 import { ForgeDatabase } from "./database.js";
 import { createHostHealthDependencies } from "./host-health.js";
@@ -17,9 +18,11 @@ export interface ForgeServer {
 export async function createForgeServer(config: ForgeConfig = loadConfig()): Promise<ForgeServer> {
   await mkdir(config.artifactRoot, { recursive: true });
   const database = new ForgeDatabase(config.databasePath);
+  const auth = new AuthService(database, config);
   const app = createApp({
     config,
     health: createHostHealthDependencies(config, database),
+    auth,
   });
   return { app, database };
 }

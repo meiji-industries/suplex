@@ -150,6 +150,14 @@ export class ForgeDatabase {
     return worker !== undefined && worker.heartbeatAgeMs <= maxAgeMs;
   }
 
+  authTransaction<T>(operation: (database: Database.Database) => T): T {
+    return this.db.transaction(() => operation(this.db))();
+  }
+
+  authQuery<T>(operation: (database: Database.Database) => T): T {
+    return operation(this.db);
+  }
+
   health(): DatabaseHealth {
     const migrationRow = this.orm.all(sql`SELECT COUNT(*) AS count FROM __drizzle_migrations`)[0] as MigrationCountRow | undefined;
     const journalMode = String(this.db.pragma("journal_mode", { simple: true })).toLowerCase();

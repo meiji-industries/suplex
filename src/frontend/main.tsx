@@ -1,6 +1,9 @@
 import { Collapsible } from "./components/ui/collapsible.js";
 import { Button } from "./components/ui/button.js";
+import { Input } from "./components/ui/input.js";
 import { AppSidebar, MobileNavigation } from "./components/app/navigation.js";
+import { ApplicationFrame } from "./components/app/application-frame.js";
+import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import type { HealthCheck, HealthSnapshot } from "../health.js";
 import { isOwnedHealthCheck } from "../health-contract.js";
 import {
@@ -35,6 +38,125 @@ function relativeTime(timestamp: string): string {
   if (elapsed < 10_000) return "just now";
   if (elapsed < 60_000) return `${Math.floor(elapsed / 1_000)}s ago`;
   return `${Math.floor(elapsed / 60_000)}m ago`;
+}
+
+async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, { ...init, headers: { ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}), ...(init?.headers ?? {}) } });
+  const text = await response.text();
+  const body = (text ? JSON.parse(text) : {}) as T & { error?: string };
+  if (!response.ok) {
+    throw new Error(body.error ?? "Request failed");
+  }
+  return body;
+}
+
+type ApiUser = { id: string; displayName: string; username: string; role: "admin" | "member"; status: string; companyIds: string[] };
+type ApiCompany = { id: string; name: string; createdAt: string };
+
+function AuthView(): ReactElement {
+  const params = useMemo(() => new URLSearchParams(window.location.search), []);
+  const [required, setRequired] = useState(false);
+  const [token, setToken] = useState(params.get("invite") ?? "");
+  const mode = params.get("mode") ?? "";
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    void readJson<{ required: boolean; authenticated: boolean }>("/api/auth/status").then((status) => {
+      if (status.authenticated) window.location.assign("/health");
+      setRequired(status.required);
+    }).catch(() => setError("Unable to read sign-in state"));
+  }, []);
+
+  const enroll = async (): Promise<void> => {
+    setBusy(true); setError("");
+    try {
+      const registrationKind = mode === "recovery" ? "recovery" : required ? "bootstrap" : "invitation";
+      const options = await readJson<{ challengeId: string; options: Parameters<typeof startRegistration>[0]["optionsJSON"] }>(`/api/auth/${registrationKind}/options`, { method: "POST", body: JSON.stringify({ token }) });
+      const response = await startRegistration({ optionsJSON: options.options });
+      await readJson(`/api/auth/${registrationKind}/verify`, { method: "POST", body: JSON.stringify({ token, challengeId: options.challengeId, response }) });
+      window.location.assign("/health");
+    } catch {
+      setError("Passkey enrollment failed");
+    } finally { setBusy(false); }
+  };
+
+  const signIn = async (): Promise<void> => {
+    setBusy(true); setError("");
+    try {
+      const options = await readJson<{ challengeId: string; options: Parameters<typeof startAuthentication>[0]["optionsJSON"] }>("/api/auth/options", { method: "POST", body: "{}" });
+      const response = await startAuthentication({ optionsJSON: options.options });
+      await readJson("/api/auth/verify", { method: "POST", body: JSON.stringify({ challengeId: options.challengeId, response }) });
+      window.location.assign("/health");
+    } catch {
+      setError("Passkey sign-in failed");
+    } finally { setBusy(false); }
+  };
+
+  const enrollment = required || token.length > 0;
+  return (
+    <ApplicationFrame title={enrollment ? "Enroll passkey" : "Sign in"}>
+      <div className="mx-auto max-w-md px-4 py-4 sm:px-8">
+        <div className="border border-border bg-card p-4">
+          <div className="mb-5 flex items-center justify-between"><span className="text-[13px] font-semibold">{enrollment ? "Passkey enrollment" : "Passkey sign-in"}</span><span className="text-xs text-muted-foreground">No password</span></div>
+          {enrollment ? <><label className="mb-1 block text-xs text-muted-foreground" htmlFor="invitation">Invitation token</label><Input id="invitation" className="mb-3 w-full" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} /><Button className="w-full" onClick={() => void enroll()} disabled={busy || token.length < 16}>{busy ? "Waiting for passkey…" : "Enroll passkey"}</Button></> : <Button className="w-full" onClick={() => void signIn()} disabled={busy}>{busy ? "Waiting for passkey…" : "Sign in with passkey"}</Button>}
+          {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
+        </div>
+      </div>
+    </ApplicationFrame>
+  );
+}
+
+function AdminView(): ReactElement {
+  const [user, setUser] = useState<ApiUser>();
+  const [users, setUsers] = useState<ApiUser[]>([]);
+  const [companies, setCompanies] = useState<ApiCompany[]>([]);
+  const [displayName, setDisplayName] = useState("");
+  const [companyName, setCompanyName] = useState("");
+  const [inviteToken, setInviteToken] = useState("");
+  const [error, setError] = useState("");
+
+  const reload = useCallback(async (): Promise<void> => {
+    try {
+      const me = await readJson<{ user: ApiUser }>("/api/auth/me");
+      setUser(me.user);
+      const [userList, companyList] = await Promise.all([readJson<{ users: ApiUser[] }>("/api/admin/users"), readJson<{ companies: ApiCompany[] }>("/api/companies")]);
+      setUsers(userList.users); setCompanies(companyList.companies);
+    } catch (reason) {
+      if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
+      else setError("Unable to load administration");
+    }
+  }, []);
+  useEffect(() => { void reload(); }, [reload]);
+
+  const invite = async (): Promise<void> => {
+    try { const result = await readJson<{ token: string }>("/api/admin/invitations", { method: "POST", body: JSON.stringify({ displayName: displayName || "Forge user" }) }); setInviteToken(result.token); setDisplayName(""); await reload(); } catch { setError("Unable to invite user"); }
+  };
+  const createCompany = async (): Promise<void> => {
+    try { await readJson("/api/admin/companies", { method: "POST", body: JSON.stringify({ name: companyName }) }); setCompanyName(""); await reload(); } catch { setError("Unable to create company"); }
+  };
+  const changeMembership = async (companyId: string, targetUserId: string, add: boolean): Promise<void> => {
+    try {
+      const init: RequestInit = { method: add ? "POST" : "DELETE" };
+      if (add) init.body = JSON.stringify({ userId: targetUserId });
+      await readJson(add ? `/api/admin/companies/${companyId}/members` : `/api/admin/companies/${companyId}/members/${targetUserId}`, init);
+      await reload();
+    } catch { setError("Unable to change membership"); }
+  };
+  const signOut = async (): Promise<void> => { await readJson("/api/auth/sign-out", { method: "POST", body: "{}" }); window.location.assign("/auth"); };
+
+  return (
+    <ApplicationFrame title="Administration">
+      <div className="divide-y divide-border/70">
+        <section className="flex flex-wrap items-center justify-between gap-3 border-b border-border/70 px-3 py-3 sm:px-4"><span className="text-xs text-muted-foreground">{user?.displayName ?? ""} · {user?.role ?? ""}</span><Button variant="ghost" size="sm" onClick={() => void signOut()}>Sign out</Button></section>
+        <section className="grid gap-px border-b border-border/70 bg-border sm:grid-cols-2">
+          <div className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Users</span><span className="text-[11px] text-muted-foreground">{users.length}</span></div><div className="mb-3 flex gap-2"><Input className="h-7 flex-1" placeholder="Display name" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /><Button size="sm" onClick={() => void invite()}>Invite</Button></div>{inviteToken ? <code className="block break-all border border-border bg-muted/30 p-2 text-[11px]">{inviteToken}</code> : null}<div className="mt-3 divide-y divide-border/70 border-y border-border/70">{users.map((candidate) => <div className="flex min-h-8 items-center justify-between gap-2 text-xs" key={candidate.id}><span className="truncate">{candidate.displayName} <span className="text-muted-foreground">{candidate.status}</span></span>{candidate.role !== "admin" && candidate.status === "active" ? <Button variant="ghost" size="sm" onClick={() => void readJson(`/api/admin/users/${candidate.id}/revoke`, { method: "POST", body: "{}" }).then(() => reload()).catch(() => setError("Unable to revoke user"))}>Revoke</Button> : null}</div>)}</div></div>
+          <div className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Companies</span><span className="text-[11px] text-muted-foreground">{companies.length}</span></div><div className="mb-3 flex gap-2"><Input className="h-7 flex-1" placeholder="Company name" value={companyName} onChange={(event) => setCompanyName(event.target.value)} /><Button size="sm" onClick={() => void createCompany()}>Create</Button></div><div className="divide-y divide-border/70 border-y border-border/70">{companies.map((company) => <div className="py-2 text-xs" key={company.id}><div className="mb-2 flex items-center justify-between"><span>{company.name}</span><span className="text-muted-foreground">{company.id.slice(0, 8)}</span></div><div className="flex flex-wrap gap-1.5">{users.filter((candidate) => candidate.role === "member" && candidate.status === "active").map((candidate) => { const assigned = candidate.companyIds.includes(company.id); return <Button key={candidate.id} variant={assigned ? "secondary" : "outline"} size="sm" onClick={() => void changeMembership(company.id, candidate.id, !assigned)}>{assigned ? "− " : "+ "}{candidate.displayName}</Button>; })}</div></div>)}</div></div>
+        </section>
+        {error ? <p role="alert" className="px-4 py-3 text-xs text-rose-700">{error}</p> : null}
+      </div>
+    </ApplicationFrame>
+  );
 }
 
 function StatusIndicator({ status }: { status: HealthCheck["status"] }): ReactElement {
@@ -160,4 +282,5 @@ function Dashboard({ initialSnapshot }: { initialSnapshot: HealthSnapshot }): Re
   );
 }
 
-createRoot(document.getElementById("forge-app")!).render(<Dashboard initialSnapshot={window.__FORGE_HEALTH__} />);
+const view = window.__FORGE_VIEW__;
+createRoot(document.getElementById("forge-app")!).render(view === "auth" ? <AuthView /> : view === "admin" ? <AdminView /> : <Dashboard initialSnapshot={window.__FORGE_HEALTH__} />);

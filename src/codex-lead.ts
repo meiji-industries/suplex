@@ -11,7 +11,7 @@ import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import { PlanMaterialCategorySchema, classifyPlanMateriality, materialitySummary, type PlanMaterialCategory } from "./plan-governance.js";
-import type { ConsolidateLeadPlanActivityInput, SupplementalReviewActivityInput, SupplementalReviewResult } from "./temporal/issue-contracts.js";
+import { DeliveryReviewActivityInputSchema, DeliveryReviewSchema, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewResult, type ConsolidateLeadPlanActivityInput, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./temporal/issue-contracts.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -240,6 +240,67 @@ function parseSupplementalReview(lines: string[]): SupplementalReview {
   return result.data;
 }
 
+function parseDeliveryReview(lines: string[]): DeliveryReview {
+  const messages = lines.flatMap((line) => {
+    try {
+      const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
+      return event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" ? [event.item.text] : [];
+    } catch {
+      return [];
+    }
+  });
+  const text = messages.at(-1);
+  if (!text) throw new AgentFailure("missing-review-output", "Codex Lead did not return a delivery review");
+  let parsed: unknown;
+  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-review-output", "Codex Lead returned malformed delivery review JSON"); }
+  const result = DeliveryReviewSchema.safeParse(parsed);
+  if (!result.success) throw new AgentFailure("invalid-review-output", "Codex Lead returned a delivery review outside the required schema");
+  return result.data;
+}
+
+async function readOptionalInstruction(filename: string): Promise<string | undefined> {
+  try {
+    const value = await readFile(filename, "utf8");
+    return value.length > 100_000 ? `${value.slice(0, 100_000)}\n[truncated]` : value;
+  } catch {
+    return undefined;
+  }
+}
+
+async function readDeliveryGitEvidence(worktreePath: string, targetBaseSha: string, subjectCommit: string, repositoryPath: string): Promise<{ targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }> {
+  const run = async (args: string[], maxBuffer: number): Promise<string> => (await execFileAsync("git", args, { cwd: worktreePath, timeout: 20_000, maxBuffer })).stdout;
+  const [status, branch, head, tree, diff, commit] = await Promise.all([
+    run(["status", "--porcelain=v1", "--untracked-files=all"], 64 * 1024),
+    run(["symbolic-ref", "--short", "HEAD"], 4 * 1024),
+    run(["rev-parse", "HEAD"], 4 * 1024),
+    run(["rev-parse", "HEAD^{tree}"], 4 * 1024),
+    run(["diff", "--no-ext-diff", "--binary", `${targetBaseSha}..${subjectCommit}`], 2 * 1024 * 1024),
+    run(["show", "--no-ext-diff", "--format=fuller", "--stat", "--summary", subjectCommit], 128 * 1024),
+  ]);
+  const instructionPaths = [
+    join(repositoryPath, "AGENTS.md"),
+    join(repositoryPath, "CLAUDE.md"),
+    join(worktreePath, "AGENTS.md"),
+    join(worktreePath, "CLAUDE.md"),
+  ];
+  const instructionEntries = await Promise.all([...new Set(instructionPaths)].map(async (filename) => {
+    const contents = await readOptionalInstruction(filename);
+    return contents === undefined ? undefined : `--- ${filename} ---\n${contents}`;
+  }));
+  return {
+    targetBaseSha,
+    subjectCommit,
+    subjectTree: tree.trim(),
+    status: redact(status.trim()) as string,
+    branch: branch.trim(),
+    head: head.trim(),
+    tree: tree.trim(),
+    diff: redact(diff) as string,
+    commit: redact(commit) as string,
+    instructions: instructionEntries.filter((entry): entry is string => entry !== undefined).join("\n"),
+  };
+}
+
 function failureCode(result: LeadProcessResult): string {
   if (/not logged in|login required|authentication required|unauthenticated|oauth authorization required/i.test(result.stderr)) return "login-expired";
   if (/rate[ -]?limit|too many requests|\b429\b/i.test(result.stderr)) return "rate-limited";
@@ -249,7 +310,7 @@ function failureCode(result: LeadProcessResult): string {
 
 async function taskScopedPath(root: string, candidate: string): Promise<string> {
   const absoluteRoot = await realpath(root);
-  const absoluteCandidate = resolve(candidate);
+  const absoluteCandidate = await realpath(resolve(candidate));
   const relativePath = relative(absoluteRoot, absoluteCandidate);
   if (relativePath.startsWith(`..${sep}`) || relativePath === "..") throw new AgentFailure("unsafe-working-directory", "Lead working directory is outside the configured repository root");
   return absoluteCandidate;
@@ -277,6 +338,21 @@ interface ImageRow {
   storage_path: string;
   sha256: string;
   filename: string;
+}
+
+interface DeliveryReviewContext {
+  title: string;
+  repositoryPath: string;
+  normalizedJson: string;
+  briefStoragePath: string;
+  briefSha256: string;
+  planStoragePath: string;
+  planSha256: string;
+  deliveryStoragePath: string;
+  deliverySha256: string;
+  evidenceStoragePath: string;
+  evidenceSha256: string;
+  developerSessionRef: string;
 }
 
 export interface AgentServiceOptions {
@@ -411,6 +487,98 @@ export class AgentService {
     }
   }
 
+  async reviewDelivery(rawInput: DeliveryReviewActivityInput): Promise<DeliveryReviewResult> {
+    const input = DeliveryReviewActivityInputSchema.parse(rawInput);
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.repository_path AS repositoryPath, r.normalized_json AS normalizedJson,
+      b.storage_path AS briefStoragePath, b.sha256 AS briefSha256,
+      pa.storage_path AS planStoragePath, pa.sha256 AS planSha256,
+      da.storage_path AS deliveryStoragePath, da.sha256 AS deliverySha256,
+      ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256,
+      de.session_ref AS developerSessionRef
+      FROM forge_tasks t
+      JOIN forge_projects p ON p.id = t.project_id
+      JOIN forge_project_revisions r ON r.id = t.project_revision_id
+      JOIN forge_artifacts b ON b.id = t.brief_artifact_id
+      JOIN forge_issue_outputs io ON io.task_id = t.id AND io.workflow_id = t.workflow_id AND io.output_artifact_id = ? AND io.revision = ?
+      JOIN forge_artifacts pa ON pa.id = io.output_artifact_id
+      JOIN forge_developer_executions de ON de.id = ? AND de.task_id = t.id AND de.company_id = t.company_id AND de.workflow_id = t.workflow_id AND de.delivery_artifact_id = ? AND de.evidence_artifact_id = ?
+      JOIN forge_artifacts da ON da.id = de.delivery_artifact_id
+      JOIN forge_artifacts ea ON ea.id = de.evidence_artifact_id
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(
+      input.leadOutputArtifactId,
+      input.planRevision,
+      input.developerExecutionId,
+      input.deliveryArtifactId,
+      input.evidenceArtifactId,
+      input.taskId,
+      input.companyId,
+      input.projectId,
+      input.projectRevisionId,
+      input.briefArtifactId,
+    ) as DeliveryReviewContext | undefined);
+    if (!context || !context.developerSessionRef) throw new AgentFailure("scoped-input-missing", "Exact Developer delivery evidence is unavailable");
+    if (context.developerSessionRef === input.leadSessionRef) throw new AgentFailure("session-identity-conflict", "Lead review must reuse the Lead session and remain distinct from Developer");
+    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(context.repositoryPath));
+    const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
+    const [brief, plan, delivery, developerEvidence, gitEvidence] = await Promise.all([
+      this.artifacts.read({ storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
+      this.artifacts.read({ storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
+      this.artifacts.read({ storagePath: context.deliveryStoragePath, sha256: context.deliverySha256 }).then((bytes) => bytes.toString("utf8")),
+      this.artifacts.read({ storagePath: context.evidenceStoragePath, sha256: context.evidenceSha256 }).then((bytes) => bytes.toString("utf8")),
+      readDeliveryGitEvidence(worktreePath, input.targetBaseSha, input.subjectCommit, repositoryPath),
+    ]);
+    if (gitEvidence.branch !== input.branchName || gitEvidence.head.toLowerCase() !== input.subjectCommit.toLowerCase() || gitEvidence.tree.toLowerCase() !== input.subjectTree.toLowerCase() || gitEvidence.status.trim()) {
+      throw new AgentFailure("delivery-revision-changed", "The Developer delivery no longer matches its recorded clean exact revision");
+    }
+    const leadProfile = this.database.authQuery((db) => db.prepare("SELECT model, provider FROM forge_profiles WHERE id = ?").get(input.roleProfiles.lead) as { model: string; provider: string } | undefined);
+    if (!leadProfile || leadProfile.provider !== "codex") throw new AgentFailure("profile-unavailable", "Lead review requires the configured Codex Lead profile");
+    const rawSessionId = await this.sessionStore.read(input.leadSessionRef);
+    if (!rawSessionId) throw new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
+    const executionId = `agent_${randomBytes(12).toString("hex")}`;
+    const startedAt = this.now().toISOString();
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.leadSessionRef, startedAt));
+    const evidenceLines: string[] = [];
+    const outputLines: string[] = [];
+    const expectedRawSessionId = rawSessionId;
+    const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
+    try {
+      const result = await this.processRunner({
+        command: this.command,
+        args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.deliveryReviewPrompt(context.title, brief, plan, delivery, developerEvidence, gitEvidence)],
+        cwd: worktreePath,
+        onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
+        onLine: async (line) => {
+          const sanitized = safeJsonLine(line);
+          const event = eventValue(line);
+          if (event.threadId && event.threadId !== expectedRawSessionId) throw new AgentFailure("session-identity-conflict", "Lead delivery review returned a different session identity");
+          evidenceLines.push(sanitized);
+          outputLines.push(line);
+          await this.databaseHeartbeat(executionId, "running");
+        },
+      });
+      if (result.exitCode !== 0) throw new AgentFailure(failureCode(result), "Codex Lead delivery review did not complete");
+      const review = DeliveryReviewSchema.parse(parseDeliveryReview(outputLines));
+      const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
+      const opinion = await this.artifacts.put(input.companyId, "delivery-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
+      const reviewId = `delivery_review_${randomBytes(12).toString("hex")}`;
+      this.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, opinion.id, opinion.companyId, opinion.kind, opinion.filename, opinion.mimeType, opinion.byteSize, opinion.sha256, opinion.storagePath, opinion.createdAt);
+        db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.planRevision, input.targetBaseSha, input.subjectCommit, input.subjectTree, executionId, input.leadSessionRef, review.outcome, review.summary, opinion.id, evidence.id, this.now().toISOString());
+        for (const finding of review.findings) db.prepare("INSERT INTO forge_delivery_findings (id, review_id, task_id, company_id, severity, rationale, evidence_ref, disposition, repair_instruction, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(finding.findingId, reviewId, input.taskId, input.companyId, finding.severity, finding.rationale, finding.evidenceRef, finding.disposition, finding.repairInstruction, this.now().toISOString());
+        db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidence.id, executionId);
+      });
+      return { reviewId, leadExecutionId: executionId, leadSessionRef: input.leadSessionRef, opinionArtifactId: opinion.id, evidenceArtifactId: evidence.id, outcome: review.outcome, summary: review.summary, repairPlan: review.repairPlan, findings: review.findings, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree };
+    } catch (error) {
+      const failure = error instanceof AgentFailure ? error : new AgentFailure("delivery-review-failed", "Codex Lead delivery review failed");
+      const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
+      this.database.authTransaction((db) => {
+        db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
+        db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId);
+      });
+      throw failure;
+    } finally { clearInterval(heartbeat); }
+  }
+
   async runSupplementalReview(rawInput: SupplementalReviewActivityInput): Promise<SupplementalReviewResult> {
     const input = rawInput;
     const profile = this.database.authQuery((db) => db.prepare("SELECT id, model, provider FROM forge_profiles WHERE id = ?").get(input.roleProfiles.reviewer) as { id: string; model: string; provider: string } | undefined);
@@ -497,6 +665,21 @@ export class AgentService {
       this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); });
       throw failure;
     } finally { clearInterval(heartbeat); }
+  }
+
+  private deliveryReviewPrompt(title: string, brief: string, plan: string, delivery: string, developerEvidence: string, gitEvidence: { targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }): string {
+    return [
+      'You are Forge\'s Lead reviewer continuing the existing Lead session. Review the exact local Developer delivery; do not redesign or expand the approved plan. Do not modify files, commit, run CI, use GitHub/provider commands, or treat CI as available.',
+      'Return exactly one JSON object with no markdown fences or commentary matching: {"kind":"delivery_review","summary":"...","outcome":"approved|blocking","findings":[{"findingId":"finding_...","severity":"blocking|advisory","rationale":"...","evidenceRef":"diff hunk, file, test, or report reference","disposition":"open|accepted|repaired","repairInstruction":null}],"repairPlan":null}. Blocking findings are limited to correctness, acceptance, security/privacy/data loss, compatibility, operational safety, unintended scope, or missing mandatory proof. Advisory findings never block. An approved result cannot contain an open blocking finding. A blocking result must identify each open blocking finding and provide a bounded repairPlan when repair is possible; use null only when a member decision is required. Ground every finding in the supplied exact revision and evidence.',
+      `Task: ${title}\nBrief:\n${brief}`,
+      `Authorized approved plan:\n${plan}`,
+      `Developer delivery report:\n${delivery}`,
+      `Developer verification evidence:\n${developerEvidence}`,
+      `Exact Git subject (base, branch, commit, tree, clean state):\n${JSON.stringify({ targetBaseSha: gitEvidence.targetBaseSha, branch: gitEvidence.branch, subjectCommit: gitEvidence.subjectCommit, subjectTree: gitEvidence.subjectTree, observedHead: gitEvidence.head, observedTree: gitEvidence.tree, dirtyState: gitEvidence.status ? "dirty" : "clean" })}`,
+      `Repository instructions:\n${gitEvidence.instructions || "(none found)"}`,
+      `Exact diff from target base to subject commit:\n${gitEvidence.diff}`,
+      `Subject commit details:\n${gitEvidence.commit}`,
+    ].join("\n\n");
   }
 
   private reviewPrompt(title: string, brief: string, revision: string, draft: string, evidence: string): string {

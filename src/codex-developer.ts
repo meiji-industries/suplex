@@ -12,7 +12,7 @@ import { AgentFailure, FileSessionStore, runCodexProcess, type LeadProcessResult
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import { createGitCommandGuard, WorktreeManager } from "./worktrees.js";
-import type { DeveloperExecutionActivityInput, DeveloperExecutionResult } from "./temporal/issue-contracts.js";
+import { DeveloperRepairActivityInputSchema, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairResult } from "./temporal/issue-contracts.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +30,18 @@ export const DeveloperDeliveryReportSchema = z.object({
   summary: z.string().min(1).max(2_000),
   steps: z.array(DeveloperDeliveryStepSchema).min(1).max(64),
   authorizedStepsNotCompleted: z.array(z.number().int().positive()).max(64),
+  resultCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  dirtyState: z.enum(["clean", "dirty"]),
+  blocker: z.string().max(4_000).nullable(),
+});
+
+export const DeveloperRepairReportSchema = z.object({
+  kind: z.literal("repair"),
+  summary: z.string().min(1).max(2_000),
+  addressedFindingIds: z.array(z.string().min(1).max(256)).max(64),
+  commandsRun: z.array(z.string().max(500)).max(128),
+  testResults: z.array(z.string().max(2_000)).max(64),
   resultCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
   resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
   dirtyState: z.enum(["clean", "dirty"]),
@@ -94,6 +106,16 @@ function parseDeliveryReport(lines: string[]): DeveloperDeliveryReport {
   const report = DeveloperDeliveryReportSchema.safeParse(parsed);
   if (!report.success) throw new AgentFailure("invalid-delivery-report", "Codex Developer returned a delivery report outside the required schema");
   return report.data;
+}
+
+function parseRepairReport(lines: string[]): z.infer<typeof DeveloperRepairReportSchema> {
+  const text = lines.map((line) => eventValue(line).message).filter((value): value is string => Boolean(value)).at(-1);
+  if (!text) throw new AgentFailure("missing-repair-report", "Codex Developer did not return a repair report");
+  let parsed: unknown;
+  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-repair-report", "Codex Developer returned malformed repair JSON"); }
+  const result = DeveloperRepairReportSchema.safeParse(parsed);
+  if (!result.success) throw new AgentFailure("invalid-repair-report", "Codex Developer returned a repair report outside the required schema");
+  return result.data;
 }
 
 function processFailure(result: LeadProcessResult): string {
@@ -225,6 +247,103 @@ export class DeveloperService {
       });
       throw failure;
     } finally { await guard?.cleanup(); }
+  }
+
+  async runRepair(rawInput: DeveloperRepairActivityInput): Promise<DeveloperRepairResult> {
+    const input = DeveloperRepairActivityInputSchema.parse(rawInput);
+    if (input.cycle > input.repairCycleLimit) throw new AgentFailure("repair-cap-exhausted", "The configured Developer repair-cycle limit has been reached");
+    const prior = this.database.authQuery((db) => db.prepare(`SELECT id, status, session_ref, branch_name, worktree_path, target_base_sha, result_commit, result_tree
+      FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; status: string; session_ref: string | null; branch_name: string; worktree_path: string; target_base_sha: string; result_commit: string | null; result_tree: string | null } | undefined);
+    const review = this.database.authQuery((db) => db.prepare(`SELECT id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, outcome
+      FROM forge_delivery_reviews WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.reviewId, input.taskId, input.companyId, input.workflowId) as { id: string; task_id: string; company_id: string; workflow_id: string; plan_revision: number; base_sha: string; subject_commit: string; subject_tree: string; outcome: string } | undefined);
+    if (input.blockingFindings.some((finding) => finding.severity !== "blocking" || finding.disposition !== "open")) throw new AgentFailure("repair-scope-violation", "Developer repair input must contain only open blocking findings");
+    if (!prior || !review || prior.status !== "completed" || prior.session_ref !== input.developerSessionRef || prior.branch_name !== input.branchName || prior.worktree_path !== input.worktreePath || prior.target_base_sha !== input.targetBaseSha || review.plan_revision !== input.planRevision || review.base_sha !== input.targetBaseSha || review.subject_commit !== input.subjectCommit || review.subject_tree !== input.subjectTree || review.outcome !== "blocking") {
+      throw new AgentFailure("repair-identity-mismatch", "Developer repair coordinates do not match the immutable review subject");
+    }
+    const previousRepairs = this.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_delivery_repairs WHERE workflow_id = ? AND review_id = ?").get(input.workflowId, input.reviewId) as { count: number }).count;
+    if (previousRepairs !== input.cycle - 1) throw new AgentFailure("repair-cycle-conflict", "Developer repair cycle does not match the durable review history");
+    const worktreePath = await scopedRepository(this.config.worktreeRoot, input.worktreePath);
+    const current = await this.worktrees.inspectDelivery(worktreePath);
+    if (current.branchName !== input.branchName || current.headSha.toLowerCase() !== input.subjectCommit.toLowerCase() || current.treeSha.toLowerCase() !== input.subjectTree.toLowerCase() || current.dirtyState !== "clean") throw new AgentFailure("repair-subject-changed", "The reviewed Developer worktree is no longer the same clean exact revision");
+    const rawSessionId = await this.sessionStore.read(input.developerSessionRef);
+    const executionId = `developer_${randomBytes(12).toString("hex")}`;
+    const startedAt = this.now().toISOString();
+    const attempt = Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
+    const wrapperId = `wrapper_${randomBytes(12).toString("hex")}`;
+    let guard: Awaited<ReturnType<typeof createGitCommandGuard>> | undefined;
+    let repairRowCreated = false;
+    guard = await createGitCommandGuard(this.config.runtimeRoot);
+    this.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, worktreePath, input.targetBaseSha, wrapperId, guard!.directory, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt);
+      db.prepare("INSERT INTO forge_delivery_repairs (id, task_id, company_id, workflow_id, review_id, developer_execution_id, cycle, status, subject_commit, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?)").run(`delivery_repair_${randomBytes(12).toString("hex")}`, input.taskId, input.companyId, input.workflowId, input.reviewId, executionId, input.cycle, input.subjectCommit, startedAt);
+      db.prepare("UPDATE forge_delivery_reviews SET repair_cycle = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(input.cycle, input.reviewId, input.taskId, input.companyId, input.workflowId);
+      repairRowCreated = true;
+    });
+    const repairPrompt = this.repairPrompt(input.repairPlan, input.blockingFindings, { branchName: input.branchName, worktreePath, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree });
+    const evidenceLines = [JSON.stringify({ type: "forge.prompt", text: redact(repairPrompt) })];
+    const outputLines: string[] = [];
+    try {
+      const heartbeat = setInterval(() => void this.heartbeat(executionId), 5_000);
+      try {
+        const result = await this.processRunner({
+          command: this.command,
+          args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", repairPrompt],
+          cwd: worktreePath,
+          env: guard.env,
+          detached: true,
+          onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); },
+          onLine: async (line) => {
+            const sanitized = safeJsonLine(line);
+            evidenceLines.push(sanitized);
+            outputLines.push(line);
+            const event = eventValue(line);
+            if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer repair returned a different session identity");
+            await this.heartbeat(executionId);
+          },
+        });
+        if (result.exitCode !== 0) {
+          evidenceLines.push(JSON.stringify({ type: "forge.process-failure", exitCode: result.exitCode, stderr: redact(result.stderr) }));
+          throw new AgentFailure(processFailure(result), "Codex Developer repair did not complete");
+        }
+        const report = parseRepairReport(outputLines);
+        if (report.addressedFindingIds.some((id) => !input.blockingFindings.some((finding) => finding.findingId === id))) throw new AgentFailure("repair-scope-violation", "Developer repair reported a finding outside the bounded blocking set");
+        const openBlockingIds = input.blockingFindings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open").map((finding) => finding.findingId);
+        if (report.blocker === null && openBlockingIds.some((id) => !report.addressedFindingIds.includes(id))) throw new AgentFailure("repair-incomplete", "Developer repair did not address every open blocking finding");
+        const gitState = await this.worktrees.inspectDelivery(worktreePath);
+        const repairParent = (await execFileAsync("git", ["rev-parse", "HEAD^"], { cwd: worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
+        if (gitState.branchName !== input.branchName || gitState.headSha.toLowerCase() === input.subjectCommit.toLowerCase() || repairParent.toLowerCase() !== input.subjectCommit.toLowerCase()) throw new AgentFailure("repair-revision-invalid", "Developer repair must create one ordinary new commit directly on the reviewed revision");
+        if (report.resultCommit.toLowerCase() !== gitState.headSha.toLowerCase() || report.resultTree.toLowerCase() !== gitState.treeSha.toLowerCase() || report.dirtyState !== gitState.dirtyState) throw new AgentFailure("repair-revision-mismatch", "Developer repair report does not match the exact Git result");
+        const repairArtifact = await this.artifacts.put(input.companyId, "developer-repair", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, cycle: input.cycle, reviewId: input.reviewId, supersedesExecutionId: input.developerExecutionId }, null, 2), "utf8") });
+        const evidence = await this.persistEvidence(input.companyId, evidenceLines);
+        const blocked = report.blocker !== null || report.dirtyState !== "clean";
+        this.database.authTransaction((db) => {
+          const row = db.prepare("SELECT id FROM forge_delivery_repairs WHERE developer_execution_id = ? AND cycle = ?").get(executionId, input.cycle) as { id: string } | undefined;
+          db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, repairArtifact.id, repairArtifact.companyId, repairArtifact.kind, repairArtifact.filename, repairArtifact.mimeType, repairArtifact.byteSize, repairArtifact.sha256, repairArtifact.storagePath, repairArtifact.createdAt);
+          db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(blocked ? "blocked" : "completed", this.now().toISOString(), this.now().toISOString(), gitState.headSha, gitState.treeSha, gitState.dirtyState, repairArtifact.id, evidence.id, executionId);
+          db.prepare("UPDATE forge_delivery_repairs SET status = ?, result_commit = ?, evidence_artifact_id = ? WHERE id = ?").run(blocked ? "blocked" : "completed", gitState.headSha, evidence.id, row?.id);
+          return row?.id;
+        });
+        return { developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, supersedesExecutionId: input.developerExecutionId, worktreePath, branchName: input.branchName, targetBaseSha: input.targetBaseSha, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, deliveryArtifactId: repairArtifact.id, evidenceArtifactId: evidence.id, deliverySummary: report.summary, outcome: blocked ? "blocked" : "completed", cycle: input.cycle };
+      } finally { clearInterval(heartbeat); }
+    } catch (error) {
+      const failure = error instanceof AgentFailure ? error : new AgentFailure("developer-repair-failed", "Codex Developer repair failed");
+      const evidence = await this.persistEvidence(input.companyId, evidenceLines);
+      this.database.authTransaction((db) => {
+        db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
+        db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId);
+        if (repairRowCreated) db.prepare("UPDATE forge_delivery_repairs SET status = 'failed', evidence_artifact_id = ? WHERE developer_execution_id = ? AND cycle = ?").run(evidence.id, executionId, input.cycle);
+      });
+      throw failure;
+    } finally { await guard.cleanup(); }
+  }
+
+  private repairPrompt(repairPlan: string, findings: DeliveryFinding[], worktree: { branchName: string; worktreePath: string; targetBaseSha: string; subjectCommit: string; subjectTree: string }): string {
+    return [
+      'You are Forge\'s authenticated Developer continuing the same Developer session. Apply only the bounded repair plan for the listed blocking Lead findings in the exact existing issue worktree. Do not redesign the authorized plan, expand scope, modify another checkout, use GitHub or any provider, push, create a pull request, merge, rebase, amend, reset, clean, or rewrite history. Run only local verification relevant to these findings. Create exactly one ordinary new local commit whose parent is the reviewed subject commit, leave the worktree clean, and return exactly one JSON object with no markdown fences or commentary matching: {"kind":"repair","summary":"...","addressedFindingIds":[],"commandsRun":[],"testResults":[],"resultCommit":"40+ hex","resultTree":"40+ hex","dirtyState":"clean","blocker":null}. Address only finding IDs supplied below; if the repository contradicts the repair plan, stop and report a blocker.',
+      `Bounded repair plan:\n${repairPlan}`,
+      `Blocking findings:\n${JSON.stringify(findings)}`,
+      `Exact worktree coordinates:\n${JSON.stringify(worktree)}`,
+    ].join("\n\n");
   }
 
   private prompt(title: string, brief: string, plan: string, evidence: string, worktree: { branchName: string; worktreePath: string; targetBaseSha: string }): string {

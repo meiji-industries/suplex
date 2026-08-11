@@ -57,6 +57,13 @@
       "when": 1786426200000,
       "tag": "0007_developer_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786426300000,
+      "tag": "0008_delivery_review",
+      "breakpoints": true
     }
   ]
 }

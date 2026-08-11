@@ -39,7 +39,7 @@ export interface IssueProjectionRecord {
   projectId: string;
   workflowId: string;
   revision: number;
-  phase: "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "delivery_blocked";
+  phase: "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "delivery_blocked";
   owner: "human" | "lead";
   allowedCommands: string[];
   pendingAction: string | null;

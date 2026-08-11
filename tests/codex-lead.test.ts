@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -11,10 +11,11 @@ import { AgentService, LeadOutputSchema, runCodexProcess, type LeadProcessRunner
 import { DeveloperService } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
+import { DeliveryReviewSchema } from "../src/temporal/issue-contracts.js";
 
 const execFileAsync = promisify(execFile);
 
-async function fixture(model = "gpt-5-codex"): Promise<{ root: string; database: ForgeDatabase; config: ReturnType<typeof createTestConfig>; briefId: string }> {
+async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixture repository."): Promise<{ root: string; database: ForgeDatabase; config: ReturnType<typeof createTestConfig>; briefId: string }> {
   const root = await mkdtemp(join(tmpdir(), "forge-codex-lead-test-"));
   const repositoryPath = join(root, "repo");
   const worktreeRoot = join(root, "worktrees");
@@ -29,7 +30,7 @@ async function fixture(model = "gpt-5-codex"): Promise<{ root: string; database:
   const config = createTestConfig(root, { repositoryRoot: root, artifactRoot: join(root, "artifacts"), runtimeRoot: join(root, "runtime") });
   const database = new ForgeDatabase(config.databasePath);
   const artifactStore = new ArtifactStore(config.artifactRoot);
-  const brief = await artifactStore.put("company_1", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from("Investigate the fixture repository.") });
+  const brief = await artifactStore.put("company_1", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from(briefText) });
   database.authQuery((db) => {
     const now = new Date().toISOString();
     db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('user_1', 'Forge Test', 'forge-test', 'admin', 'active', ?, ?)").run(now, now);
@@ -80,6 +81,16 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
 test("Lead output schema rejects unresolved technical questions and malformed blockers", () => {
   expect(LeadOutputSchema.safeParse({ kind: "plan", summary: "x", reproduction: null, rootCauseAnalysis: null, steps: [], compatibilityAnalysis: "x", operationalAnalysis: "x", verificationStrategy: "x", unresolvedTechnicalQuestions: ["choose"] }).success).toBe(false);
   expect(LeadOutputSchema.safeParse({ kind: "decision_blocker", summary: "x", evidence: "x", owner: "developer", question: "x", nextAction: "x" }).success).toBe(false);
+});
+
+test("delivery review schema separates advisory approval from blocking repair", () => {
+  const advisory = { kind: "delivery_review" as const, summary: "The delivery is acceptable with one follow-up note.", outcome: "approved" as const, findings: [{ findingId: "finding_advisory", severity: "advisory" as const, rationale: "The test could be more explicit.", evidenceRef: "delivery report step 1", disposition: "open" as const, repairInstruction: null }], repairPlan: null };
+  const blocking = { ...advisory, outcome: "blocking" as const, findings: [{ findingId: "finding_blocking", severity: "blocking" as const, rationale: "The exact acceptance file is missing.", evidenceRef: "diff: missing proof file", disposition: "open" as const, repairInstruction: "Create the missing acceptance file." }], repairPlan: "Create the missing acceptance file and rerun the focused check." };
+  expect(DeliveryReviewSchema.safeParse(advisory).success).toBe(true);
+  expect(DeliveryReviewSchema.safeParse(blocking).success).toBe(true);
+  expect(DeliveryReviewSchema.safeParse({ ...advisory, outcome: "approved", findings: blocking.findings }).success).toBe(false);
+  expect(DeliveryReviewSchema.safeParse({ ...blocking, findings: [{ ...blocking.findings[0], disposition: "repaired" }], repairPlan: null }).success).toBe(false);
+  expect(DeliveryReviewSchema.safeParse({ ...advisory, findings: [advisory.findings[0], advisory.findings[0]] }).success).toBe(false);
 });
 
 test("Lead planning classifies a successful process without schema output", async () => {
@@ -195,6 +206,116 @@ test("Developer execution creates an isolated delivery commit and stores an exac
     await rm(value.root, { recursive: true, force: true });
   }
 });
+
+test("Lead reviews the exact Developer delivery and the same Developer session performs bounded repair", async () => {
+  const value = await fixture();
+  const artifactStore = new ArtifactStore(value.config.artifactRoot);
+  const worktreePath = join(value.root, "worktrees", "task-1");
+  await execFileAsync("git", ["worktree", "add", "-b", "forge/issue/task_1", worktreePath, "HEAD"], { cwd: join(value.root, "repo") });
+  const targetBaseSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).stdout.trim();
+  await writeFile(join(worktreePath, "DELIVERED.md"), "delivery\n");
+  await execFileAsync("git", ["add", "DELIVERED.md"], { cwd: worktreePath });
+  await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Deliver exact fixture"], { cwd: worktreePath });
+  const subjectCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).stdout.trim();
+  const subjectTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: worktreePath })).stdout.trim();
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "review-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Exact fixture plan", reproduction: null, rootCauseAnalysis: "The fixture needs a delivery marker.", steps: [{ number: 1, instruction: "Create the delivery marker.", verification: "The marker exists." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the exact commit.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
+  const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead-review.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
+  const delivery = await artifactStore.put("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from("{\"kind\":\"delivery\"}\n") });
+  const developerEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "developer.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"developer\"}\n") });
+  const now = new Date().toISOString();
+  value.database.authTransaction((db) => {
+    for (const artifact of [plan, leadEvidence, delivery, developerEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_lead_review', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
+    db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_review_plan', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_lead_review', 1, 'plan', ?, ?, 'session_lead', 'Exact fixture plan', ?)").run(plan.id, leadEvidence.id, now);
+    db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, current_step, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_review_subject', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'completed', 'forge/issue/task_1', ?, ?, 'session_developer', 1, ?, ?, ?, ?, 'clean', ?, ?)").run(worktreePath, targetBaseSha, now, now, subjectCommit, subjectTree, delivery.id, developerEvidence.id);
+  });
+  const sessions = new Map([["session_lead", "raw-lead"], ["session_developer", "raw-developer"]]);
+  const sessionStore: SessionStore = { async create(raw) { const ref = `session_${raw}`; sessions.set(ref, raw); return ref; }, async read(ref) { return sessions.get(ref) ?? ""; } };
+  let reviewPrompt = "";
+  const reviewRunner: LeadProcessRunner = async (invocation) => {
+    await invocation.onStart(4701, "2026-08-11T00:00:00.000Z");
+    reviewPrompt = invocation.args.at(-1) ?? "";
+    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-lead" }));
+    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery_review", summary: "One required repair remains.", outcome: "blocking", findings: [{ findingId: "finding_blocking", severity: "blocking", rationale: "The proof marker is incomplete.", evidenceRef: "DELIVERED.md", disposition: "open", repairInstruction: "Complete the proof marker." }, { findingId: "finding_advisory", severity: "advisory", rationale: "The report could be more detailed.", evidenceRef: "delivery report", disposition: "open", repairInstruction: null }], repairPlan: "Complete DELIVERED.md with the required proof text." }) } }));
+    return { exitCode: 0, stderr: "" };
+  };
+  try {
+    const lead = new AgentService(value.database, value.config, { processRunner: reviewRunner, sessionStore });
+    const review = await lead.reviewDelivery({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, developerExecutionId: "developer_review_subject", deliveryArtifactId: delivery.id, evidenceArtifactId: developerEvidence.id, worktreePath, branchName: "forge/issue/task_1", targetBaseSha, subjectCommit, subjectTree });
+    expect(review).toMatchObject({ outcome: "blocking", leadSessionRef: "session_lead", subjectCommit, subjectTree });
+    expect(reviewPrompt).toContain(targetBaseSha);
+    expect(reviewPrompt).toContain(subjectCommit);
+    expect(reviewPrompt).toContain(subjectTree);
+    expect(value.database.authQuery((db) => db.prepare("SELECT outcome, session_ref, subject_commit FROM forge_delivery_reviews WHERE id = ?").get(review.reviewId))).toEqual({ outcome: "blocking", session_ref: "session_lead", subject_commit: subjectCommit });
+
+    const repairRunner: LeadProcessRunner = async (invocation) => {
+      await invocation.onStart(4702, "2026-08-11T00:01:00.000Z");
+      await writeFile(join(invocation.cwd, "DELIVERED.md"), "forge developer proof\n");
+      await execFileAsync("git", ["add", "DELIVERED.md"], { cwd: invocation.cwd });
+      await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Repair exact fixture"], { cwd: invocation.cwd });
+      const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
+      const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
+      await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer" }));
+      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "repair", summary: "Proof marker repaired.", addressedFindingIds: ["finding_blocking"], commandsRun: ["git add DELIVERED.md", "git commit"], testResults: ["Marker inspected"], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
+      return { exitCode: 0, stderr: "" };
+    };
+    const developer = new DeveloperService(value.database, value.config, { processRunner: repairRunner, sessionStore });
+    const repaired = await developer.runRepair({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: "session_lead", developerSessionRef: "session_developer", developerExecutionId: "developer_review_subject", reviewId: review.reviewId, cycle: 1, repairCycleLimit: 2, worktreePath, branchName: "forge/issue/task_1", targetBaseSha, subjectCommit, subjectTree, blockingFindings: review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open"), repairPlan: review.repairPlan! });
+    expect(repaired).toMatchObject({ outcome: "completed", developerSessionRef: "session_developer", supersedesExecutionId: "developer_review_subject", cycle: 1 });
+    expect(repaired.resultCommit).not.toBe(subjectCommit);
+    expect(value.database.authQuery((db) => db.prepare("SELECT cycle, status, result_commit FROM forge_delivery_repairs WHERE review_id = ?").get(review.reviewId))).toMatchObject({ cycle: 1, status: "completed", result_commit: repaired.resultCommit });
+    expect((await execFileAsync("git", ["rev-parse", "HEAD^"], { cwd: worktreePath })).stdout.trim()).toBe(subjectCommit);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Lead reviews and the same Developer session repairs a controlled defect", async () => {
+  const value = await fixture(process.env.FORGE_CODEX_REAL_MODEL ?? "gpt-5.6-luna", "Create CONTROLLED_PROOF.md with the exact text `forge developer proof`. The file content is mandatory and must remain exact.");
+  try {
+    const lead = new AgentService(value.database, value.config);
+    const plan = await lead.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1", developer: "profile_1" }, revision: 1 });
+    expect(plan.leadOutputKind).toBe("plan");
+    const developer = new DeveloperService(value.database, value.config);
+    const delivery = await developer.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: plan.leadSessionRef, leadOutputArtifactId: plan.leadOutputArtifactId });
+    expect(delivery.outcome).toBe("completed");
+    const defectPath = join(delivery.worktreePath, "CONTROLLED_PROOF.md");
+    await writeFile(defectPath, "wrong proof\n");
+    await execFileAsync("git", ["add", "CONTROLLED_PROOF.md"], { cwd: delivery.worktreePath });
+    await execFileAsync("git", ["-c", "user.name=Forge Test", "-c", "user.email=forge-test@example.invalid", "commit", "-m", "Introduce controlled review defect"], { cwd: delivery.worktreePath });
+    const subjectCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: delivery.worktreePath })).stdout.trim();
+    const subjectTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: delivery.worktreePath })).stdout.trim();
+    value.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET result_commit = ?, result_tree = ?, dirty_state = 'clean' WHERE id = ?").run(subjectCommit, subjectTree, delivery.developerExecutionId));
+    let review: Awaited<ReturnType<AgentService["reviewDelivery"]>>;
+    try {
+      review = await lead.reviewDelivery({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: plan.leadSessionRef, leadOutputArtifactId: plan.leadOutputArtifactId, developerExecutionId: delivery.developerExecutionId, deliveryArtifactId: delivery.deliveryArtifactId, evidenceArtifactId: delivery.evidenceArtifactId, worktreePath: delivery.worktreePath, branchName: delivery.branchName, targetBaseSha: delivery.targetBaseSha, subjectCommit, subjectTree });
+    } catch (error) {
+      const evidenceRow = value.database.authQuery((db) => db.prepare("SELECT a.storage_path, a.sha256 FROM forge_agent_executions e JOIN forge_artifacts a ON a.id = e.evidence_artifact_id WHERE e.task_id = 'task_1' ORDER BY e.started_at DESC LIMIT 1").get() as { storage_path: string; sha256: string } | undefined);
+      if (evidenceRow) console.log("real review evidence", (await readFile(join(value.config.artifactRoot, evidenceRow.storage_path), "utf8")).slice(-12_000));
+      throw error;
+    }
+    expect(review.leadSessionRef).toBe(plan.leadSessionRef);
+    expect(review.leadSessionRef).not.toBe(delivery.developerSessionRef);
+    expect(review.outcome).toBe("blocking");
+    expect(review.repairPlan).toBeTruthy();
+    let repaired: Awaited<ReturnType<DeveloperService["runRepair"]>>;
+    try {
+      repaired = await developer.runRepair({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: plan.leadSessionRef, developerSessionRef: delivery.developerSessionRef, developerExecutionId: delivery.developerExecutionId, reviewId: review.reviewId, cycle: 1, repairCycleLimit: 2, worktreePath: delivery.worktreePath, branchName: delivery.branchName, targetBaseSha: delivery.targetBaseSha, subjectCommit, subjectTree, blockingFindings: review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open"), repairPlan: review.repairPlan! });
+    } catch (error) {
+      const evidenceRow = value.database.authQuery((db) => db.prepare("SELECT a.storage_path, a.sha256 FROM forge_developer_executions e JOIN forge_artifacts a ON a.id = e.evidence_artifact_id WHERE e.task_id = 'task_1' ORDER BY e.started_at DESC LIMIT 1").get() as { storage_path: string; sha256: string } | undefined);
+      if (evidenceRow) console.log("real repair evidence", (await readFile(join(value.config.artifactRoot, evidenceRow.storage_path), "utf8")).slice(-12_000));
+      throw error;
+    }
+    expect(repaired.outcome).toBe("completed");
+    expect(repaired.developerSessionRef).toBe(delivery.developerSessionRef);
+    expect(repaired.resultCommit).not.toBe(subjectCommit);
+    expect((await execFileAsync("git", ["show", `HEAD:CONTROLLED_PROOF.md`], { cwd: delivery.worktreePath })).stdout.trim()).toBe("forge developer proof");
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+}, 600_000);
 
 test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Developer executes a controlled fixture plan in a fresh issue worktree", async () => {
   const value = await fixture(process.env.FORGE_CODEX_REAL_MODEL ?? "gpt-5.6-luna");

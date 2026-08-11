@@ -8,12 +8,12 @@ import { AgentService } from "../codex-lead.js";
 import { DeveloperService } from "../codex-developer.js";
 import { cancelDeveloperExecution } from "../developer-recovery.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { IssueWorkflowStateSchema, type IssueActivities, type IssueWorkflowState } from "./issue-contracts.js";
+import { DeliveryDecisionActivityInputSchema, IssueWorkflowStateSchema, type IssueActivities, type IssueWorkflowState } from "./issue-contracts.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
 
 export interface ActivityOptions {
-  agent?: Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan">>;
-  developer?: Pick<DeveloperService, "run">;
+  agent?: Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery">>;
+  developer?: Partial<Pick<DeveloperService, "run" | "runRepair">>;
 }
 
 export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): ProbeActivities & IssueActivities {
@@ -71,6 +71,13 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         ...(state.developerEvidenceArtifactId !== undefined ? { developerEvidenceArtifactId: state.developerEvidenceArtifactId } : {}),
         ...(state.deliverySummary !== undefined ? { deliverySummary: state.deliverySummary } : {}),
         ...(state.developerOutcome !== undefined ? { developerOutcome: state.developerOutcome } : {}),
+        ...(state.deliveryReviewId !== undefined ? { deliveryReviewId: state.deliveryReviewId } : {}),
+        ...(state.deliveryReviewOutcome !== undefined ? { deliveryReviewOutcome: state.deliveryReviewOutcome } : {}),
+        ...(state.deliveryReviewSummary !== undefined ? { deliveryReviewSummary: state.deliveryReviewSummary } : {}),
+        ...(state.deliveryBlockingFindings !== undefined ? { deliveryBlockingFindings: state.deliveryBlockingFindings } : {}),
+        ...(state.deliveryRepairPlan !== undefined ? { deliveryRepairPlan: state.deliveryRepairPlan } : {}),
+        ...(state.repairCycle !== undefined ? { repairCycle: state.repairCycle } : {}),
+        ...(state.deliveryDecisionArtifactId !== undefined ? { deliveryDecisionArtifactId: state.deliveryDecisionArtifactId } : {}),
       });
       return state;
     },
@@ -83,8 +90,14 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     async consolidateLeadPlan(input) {
       return (agent?.consolidateLeadPlan ?? defaultAgent.consolidateLeadPlan.bind(defaultAgent))(input);
     },
+    async reviewDelivery(input) {
+      return (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(input);
+    },
     async runDeveloperExecution(input) {
-      return developer.run(input);
+      return (developer.run ?? defaultDeveloper.run.bind(defaultDeveloper))(input);
+    },
+    async runDeveloperRepair(input) {
+      return (developer.runRepair ?? defaultDeveloper.runRepair.bind(defaultDeveloper))(input);
     },
     async cancelDeveloperExecution(input) {
       return cancelDeveloperExecution(database, input.executionId);
@@ -102,6 +115,23 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         db.prepare("INSERT INTO forge_plan_decisions (id, task_id, company_id, workflow_id, plan_revision, decision, actor_user_id, note_artifact_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(decisionId, input.taskId, input.companyId, input.workflowId, input.planRevision, input.decision, input.actorUserId, artifact.id, artifact.createdAt);
       });
       return { decisionId };
+    },
+    async recordDeliveryDecision(rawInput) {
+      const input = DeliveryDecisionActivityInputSchema.parse(rawInput);
+      const actor = database.authQuery((db) => db.prepare("SELECT id, role, status FROM forge_users WHERE id = ?").get(input.actorUserId) as { id: string; role: string; status: string } | undefined);
+      if (!actor || actor.status !== "active") throw new Error("Delivery decision actor is unavailable");
+      const scoped = database.authQuery((db) => actor.role === "admin"
+        ? db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(input.taskId, input.companyId, input.workflowId)
+        : db.prepare("SELECT t.id FROM forge_tasks t JOIN forge_memberships m ON m.company_id = t.company_id WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND m.user_id = ? AND m.status = 'active'").get(input.taskId, input.companyId, input.workflowId, input.actorUserId)) as { id: string } | undefined;
+      if (!scoped) throw new Error("Delivery decision scope is unavailable");
+      const note = (redact(input.note.trim()) as string) || "Member decision recorded for blocked delivery";
+      const artifact = await new ArtifactStore(config.artifactRoot).put(input.companyId, "delivery-decision", { filename: "delivery-decision.md", mimeType: "text/markdown", bytes: Buffer.from(note, "utf8") });
+      const decisionId = `delivery_decision_${randomBytes(12).toString("hex")}`;
+      database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+        db.prepare("INSERT INTO forge_delivery_decisions (id, task_id, company_id, workflow_id, actor_user_id, artifact_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(decisionId, input.taskId, input.companyId, input.workflowId, input.actorUserId, artifact.id, artifact.createdAt);
+      });
+      return { artifactId: artifact.id };
     },
   };
 }

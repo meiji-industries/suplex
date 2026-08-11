@@ -434,6 +434,23 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
         const body = requestBody(request);
         try { return reply.send(await tasks.startDevelopment(user.id, request.params.taskId, typeof body.expectedRevision === "number" ? body.expectedRevision : Number(body.expectedRevision))); } catch (error) { return sendTaskError(reply, error); }
       });
+      for (const [path, action] of [["review-delivery", "reviewDelivery"], ["repair-delivery", "repairDelivery"]] as const) {
+        app.post<{ Params: { taskId: string } }>(`/api/tasks/:taskId/${path}`, async (request, reply) => {
+          const user = await requireUser(request, reply);
+          if (!user) return reply;
+          const body = requestBody(request);
+          try {
+            const expectedRevision = typeof body.expectedRevision === "number" ? body.expectedRevision : Number(body.expectedRevision);
+            return reply.send(await (action === "reviewDelivery" ? tasks.reviewDelivery(user.id, request.params.taskId, expectedRevision) : tasks.repairDelivery(user.id, request.params.taskId, expectedRevision)));
+          } catch (error) { return sendTaskError(reply, error); }
+        });
+      }
+      app.post<{ Params: { taskId: string } }>("/api/tasks/:taskId/record-delivery-decision", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        const body = requestBody(request);
+        try { return reply.send(await tasks.recordDeliveryDecision(user.id, request.params.taskId, typeof body.expectedRevision === "number" ? body.expectedRevision : Number(body.expectedRevision), typeof body.note === "string" ? body.note : undefined)); } catch (error) { return sendTaskError(reply, error); }
+      });
       for (const [path, action] of [["retry-development", "retryDevelopment"], ["cancel-development", "cancelDevelopment"]] as const) {
         app.post<{ Params: { taskId: string } }>(`/api/tasks/:taskId/${path}`, async (request, reply) => {
           const user = await requireUser(request, reply);

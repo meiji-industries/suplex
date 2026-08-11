@@ -16,7 +16,7 @@ import { createForgeServer, type ForgeServer } from "../src/server.js";
 import { ForgeDatabase } from "../src/database.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 import { createActivities } from "../src/temporal/activities.js";
-import { approveIssuePlan, connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, rejectIssuePlan, startIssueDevelopment, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
+import { approveIssuePlan, connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, rejectIssuePlan, repairIssueDelivery, reviewIssueDelivery, startIssueDevelopment, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
 
 const execFileAsync = promisify(execFile);
 const replayDurationKeys = new Set(["firstWorkflowTaskBackoff", "workflowTaskTimeout", "startToCloseTimeout", "scheduleToCloseTimeout", "scheduleToStartTimeout", "heartbeatTimeout", "initialInterval", "maximumInterval"]);
@@ -116,8 +116,14 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     temporalConnection.close();
 
     database = new ForgeDatabase(config.databasePath);
-    const integrationAgent = { runLeadPlanning: async () => ({ leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan" as const, leadSummary: "Integration plan", materialCategories: ["security_permissions" as const], material: true }) };
-    const integrationDeveloper = { run: async () => ({ developerExecutionId: "developer_integration", developerSessionRef: "session_developer_integration", worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), currentStep: 1, resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_developer_evidence", deliverySummary: "Developer delivery", outcome: "completed" as const }) };
+    const integrationAgent = {
+      runLeadPlanning: async () => ({ leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan" as const, leadSummary: "Integration plan", materialCategories: ["security_permissions" as const], material: true }),
+      reviewDelivery: async () => ({ reviewId: "delivery_review_integration", leadExecutionId: "agent_review_integration", leadSessionRef: "session_integration", opinionArtifactId: "artifact_review_opinion", evidenceArtifactId: "artifact_review_evidence", outcome: "blocking" as const, summary: "Integration delivery needs one bounded repair.", repairPlan: "Apply the controlled repair.", findings: [{ findingId: "finding_integration", severity: "blocking" as const, rationale: "Controlled fixture defect.", evidenceRef: "fixture", disposition: "open" as const, repairInstruction: "Apply the controlled repair." }], targetBaseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40) }),
+    };
+    const integrationDeveloper = {
+      run: async () => ({ developerExecutionId: "developer_integration", developerSessionRef: "session_developer_integration", worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), currentStep: 1, resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_developer_evidence", deliverySummary: "Developer delivery", outcome: "completed" as const }),
+      runRepair: async () => ({ developerExecutionId: "developer_repair_integration", developerSessionRef: "session_developer_integration", supersedesExecutionId: "developer_integration", worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "d".repeat(40), resultTree: "e".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_repaired_delivery", evidenceArtifactId: "artifact_repaired_evidence", deliverySummary: "Developer repair", outcome: "completed" as const, cycle: 1 }),
+    };
     workerConnection = await NativeConnection.connect({ address: config.temporalAddress });
     worker = await Worker.create({
       connection: workerConnection,
@@ -171,7 +177,11 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     const approvedIssue = await approveIssuePlan(config, startedIssue.workflowId, { expectedRevision: 3, actorUserId: "issue-admin", note: "Approve revised plan" });
     expect(approvedIssue).toMatchObject({ phase: "ready_for_development", revision: 4, allowedCommands: ["start_development"] });
     const deliveredIssue = await startIssueDevelopment(config, startedIssue.workflowId, { expectedRevision: 4, actorUserId: "issue-admin" });
-    expect(deliveredIssue).toMatchObject({ phase: "delivery_ready", revision: 6, developerExecutionId: "developer_integration", developerSessionRef: "session_developer_integration", branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40) });
+    expect(deliveredIssue).toMatchObject({ phase: "delivery_ready", revision: 6, allowedCommands: ["review_delivery"], developerExecutionId: "developer_integration", developerSessionRef: "session_developer_integration", branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40) });
+    const repairRequired = await reviewIssueDelivery(config, startedIssue.workflowId, { expectedRevision: 6, actorUserId: "issue-admin" });
+    expect(repairRequired).toMatchObject({ phase: "repair_required", revision: 8, allowedCommands: ["repair_delivery"], deliveryReviewId: "delivery_review_integration", deliveryReviewOutcome: "blocking", repairCycle: 0 });
+    const repairedIssue = await repairIssueDelivery(config, startedIssue.workflowId, { expectedRevision: 8, actorUserId: "issue-admin" });
+    expect(repairedIssue).toMatchObject({ phase: "delivery_ready", revision: 10, allowedCommands: ["review_delivery"], developerExecutionId: "developer_repair_integration", developerSessionRef: "session_developer_integration", resultCommit: "d".repeat(40), repairCycle: 1, deliveryReviewId: null, deliveryReviewOutcome: null });
 
     const startedContinuation = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-continuation", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, continueAsNewAfter: 2 });
     let continuationState = await queryIssueWorkflow(config, startedContinuation.workflowId);

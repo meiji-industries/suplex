@@ -10,9 +10,10 @@ import { fileURLToPath } from "node:url";
 import { Connection } from "@temporalio/client";
 import { NativeConnection, Worker } from "@temporalio/worker";
 
-import { createTestConfig } from "../src/config.js";
+import { createTestConfig, loadConfig } from "../src/config.js";
 import { createForgeServer, type ForgeServer } from "../src/server.js";
 import { ForgeDatabase } from "../src/database.js";
+import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 import { createActivities } from "../src/temporal/activities.js";
 import { ensureTemporalFoundation, queryProbeWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
 
@@ -54,6 +55,15 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
   }
   expect(await containerStatus("forge-temporal")).toBe("running");
   expect(await publishedTemporalPort("forge-temporal")).toBe(7233);
+  const liveConfig = loadConfig();
+  const liveNeutralContainerName = runtimeIdentifiers(liveConfig.installationId).temporalContainerName;
+  const liveNeutralContainerId = await containerId(liveNeutralContainerName);
+  if (!liveNeutralContainerId) {
+    await rm(root, { recursive: true, force: true });
+    throw new Error("The migrated neutral Forge Temporal container is required for the non-disruptive integration proof");
+  }
+  expect(await containerStatus(liveNeutralContainerName)).toBe("running");
+  expect(await publishedTemporalPort(liveNeutralContainerName)).toBeGreaterThan(0);
   let config = createTestConfig(root, { taskQueue: `tasks-test-${process.pid}-${randomUUID().slice(0, 8)}` });
   let worker: Worker | undefined;
   let workerRun: Promise<void> | undefined;
@@ -168,6 +178,9 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     expect(await containerId("forge-temporal")).toBe(liveForgeContainerId);
     expect(await containerStatus("forge-temporal")).toBe("running");
     expect(await publishedTemporalPort("forge-temporal")).toBe(7233);
+    expect(await containerId(liveNeutralContainerName)).toBe(liveNeutralContainerId);
+    expect(await containerStatus(liveNeutralContainerName)).toBe("running");
+    expect(await publishedTemporalPort(liveNeutralContainerName)).toBeGreaterThan(0);
     await rm(root, { recursive: true, force: true });
   }
 });

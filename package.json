@@ -21,9 +21,9 @@
     "build": "tsc && vite build",
     "dev": "tsx src/cli.ts start --foreground",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --exclude tests/temporal.integration.test.ts --exclude tests/*.browser.test.ts",
+    "test": "vitest run --exclude 'tests/temporal.integration.test.ts' --exclude 'tests/**/*.browser.test.ts'",
     "test:temporal": "vitest run tests/temporal.integration.test.ts",
-    "test:browser": "pnpm run build && vitest run tests/*.browser.test.ts",
+    "test:browser": "pnpm run build && vitest run --config vitest.browser.config.ts",
     "test:all": "pnpm run typecheck && pnpm run test && pnpm run test:temporal && pnpm run test:browser"
   },
   "dependencies": {

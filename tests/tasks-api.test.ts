@@ -36,7 +36,7 @@ test("task API creates an idempotent backlog card and accepts only the current p
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
   const projects = new ProjectService(database, auth, config, { localRepository, github });
   const company = auth.createCompany("admin-1", "API Company");
-  const profile = projects.createProfile("admin-1", { name: "API profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
+  const profile = projects.createProfile("admin-1", { name: "API profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const project = await projects.createProject("admin-1", company.id, { name: "API project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
   const active = await projects.activateProject("admin-1", project.id);
   const workflow: IssueWorkflowPort = {

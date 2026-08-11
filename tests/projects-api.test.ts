@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import type { OutgoingHttpHeaders } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +26,7 @@ function webAuthn(): WebAuthnAdapter {
 const github: GithubAdapter = {
   async checkAuthentication() {},
   async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; },
+  async listChecks() { return [{ name: "Tests / unit", status: "completed", conclusion: "success" }]; },
 };
 
 function sessionCookie(response: { headers: OutgoingHttpHeaders }): string {
@@ -51,7 +52,8 @@ test("project API activates valid configuration, redacts typed failures, and pre
   const auth = new AuthService(database, config, { webAuthn: webAuthn() });
   const projects = new ProjectService(database, auth, config, {
     github,
-    localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "base-sha", targetSha: "target-sha" }; } },
+    localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } },
+    repositoryProvisioner: { async ensure(input) { await mkdir(input.repositoryPath, { recursive: true }); await mkdir(input.worktreeRoot, { recursive: true }); } },
   });
   const app = createApp({ config, auth, projects, health: {
     temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }),
@@ -69,12 +71,22 @@ test("project API activates valid configuration, redacts typed failures, and pre
     const origin = config.reachableAddress;
     const company = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin }, payload: { name: "Project Company" } })).json() as { id: string };
     const otherCompany = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin }, payload: { name: "Other Project Company" } })).json() as { id: string };
-    const profile = (await app.inject({ method: "POST", url: "/api/admin/profiles", headers: { cookie: adminCookie, origin }, payload: { name: "API profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 } })).json() as { id: string };
+    const profile = (await app.inject({ method: "POST", url: "/api/admin/profiles", headers: { cookie: adminCookie, origin }, payload: { name: "API profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 } })).json() as { id: string };
+    const models = (await app.inject({ method: "GET", url: "/api/admin/models", headers: { cookie: adminCookie } })).json() as { models: Array<{ id: string; status: string }> };
+    expect(models.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: "gpt-5.6-sol", status: "active" })]));
+    const minimal = await app.inject({ method: "POST", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie, origin }, payload: { repositoryUrl: "git@github.com:meiji-industries/sampler.git" } });
+    expect(minimal.statusCode).toBe(201);
+    expect(minimal.json()).toMatchObject({ name: "sampler", repository: "meiji-industries/sampler", repositoryPath: await realpath(join(repositoryRoot, "meiji-industries", "sampler")), worktreeRoot: await realpath(join(worktreeRoot, "meiji-industries", "sampler")), baseBranch: "main", targetBranch: "main", status: "draft" });
+    const invalidUrl = await app.inject({ method: "POST", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie, origin }, payload: { repositoryUrl: "https://token@github.com/meiji-industries/private.git" } });
+    expect(invalidUrl.statusCode).toBe(422);
+    expect(invalidUrl.json()).toMatchObject({ error: "GitHub repository URL is invalid", findings: [expect.objectContaining({ field: "repositoryUrl" })] });
+    expect(JSON.stringify(invalidUrl.json())).not.toContain("token@");
     const configuration = { name: "Direct GitHub", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } };
     const draft = await app.inject({ method: "POST", url: `/api/companies/${company.id}/projects`, headers: { cookie: adminCookie, origin }, payload: configuration });
     expect(draft.statusCode).toBe(201);
     const project = draft.json() as { id: string; status: string };
     expect(project.status).toBe("draft");
+    expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}/checks`, headers: { cookie: adminCookie } })).json()).toEqual({ checks: [{ name: "Tests / unit", status: "completed", conclusion: "success" }] });
     const activated = await app.inject({ method: "POST", url: `/api/projects/${project.id}/activate`, headers: { cookie: adminCookie, origin }, payload: {} });
     expect(activated.statusCode).toBe(200);
     expect(activated.json()).toMatchObject({ status: "active", configurationRevision: 2, repository: "acme/forge" });
@@ -82,7 +94,7 @@ test("project API activates valid configuration, redacts typed failures, and pre
     expect(invalid.statusCode).toBe(422);
     expect(invalid.json()).toMatchObject({ error: "Project configuration is invalid" });
     expect(JSON.stringify(invalid.json())).not.toContain("token@");
-    expect((await app.inject({ method: "GET", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie, origin } })).json().projects).toHaveLength(0);
+    expect((await app.inject({ method: "GET", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie, origin } })).json().projects).toHaveLength(1);
     expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}`, headers: { cookie: adminCookie, origin } })).statusCode).toBe(200);
     expect((await app.inject({ method: "POST", url: `/api/admin/companies/${company.id}/status/paused`, headers: { cookie: adminCookie, origin }, payload: {} })).json()).toMatchObject({ status: "paused" });
     expect((await app.inject({ method: "POST", url: `/api/companies/${company.id}/projects`, headers: { cookie: adminCookie, origin }, payload: configuration })).statusCode).toBe(409);

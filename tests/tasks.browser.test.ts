@@ -34,7 +34,7 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
   const projects = new ProjectService(database, auth, config, { localRepository, github });
   const company = auth.createCompany("admin-1", "Browser Tasks");
-  const profile = projects.createProfile("admin-1", { name: "Browser task profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
+  const profile = projects.createProfile("admin-1", { name: "Browser task profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const project = await projects.createProject("admin-1", company.id, { name: "Browser task project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
   await projects.activateProject("admin-1", project.id);
   let plannedState: IssueWorkflowState | undefined;
@@ -87,7 +87,9 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
       await page.locator("#task-project").selectOption(project.id);
       await page.getByLabel("Task title", { exact: true }).fill("Browser task");
       await page.getByLabel("Task description", { exact: true }).fill("## Browser brief\n\nImage attached.");
+      await page.getByRole("button", { name: "Add images", exact: true }).waitFor();
       await page.getByLabel("Task images", { exact: true }).setInputFiles(imagePath);
+      await page.getByRole("button", { name: "Remove evidence.png", exact: true }).waitFor();
       await page.getByRole("button", { name: "Create task" }).click();
       await page.getByRole("button", { name: /Browser task/ }).waitFor();
       await page.getByRole("button", { name: "Start planning", exact: true }).waitFor();

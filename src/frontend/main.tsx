@@ -1,6 +1,8 @@
 import { Collapsible } from "./components/ui/collapsible.js";
 import { Button } from "./components/ui/button.js";
+import { Badge } from "./components/ui/badge.js";
 import { Input } from "./components/ui/input.js";
+import { InlineAttachmentPicker } from "./components/ui/inline-attachment-picker.js";
 import { Dialog } from "./components/ui/dialog.js";
 import { CreateButton } from "./components/ui/create-button.js";
 import { ApplicationFrame } from "./components/app/application-frame.js";
@@ -50,24 +52,11 @@ function relativeTime(timestamp: string): string {
 }
 
 type ApiProfile = { id: string; name: string; model: string; reasoningLevel: string; servicePriority: string; capacity: number };
+type ApiModel = { id: string; displayName: string; description: string; status: "active" | "retired"; sortOrder: number };
+type ApiCheck = { name: string; status: string; conclusion?: string };
 type ApiInvitation = { id: string; kind: "bootstrap" | "user" | "recovery"; displayName: string; expiresAt: string; status: "active" | "expired" | "consumed" | "replaced"; createdAt: string };
 type ApiCredential = { id: string; userId: string; credentialId: string; createdAt: string; revokedAt?: string };
-type ApiProject = { id: string; companyId: string; name: string; repositoryPath: string; worktreeRoot: string; repository?: string; baseBranch: string; targetBranch: string; setupCommand: string; verificationCommand: string; requiredChecks: string[]; allowedProfileIds: string[]; roleDefaults: Record<string, string>; status: string; configurationRevision: number; configurationIdentity?: string };
-const projectFormFields = [
-  { key: "name", label: "Project name" },
-  { key: "repositoryPath", label: "Repository path" },
-  { key: "worktreeRoot", label: "Worktree root" },
-  { key: "repository", label: "GitHub repository (owner/name)" },
-  { key: "baseBranch", label: "Base branch" },
-  { key: "targetBranch", label: "Target branch" },
-  { key: "setupCommand", label: "Setup command" },
-  { key: "verificationCommand", label: "Verification command" },
-  { key: "requiredChecks", label: "Required checks (comma separated)" },
-  { key: "allowedProfileIds", label: "Allowed profiles (comma separated)" },
-  { key: "leadProfile", label: "Lead default" },
-  { key: "developerProfile", label: "Developer default" },
-  { key: "reviewerProfile", label: "Reviewer default (optional)" },
-] as const;
+type ApiProject = { id: string; companyId: string; name: string; repositoryPath: string; worktreeRoot: string; repository?: string; baseBranch: string; targetBranch: string; setupCommand: string; verificationCommand: string; requiredChecks: string[]; allowedProfileIds: string[]; roleDefaults: Record<string, string>; status: "draft" | "active" | "paused" | "needs-reactivation" | "archived"; configurationRevision: number; configurationIdentity?: string; baseSha?: string; targetSha?: string };
 
 type ApiAttentionItem = { id: string; companyId: string; taskId: string; taskTitle: string; category: string; summary: string; action: string; evidenceRef?: string; updatedAt: string };
 type ApiAttentionCompany = { companyId: string; companyName: string; companyStatus: string; activeIssueCount: number; phases: Record<string, number>; attentionCount: number; attention: ApiAttentionItem[]; recentOutcomes: Array<{ taskId: string; taskTitle: string; phase: string; updatedAt: string }> };
@@ -143,12 +132,15 @@ function AdminView(): ReactElement {
   const [invitations, setInvitations] = useState<ApiInvitation[]>([]);
   const [credentials, setCredentials] = useState<ApiCredential[]>([]);
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
+  const [models, setModels] = useState<ApiModel[]>([]);
   const [displayName, setDisplayName] = useState("");
   const [profileName, setProfileName] = useState("");
-  const [profileModel, setProfileModel] = useState("gpt-5-codex");
+  const [profileModel, setProfileModel] = useState("gpt-5.6-sol");
   const [profileReasoning, setProfileReasoning] = useState("medium");
   const [profilePriority, setProfilePriority] = useState("standard");
   const [profileCapacity, setProfileCapacity] = useState("2");
+  const [modelId, setModelId] = useState("");
+  const [modelName, setModelName] = useState("");
   const [inviteToken, setInviteToken] = useState("");
   const [inviteExpiresAt, setInviteExpiresAt] = useState("");
   const [copied, setCopied] = useState(false);
@@ -157,16 +149,20 @@ function AdminView(): ReactElement {
 
   const reload = useCallback(async (): Promise<void> => {
     try {
-      const [userList, invitationList, credentialList, profileList] = await Promise.all([
+      const [userList, invitationList, credentialList, profileList, modelList] = await Promise.all([
         readJson<{ users: ApiUser[] }>("/api/admin/users"),
         readJson<{ invitations: ApiInvitation[] }>("/api/admin/invitations"),
         readJson<{ credentials: ApiCredential[] }>("/api/admin/credentials"),
         readJson<{ profiles: ApiProfile[] }>("/api/profiles").catch(() => ({ profiles: [] })),
+        readJson<{ models: ApiModel[] }>("/api/admin/models").catch(() => ({ models: [] })),
       ]);
       setUsers(userList.users);
       setInvitations(invitationList.invitations);
       setCredentials(credentialList.credentials);
       setProfiles(profileList.profiles);
+      setModels(modelList.models);
+      const activeModels = modelList.models.filter((model) => model.status === "active");
+      setProfileModel((current) => activeModels.some((model) => model.id === current) ? current : activeModels[0]?.id ?? "");
     } catch (reason) {
       if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
       else setError("Unable to load administration");
@@ -193,6 +189,16 @@ function AdminView(): ReactElement {
   };
   const createProfile = async (): Promise<void> => {
     try { await readJson("/api/admin/profiles", { method: "POST", body: JSON.stringify({ name: profileName, model: profileModel, reasoningLevel: profileReasoning, servicePriority: profilePriority, capacity: Number(profileCapacity) }) }); setProfileName(""); await reload(); } catch { setError("Unable to create profile"); }
+  };
+  const createModel = async (): Promise<void> => {
+    try {
+      await readJson("/api/admin/models", { method: "POST", body: JSON.stringify({ id: modelId, displayName: modelName, description: "", sortOrder: 100 }) });
+      setModelId(""); setModelName(""); await reload();
+    } catch { setError("Unable to add model"); }
+  };
+  const toggleModel = async (model: ApiModel): Promise<void> => {
+    try { await readJson(`/api/admin/models/${encodeURIComponent(model.id)}`, { method: "PATCH", body: JSON.stringify({ status: model.status === "active" ? "retired" : "active" }) }); await reload(); }
+    catch { setError("Unable to update model"); }
   };
   const changeMembership = async (companyId: string, targetUserId: string, add: boolean): Promise<void> => {
     const action = `membership:${companyId}:${targetUserId}`;
@@ -272,7 +278,26 @@ function AdminView(): ReactElement {
           <div className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Invitations</span><span className="text-[11px] text-muted-foreground">{invitations.length}</span></div><div className="divide-y divide-border/70 border-y border-border/70">{invitations.map((invitation) => <div className="py-2 text-xs" key={invitation.id}><div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{invitation.displayName}</span><span className="shrink-0 text-muted-foreground">{invitation.status}</span></div><div className="mt-1 text-[11px] text-muted-foreground">{invitation.kind} · expires {adminDate(invitation.expiresAt)}</div></div>)}</div></div>
           <div className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Passkeys</span><span className="text-[11px] text-muted-foreground">{credentials.filter((credential) => !credential.revokedAt).length} active</span></div><div className="divide-y divide-border/70 border-y border-border/70">{credentials.map((credential) => { const candidate = users.find((entry) => entry.id === credential.userId); const action = `credential:${credential.id}`; return <div className="flex min-h-8 items-center justify-between gap-2 text-xs" key={credential.id}><span className="min-w-0 truncate">{candidate?.displayName ?? "User"}<span className="ml-2 text-muted-foreground">{credential.revokedAt ? "revoked" : `created ${adminDate(credential.createdAt)}`}</span></span>{!credential.revokedAt && credential.userId !== user.id ? <span className="flex shrink-0 items-center gap-1">{pendingAction === action ? <span className="text-[11px] text-muted-foreground">Confirm</span> : null}<Button variant="ghost" size="sm" onClick={() => void revokeCredential(credential)}>{pendingAction === action ? "Confirm revoke" : "Revoke"}</Button>{pendingAction === action ? <Button variant="ghost" size="sm" onClick={() => setPendingAction("")}>Cancel</Button> : null}</span> : null}</div>; })}</div></div>
         </section> : null}
-        {isProfiles ? (<section className="border-b border-border/70 bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Codex profiles</span><span className="text-[11px] text-muted-foreground">{profiles.length} configured</span></div><div className="mb-3 flex flex-wrap gap-2"><Input className="h-7 w-36" placeholder="Profile name" value={profileName} onChange={(event) => setProfileName(event.target.value)} /><Input className="h-7 w-36" placeholder="Model" value={profileModel} onChange={(event) => setProfileModel(event.target.value)} /><Input className="h-7 w-20" aria-label="Reasoning level" placeholder="Reasoning" value={profileReasoning} onChange={(event) => setProfileReasoning(event.target.value)} /><Input className="h-7 w-24" aria-label="Service priority" placeholder="Priority" value={profilePriority} onChange={(event) => setProfilePriority(event.target.value)} /><Input className="h-7 w-20" placeholder="Capacity" inputMode="numeric" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><Button size="sm" onClick={() => void createProfile()}>Create profile</Button></div><div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground">{profiles.map((profile) => <span className="border border-border px-2 py-1" key={profile.id}>{profile.name} · {profile.model} · {profile.reasoningLevel} · {profile.servicePriority} · {profile.capacity} slots · {profile.id}</span>)}</div></section>) : null}
+        {isProfiles ? (<>
+          <section className="border-b border-border/70 bg-background p-4">
+            <div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Codex profiles</span><span className="text-[11px] text-muted-foreground">{profiles.length} configured</span></div>
+            <div className="mb-3 flex flex-wrap gap-2">
+              <Input className="h-7 w-36" placeholder="Profile name" value={profileName} onChange={(event) => setProfileName(event.target.value)} />
+              <select aria-label="Model" className="h-7 min-w-44 border border-input bg-background px-2 text-xs" value={profileModel} onChange={(event) => setProfileModel(event.target.value)}>{models.filter((model) => model.status === "active").map((model) => <option key={model.id} value={model.id}>{model.displayName} · {model.id}</option>)}</select>
+              <select aria-label="Reasoning level" className="h-7 border border-input bg-background px-2 text-xs" value={profileReasoning} onChange={(event) => setProfileReasoning(event.target.value)}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select>
+              <select aria-label="Service priority" className="h-7 border border-input bg-background px-2 text-xs" value={profilePriority} onChange={(event) => setProfilePriority(event.target.value)}><option value="standard">Standard</option><option value="priority">Priority</option></select>
+              <Input className="h-7 w-20" aria-label="Capacity" placeholder="Capacity" inputMode="numeric" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} />
+              <Button size="sm" onClick={() => void createProfile()} disabled={!profileName.trim() || !profileModel}>Create profile</Button>
+            </div>
+            <div className="divide-y divide-border/70 border-y border-border/70 text-xs">{profiles.map((profile) => <div className="flex min-h-9 items-center justify-between gap-3" key={profile.id}><span className="font-medium">{profile.name}</span><span className="truncate text-[11px] text-muted-foreground">{profile.model} · {profile.reasoningLevel} · {profile.servicePriority} · {profile.capacity} slots</span></div>)}</div>
+          </section>
+          <section className="border-b border-border/70 bg-background p-4">
+            <div className="mb-1 flex items-center justify-between"><span className="text-xs font-semibold">Model catalog</span><span className="text-[11px] text-muted-foreground">Database backed</span></div>
+            <p className="mb-3 text-[11px] text-muted-foreground">Models available when creating Codex profiles. Retiring a model preserves existing profiles.</p>
+            <div className="mb-3 flex flex-wrap gap-2"><Input className="h-7 w-44" placeholder="Model ID" value={modelId} onChange={(event) => setModelId(event.target.value)} /><Input className="h-7 w-44" placeholder="Display name" value={modelName} onChange={(event) => setModelName(event.target.value)} /><Button variant="outline" size="sm" onClick={() => void createModel()} disabled={!modelId.trim() || !modelName.trim()}>Add model</Button></div>
+            <div className="divide-y divide-border/70 border-y border-border/70">{models.map((model) => <div className="flex min-h-10 items-center justify-between gap-3 text-xs" key={model.id}><div className="min-w-0"><div className="font-medium">{model.displayName} <code className="ml-1 text-[11px] font-normal text-muted-foreground">{model.id}</code></div><div className="truncate text-[11px] text-muted-foreground">{model.description || "No description"}</div></div><Button variant="ghost" size="sm" onClick={() => void toggleModel(model)}>{model.status === "active" ? "Retire" : "Restore"}</Button></div>)}</div>
+          </section>
+        </>) : null}
         {error ? <p role="alert" className="px-4 py-3 text-xs text-rose-700">{error}</p> : null}
       </div>
     </SettingsLayout>
@@ -294,37 +319,30 @@ function CreateProjectDialog({
   onCreated: () => Promise<void>;
   reloadCompanies: () => Promise<void>;
 }): ReactElement {
-  const [form, setForm] = useState({ name: "", repositoryPath: "", worktreeRoot: "", repository: "", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: "", allowedProfileIds: "", leadProfile: "", developerProfile: "", reviewerProfile: "" });
+  const [repositoryUrl, setRepositoryUrl] = useState("");
   const [findings, setFindings] = useState<Array<{ field: string; message: string }>>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (open) {
-      setForm({ name: "", repositoryPath: "", worktreeRoot: "", repository: "", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: "", allowedProfileIds: "", leadProfile: "", developerProfile: "", reviewerProfile: "" });
+      setRepositoryUrl("");
       setFindings([]);
       setError("");
       setBusy(false);
     }
   }, [open]);
 
-  const setField = (key: keyof typeof form, value: string): void => setForm((current) => ({ ...current, [key]: value }));
-
   const submit = async (event?: FormEvent): Promise<void> => {
-    if (event) event.preventDefault();
-    if (!companyId || companyStatus !== "active") return;
+    event?.preventDefault();
+    if (!companyId || companyStatus !== "active" || !repositoryUrl.trim()) return;
     setBusy(true);
     setError("");
     setFindings([]);
     try {
       await readJson<ApiProject>(`/api/companies/${companyId}/projects`, {
         method: "POST",
-        body: JSON.stringify({
-          ...form,
-          requiredChecks: form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean),
-          allowedProfileIds: form.allowedProfileIds.split(",").map((value) => value.trim()).filter(Boolean),
-          roleDefaults: { lead: form.leadProfile, developer: form.developerProfile, reviewer: form.reviewerProfile },
-        }),
+        body: JSON.stringify({ repositoryUrl: repositoryUrl.trim() }),
       });
       await onCreated();
       onOpenChange(false);
@@ -341,7 +359,7 @@ function CreateProjectDialog({
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Backdrop className="fixed inset-0 z-50 bg-black/20" />
-        <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 max-h-[85vh] w-[min(92vw,640px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto border border-border bg-background p-4 shadow-lg outline-none">
+        <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 w-[min(92vw,460px)] -translate-x-1/2 -translate-y-1/2 border border-border bg-background p-4 shadow-lg outline-none">
           <div className="mb-3 flex items-center justify-between">
             <Dialog.Title className="text-[13px] font-semibold">New project</Dialog.Title>
             <Dialog.Close render={<Button variant="ghost" size="icon" aria-label="Close"><X className="size-3.5" /></Button>} />
@@ -349,22 +367,188 @@ function CreateProjectDialog({
           {companyStatus !== "active" ? (
             <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p>
           ) : (
-            <form className="grid gap-3 overflow-y-auto pr-1 sm:grid-cols-2" onSubmit={(event: FormEvent) => void submit(event)}>
-              {projectFormFields.map((field, index) => {
-                const fullWidth = field.key === "name" || field.key === "repositoryPath" || field.key === "worktreeRoot" || field.key === "repository";
-                return (
-                  <label key={field.key} className={`grid gap-0.5 text-[11px] text-muted-foreground ${fullWidth ? "sm:col-span-2" : ""}`}>
-                    {field.label}
-                    <Input name={field.key} autoFocus={index === 0} value={form[field.key as keyof typeof form]} onChange={(event) => setField(field.key as keyof typeof form, event.target.value)} />
-                  </label>
-                );
-              })}
-              <div className="mt-2 flex justify-end gap-2 sm:col-span-2">
+            <form className="grid gap-3" onSubmit={(event: FormEvent) => void submit(event)}>
+              <label className="grid gap-1 text-[11px] text-muted-foreground" htmlFor="project-repository-url">
+                GitHub repository URL
+                <Input id="project-repository-url" name="repositoryUrl" autoFocus autoComplete="off" spellCheck={false} placeholder="https://github.com/owner/repository" aria-describedby="project-repository-hint" value={repositoryUrl} onChange={(event) => setRepositoryUrl(event.target.value)} />
+              </label>
+              <p id="project-repository-hint" className="text-[11px] leading-4 text-muted-foreground">HTTPS and SSH URLs are supported. Forge clones into <span className="font-mono">~/forge/repos</span> and creates worktrees in <span className="font-mono">~/forge/worktrees</span>.</p>
+              <div className="mt-1 flex justify-end gap-2">
                 <Dialog.Close render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} />
-                <Button type="submit" size="sm" disabled={busy || !companyId}>{busy ? "Creating…" : "Create project"}</Button>
+                <Button type="submit" size="sm" disabled={busy || !companyId || !repositoryUrl.trim()}>{busy ? "Cloning…" : "Create project"}</Button>
               </div>
             </form>
           )}
+          {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
+          {findings.length ? <ul className="mt-3 space-y-1 text-xs text-rose-700">{findings.map((item, index) => <li key={`${item.field}-${index}`}>{item.field}: {item.message}</li>)}</ul> : null}
+        </Dialog.Popup>
+      </Dialog.Portal>
+    </Dialog.Root>
+  );
+}
+
+type ProjectSettingsForm = {
+  name: string;
+  baseBranch: string;
+  targetBranch: string;
+  setupCommand: string;
+  verificationCommand: string;
+  requiredChecks: string;
+  allowedProfileIds: string[];
+  leadProfile: string;
+  developerProfile: string;
+  reviewerProfile: string;
+};
+
+type ActivationRequirement = { key: string; label: string; complete: boolean };
+
+function activationRequirements(input: { requiredChecks: string[]; allowedProfileIds: string[]; leadProfile: string | undefined; developerProfile: string | undefined }): ActivationRequirement[] {
+  return [
+    { key: "checks", label: "Add at least one required GitHub check", complete: input.requiredChecks.length > 0 },
+    { key: "profiles", label: "Allow at least one Codex profile", complete: input.allowedProfileIds.length > 0 },
+    { key: "lead", label: "Choose a Lead default", complete: Boolean(input.leadProfile) },
+    { key: "developer", label: "Choose a Developer default", complete: Boolean(input.developerProfile) },
+  ];
+}
+
+function settingsForm(project: ApiProject): ProjectSettingsForm {
+  return {
+    name: project.name,
+    baseBranch: project.baseBranch,
+    targetBranch: project.targetBranch,
+    setupCommand: project.setupCommand,
+    verificationCommand: project.verificationCommand,
+    requiredChecks: project.requiredChecks.join(", "),
+    allowedProfileIds: project.allowedProfileIds,
+    leadProfile: project.roleDefaults.lead ?? "",
+    developerProfile: project.roleDefaults.developer ?? "",
+    reviewerProfile: project.roleDefaults.reviewer ?? "",
+  };
+}
+
+function ProjectSettingsDialog({
+  project,
+  profiles,
+  onOpenChange,
+  onSaved,
+}: {
+  project: ApiProject | undefined;
+  profiles: ApiProfile[];
+  onOpenChange: (open: boolean) => void;
+  onSaved: () => Promise<void>;
+}): ReactElement {
+  const [form, setForm] = useState<ProjectSettingsForm | undefined>();
+  const [findings, setFindings] = useState<Array<{ field: string; message: string }>>([]);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [checkOptions, setCheckOptions] = useState<ApiCheck[]>([]);
+  const [checksLoading, setChecksLoading] = useState(false);
+
+  useEffect(() => {
+    setForm(project ? settingsForm(project) : undefined);
+    setFindings([]);
+    setError("");
+    setBusy(false);
+    setCheckOptions([]);
+    if (project) {
+      setChecksLoading(true);
+      void readJson<{ checks: ApiCheck[] }>(`/api/projects/${project.id}/checks`)
+        .then((result) => setCheckOptions(result.checks))
+        .catch(() => setCheckOptions([]))
+        .finally(() => setChecksLoading(false));
+    }
+  }, [project]);
+
+  const setField = <Key extends keyof ProjectSettingsForm>(key: Key, value: ProjectSettingsForm[Key]): void => {
+    setForm((current) => current ? { ...current, [key]: value } : current);
+  };
+
+  const toggleProfile = (profileId: string): void => {
+    if (!form) return;
+    const enabled = form.allowedProfileIds.includes(profileId);
+    const allowedProfileIds = enabled ? form.allowedProfileIds.filter((id) => id !== profileId) : [...form.allowedProfileIds, profileId];
+    setForm({
+      ...form,
+      allowedProfileIds,
+      leadProfile: enabled && form.leadProfile === profileId ? "" : form.leadProfile,
+      developerProfile: enabled && form.developerProfile === profileId ? "" : form.developerProfile,
+      reviewerProfile: enabled && form.reviewerProfile === profileId ? "" : form.reviewerProfile,
+    });
+  };
+
+  const toggleCheck = (checkName: string): void => {
+    if (!form) return;
+    const checks = form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean);
+    setField("requiredChecks", (checks.includes(checkName) ? checks.filter((name) => name !== checkName) : [...checks, checkName]).join(", "));
+  };
+
+  const submit = async (event: FormEvent): Promise<void> => {
+    event.preventDefault();
+    if (!project || !form) return;
+    setBusy(true);
+    setError("");
+    setFindings([]);
+    try {
+      await readJson<ApiProject>(`/api/projects/${project.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: form.name,
+          repositoryPath: project.repositoryPath,
+          worktreeRoot: project.worktreeRoot,
+          repository: project.repository ?? "",
+          baseBranch: form.baseBranch,
+          targetBranch: form.targetBranch,
+          setupCommand: form.setupCommand,
+          verificationCommand: form.verificationCommand,
+          requiredChecks: form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean),
+          allowedProfileIds: form.allowedProfileIds,
+          roleDefaults: { lead: form.leadProfile, developer: form.developerProfile, reviewer: form.reviewerProfile },
+        }),
+      });
+      await onSaved();
+      onOpenChange(false);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Project configuration failed");
+      if (reason instanceof Error && "findings" in reason) setFindings((reason as Error & { findings?: Array<{ field: string; message: string }> }).findings ?? []);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const allowedProfiles = profiles.filter((profile) => form?.allowedProfileIds.includes(profile.id));
+  const requirements = form ? activationRequirements({
+    requiredChecks: form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean),
+    allowedProfileIds: form.allowedProfileIds,
+    leadProfile: form.leadProfile,
+    developerProfile: form.developerProfile,
+  }) : [];
+  const missingRequirements = requirements.filter((requirement) => !requirement.complete);
+  const selectedChecks = form?.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean) ?? [];
+  const availableChecks: ApiCheck[] = [...new Map([...checkOptions, ...selectedChecks.map((name) => ({ name, status: "configured" } satisfies ApiCheck))].map((check) => [check.name, check])).values()];
+  return (
+    <Dialog.Root open={Boolean(project)} onOpenChange={(open) => { if (!open) onOpenChange(false); }}>
+      <Dialog.Portal>
+        <Dialog.Backdrop className="fixed inset-0 z-50 bg-black/20" />
+        <Dialog.Popup className="fixed left-1/2 top-1/2 z-50 max-h-[85vh] w-[min(92vw,640px)] -translate-x-1/2 -translate-y-1/2 overflow-y-auto border border-border bg-background p-4 shadow-lg outline-none">
+          <div className="mb-3 flex items-center justify-between">
+            <div><Dialog.Title className="text-[13px] font-semibold">Project settings</Dialog.Title><p className="mt-0.5 text-[11px] text-muted-foreground">{project?.repository}</p></div>
+            <Dialog.Close render={<Button variant="ghost" size="icon" aria-label="Close"><X className="size-3.5" /></Button>} />
+          </div>
+          {project && form ? <form className="grid gap-3 sm:grid-cols-2" onSubmit={(event) => void submit(event)}>
+            <div className={`grid gap-2 border px-3 py-2 sm:col-span-2 ${missingRequirements.length ? "border-amber-200 bg-amber-50/70" : "border-emerald-200 bg-emerald-50/70"}`}>
+              <div className="flex items-center justify-between gap-2"><span className="text-xs font-medium">Activation requirements</span><span className={missingRequirements.length ? "text-[11px] font-medium text-amber-800" : "text-[11px] font-medium text-emerald-700"}>{missingRequirements.length ? `${missingRequirements.length} missing` : "Ready"}</span></div>
+              <ul className="grid gap-x-4 gap-y-1 sm:grid-cols-2">{requirements.map((requirement) => <li className={`flex items-center gap-1.5 text-[11px] ${requirement.complete ? "text-muted-foreground" : "font-medium text-amber-800"}`} key={requirement.key}><span className={`size-1.5 rounded-full ${requirement.complete ? "bg-emerald-500" : "bg-amber-500"}`} />{requirement.label}</li>)}</ul>
+            </div>
+            <label className="grid gap-1 text-[11px] text-muted-foreground sm:col-span-2">Project name<Input autoFocus value={form.name} onChange={(event) => setField("name", event.target.value)} /></label>
+            <label className="grid gap-1 text-[11px] text-muted-foreground">Base branch<Input value={form.baseBranch} onChange={(event) => setField("baseBranch", event.target.value)} /></label>
+            <label className="grid gap-1 text-[11px] text-muted-foreground">Target branch<Input value={form.targetBranch} onChange={(event) => setField("targetBranch", event.target.value)} /></label>
+            <label className="grid gap-1 text-[11px] text-muted-foreground">Setup command<Input value={form.setupCommand} onChange={(event) => setField("setupCommand", event.target.value)} /></label>
+            <label className="grid gap-1 text-[11px] text-muted-foreground">Verification command<Input value={form.verificationCommand} onChange={(event) => setField("verificationCommand", event.target.value)} /></label>
+            <fieldset className="grid gap-1.5 sm:col-span-2"><legend className="mb-1 text-[11px] text-muted-foreground">Required GitHub checks</legend>{checksLoading ? <p className="text-[11px] text-muted-foreground">Loading checks from {project.targetBranch}…</p> : availableChecks.length ? <div className="flex flex-wrap gap-x-4 gap-y-2">{availableChecks.map((check) => <label className="flex items-center gap-1.5 text-xs" key={check.name}><input type="checkbox" checked={selectedChecks.includes(check.name)} onChange={() => toggleCheck(check.name)} /><span>{check.name}</span>{check.conclusion ? <span className="text-[10px] text-muted-foreground">{check.conclusion}</span> : null}</label>)}</div> : <p className="border border-border bg-muted/30 px-2 py-1.5 text-[11px] text-muted-foreground">No check runs were found on <span className="font-mono">{project.targetBranch}</span>. Run the repository workflows once, then reopen settings.</p>}<span className="text-[11px] text-muted-foreground">Exact check names fetched from GitHub for the target branch.</span></fieldset>
+            <fieldset className="grid gap-1.5 sm:col-span-2"><legend className="mb-1 text-[11px] text-muted-foreground">Allowed profiles</legend>{profiles.length ? <div className="flex flex-wrap gap-x-4 gap-y-2">{profiles.map((profile) => <label className="flex items-center gap-1.5 text-xs" key={profile.id}><input type="checkbox" checked={form.allowedProfileIds.includes(profile.id)} onChange={() => toggleProfile(profile.id)} />{profile.name}</label>)}</div> : <p className="border border-amber-200 bg-amber-50/70 px-2 py-1.5 text-[11px] text-amber-800">No Codex profiles configured. <a className="font-medium underline underline-offset-2" href={withCompany("/admin/profiles", project.companyId)}>Create a profile</a> before activating this project.</p>}</fieldset>
+            {(["leadProfile", "developerProfile", "reviewerProfile"] as const).map((key) => <label className="grid gap-1 text-[11px] text-muted-foreground" key={key}>{key === "leadProfile" ? "Lead default" : key === "developerProfile" ? "Developer default" : "Reviewer default (optional)"}<select className="h-8 border border-input bg-background px-2 text-xs" value={form[key]} onChange={(event) => setField(key, event.target.value)}><option value="">None</option>{allowedProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></label>)}
+            <div className="mt-1 flex items-center justify-end gap-2 sm:col-span-2">{missingRequirements.length ? <span className="mr-auto text-[11px] text-amber-800">Complete the missing requirements to save.</span> : null}<Dialog.Close render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || missingRequirements.length > 0}>{busy ? "Saving…" : "Save settings"}</Button></div>
+          </form> : null}
           {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
           {findings.length ? <ul className="mt-3 space-y-1 text-xs text-rose-700">{findings.map((item, index) => <li key={`${item.field}-${index}`}>{item.field}: {item.message}</li>)}</ul> : null}
         </Dialog.Popup>
@@ -380,6 +564,7 @@ function ProjectsView(): ReactElement {
   const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [loadError, setLoadError] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
+  const [settingsProject, setSettingsProject] = useState<ApiProject>();
   const requestToken = useRef(0);
   const loadedCompanyIdRef = useRef("");
   const companyId = currentCompany?.id ?? "";
@@ -413,7 +598,7 @@ function ProjectsView(): ReactElement {
 
   const visibleProjects = loadedCompanyId === companyId ? projects : [];
 
-  const changeStatus = async (projectId: string, status: "activate" | "pause" | "archive"): Promise<void> => {
+  const changeStatus = async (projectId: string, status: "activate" | "reactivate" | "pause" | "archive"): Promise<void> => {
     setLoadError("");
     try { await readJson(`/api/projects/${projectId}/${status}`, { method: "POST", body: "{}" }); await reload(); }
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setLoadError(reason instanceof Error ? reason.message : "Project update failed"); }
@@ -423,17 +608,17 @@ function ProjectsView(): ReactElement {
     <ApplicationFrame title="Projects" headerRight={currentCompany?.status === "active" ? <CreateButton onClick={() => setCreateOpen(true)} disabled={!companyId}>Create</CreateButton> : undefined}>
       <div className="bg-background text-foreground">
         <section className="p-4">
-          <div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Configured projects</span><span className="text-[11px] text-muted-foreground">Profiles: {profiles.length}</span></div>
           {currentCompany && currentCompany.status !== "active" ? <p className="mb-3 text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p> : null}
           {currentCompany ? (
             <div className="divide-y divide-border/70 border-y border-border/70">
-              {visibleProjects.map((project) => <article className="py-3" key={project.id}><div className="flex flex-wrap items-center justify-between gap-2"><div><span className="text-[13px] font-medium">{project.name}</span><span className="ml-2 text-[11px] text-muted-foreground">{project.status} · revision {project.configurationRevision}</span></div><div className="flex gap-1.5">{project.status === "draft" ? <Button size="sm" onClick={() => void changeStatus(project.id, "activate")}>Activate</Button> : null}{project.status === "active" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "pause")}>Pause</Button> : null}{project.status !== "archived" && project.status !== "draft" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "archive")}>Archive</Button> : null}<a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></div><div className="mt-2 grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Base {project.baseBranch}</span><span>Target {project.targetBranch}</span></div></article>)}
+              {visibleProjects.map((project) => { const requirements = activationRequirements({ requiredChecks: project.requiredChecks, allowedProfileIds: project.allowedProfileIds, leadProfile: project.roleDefaults.lead, developerProfile: project.roleDefaults.developer }); const missingRequirements = requirements.filter((requirement) => !requirement.complete); const ready = missingRequirements.length === 0; return <article className="py-3" key={project.id}><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-2"><span className="text-[13px] font-medium">{project.name}</span>{project.status === "draft" ? <Badge variant="draft" data-status="draft"><span className="size-1.5 rounded-full bg-amber-500" />Draft</Badge> : <span className="text-[11px] text-muted-foreground">{project.status}</span>}<span className="text-[11px] text-muted-foreground">revision {project.configurationRevision}</span></div><div className="flex flex-wrap gap-1.5">{project.status === "draft" && ready ? <Button size="sm" onClick={() => void changeStatus(project.id, "activate")}>Activate</Button> : null}{project.status === "needs-reactivation" || project.status === "paused" ? <Button size="sm" onClick={() => void changeStatus(project.id, "reactivate")}>Reactivate</Button> : null}{project.status === "active" || project.status === "needs-reactivation" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "pause")}>Pause</Button> : null}{project.status !== "archived" ? <Button variant={project.status === "draft" && !ready ? "default" : "ghost"} size="sm" onClick={() => setSettingsProject(project)}>Configure</Button> : null}{project.status !== "archived" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "archive")}>Archive</Button> : null}<a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></div><div className="mt-2 grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Base {project.baseBranch} · {project.baseSha ? `${project.baseSha.slice(0, 8)}…` : "unaccepted"}</span><span>Target {project.targetBranch} · {project.targetSha ? `${project.targetSha.slice(0, 8)}…` : "unaccepted"}</span><span>{project.requiredChecks.length} required checks</span><span>Defaults: Lead {project.roleDefaults.lead ?? "—"} · Developer {project.roleDefaults.developer ?? "—"}</span>{project.status === "draft" && missingRequirements.length ? <span className="font-medium text-amber-700 sm:col-span-2">{missingRequirements.length} activation requirements missing: {missingRequirements.map((requirement) => requirement.label).join(" · ")}</span> : null}</div></article>; })}
               {!loading && loadedCompanyId === companyId && visibleProjects.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">No projects configured.</div> : null}
             </div>
           ) : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
           {loadError ? <p role="alert" className="mt-3 text-xs text-rose-700">{loadError}</p> : null}
         </section>
         <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} companyId={companyId} companyStatus={currentCompany?.status} onCreated={reload} reloadCompanies={reloadCompanies} />
+        <ProjectSettingsDialog project={settingsProject} profiles={profiles} onOpenChange={() => setSettingsProject(undefined)} onSaved={reload} />
       </div>
     </ApplicationFrame>
   );
@@ -509,6 +694,14 @@ function TasksView(): ReactElement {
   const selected = scopeLoaded ? selectedState : undefined;
   const availableProjects = visibleProjects.filter((project) => project.companyId === companyId && project.status === "active");
   const selectTask = (task: ApiTask): void => { setSelected(task); selectedRef.current = task; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`/tasks/${encodeURIComponent(task.id)}`, companyId)); };
+  const addImages = async (files: File[]): Promise<void> => {
+    setError("");
+    if (images.length + files.length > 8) { setError("At most eight images may be attached"); return; }
+    if (files.some((file) => !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type))) { setError("Only PNG, JPEG, WebP, and GIF images are accepted"); return; }
+    if (files.some((file) => file.size > 9_000_000)) { setError("Each image must be smaller than 9 MB"); return; }
+    try { const nextImages = await Promise.all(files.map(fileAsImage)); setImages((current) => [...current, ...nextImages]); }
+    catch { setError("Unable to read image"); }
+  };
   const create = async (): Promise<void> => {
     if (!companyId || currentCompany?.status !== "active") return;
     setBusy(true); setError("");
@@ -540,8 +733,7 @@ function TasksView(): ReactElement {
           <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">New task</span><span className="text-[11px] text-muted-foreground">Backlog first</span></div>
             {currentCompany ? <div className="mb-3 flex items-center gap-2 border-b border-border/70 pb-2 text-xs"><span className="font-medium truncate">{currentCompany.name}</span><span className="text-[11px] text-muted-foreground">{currentCompany.status}</span></div> : null}
             {currentCompany?.status === "active" ? <><label className="mb-1 block text-[11px] text-muted-foreground" htmlFor="task-project">Project</label><select id="task-project" className="mb-2 h-7 w-full border border-input bg-background px-2 text-xs" value={projectId} onChange={(event) => setProjectId(event.target.value)}>{availableProjects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select>
-            <div className="grid gap-2"><Input aria-label="Task title" placeholder="Title" value={title} onChange={(event) => setTitle(event.target.value)} /><textarea aria-label="Task description" className="min-h-32 border border-input bg-background px-2 py-1.5 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring" placeholder="Markdown description" value={description} onChange={(event) => setDescription(event.target.value)} /><input aria-label="Task images" className="text-xs" type="file" accept="image/png,image/jpeg,image/webp,image/gif" multiple onChange={(event) => void Promise.all(Array.from(event.target.files ?? []).map(fileAsImage)).then(setImages).catch(() => setError("Unable to read image"))} /></div></> : currentCompany ? <p className="text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New tasks are unavailable." : "Company archived. New tasks are unavailable."}</p> : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
-            {images.length ? <div className="mt-2 text-[11px] text-muted-foreground">{images.map((image) => <div key={image.filename}>{image.filename}</div>)}</div> : null}
+            <div className="grid gap-2"><Input aria-label="Task title" placeholder="Title" value={title} onChange={(event) => setTitle(event.target.value)} /><textarea aria-label="Task description" className="min-h-32 border border-input bg-background px-2 py-1.5 text-xs outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring" placeholder="Markdown description" value={description} onChange={(event) => setDescription(event.target.value)} /><InlineAttachmentPicker attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} disabled={busy} /></div></> : currentCompany ? <p className="text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New tasks are unavailable." : "Company archived. New tasks are unavailable."}</p> : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
             {currentCompany?.status === "active" ? <Button className="mt-3 w-full" onClick={() => void create()} disabled={busy || !companyId || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button> : null}
             {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
           </section>

@@ -164,6 +164,28 @@ export class ForgeDatabase {
     this.db.pragma("foreign_keys = ON");
     this.orm = drizzle(this.db, { schema: { ...authSchema, probeWorkflows, workerRegistrations } });
     migrate(this.orm, { migrationsFolder: migrationFolder() });
+    this.ensureModelCatalog();
+  }
+
+  private ensureModelCatalog(): void {
+    this.db.exec(`CREATE TABLE IF NOT EXISTS forge_models (
+      model_id TEXT PRIMARY KEY NOT NULL,
+      display_name TEXT NOT NULL,
+      description TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS forge_models_status_order_idx ON forge_models (status, sort_order, model_id);`);
+    const seed = this.db.prepare("INSERT OR IGNORE INTO forge_models (model_id, display_name, description, status, sort_order, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?)");
+    const timestamp = "2026-08-11T00:00:00.000Z";
+    this.db.transaction(() => {
+      seed.run("gpt-5.6-sol", "GPT-5.6 Sol", "Frontier model for complex coding and agentic work.", 10, timestamp, timestamp);
+      seed.run("gpt-5.6-terra", "GPT-5.6 Terra", "Balanced model for everyday coding work.", 20, timestamp, timestamp);
+      seed.run("gpt-5.6-luna", "GPT-5.6 Luna", "Fast, cost-efficient model for routine coding work.", 30, timestamp, timestamp);
+      seed.run("gpt-5.3-codex", "GPT-5.3 Codex", "Previous-generation Codex model retained for compatibility.", 40, timestamp, timestamp);
+    })();
   }
 
   recordProbe(record: ProbeRecord): void {

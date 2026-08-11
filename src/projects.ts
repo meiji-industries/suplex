@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
-import { access, constants, realpath } from "node:fs/promises";
-import { relative, resolve, sep } from "node:path";
+import { access, constants, mkdir, mkdtemp, realpath, rename, rm, stat } from "node:fs/promises";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -47,6 +47,24 @@ export interface CodexProfile {
   capacity: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export type ModelStatus = "active" | "retired";
+
+export interface CodexModel {
+  id: string;
+  displayName: string;
+  description: string;
+  status: ModelStatus;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectCheckOption {
+  name: string;
+  status: string;
+  conclusion?: string;
 }
 
 export interface ProjectInput {
@@ -101,9 +119,20 @@ export interface LocalRepositoryAdapter {
   inspect(input: { repositoryPath: string; baseBranch: string; targetBranch: string }): Promise<LocalRepositoryInspection>;
 }
 
+export interface RepositoryProvisioner {
+  ensure(input: { cloneUrl: string; repository: string; repositoryPath: string; worktreeRoot: string }): Promise<void>;
+}
+
+export interface GithubRepositoryCoordinate {
+  cloneUrl: string;
+  repository: string;
+  name: string;
+}
+
 interface ProjectServiceOptions {
   github?: GithubAdapter;
   localRepository?: LocalRepositoryAdapter;
+  repositoryProvisioner?: RepositoryProvisioner;
   now?: () => Date;
 }
 
@@ -143,11 +172,22 @@ interface ProfileRow {
   updated_at: string;
 }
 
-const namePattern = /^[\p{L}\p{N}][\p{L}\p{N} ._'-]{0,78}[\p{L}\p{N}]$/u;
+interface ModelRow {
+  model_id: string;
+  display_name: string;
+  description: string;
+  status: ModelStatus;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+const namePattern = /^[\p{L}\p{N}](?:[\p{L}\p{N} ._'-]{0,78}[\p{L}\p{N}])?$/u;
 const repositoryPattern = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})\/[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})$/;
 const branchPattern = /^(?![./])(?!.*(?:\.\.|\.$|\.lock$|\/\/|\s|[~^:?*\[\\]))[A-Za-z0-9._/-]+$/;
 const checkPattern = /^[\p{L}\p{N}][\p{L}\p{N} ._:/()\[\]-]{0,119}$/u;
 const secretPattern = /(?:gh[pousr]_|github_pat_|token\s*=|password\s*=|secret\s*=|BEGIN [A-Z ]+ PRIVATE KEY|sk-[A-Za-z0-9])/i;
+const modelIdPattern = /^[a-z0-9][a-z0-9._-]{1,119}$/;
 const approvedSetupCommands = new Set(["pnpm install", "pnpm install --frozen-lockfile", "npm install", "npm ci", "yarn install", "yarn install --immutable", "bun install"]);
 const approvedVerificationCommands = new Set(["pnpm test", "pnpm typecheck", "pnpm lint", "npm test", "npm run typecheck", "npm run lint", "yarn test", "yarn typecheck", "yarn lint", "bun test", "mise run test", "mise run typecheck", "mise run lint", "make test", "make check"]);
 
@@ -207,6 +247,10 @@ function publicProfile(row: ProfileRow): CodexProfile {
   };
 }
 
+function publicModel(row: ModelRow): CodexModel {
+  return { id: row.model_id, displayName: row.display_name, description: row.description, status: row.status, sortOrder: row.sort_order, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
 function publicProject(row: ProjectRow): Project {
   return {
     id: row.id,
@@ -241,11 +285,39 @@ function isApprovedCommand(command: string, kind: "setup" | "verification"): boo
   return (kind === "setup" ? approvedSetupCommands : approvedVerificationCommands).has(command.trim()) && !secretPattern.test(command);
 }
 
+function githubRepositoryCoordinate(rawUrl: string): GithubRepositoryCoordinate | undefined {
+  const trimmed = rawUrl.trim();
+  const normalizedSsh = trimmed.replace(/\.git$/, "");
+  const ssh = /^git@github\.com:([A-Za-z0-9][A-Za-z0-9_.-]{0,99})\/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})$/.exec(normalizedSsh);
+  if (ssh?.[1] && ssh[2]) {
+    const repository = `${ssh[1]}/${ssh[2]}`.toLowerCase();
+    return { cloneUrl: `git@github.com:${repository}.git`, repository, name: ssh[2] };
+  }
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== "https:" || parsed.hostname.toLowerCase() !== "github.com" || parsed.username || parsed.password || parsed.search || parsed.hash) return undefined;
+    const normalizedPath = parsed.pathname.replace(/\/$/, "").replace(/\.git$/, "");
+    const match = /^\/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})\/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})$/.exec(normalizedPath);
+    if (!match?.[1] || !match[2]) return undefined;
+    const repository = `${match[1]}/${match[2]}`.toLowerCase();
+    return { cloneUrl: `https://github.com/${repository}.git`, repository, name: match[2] };
+  } catch {
+    return undefined;
+  }
+}
+
+export function parseGithubRepositoryUrl(rawUrl: string): GithubRepositoryCoordinate {
+  const coordinate = githubRepositoryCoordinate(rawUrl);
+  if (!coordinate || secretPattern.test(rawUrl)) {
+    throw new ProjectFailure("GitHub repository URL is invalid", [finding("repository-url", "repositoryUrl", "Use an HTTPS or SSH URL for one GitHub repository")], 422);
+  }
+  return coordinate;
+}
+
 function githubRepositoryFromRemote(remoteUrl: string): { identity: string; credentialBearing: boolean } | undefined {
   const trimmed = remoteUrl.trim();
-  const normalizedRemote = trimmed.replace(/\.git$/, "");
-  const ssh = /^git@github\.com:([A-Za-z0-9][A-Za-z0-9_.-]{0,99}\/[A-Za-z0-9][A-Za-z0-9_.-]{0,99})$/.exec(normalizedRemote);
-  if (ssh?.[1]) return { identity: ssh[1].toLowerCase(), credentialBearing: false };
+  const coordinate = githubRepositoryCoordinate(trimmed);
+  if (coordinate) return { identity: coordinate.repository, credentialBearing: false };
   try {
     const parsed = new URL(trimmed);
     if (parsed.hostname.toLowerCase() !== "github.com") return undefined;
@@ -254,6 +326,41 @@ function githubRepositoryFromRemote(remoteUrl: string): { identity: string; cred
   } catch {
     return undefined;
   }
+}
+
+function defaultRepositoryProvisioner(): RepositoryProvisioner {
+  const git = async (args: string[], cwd?: string): Promise<string> => {
+    const result = await execFileAsync("git", args, { ...(cwd ? { cwd } : {}), timeout: 120_000, maxBuffer: 64 * 1024 });
+    return result.stdout.trim();
+  };
+  return {
+    async ensure(input) {
+      await mkdir(dirname(input.repositoryPath), { recursive: true });
+      let repositoryExists = false;
+      try {
+        repositoryExists = (await stat(input.repositoryPath)).isDirectory();
+      } catch {}
+      if (repositoryExists) {
+        try {
+          const remoteUrl = await git(["remote", "get-url", "origin"], input.repositoryPath);
+          const remote = githubRepositoryFromRemote(remoteUrl);
+          if (!remote || remote.credentialBearing || remote.identity !== input.repository) throw new Error("origin mismatch");
+        } catch {
+          throw new ProjectFailure("Repository provisioning failed", [finding("repository-conflict", "repositoryUrl", "The default repository path already exists and does not match this GitHub repository")], 409);
+        }
+      } else {
+        const temporaryPath = await mkdtemp(join(dirname(input.repositoryPath), ".forge-clone-"));
+        try {
+          await git(["clone", "--origin", "origin", "--", input.cloneUrl, temporaryPath]);
+          await rename(temporaryPath, input.repositoryPath);
+        } catch {
+          await rm(temporaryPath, { recursive: true, force: true });
+          throw new ProjectFailure("Repository provisioning failed", [finding("repository-unavailable", "repositoryUrl", "Git could not clone the repository with the host's current credentials")], 422);
+        }
+      }
+      await mkdir(input.worktreeRoot, { recursive: true });
+    },
+  };
 }
 
 async function canonicalDirectory(raw: string, rootRaw: string, field: string): Promise<{ path?: string; findings: ProjectFinding[] }> {
@@ -313,6 +420,7 @@ export class ProjectService {
   private readonly now: () => Date;
   private readonly github: GithubAdapter;
   private readonly localRepositoryPromise: Promise<LocalRepositoryAdapter>;
+  private readonly repositoryProvisioner: RepositoryProvisioner;
 
   constructor(
     private readonly database: ForgeDatabase,
@@ -323,6 +431,7 @@ export class ProjectService {
     this.now = options.now ?? (() => new Date());
     this.github = options.github ?? createGithubAdapter();
     this.localRepositoryPromise = options.localRepository ? Promise.resolve(options.localRepository) : defaultLocalRepositoryAdapter();
+    this.repositoryProvisioner = options.repositoryProvisioner ?? defaultRepositoryProvisioner();
   }
 
   createProfile(actorUserId: string, input: { name: string; model: string; reasoningLevel: ReasoningLevel; servicePriority: ServicePriority; capacity: number }): CodexProfile {
@@ -331,7 +440,8 @@ export class ProjectService {
     const name = input.name.trim();
     const model = input.model.trim();
     if (!namePattern.test(name)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-name", "name", "Profile name is invalid")]);
-    if (!model || model.length > 120 || /[\r\n]/.test(model) || secretPattern.test(model)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-model", "model", "Model name is invalid")]);
+    const catalogModel = this.database.authQuery((db) => db.prepare("SELECT model_id FROM forge_models WHERE model_id = ? AND status = 'active'").get(model) as { model_id: string } | undefined);
+    if (!modelIdPattern.test(model) || secretPattern.test(model) || !catalogModel) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-model", "model", "Select an active model from the catalog")]);
     if (!["low", "medium", "high"].includes(input.reasoningLevel)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-reasoning", "reasoningLevel", "Reasoning level is invalid")]);
     if (!["standard", "priority"].includes(input.servicePriority)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-priority", "servicePriority", "Service priority is invalid")]);
     if (!Number.isInteger(input.capacity) || input.capacity < 1 || input.capacity > 32) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-capacity", "capacity", "Capacity must be an integer from 1 to 32")]);
@@ -354,8 +464,94 @@ export class ProjectService {
     return this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_profiles ORDER BY name").all() as ProfileRow[]).map(publicProfile));
   }
 
+  listModels(actorUserId: string, includeRetired = false): CodexModel[] {
+    if (includeRetired) this.requireAdmin(actorUserId);
+    else this.user(actorUserId);
+    return this.database.authQuery((db) => {
+      const rows = (includeRetired
+        ? db.prepare("SELECT * FROM forge_models ORDER BY sort_order, model_id").all()
+        : db.prepare("SELECT * FROM forge_models WHERE status = 'active' ORDER BY sort_order, model_id").all()) as ModelRow[];
+      return rows.map(publicModel);
+    });
+  }
+
+  createModel(actorUserId: string, input: { id: string; displayName: string; description?: string; sortOrder?: number }): CodexModel {
+    this.requireAdmin(actorUserId);
+    const id = input.id.trim().toLowerCase();
+    const displayName = input.displayName.trim();
+    const description = input.description?.trim() ?? "";
+    const sortOrder = input.sortOrder ?? 100;
+    if (!modelIdPattern.test(id) || !displayName || displayName.length > 120 || description.length > 240 || !Number.isInteger(sortOrder) || sortOrder < 0 || sortOrder > 10_000) {
+      throw new ProjectFailure("Model configuration is invalid", [finding("invalid-model", "model", "Use a valid model ID, display name, and sort order")]);
+    }
+    const now = this.now().toISOString();
+    try {
+      this.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_models (model_id, display_name, description, status, sort_order, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?)").run(id, displayName, description, sortOrder, now, now);
+        this.auth.recordAuditEventInTransaction(db, actorUserId, "model_created", undefined, undefined, { modelId: id });
+      });
+    } catch {
+      throw new ProjectFailure("Model configuration is invalid", [finding("duplicate-model", "model", "Model ID is already in the catalog")], 409);
+    }
+    return this.database.authQuery((db) => publicModel(db.prepare("SELECT * FROM forge_models WHERE model_id = ?").get(id) as ModelRow));
+  }
+
+  setModelStatus(actorUserId: string, modelId: string, status: ModelStatus): CodexModel {
+    this.requireAdmin(actorUserId);
+    if (!modelIdPattern.test(modelId) || !["active", "retired"].includes(status)) throw new ProjectFailure("Model configuration is invalid", [finding("invalid-model", "model", "Model ID or status is invalid")]);
+    const now = this.now().toISOString();
+    this.database.authTransaction((db) => {
+      const result = db.prepare("UPDATE forge_models SET status = ?, updated_at = ? WHERE model_id = ?").run(status, now, modelId);
+      if (result.changes === 0) throw new ProjectFailure("Not found", [], 404);
+      this.auth.recordAuditEventInTransaction(db, actorUserId, status === "active" ? "model_restored" : "model_retired", undefined, undefined, { modelId });
+    });
+    return this.database.authQuery((db) => publicModel(db.prepare("SELECT * FROM forge_models WHERE model_id = ?").get(modelId) as ModelRow));
+  }
+
+  async listProjectChecks(actorUserId: string, projectId: string): Promise<ProjectCheckOption[]> {
+    const project = this.getProject(actorUserId, projectId);
+    if (!project.repository) return [];
+    try {
+      await this.github.checkAuthentication();
+      if (!this.github.listChecks) throw new GithubFailure("command");
+      return await this.github.listChecks({ cwd: project.repositoryPath, nameWithOwner: project.repository, ref: project.targetBranch });
+    } catch (error) {
+      const code = error instanceof GithubFailure && error.code === "authentication" ? "github-auth-unavailable" : "github-checks-unavailable";
+      throw new ProjectFailure("GitHub checks are unavailable", [finding(code, "requiredChecks", code === "github-auth-unavailable" ? "Host GitHub CLI authentication is unavailable" : "GitHub did not return checks for the target branch")], 422);
+    }
+  }
+
   createProject(actorUserId: string, companyId: string, input: ProjectInput): Promise<Project> {
     return this.mutateProject(actorUserId, companyId, input, false);
+  }
+
+  async createProjectFromRepository(actorUserId: string, companyId: string, repositoryUrl: string): Promise<Project> {
+    const company = this.auth.requireCompanyAccess(actorUserId, companyId);
+    if (company.status !== "active") throw new ProjectFailure("Company is not active", [finding("company-inactive", "companyId", "Project configuration requires an active company")], 409);
+    const coordinate = parseGithubRepositoryUrl(repositoryUrl);
+    const [owner, repositoryName] = coordinate.repository.split("/");
+    if (!owner || !repositoryName) throw new ProjectFailure("GitHub repository URL is invalid", [finding("repository-url", "repositoryUrl", "Use an HTTPS or SSH URL for one GitHub repository")], 422);
+    const repositoryPath = resolve(this.config.repositoryRoot, owner, repositoryName);
+    const worktreeRoot = resolve(this.config.worktreeRoot, owner, repositoryName);
+    if (!withinRoot(repositoryPath, resolve(this.config.repositoryRoot)) || !withinRoot(worktreeRoot, resolve(this.config.worktreeRoot))) {
+      throw new ProjectFailure("Repository provisioning failed", [finding("path-outside-root", "repositoryUrl", "Derived project paths escaped the configured Forge roots")], 422);
+    }
+    await this.repositoryProvisioner.ensure({ cloneUrl: coordinate.cloneUrl, repository: coordinate.repository, repositoryPath, worktreeRoot });
+    const profiles = this.listProfiles(actorUserId).slice(0, 16);
+    const defaultProfileId = profiles[0]?.id;
+    return this.mutateProject(actorUserId, companyId, {
+      name: coordinate.name,
+      repositoryPath,
+      worktreeRoot,
+      repository: coordinate.repository,
+      baseBranch: "main",
+      targetBranch: "main",
+      setupCommand: "pnpm install",
+      verificationCommand: "pnpm test",
+      requiredChecks: [],
+      allowedProfileIds: profiles.map((profile) => profile.id),
+      roleDefaults: defaultProfileId ? { lead: defaultProfileId, developer: defaultProfileId } : {},
+    }, false, undefined, true);
   }
 
   async updateProject(actorUserId: string, projectId: string, input: ProjectInput): Promise<Project> {
@@ -370,7 +566,9 @@ export class ProjectService {
     if (project.status === "archived") throw new ProjectFailure("Project activation failed", [finding("project-archived", "status", "Archived projects cannot be activated")], 409);
     const findings: ProjectFinding[] = [];
     const local = await this.localRepositoryPromise;
-    const profiles = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_profiles WHERE id IN (" + project.allowedProfileIds.map(() => "?").join(",") + ")").all(...project.allowedProfileIds) as Array<{ id: string }>);
+    const profiles = project.allowedProfileIds.length === 0
+      ? []
+      : this.database.authQuery((db) => db.prepare("SELECT id FROM forge_profiles WHERE id IN (" + project.allowedProfileIds.map(() => "?").join(",") + ")").all(...project.allowedProfileIds) as Array<{ id: string }>);
     const profileIds = new Set(profiles.map((profile) => profile.id));
     for (const profileId of project.allowedProfileIds) if (!profileIds.has(profileId)) findings.push(finding("profile-unavailable", "allowedProfileIds", "Every allowed role profile must exist"));
     for (const [role, profileId] of Object.entries(project.roleDefaults)) if (!project.allowedProfileIds.includes(profileId) || !profileIds.has(profileId)) findings.push(finding("profile-ineligible", `roleDefaults.${role}`, "Role defaults must reference an allowed profile"));
@@ -469,7 +667,7 @@ export class ProjectService {
     return rows.map(publicProject);
   }
 
-  private async mutateProject(actorUserId: string, companyId: string, input: ProjectInput, updating: boolean, projectId?: string): Promise<Project> {
+  private async mutateProject(actorUserId: string, companyId: string, input: ProjectInput, updating: boolean, projectId?: string, allowIncompleteDraft = false): Promise<Project> {
     const company = this.auth.requireCompanyAccess(actorUserId, companyId);
     if (company.status !== "active") throw new ProjectFailure("Company is not active", [finding("company-inactive", "companyId", "Project configuration requires an active company")], 409);
     const [repository, worktree] = await Promise.all([
@@ -485,14 +683,14 @@ export class ProjectService {
     if (!isApprovedCommand(input.setupCommand, "setup")) findings.push(finding("unapproved-command", "setupCommand", "Setup must be one approved literal command"));
     if (!isApprovedCommand(input.verificationCommand, "verification")) findings.push(finding("unapproved-command", "verificationCommand", "Verification must be one approved literal command"));
     if (secretPattern.test(input.repository) || secretPattern.test(input.baseBranch) || secretPattern.test(input.targetBranch)) findings.push(finding("secret-shaped-value", "configuration", "Secret-shaped configuration values are not accepted"));
-    if (!Array.isArray(input.requiredChecks) || input.requiredChecks.length === 0 || input.requiredChecks.length > 32 || input.requiredChecks.some((check) => !checkPattern.test(check.trim()))) findings.push(finding("invalid-check", "requiredChecks", "At least one safe required check is required"));
-    if (!Array.isArray(input.allowedProfileIds) || input.allowedProfileIds.length === 0 || input.allowedProfileIds.length > 16) findings.push(finding("invalid-profiles", "allowedProfileIds", "At least one allowed profile is required"));
+    if (!Array.isArray(input.requiredChecks) || (!allowIncompleteDraft && input.requiredChecks.length === 0) || input.requiredChecks.length > 32 || input.requiredChecks.some((check) => !checkPattern.test(check.trim()))) findings.push(finding("invalid-check", "requiredChecks", "At least one safe required check is required"));
+    if (!Array.isArray(input.allowedProfileIds) || (!allowIncompleteDraft && input.allowedProfileIds.length === 0) || input.allowedProfileIds.length > 16) findings.push(finding("invalid-profiles", "allowedProfileIds", "At least one allowed profile is required"));
     if (worktree.path) {
       try { await access(worktree.path, constants.W_OK); } catch { findings.push(finding("worktree-unwritable", "worktreeRoot", "Worktree root must be writable")); }
     }
     const normalized = normalizedInput(input, { repositoryPath: repository.path ?? resolve(input.repositoryPath), worktreeRoot: worktree.path ?? resolve(input.worktreeRoot) });
-    if (!normalized.roleDefaults.lead) findings.push(finding("missing-default", "roleDefaults.lead", "A Lead profile default is required"));
-    if (!normalized.roleDefaults.developer) findings.push(finding("missing-default", "roleDefaults.developer", "A Developer profile default is required"));
+    if (!allowIncompleteDraft && !normalized.roleDefaults.lead) findings.push(finding("missing-default", "roleDefaults.lead", "A Lead profile default is required"));
+    if (!allowIncompleteDraft && !normalized.roleDefaults.developer) findings.push(finding("missing-default", "roleDefaults.developer", "A Developer profile default is required"));
     for (const [role, profileId] of Object.entries(normalized.roleDefaults)) if (!normalized.allowedProfileIds.includes(profileId)) findings.push(finding("profile-ineligible", `roleDefaults.${role}`, "Role defaults must reference an allowed profile"));
     if (findings.length) throw new ProjectFailure("Project configuration is invalid", findings, 422);
     const now = this.now().toISOString();

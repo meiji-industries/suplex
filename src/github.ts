@@ -8,9 +8,16 @@ export interface GithubRepository {
   url: string;
 }
 
+export interface GithubCheck {
+  name: string;
+  status: string;
+  conclusion?: string;
+}
+
 export interface GithubAdapter {
   checkAuthentication(): Promise<void>;
   getRepository(input: { cwd: string; nameWithOwner: string }): Promise<GithubRepository>;
+  listChecks?(input: { cwd: string; nameWithOwner: string; ref: string }): Promise<GithubCheck[]>;
 }
 
 export class GithubFailure extends Error {
@@ -56,6 +63,19 @@ export function createGithubAdapter(command = process.env.FORGE_GH_COMMAND ?? "g
       } catch (error) {
         if (error instanceof GithubFailure) throw error;
         throw new GithubFailure("repository");
+      }
+    },
+    async listChecks(input) {
+      const path = `repos/${input.nameWithOwner}/commits/${encodeURIComponent(input.ref)}/check-runs?per_page=100`;
+      const result = await runGh(command, ["api", "-H", "Accept: application/vnd.github+json", path], input.cwd);
+      try {
+        const parsed = JSON.parse(result.stdout) as { check_runs?: Array<{ name?: unknown; status?: unknown; conclusion?: unknown }> };
+        const checks = (parsed.check_runs ?? []).flatMap((check) => typeof check.name === "string" && typeof check.status === "string"
+          ? [{ name: check.name, status: check.status, ...(typeof check.conclusion === "string" ? { conclusion: check.conclusion } : {}) }]
+          : []);
+        return [...new Map(checks.map((check) => [check.name, check])).values()].sort((left, right) => left.name.localeCompare(right.name));
+      } catch {
+        throw new GithubFailure("command");
       }
     },
   };

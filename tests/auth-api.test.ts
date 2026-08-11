@@ -41,8 +41,13 @@ const health = {
 
 function sessionCookie(response: { headers: OutgoingHttpHeaders }): string {
   const header = response.headers["set-cookie"];
-  const value = Array.isArray(header) ? header[0] : typeof header === "string" ? header : undefined;
-  return value?.split(";", 1)[0] ?? "";
+  const values = Array.isArray(header) ? header : typeof header === "string" ? [header] : [];
+  for (const setCookie of values) {
+    const pair = setCookie.split(";", 1)[0] ?? "";
+    const [name, value] = pair.split("=", 2);
+    if (name?.trim() === "forge_session" && value !== undefined) return `${name.trim()}=${value}`;
+  }
+  return "";
 }
 
 test("API enrollment and authorization fail closed before company details are returned", async () => {
@@ -63,24 +68,24 @@ test("API enrollment and authorization fail closed before company details are re
     expect(adminCookie).toContain("forge_session=");
     expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: adminCookie } })).statusCode).toBe(200);
 
-    const companyA = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie }, payload: { name: "API A" } })).json() as { id: string };
-    const companyB = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie }, payload: { name: "API B" } })).json() as { id: string };
-    const renamed = await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie }, payload: { name: "  API A renamed  " } });
+    const companyA = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "API A" } })).json() as { id: string };
+    const companyB = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "API B" } })).json() as { id: string };
+    const renamed = await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "  API A renamed  " } });
     expect(renamed.statusCode).toBe(200);
     expect(renamed.json()).toMatchObject({ id: companyA.id, name: "API A renamed", status: "active" });
-    expect((await app.inject({ method: "POST", url: `/api/admin/companies/${companyA.id}/status/paused`, headers: { cookie: adminCookie }, payload: {} })).statusCode).toBe(200);
-    expect((await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie }, payload: { name: "" } })).json()).toEqual({ error: "Company name is invalid" });
-    expect((await app.inject({ method: "DELETE", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie } })).statusCode).toBe(404);
-    const invite = (await app.inject({ method: "POST", url: "/api/admin/invitations", headers: { cookie: adminCookie }, payload: { displayName: "API member" } })).json() as { token: string; user: { id: string } };
+    expect((await app.inject({ method: "POST", url: `/api/admin/companies/${companyA.id}/status/paused`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: {} })).statusCode).toBe(200);
+    expect((await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "" } })).json()).toEqual({ error: "Company name is invalid" });
+    expect((await app.inject({ method: "DELETE", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie, origin: config.reachableAddress } })).statusCode).toBe(404);
+    const invite = (await app.inject({ method: "POST", url: "/api/admin/invitations", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { displayName: "API member" } })).json() as { token: string; user: { id: string } };
     const memberOptions = await app.inject({ method: "POST", url: "/api/auth/invitation/options", payload: { token: invite.token } });
     const memberCeremony = memberOptions.json() as { challengeId: string };
     const memberEnrolled = await app.inject({ method: "POST", url: "/api/auth/invitation/verify", payload: { token: invite.token, challengeId: memberCeremony.challengeId, response: { id: "member-api-credential", type: "public-key" } } });
     const memberCookie = sessionCookie(memberEnrolled);
 
-    const memberRename = await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: memberCookie }, payload: { name: "Member rename" } });
+    const memberRename = await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: memberCookie, origin: config.reachableAddress }, payload: { name: "Member rename" } });
     expect(memberRename.statusCode).toBe(404);
 
-    const membership = await app.inject({ method: "POST", url: `/api/admin/companies/${companyA.id}/members`, headers: { cookie: adminCookie }, payload: { userId: invite.user.id } });
+    const membership = await app.inject({ method: "POST", url: `/api/admin/companies/${companyA.id}/members`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { userId: invite.user.id } });
     expect(membership.statusCode).toBe(204);
     expect((await app.inject({ method: "GET", url: `/companies/${companyA.id}/settings`, headers: { cookie: adminCookie } })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: `/companies/${companyA.id}/settings`, headers: { cookie: memberCookie } })).statusCode).toBe(404);
@@ -93,7 +98,7 @@ test("API enrollment and authorization fail closed before company details are re
     expect((await app.inject({ method: "GET", url: `/api/companies/${companyA.id}` })).statusCode).toBe(401);
     expect((await app.inject({ method: "GET", url: "/health" })).statusCode).toBe(302);
 
-    const removed = await app.inject({ method: "DELETE", url: `/api/admin/companies/${companyA.id}/members/${invite.user.id}`, headers: { cookie: adminCookie } });
+    const removed = await app.inject({ method: "DELETE", url: `/api/admin/companies/${companyA.id}/members/${invite.user.id}`, headers: { cookie: adminCookie, origin: config.reachableAddress } });
     expect(removed.statusCode).toBe(204);
   } finally {
     await app.close();

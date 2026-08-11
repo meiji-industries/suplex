@@ -1,6 +1,6 @@
 import cookie from "@fastify/cookie";
 import { serializerCompiler, validatorCompiler } from "@fastify/type-provider-zod";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { Logger } from "pino";
 
 import { AuthService } from "./auth.js";
@@ -15,6 +15,7 @@ import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
 import { HealthSnapshotSchema } from "./schemas.js";
 import { installHttpErrorHandlers } from "./http/errors.js";
+import { ORIGIN_TOKEN_COOKIE_NAME, ORIGIN_TOKEN_HEADER_NAME, SESSION_COOKIE_NAME } from "./http/session.js";
 import authRoutes from "./http/routes/auth.js";
 import authenticated from "./http/routes/authenticated.js";
 import assets from "./http/routes/assets.js";
@@ -44,6 +45,16 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
   app.setSerializerCompiler(serializerCompiler);
   void app.register(cookie);
   installHttpErrorHandlers(app);
+  app.addHook("preHandler", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
+    if (typeof request.cookies[SESSION_COOKIE_NAME] !== "string" || request.cookies[SESSION_COOKIE_NAME] === "") return;
+    const origin = Array.isArray(request.headers.origin) ? request.headers.origin[0] : request.headers.origin;
+    if (origin === dependencies.config.reachableAddress) return;
+    const token = Array.isArray(request.headers[ORIGIN_TOKEN_HEADER_NAME]) ? request.headers[ORIGIN_TOKEN_HEADER_NAME][0] : request.headers[ORIGIN_TOKEN_HEADER_NAME];
+    const cookieToken = request.cookies[ORIGIN_TOKEN_COOKIE_NAME];
+    if (typeof token === "string" && token === cookieToken && token.length >= 32) return;
+    return reply.code(403).send({ error: "request_origin_invalid" });
+  });
 
   const getHealth = dependencies.getHealth ?? (() => inspectHostHealth(dependencies.config, dependencies.health));
   const readHealth = async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth());

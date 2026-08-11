@@ -1,4 +1,6 @@
-import type { FastifyRequest } from "fastify";
+import { randomBytes } from "node:crypto";
+
+import type { FastifyReply, FastifyRequest } from "fastify";
 
 import type { AuthService, AuthUser } from "../auth.js";
 import type { ForgeConfig } from "../config.js";
@@ -9,8 +11,12 @@ declare module "fastify" {
   }
 }
 
+export const SESSION_COOKIE_NAME = "forge_session";
+export const ORIGIN_TOKEN_COOKIE_NAME = "forge_origin";
+export const ORIGIN_TOKEN_HEADER_NAME = "x-forge-origin";
+
 export async function sessionUser(auth: AuthService | undefined, request: Pick<FastifyRequest, "cookies">): Promise<AuthUser | undefined> {
-  return auth?.getUserBySession(request.cookies.forge_session ?? "");
+  return auth?.getUserBySession(request.cookies[SESSION_COOKIE_NAME] ?? "");
 }
 
 export function authenticatedUser(request: FastifyRequest): AuthUser {
@@ -20,12 +26,24 @@ export function authenticatedUser(request: FastifyRequest): AuthUser {
   return request.forgeUser;
 }
 
-export function setSessionCookie(config: ForgeConfig, reply: { setCookie: (name: string, value: string, options: { httpOnly: boolean; sameSite: "lax"; secure: boolean; path: string; maxAge: number }) => unknown }, sessionToken: string): void {
-  reply.setCookie("forge_session", sessionToken, {
+export function setSessionCookie(config: ForgeConfig, reply: FastifyReply, sessionToken: string): void {
+  reply.setCookie(SESSION_COOKIE_NAME, sessionToken, {
     httpOnly: true,
     sameSite: "lax",
     secure: config.reachableAddress.startsWith("https:"),
     path: "/",
     maxAge: 7 * 24 * 60 * 60,
   });
+  reply.setCookie(ORIGIN_TOKEN_COOKIE_NAME, randomBytes(32).toString("base64url"), {
+    httpOnly: false,
+    sameSite: "strict",
+    secure: config.reachableAddress.startsWith("https:"),
+    path: "/",
+    maxAge: 7 * 24 * 60 * 60,
+  });
+}
+
+export function clearSessionCookies(reply: FastifyReply): void {
+  reply.clearCookie(SESSION_COOKIE_NAME, { path: "/" });
+  reply.clearCookie(ORIGIN_TOKEN_COOKIE_NAME, { path: "/" });
 }

@@ -27,10 +27,15 @@ const github: GithubAdapter = {
   async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; },
 };
 
-function cookie(response: { headers: OutgoingHttpHeaders }): string {
+function sessionCookie(response: { headers: OutgoingHttpHeaders }): string {
   const header = response.headers["set-cookie"];
-  const value = Array.isArray(header) ? header[0] : typeof header === "string" ? header : "";
-  return (value ?? "").split(";", 1)[0] ?? "";
+  const values = Array.isArray(header) ? header : typeof header === "string" ? [header] : [];
+  for (const setCookie of values) {
+    const pair = setCookie.split(";", 1)[0] ?? "";
+    const [name, value] = pair.split("=", 2);
+    if (name?.trim() === "forge_session" && value !== undefined) return `${name.trim()}=${value}`;
+  }
+  return "";
 }
 
 test("project API activates valid configuration, redacts typed failures, and preserves company scope", async () => {
@@ -59,26 +64,27 @@ test("project API activates valid configuration, redacts typed failures, and pre
     const invitation = auth.ensureBootstrapInvitation()!;
     const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });
     const enrolled = await app.inject({ method: "POST", url: "/api/auth/bootstrap/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: "admin-project-api", type: "public-key" } } });
-    const adminCookie = cookie(enrolled);
-    const company = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie }, payload: { name: "Project Company" } })).json() as { id: string };
-    const otherCompany = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie }, payload: { name: "Other Project Company" } })).json() as { id: string };
-    const profile = (await app.inject({ method: "POST", url: "/api/admin/profiles", headers: { cookie: adminCookie }, payload: { name: "API profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 } })).json() as { id: string };
+    const adminCookie = sessionCookie(enrolled);
+    const origin = config.reachableAddress;
+    const company = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin }, payload: { name: "Project Company" } })).json() as { id: string };
+    const otherCompany = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin }, payload: { name: "Other Project Company" } })).json() as { id: string };
+    const profile = (await app.inject({ method: "POST", url: "/api/admin/profiles", headers: { cookie: adminCookie, origin }, payload: { name: "API profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 } })).json() as { id: string };
     const configuration = { name: "Direct GitHub", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } };
-    const draft = await app.inject({ method: "POST", url: `/api/companies/${company.id}/projects`, headers: { cookie: adminCookie }, payload: configuration });
+    const draft = await app.inject({ method: "POST", url: `/api/companies/${company.id}/projects`, headers: { cookie: adminCookie, origin }, payload: configuration });
     expect(draft.statusCode).toBe(201);
     const project = draft.json() as { id: string; status: string };
     expect(project.status).toBe("draft");
-    const activated = await app.inject({ method: "POST", url: `/api/projects/${project.id}/activate`, headers: { cookie: adminCookie }, payload: {} });
+    const activated = await app.inject({ method: "POST", url: `/api/projects/${project.id}/activate`, headers: { cookie: adminCookie, origin }, payload: {} });
     expect(activated.statusCode).toBe(200);
     expect(activated.json()).toMatchObject({ status: "active", configurationRevision: 2, repository: "acme/forge" });
-    const invalid = await app.inject({ method: "POST", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie }, payload: { ...configuration, name: "Unsafe", repositoryPath: join(repositoryRoot, "unsafe"), worktreeRoot: join(worktreeRoot, "unsafe"), repository: "https://token@github.com/acme/forge.git" } });
+    const invalid = await app.inject({ method: "POST", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie, origin }, payload: { ...configuration, name: "Unsafe", repositoryPath: join(repositoryRoot, "unsafe"), worktreeRoot: join(worktreeRoot, "unsafe"), repository: "https://token@github.com/acme/forge.git" } });
     expect(invalid.statusCode).toBe(422);
     expect(invalid.json()).toMatchObject({ error: "Project configuration is invalid" });
     expect(JSON.stringify(invalid.json())).not.toContain("token@");
-    expect((await app.inject({ method: "GET", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie } })).json().projects).toHaveLength(0);
-    expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}`, headers: { cookie: adminCookie } })).statusCode).toBe(200);
-    expect((await app.inject({ method: "POST", url: `/api/admin/companies/${company.id}/status/paused`, headers: { cookie: adminCookie }, payload: {} })).json()).toMatchObject({ status: "paused" });
-    expect((await app.inject({ method: "POST", url: `/api/companies/${company.id}/projects`, headers: { cookie: adminCookie }, payload: configuration })).statusCode).toBe(409);
+    expect((await app.inject({ method: "GET", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie, origin } })).json().projects).toHaveLength(0);
+    expect((await app.inject({ method: "GET", url: `/api/projects/${project.id}`, headers: { cookie: adminCookie, origin } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: `/api/admin/companies/${company.id}/status/paused`, headers: { cookie: adminCookie, origin }, payload: {} })).json()).toMatchObject({ status: "paused" });
+    expect((await app.inject({ method: "POST", url: `/api/companies/${company.id}/projects`, headers: { cookie: adminCookie, origin }, payload: configuration })).statusCode).toBe(409);
   } finally {
     await app.close();
     database.close();

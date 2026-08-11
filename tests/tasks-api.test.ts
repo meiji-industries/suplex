@@ -53,27 +53,36 @@ test("task API creates an idempotent backlog card and accepts only the current p
   const options = await app.inject({ method: "POST", url: "/api/auth/recovery/options", payload: { token: invitation.token } });
   const enrolled = await app.inject({ method: "POST", url: "/api/auth/recovery/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: "api-admin", type: "public-key" } } });
   const rawCookie = enrolled.headers["set-cookie"];
-  const cookie = (Array.isArray(rawCookie) ? rawCookie[0] : rawCookie)?.split(";", 1)[0] ?? "";
+  const values = Array.isArray(rawCookie) ? rawCookie : typeof rawCookie === "string" ? [rawCookie] : [];
+  const cookie = (() => {
+    for (const setCookie of values) {
+      const pair = setCookie.split(";", 1)[0] ?? "";
+      const [name, value] = pair.split("=", 2);
+      if (name?.trim() === "forge_session" && value !== undefined) return `${name.trim()}=${value}`;
+    }
+    return "";
+  })();
+  const origin = config.reachableAddress;
   try {
-    const created = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie }, payload: { projectId: project.id, title: "API task", description: "# Details", idempotencyKey: "api-task-0001", supplementalReview: true, images: [{ filename: "note.png", mimeType: "image/png", base64: Buffer.from("image").toString("base64") }] } });
+    const created = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload: { projectId: project.id, title: "API task", description: "# Details", idempotencyKey: "api-task-0001", supplementalReview: true, images: [{ filename: "note.png", mimeType: "image/png", base64: Buffer.from("image").toString("base64") }] } });
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ title: "API task", phase: "backlog", revision: 0, allowedCommands: ["start_planning"] });
-    const duplicate = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie }, payload: { projectId: project.id, title: "Other", description: "Other", idempotencyKey: "api-task-0001", images: [] } });
+    const duplicate = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload: { projectId: project.id, title: "Other", description: "Other", idempotencyKey: "api-task-0001", images: [] } });
     expect(duplicate.statusCode).toBe(200);
     const task = created.json() as { id: string };
-    expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie }, payload: { expectedRevision: 9 } })).statusCode).toBe(409);
-    const started = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie }, payload: { expectedRevision: 0 } });
+    expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie, origin }, payload: { expectedRevision: 9 } })).statusCode).toBe(409);
+    const started = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie, origin }, payload: { expectedRevision: 0 } });
     expect(started.statusCode).toBe(200);
     expect(started.json()).toMatchObject({ phase: "approval", owner: "human", revision: 1, planMaterial: true });
-    const reviewed = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/request-supplemental-review`, headers: { cookie }, payload: { expectedRevision: 1 } });
+    const reviewed = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/request-supplemental-review`, headers: { cookie, origin }, payload: { expectedRevision: 1 } });
     expect(reviewed.statusCode).toBe(200);
     expect(reviewed.json()).toMatchObject({ phase: "approval", revision: 2, supplementalReviewUsed: true });
-    const approved = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie }, payload: { expectedRevision: 2, note: "Self-approved" } });
+    const approved = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: { expectedRevision: 2, note: "Self-approved" } });
     expect(approved.statusCode).toBe(200);
     expect(approved.json()).toMatchObject({ phase: "ready_for_development", owner: "lead", revision: 3 });
-    expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie }, payload: { expectedRevision: 2 } })).statusCode).toBe(409);
-    expect((await app.inject({ method: "GET", url: "/api/tasks", headers: { cookie } })).json().tasks).toHaveLength(1);
-    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/images/does-not-exist`, headers: { cookie } })).statusCode).toBe(404);
+    expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: { expectedRevision: 2 } })).statusCode).toBe(409);
+    expect((await app.inject({ method: "GET", url: "/api/tasks", headers: { cookie, origin } })).json().tasks).toHaveLength(1);
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/images/does-not-exist`, headers: { cookie, origin } })).statusCode).toBe(404);
   } finally {
     await app.close(); database.close(); await rm(root, { recursive: true, force: true });
   }

@@ -28,11 +28,22 @@ export class ApiError extends Error {
   }
 }
 
+function cookieValue(name: string): string | undefined {
+  return document.cookie
+    .split(";")
+    .map((pair) => pair.trim().split("=", 2))
+    .find(([key]) => key === name)?.[1];
+}
+
 export async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const method = init?.method?.toUpperCase() ?? "GET";
+  const isSafe = method === "GET" || method === "HEAD" || method === "OPTIONS";
+  const originToken = !isSafe ? cookieValue("forge_origin") : undefined;
   const response = await fetch(url, {
     ...init,
     headers: {
       ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
+      ...(originToken ? { "X-Forge-Origin": originToken } : {}),
       ...(init?.headers ?? {}),
     },
   });

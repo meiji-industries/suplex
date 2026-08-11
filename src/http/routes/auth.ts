@@ -4,8 +4,8 @@ import { type ZodTypeProvider } from "@fastify/type-provider-zod";
 import { AuthService } from "../../auth.js";
 import type { ForgeConfig } from "../../config.js";
 import type { FastifyReply } from "fastify";
-import { AuthEnvelopeSchema, AuthOptionsResponseSchema, AuthStatusResponseSchema, SignOutResponseSchema, TokenBodySchema, RegistrationVerificationBodySchema, AuthenticationVerificationBodySchema } from "../contracts/common.js";
-import { authenticatedUser, setSessionCookie } from "../session.js";
+import { AuthEnvelopeSchema, AuthOptionsResponseSchema, AuthStatusResponseSchema, ErrorResponseSchema, SignOutResponseSchema, TokenBodySchema, RegistrationVerificationBodySchema, AuthenticationVerificationBodySchema } from "../contracts/common.js";
+import { authenticatedUser, clearSessionCookies, SESSION_COOKIE_NAME, setSessionCookie, sessionUser } from "../session.js";
 
 export interface AuthRoutesOptions {
   auth: AuthService;
@@ -21,7 +21,7 @@ const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, options) =
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const { auth, config } = options;
 
-  typed.get("/status", { schema: { response: { 200: AuthStatusResponseSchema } } }, async (request, reply) => reply.send({ ...auth.getBootstrapState(), authenticated: (await auth.getUserBySession(request.cookies.forge_session ?? "")) !== undefined }));
+  typed.get("/status", { schema: { response: { 200: AuthStatusResponseSchema } } }, async (request, reply) => reply.send({ ...auth.getBootstrapState(), authenticated: (await sessionUser(auth, request)) !== undefined }));
 
   typed.post("/bootstrap/options", { schema: { body: TokenBodySchema, response: { 200: AuthOptionsResponseSchema } } }, async (request, reply) => reply.send({ ...(await auth.beginBootstrapRegistration(request.body.token)) }));
   typed.post("/invitation/options", { schema: { body: TokenBodySchema, response: { 200: AuthOptionsResponseSchema } } }, async (request, reply) => reply.send(await auth.beginInvitationRegistration(request.body.token)));
@@ -46,9 +46,10 @@ const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, options) =
     setSessionCookie(config, reply, result.sessionToken);
     return reply.send({ user: result.user });
   });
-  typed.post("/sign-out", { schema: { response: { 200: SignOutResponseSchema } } }, async (request, reply) => {
-    auth.signOut(request.cookies.forge_session ?? "");
-    reply.clearCookie("forge_session", { path: "/" });
+  typed.post("/sign-out", { schema: { response: { 200: SignOutResponseSchema, 401: ErrorResponseSchema } } }, async (request, reply) => {
+    if (!(await sessionUser(auth, request))) return reply.code(401).send({ error: "Authentication required" });
+    auth.signOut(request.cookies[SESSION_COOKIE_NAME] ?? "");
+    clearSessionCookies(reply);
     return reply.send({ signedOut: true });
   });
 };

@@ -1,4 +1,4 @@
-import { Activity, ChevronRight, FolderGit2, ShieldCheck } from "lucide-react";
+import { Activity, ChevronRight, ClipboardList, FolderGit2, ShieldCheck } from "lucide-react";
 import { useState, type ReactElement } from "react";
 
 import { Button } from "../ui/button.js";
@@ -14,6 +14,7 @@ function NavigationLinks({ close }: { close?: () => void }): ReactElement {
       <a className="flex h-7 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground" href="/health" onClick={close}><Activity className="size-3.5" />Overview</a>
       <a aria-current="page" className="flex h-7 items-center gap-2 rounded-md bg-sidebar-accent px-2 font-medium text-sidebar-foreground" href="/health" onClick={close}><ShieldCheck className="size-3.5 text-primary" />Host health</a>
       <a className="flex h-7 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground" href="/projects" onClick={close}><FolderGit2 className="size-3.5" />Projects</a>
+      <a className="flex h-7 items-center gap-2 rounded-md px-2 text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-foreground" href="/tasks" onClick={close}><ClipboardList className="size-3.5" />Tasks</a>
     </nav>
   );
 }

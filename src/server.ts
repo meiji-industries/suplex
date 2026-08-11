@@ -10,6 +10,7 @@ import { ForgeDatabase } from "./database.js";
 import { createHostHealthDependencies } from "./host-health.js";
 import { StructuredLogger } from "./logging.js";
 import { ProjectService } from "./projects.js";
+import { TaskService } from "./tasks.js";
 
 export interface ForgeServer {
   app: FastifyInstance;
@@ -22,11 +23,13 @@ export async function createForgeServer(config: ForgeConfig = loadConfig()): Pro
   const database = new ForgeDatabase(config.databasePath);
   const auth = new AuthService(database, config);
   const projects = new ProjectService(database, auth, config);
+  const tasks = new TaskService(database, auth, projects, config);
   const app = createApp({
     config,
     health: createHostHealthDependencies(config, database),
     auth,
     projects,
+    tasks,
   });
   return { app, database };
 }

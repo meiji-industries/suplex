@@ -6,8 +6,9 @@ import { randomUUID } from "node:crypto";
 import type { ForgeConfig } from "../config.js";
 import type { HealthCheck } from "../health.js";
 import { isLegacyDurableIdentifier, runtimeIdentifiers } from "../runtime-identifiers.js";
-import { probeStateQuery, probeWorkflow } from "./workflows.js";
+import { issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, startPlanningUpdate } from "./workflows.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
+import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, StartPlanningInputSchema, type IssueWorkflowInput, type IssueWorkflowState, type StartPlanningInput } from "./issue-contracts.js";
 
 export const REQUIRED_SEARCH_ATTRIBUTES = ["CompanyId", "ProjectId", "IssueId"] as const;
 export const LEGACY_SEARCH_ATTRIBUTES = ["ForgeCompanyId", "ForgeProjectId", "ForgeIssueId"] as const;
@@ -25,6 +26,11 @@ function isAlreadyExists(error: unknown): boolean {
 function isNotFound(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /not.?found|namespace.*does not exist/i.test(message);
+}
+
+function isAlreadyStarted(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /already started|already exists/i.test(message);
 }
 
 export async function connectTemporal(config: ForgeConfig): Promise<TemporalClientConnection> {
@@ -159,6 +165,61 @@ export async function queryProbeWorkflow(config: ForgeConfig, workflowId: string
   try {
     const handle: WorkflowHandle<typeof probeWorkflow> = temporalClient.client.workflow.getHandle(workflowId, runId);
     return ProbeWorkflowStateSchema.parse(await handle.query(probeStateQuery));
+  } finally {
+    temporalClient.connection.close();
+  }
+}
+
+export async function startIssueWorkflow(config: ForgeConfig, input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string }> {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  const workflowId = input.workflowId ?? `${identifiers.workflowPrefix}-issue-${input.issueId}`;
+  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) {
+    throw new Error(`Refusing issue workflow ID outside this neutral installation scope: ${workflowId}`);
+  }
+  const validatedInput = IssueWorkflowInputSchema.parse({ ...input, workflowId });
+  const temporalClient = await connectTemporal(config);
+  try {
+    try {
+      const handle = await temporalClient.client.workflow.start(issueWorkflow, {
+        args: [validatedInput],
+        taskQueue: config.taskQueue,
+        workflowId,
+        searchAttributes: {
+          CompanyId: [validatedInput.companyId],
+          ProjectId: [validatedInput.projectId],
+          IssueId: [validatedInput.issueId],
+        },
+      });
+      return { workflowId: handle.workflowId, runId: handle.firstExecutionRunId };
+    } catch (error) {
+      if (!isAlreadyStarted(error)) throw error;
+      return { workflowId, runId: "" };
+    }
+  } finally {
+    temporalClient.connection.close();
+  }
+}
+
+export async function startIssuePlanning(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  const validatedInput = StartPlanningInputSchema.parse(input);
+  const temporalClient = await connectTemporal(config);
+  try {
+    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(startPlanningUpdate, { args: [validatedInput] }));
+  } finally {
+    temporalClient.connection.close();
+  }
+}
+
+export async function queryIssueWorkflow(config: ForgeConfig, workflowId: string): Promise<IssueWorkflowState> {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  const temporalClient = await connectTemporal(config);
+  try {
+    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
+    return IssueWorkflowStateSchema.parse(await handle.query(issueStateQuery));
   } finally {
     temporalClient.connection.close();
   }

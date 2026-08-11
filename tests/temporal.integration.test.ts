@@ -15,7 +15,7 @@ import { createForgeServer, type ForgeServer } from "../src/server.js";
 import { ForgeDatabase } from "../src/database.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 import { createActivities } from "../src/temporal/activities.js";
-import { ensureTemporalFoundation, queryProbeWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
+import { ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
 
 const execFileAsync = promisify(execFile);
 async function containerId(name: string): Promise<string | undefined> {
@@ -125,6 +125,25 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
       companyId: "company-1",
       status: "running",
     });
+
+    database.authQuery((db) => {
+      db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('issue-admin', 'Issue Admin', 'issue-admin@forge.local', 'admin', 'active', ?, ?)").run(new Date().toISOString(), new Date().toISOString());
+      db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('issue-company', 'Issue Company', 'active', ?)").run(new Date().toISOString());
+      db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES ('issue-project', 'issue-company', 'Issue Project', ?, ?, 'acme/forge', 'main', 'main', 'pnpm install', 'pnpm test', '[\"Tests / unit\"]', '[]', '{}', 'active', 'issue-revision', ?, ?)").run(join(root, "repo"), join(root, "worktrees"), new Date().toISOString(), new Date().toISOString());
+      db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, actor_user_id, created_at) VALUES ('issue-revision', 'issue-project', 1, 'issue-identity', '{}', 'issue-admin', ?)").run(new Date().toISOString());
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('issue-brief', 'issue-company', 'task-brief', 'task.md', 'text/markdown', 4, ?, 'issue-company/issue-brief.bin', ?)").run("0".repeat(64), new Date().toISOString());
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-restart', 'issue-company', 'issue-project', 'Restart issue', 'issue-brief', '[]', '{}', 0, ?, 'issue-revision', 'issue-restart-key', ?, ?)").run(`${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-restart`, new Date().toISOString(), new Date().toISOString());
+    });
+    const startedIssue = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-restart", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false });
+    let issueState = await queryIssueWorkflow(config, startedIssue.workflowId);
+    for (let attempt = 0; attempt < 20 && issueState.phase !== "backlog"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      issueState = await queryIssueWorkflow(config, startedIssue.workflowId);
+    }
+    expect(issueState).toMatchObject({ issueId: "issue-restart", phase: "backlog", revision: 0, allowedCommands: ["start_planning"] });
+    const plannedIssue = await startIssuePlanning(config, startedIssue.workflowId, { expectedRevision: 0, actorUserId: "issue-admin" });
+    expect(plannedIssue).toMatchObject({ phase: "planning", revision: 1, owner: "lead" });
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-restart'").get())).toEqual({ revision: 1, phase: "planning" });
 
     worker.shutdown();
     await workerRun;

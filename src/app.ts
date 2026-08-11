@@ -7,6 +7,7 @@ import { AuthFailure, AuthService, type AuthUser } from "./auth.js";
 import type { ForgeConfig } from "./config.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
 import { ProjectFailure, ProjectService, type ProjectInput, type ProjectRole } from "./projects.js";
+import { TaskFailure, TaskService, type TaskEvent, type TaskInput } from "./tasks.js";
 import { HealthSnapshotSchema } from "./schemas.js";
 import { renderApplicationPage, renderHealthPage } from "./ui.js";
 
@@ -31,6 +32,7 @@ export interface AppDependencies {
   getHealth?: () => Promise<HealthSnapshot>;
   auth?: AuthService;
   projects?: ProjectService;
+  tasks?: TaskService;
 }
 
 export function createApp(dependencies: AppDependencies): FastifyInstance {
@@ -40,6 +42,7 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
   const readHealth = async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth());
   const auth = dependencies.auth;
   const projects = dependencies.projects;
+  const tasks = dependencies.tasks;
   const sessionUser = async (request: { cookies: Record<string, string | undefined> }): Promise<AuthUser | undefined> => auth?.getUserBySession(request.cookies.forge_session ?? "");
   const sendAuthError = (reply: { code: (statusCode: number) => { send: (body: object) => unknown } }, error: unknown): unknown => {
     if (error instanceof AuthFailure) {
@@ -93,6 +96,18 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
       return reply.redirect("/auth");
     }
     return reply.type("text/html; charset=utf-8").send(renderApplicationPage("projects"));
+  });
+  app.get("/tasks", async (request, reply) => {
+    if (auth && !(await sessionUser(request))) {
+      return reply.redirect("/auth");
+    }
+    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("tasks"));
+  });
+  app.get<{ Params: { taskId: string } }>("/tasks/:taskId", async (request, reply) => {
+    if (auth && !(await sessionUser(request))) {
+      return reply.redirect("/auth");
+    }
+    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("tasks"));
   });
   app.get("/health", async (_request, reply) => {
     if (auth && !(await sessionUser(_request))) {
@@ -340,6 +355,79 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
         const user = await requireUser(request, reply);
         if (!user) return reply;
         try { return reply.send(auth.setCompanyStatus(user.id, request.params.companyId, request.params.status)); } catch (error) { return sendAuthError(reply, error); }
+      });
+    }
+    if (tasks) {
+      const sendTaskError = (reply: { code: (statusCode: number) => { send: (body: object) => unknown } }, error: unknown): unknown => {
+        if (error instanceof TaskFailure) return reply.code(error.statusCode).send({ error: error.publicMessage, findings: error.findings });
+        if (error instanceof AuthFailure) return sendAuthError(reply, error);
+        return reply.code(400).send({ error: "Task request failed" });
+      };
+      const taskInput = (request: { body: unknown }): TaskInput => {
+        const body = requestBody(request);
+        const roleProfiles = body.roleProfiles && typeof body.roleProfiles === "object" && !Array.isArray(body.roleProfiles) ? body.roleProfiles as Record<string, unknown> : {};
+        const images = Array.isArray(body.images) ? body.images.flatMap((value) => {
+          if (!value || typeof value !== "object" || Array.isArray(value)) return [];
+          const image = value as Record<string, unknown>;
+          return typeof image.filename === "string" && typeof image.mimeType === "string" && typeof image.base64 === "string" ? [{ filename: image.filename, mimeType: image.mimeType, base64: image.base64 }] : [];
+        }) : [];
+        return {
+          projectId: textBody(request, "projectId"),
+          title: textBody(request, "title"),
+          description: textBody(request, "description"),
+          idempotencyKey: textBody(request, "idempotencyKey"),
+          images,
+          ...(Object.fromEntries(Object.entries(roleProfiles).filter(([role, value]) => ["lead", "developer", "reviewer"].includes(role) && typeof value === "string")) as TaskInput["roleProfiles"]),
+          supplementalReview: body.supplementalReview === true,
+        };
+      };
+      app.get("/api/tasks", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try { return reply.send({ tasks: tasks.listTasks(user.id) }); } catch (error) { return sendTaskError(reply, error); }
+      });
+      app.get<{ Params: { companyId: string } }>("/api/companies/:companyId/tasks", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try { return reply.send({ tasks: tasks.listTasks(user.id, request.params.companyId) }); } catch (error) { return sendTaskError(reply, error); }
+      });
+      app.post<{ Params: { companyId: string } }>("/api/companies/:companyId/tasks", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try {
+          const result = await tasks.createTask(user.id, request.params.companyId, taskInput(request));
+          return reply.code(result.created ? 201 : 200).send(result.task);
+        } catch (error) { return sendTaskError(reply, error); }
+      });
+      app.get<{ Params: { taskId: string } }>("/api/tasks/:taskId", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try { return reply.send(tasks.getTask(user.id, request.params.taskId)); } catch (error) { return sendTaskError(reply, error); }
+      });
+      app.post<{ Params: { taskId: string } }>("/api/tasks/:taskId/start-planning", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        const body = requestBody(request);
+        try { return reply.send(await tasks.startPlanning(user.id, request.params.taskId, typeof body.expectedRevision === "number" ? body.expectedRevision : Number(body.expectedRevision))); } catch (error) { return sendTaskError(reply, error); }
+      });
+      app.get<{ Params: { taskId: string; artifactId: string } }>("/api/tasks/:taskId/images/:artifactId", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        try {
+          const image = await tasks.getTaskImage(user.id, request.params.taskId, request.params.artifactId);
+          return reply.header("Cache-Control", "private, no-store").type(image.artifact.mimeType).send(image.bytes);
+        } catch (error) { return sendTaskError(reply, error); }
+      });
+      app.get("/api/tasks/events", async (request, reply) => {
+        const user = await requireUser(request, reply);
+        if (!user) return reply;
+        reply.hijack();
+        reply.raw.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-store", Connection: "keep-alive" });
+        const send = (event: TaskEvent): void => { reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`); };
+        reply.raw.write("event: ready\ndata: {}\n\n");
+        const unsubscribe = tasks.subscribe(user.id, send);
+        request.raw.on("close", unsubscribe);
+        return reply;
       });
     }
   }

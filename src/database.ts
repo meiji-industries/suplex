@@ -33,6 +33,19 @@ export interface WorkerHealth {
   heartbeatAgeMs: number;
 }
 
+export interface IssueProjectionRecord {
+  taskId: string;
+  companyId: string;
+  projectId: string;
+  workflowId: string;
+  revision: number;
+  phase: "backlog" | "planning";
+  owner: "human" | "lead";
+  allowedCommands: string[];
+  pendingAction: string | null;
+  lastEventId: string;
+}
+
 export interface DatabaseHealth {
   walMode: boolean;
   migrationVersion: number;
@@ -156,6 +169,41 @@ export class ForgeDatabase {
 
   authQuery<T>(operation: (database: Database.Database) => T): T {
     return operation(this.db);
+  }
+
+  projectIssueState(state: IssueProjectionRecord): void {
+    this.db.transaction(() => {
+      const current = this.db.prepare("SELECT revision FROM forge_issue_projections WHERE task_id = ?").get(state.taskId) as { revision: number } | undefined;
+      if (current && current.revision >= state.revision) return;
+      const updatedAt = new Date().toISOString();
+      this.db.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, project_id = excluded.project_id, workflow_id = excluded.workflow_id, revision = excluded.revision, phase = excluded.phase, owner = excluded.owner, allowed_commands_json = excluded.allowed_commands_json, pending_action = excluded.pending_action, updated_at = excluded.updated_at, last_event_id = excluded.last_event_id
+        WHERE forge_issue_projections.revision < excluded.revision`).run(
+        state.taskId,
+        state.companyId,
+        state.projectId,
+        state.workflowId,
+        state.revision,
+        state.phase,
+        state.owner,
+        JSON.stringify(state.allowedCommands),
+        state.pendingAction,
+        updatedAt,
+        state.lastEventId,
+      );
+      this.db.prepare(`INSERT OR IGNORE INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        state.lastEventId,
+        state.taskId,
+        state.companyId,
+        state.workflowId,
+        state.revision,
+        state.phase === "backlog" ? "task_created" : "planning_started",
+        JSON.stringify({ revision: state.revision }),
+        updatedAt,
+      );
+    })();
   }
 
   health(): DatabaseHealth {

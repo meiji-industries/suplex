@@ -1,11 +1,12 @@
-import { existsSync, mkdirSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import { migrate } from "drizzle-orm/better-sqlite3/migrator";
-import { desc, eq, sql } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 
 import { probeWorkflows, workerRegistrations } from "./database-schema.js";
 
@@ -53,15 +54,34 @@ export interface IssueProjectionRecord {
   state?: Record<string, unknown>;
 }
 
-export interface DatabaseHealth {
-  walMode: boolean;
-  migrationVersion: number;
-  readable: boolean;
-  writable: boolean;
+export type SchemaState = "current" | "behind" | "ahead" | "partial" | "corrupt" | "locked" | "unavailable";
+
+export interface ExpectedMigration {
+  index: number;
+  tag: string;
+  hash: string;
 }
 
-interface MigrationCountRow {
-  count: number;
+export interface AppliedMigration {
+  hash: string;
+  createdAt: number;
+}
+
+export interface SchemaStatus {
+  state: SchemaState;
+  expected: ExpectedMigration[];
+  applied: AppliedMigration[];
+  walMode: boolean;
+  reason?: string;
+}
+
+export interface DatabaseHealth {
+  walMode: boolean;
+  schemaState: SchemaState;
+  expectedMigrations: number;
+  appliedMigrations: number;
+  readable: boolean;
+  writable: boolean;
 }
 
 function migrationFolder(): string {
@@ -81,6 +101,54 @@ function migrationFolder(): string {
     throw new Error("Forge database migrations are not installed");
   }
   return folder;
+}
+
+interface JournalFile {
+  version: string;
+  dialect: string;
+  entries: Array<{ idx: number; tag: string }>;
+}
+
+function fileSha256(path: string): string {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
+
+function expectedMigrationsFromJournal(folder: string): ExpectedMigration[] {
+  const journal: JournalFile = JSON.parse(readFileSync(`${folder}/meta/_journal.json`, "utf8")) as JournalFile;
+  return journal.entries.map((entry) => ({
+    index: entry.idx,
+    tag: entry.tag,
+    hash: fileSha256(`${folder}/${entry.tag}.sql`),
+  }));
+}
+
+function isCleanPrefix(expected: ExpectedMigration[], applied: AppliedMigration[]): boolean {
+  const limit = Math.min(expected.length, applied.length);
+  for (let i = 0; i < limit; i += 1) {
+    if (applied[i]!.hash !== expected[i]!.hash) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function determineSchemaState(expected: ExpectedMigration[], applied: AppliedMigration[]): SchemaState {
+  if (applied.length === 0 && expected.length > 0) {
+    return "behind";
+  }
+  if (isCleanPrefix(expected, applied)) {
+    if (applied.length === expected.length) return "current";
+    if (applied.length < expected.length) return "behind";
+    return "ahead";
+  }
+
+  const expectedHashes = new Set(expected.map((migration) => migration.hash));
+  const allAppliedKnown = applied.every((migration) => expectedHashes.has(migration.hash));
+  if (allAppliedKnown) {
+    return "partial";
+  }
+
+  return applied.length > expected.length ? "ahead" : "corrupt";
 }
 
 export class ForgeDatabase {
@@ -296,18 +364,50 @@ export class ForgeDatabase {
     })();
   }
 
-  health(): DatabaseHealth {
-    const migrationRow = this.orm.all(sql`SELECT COUNT(*) AS count FROM __drizzle_migrations`)[0] as MigrationCountRow | undefined;
+  schemaStatus(): SchemaStatus {
+    const folder = migrationFolder();
+    const expected = expectedMigrationsFromJournal(folder);
     const journalMode = String(this.db.pragma("journal_mode", { simple: true })).toLowerCase();
-    this.orm.all(sql`SELECT 1`);
-    this.orm.run(sql`CREATE TABLE IF NOT EXISTS health_write_probe (id INTEGER PRIMARY KEY, checked_at TEXT NOT NULL)`);
-    this.orm.run(sql`DROP TABLE health_write_probe`);
+    const walMode = journalMode === "wal";
+
+    const appliedRows = this.db
+      .prepare("SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at ASC, hash ASC")
+      .all() as Array<{ hash: string; created_at: number }>;
+    const applied = appliedRows.map((row) => ({ hash: row.hash, createdAt: row.created_at }));
+
     return {
-      walMode: journalMode === "wal",
-      migrationVersion: Number(migrationRow?.count ?? 0),
-      readable: true,
-      writable: true,
+      state: determineSchemaState(expected, applied),
+      expected,
+      applied,
+      walMode,
     };
+  }
+
+  health(): DatabaseHealth {
+    try {
+      const status = this.schemaStatus();
+      this.db.prepare("CREATE TABLE IF NOT EXISTS health_write_probe (id INTEGER PRIMARY KEY, checked_at TEXT NOT NULL)").run();
+      this.db.prepare("DROP TABLE health_write_probe").run();
+      return {
+        walMode: status.walMode,
+        schemaState: status.state,
+        expectedMigrations: status.expected.length,
+        appliedMigrations: status.applied.length,
+        readable: true,
+        writable: true,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const busy = (error as NodeJS.ErrnoException).code === "SQLITE_BUSY" || /database is locked|busy/i.test(message);
+      return {
+        walMode: false,
+        schemaState: busy ? "locked" : "unavailable",
+        expectedMigrations: 0,
+        appliedMigrations: 0,
+        readable: false,
+        writable: false,
+      };
+    }
   }
 
   close(): void {

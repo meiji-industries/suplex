@@ -10,6 +10,8 @@ import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
+import { PlanMaterialCategorySchema, classifyPlanMateriality, materialitySummary, type PlanMaterialCategory } from "./plan-governance.js";
+import type { ConsolidateLeadPlanActivityInput, SupplementalReviewActivityInput, SupplementalReviewResult } from "./temporal/issue-contracts.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -25,6 +27,7 @@ export const LeadPlanSchema = z.object({
   operationalAnalysis: z.string().min(1).max(20_000),
   verificationStrategy: z.string().min(1).max(20_000),
   unresolvedTechnicalQuestions: z.array(z.string().max(2_000)).max(32).length(0),
+  materialCategories: z.array(PlanMaterialCategorySchema).max(6).default([]),
 });
 
 export const DecisionBlockerSchema = z.object({
@@ -37,6 +40,13 @@ export const DecisionBlockerSchema = z.object({
 });
 
 export const LeadOutputSchema = z.discriminatedUnion("kind", [LeadPlanSchema, DecisionBlockerSchema]);
+export const SupplementalReviewSchema = z.object({
+  kind: z.literal("review"),
+  summary: z.string().min(1).max(2_000),
+  opinion: z.enum(["approve", "request_changes"]),
+  concerns: z.array(z.string().max(4_000)).max(16),
+  requiredChanges: z.array(z.string().max(4_000)).max(16),
+});
 
 export const LeadPlanningActivityInputSchema = z.object({
   taskId: durableId,
@@ -53,6 +63,7 @@ export const LeadPlanningActivityInputSchema = z.object({
 export type LeadPlan = z.infer<typeof LeadPlanSchema>;
 export type DecisionBlocker = z.infer<typeof DecisionBlockerSchema>;
 export type LeadOutput = z.infer<typeof LeadOutputSchema>;
+export type SupplementalReview = z.infer<typeof SupplementalReviewSchema>;
 export type LeadPlanningActivityInput = z.infer<typeof LeadPlanningActivityInputSchema>;
 
 export interface LeadPlanningResult {
@@ -62,6 +73,8 @@ export interface LeadPlanningResult {
   leadOutputArtifactId: string;
   leadOutputKind: "plan" | "decision_blocker";
   leadSummary: string;
+  materialCategories: PlanMaterialCategory[];
+  material: boolean;
 }
 
 export interface LeadInvocation {
@@ -204,6 +217,24 @@ function parseLeadOutput(lines: string[]): LeadOutput {
   }
   const result = LeadOutputSchema.safeParse(parsed);
   if (!result.success) throw new AgentFailure("invalid-output-schema", "Codex returned a Lead result that does not satisfy the required schema");
+  return result.data;
+}
+
+function parseSupplementalReview(lines: string[]): SupplementalReview {
+  const messages = lines.flatMap((line) => {
+    try {
+      const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
+      return event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" ? [event.item.text] : [];
+    } catch {
+      return [];
+    }
+  });
+  const text = messages.at(-1);
+  if (!text) throw new AgentFailure("missing-output", "Supplemental review did not return an opinion");
+  let parsed: unknown;
+  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-output", "Supplemental review returned malformed JSON"); }
+  const result = SupplementalReviewSchema.safeParse(parsed);
+  if (!result.success) throw new AgentFailure("invalid-output-schema", "Supplemental review did not satisfy the required schema");
   return result.data;
 }
 
@@ -378,6 +409,108 @@ export class AgentService {
     }
   }
 
+  async runSupplementalReview(rawInput: SupplementalReviewActivityInput): Promise<SupplementalReviewResult> {
+    const input = rawInput;
+    const profile = this.database.authQuery((db) => db.prepare("SELECT id, model, provider FROM forge_profiles WHERE id = ?").get(input.roleProfiles.reviewer) as { id: string; model: string; provider: string } | undefined);
+    if (!profile || profile.provider !== "codex") throw new AgentFailure("reviewer-profile-unavailable", "Supplemental review requires an allowed profile");
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.repository_path, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256, oa.storage_path AS output_storage_path, oa.sha256 AS output_sha256, e.storage_path AS evidence_storage_path, e.sha256 AS evidence_sha256
+      FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id JOIN forge_project_revisions r ON r.id = t.project_revision_id
+      JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_issue_outputs io ON io.task_id = t.id AND io.output_artifact_id = ?
+      JOIN forge_artifacts oa ON oa.id = io.output_artifact_id JOIN forge_artifacts e ON e.id = io.evidence_artifact_id
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId, input.briefArtifactId) as { title: string; repository_path: string; normalized_json: string; brief_storage_path: string; brief_sha256: string; output_storage_path: string; output_sha256: string; evidence_storage_path: string; evidence_sha256: string } | undefined);
+    if (!context) throw new AgentFailure("scoped-input-missing", "Supplemental review evidence is unavailable");
+    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(context.repository_path));
+    const brief = (await this.artifacts.read({ storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
+    const draft = (await this.artifacts.read({ storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
+    const priorEvidence = (await this.artifacts.read({ storagePath: context.evidence_storage_path, sha256: context.evidence_sha256 })).toString("utf8");
+    const executionId = `agent_${randomBytes(12).toString("hex")}`;
+    const startedAt = this.now().toISOString();
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES (?, ?, ?, ?, 'reviewer', 'starting', 1, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, startedAt));
+    const lines: string[] = [];
+    let sessionRef: string | undefined;
+    let rawSessionId: string | undefined;
+    const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
+    try {
+      const result = await this.processRunner({
+        command: this.command,
+        args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--model", profile.model, this.reviewPrompt(context.title, brief, context.normalized_json, draft, priorEvidence)],
+        cwd: repositoryPath,
+        onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
+        onLine: async (line) => {
+          const sanitized = safeJsonLine(line);
+          lines.push(sanitized);
+          const event = eventValue(sanitized);
+          if (event.threadId && !sessionRef) { rawSessionId = event.threadId; sessionRef = await this.sessionStore.create(rawSessionId); await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET session_ref = ?, heartbeat_at = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), executionId)); }
+          await this.databaseHeartbeat(executionId, "running");
+        },
+      });
+      if (result.exitCode !== 0) throw new AgentFailure(failureCode(result), "Supplemental review did not complete");
+      const review = parseSupplementalReview(lines);
+      if (!sessionRef) throw new AgentFailure("missing-session", "Supplemental review did not return a session reference");
+      const evidence = await this.persistEvidence(input.companyId, executionId, lines);
+      const reviewArtifact = await this.artifacts.put(input.companyId, "supplemental-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
+      const reviewId = `review_${randomBytes(12).toString("hex")}`;
+      this.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, reviewArtifact.id, reviewArtifact.companyId, reviewArtifact.kind, reviewArtifact.filename, reviewArtifact.mimeType, reviewArtifact.byteSize, reviewArtifact.sha256, reviewArtifact.storagePath, reviewArtifact.createdAt);
+        db.prepare("INSERT INTO forge_plan_reviews (id, task_id, company_id, workflow_id, plan_revision, profile_id, execution_id, session_ref, opinion_artifact_id, evidence_artifact_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.revision, profile.id, executionId, sessionRef, reviewArtifact.id, evidence.id, review.summary, this.now().toISOString());
+        db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidence.id, executionId);
+      });
+      return { reviewId, reviewArtifactId: reviewArtifact.id, evidenceArtifactId: evidence.id, executionId, sessionRef, summary: review.summary };
+    } catch (error) {
+      const failure = error instanceof AgentFailure ? error : new AgentFailure("review-failed", "Supplemental review failed");
+      const evidence = await this.persistEvidence(input.companyId, executionId, lines);
+      this.database.authTransaction((db) => {
+        db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
+        db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId);
+      });
+      throw failure;
+    } finally { clearInterval(heartbeat); }
+  }
+
+  async consolidateLeadPlan(rawInput: ConsolidateLeadPlanActivityInput): Promise<LeadPlanningResult> {
+    const rawSessionId = await this.sessionStore.read(rawInput.leadSessionRef);
+    const lead = this.database.authQuery((db) => db.prepare("SELECT model, provider FROM forge_profiles WHERE id = ?").get(rawInput.roleProfiles.lead) as { model: string; provider: string } | undefined);
+    if (!lead || lead.provider !== "codex") throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for consolidation");
+    const draft = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.leadOutputArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
+    const review = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.supplementalReviewArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
+    if (!draft || !review) throw new AgentFailure("scoped-input-missing", "Consolidation evidence is unavailable");
+    const repositoryPath = await this.consolidationRepositoryPath(rawInput);
+    const draftText = (await this.artifacts.read(draft)).toString("utf8");
+    const reviewText = (await this.artifacts.read(review)).toString("utf8");
+    const executionId = `agent_${randomBytes(12).toString("hex")}`;
+    const startedAt = this.now().toISOString();
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, rawInput.taskId, rawInput.companyId, rawInput.workflowId, rawInput.leadSessionRef, startedAt));
+    const lines: string[] = [];
+    const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
+    try {
+      const result = await this.processRunner({ command: this.command, args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.consolidationPrompt(draftText, reviewText)], cwd: repositoryPath, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { lines.push(safeJsonLine(line)); await this.databaseHeartbeat(executionId, "running"); } });
+      if (result.exitCode !== 0) throw new AgentFailure(failureCode(result), "Lead consolidation did not complete");
+      const output = parseLeadOutput(lines);
+      const persisted = await this.persistOutput({ taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, projectId: rawInput.projectId, projectRevisionId: rawInput.projectRevisionId, briefArtifactId: rawInput.briefArtifactId, imageArtifactIds: rawInput.imageArtifactIds, roleProfiles: rawInput.roleProfiles, revision: rawInput.revision }, executionId, rawInput.leadSessionRef, lines, output);
+      await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), persisted.evidence.id, executionId));
+      return persisted.result;
+    } catch (error) {
+      const failure = error instanceof AgentFailure ? error : new AgentFailure("consolidation-failed", "Lead consolidation failed");
+      const evidence = await this.persistEvidence(rawInput.companyId, executionId, lines);
+      this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); });
+      throw failure;
+    } finally { clearInterval(heartbeat); }
+  }
+
+  private reviewPrompt(title: string, brief: string, revision: string, draft: string, evidence: string): string {
+    return `You are Forge's independent supplemental reviewer. Do not modify files, review implementation, or become the plan owner. Return exactly one JSON object: {"kind":"review","summary":"...","opinion":"approve"|"request_changes","concerns":[],"requiredChanges":[]}. Read the complete draft and scoped evidence below. Identify only concrete correctness, acceptance, security/privacy, compatibility, operational, or unintended-scope concerns.\n\nTask: ${title}\nBrief:\n${brief}\n\nPinned Project revision:\n${revision}\n\nDraft Lead plan:\n${draft}\n\nLead evidence:\n${evidence}`;
+  }
+
+  private consolidationPrompt(draft: string, review: string): string {
+    return `Reconsider the complete Lead plan in this same session after an independent supplemental review. Return exactly one consolidated JSON plan or one decision_blocker matching the required schema. Preserve correct steps, address concrete review concerns, and do not leave unresolved technical questions. Do not include markdown fences or commentary.\n\nDraft plan:\n${draft}\n\nSupplemental review:\n${review}`;
+  }
+
+  private async consolidationRepositoryPath(input: ConsolidateLeadPlanActivityInput): Promise<string> {
+    const row = this.database.authQuery((db) => db.prepare("SELECT p.repository_path FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?").get(input.taskId, input.companyId, input.projectId, input.projectRevisionId) as { repository_path: string } | undefined);
+    if (!row) throw new AgentFailure("scoped-input-missing", "Consolidation repository is unavailable");
+    return taskScopedPath(this.config.repositoryRoot, await realpath(row.repository_path));
+  }
+
   private async databaseHeartbeat(executionId: string, status: "running"): Promise<void> {
     this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = ?, heartbeat_at = ? WHERE id = ?").run(status, this.now().toISOString(), executionId));
   }
@@ -391,7 +524,7 @@ export class AgentService {
   }
 
   private initialPrompt(title: string, brief: string, revision: string, profiles: ProfileSettings[], repositoryEvidence: string): string {
-    return `You are Forge's Lead planner. Work read-only in the provided repository. Do not modify files, reveal credentials, or invent provider facts.\n\nReturn exactly one JSON object matching one of these shapes:\n{"kind":"plan","summary":"...","reproduction":null,"rootCauseAnalysis":null,"steps":[{"number":1,"instruction":"...","verification":"..."}],"compatibilityAnalysis":"...","operationalAnalysis":"...","verificationStrategy":"...","unresolvedTechnicalQuestions":[]}\n{"kind":"decision_blocker","summary":"...","evidence":"...","owner":"human","question":"...","nextAction":"..."}\nUse decision_blocker only for one unresolved human/business choice. A plan must have numbered prescriptive steps, compatibility and operational analysis, a complete verification strategy, and zero unresolved technical questions.\n\nTask: ${title}\nBrief:\n${brief}\n\nPinned Project revision:\n${revision}\n\nRole profile settings:\n${JSON.stringify(profiles)}\n\nRepository read evidence:\n${repositoryEvidence}`;
+    return `You are Forge's Lead planner. Work read-only in the provided repository. Do not modify files, reveal credentials, or invent provider facts.\n\nReturn exactly one JSON object matching one of these shapes:\n{"kind":"plan","summary":"...","reproduction":null,"rootCauseAnalysis":null,"steps":[{"number":1,"instruction":"...","verification":"..."}],"compatibilityAnalysis":"...","operationalAnalysis":"...","verificationStrategy":"...","unresolvedTechnicalQuestions":[],"materialCategories":[]}\n{"kind":"decision_blocker","summary":"...","evidence":"...","owner":"human","question":"...","nextAction":"..."}\nUse decision_blocker only for one unresolved human/business choice. A plan must have numbered prescriptive steps, compatibility and operational analysis, a complete verification strategy, zero unresolved technical questions, and a materialCategories array containing only the categories directly implicated: architecture_dependencies, schema_data_migration, security_permissions, external_integration, production_operation, user_visible_behavior.\n\nTask: ${title}\nBrief:\n${brief}\n\nPinned Project revision:\n${revision}\n\nRole profile settings:\n${JSON.stringify(profiles)}\n\nRepository read evidence:\n${repositoryEvidence}`;
   }
 
   private correctionPrompt(): string {
@@ -407,7 +540,8 @@ export class AgentService {
     const evidence = await this.persistEvidence(input.companyId, executionId, lines);
     const outputKind = output.kind === "plan" ? "lead-plan" : "decision-blocker";
     const outputArtifact = await this.artifacts.put(input.companyId, outputKind, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(output, null, 2), "utf8") });
-    const summary = output.summary;
+    const categories = output.kind === "plan" ? classifyPlanMateriality(`${output.summary}\n${output.steps.map((step) => step.instruction).join("\n")}`, output.materialCategories) : [];
+    const summary = output.kind === "plan" ? `${output.summary} (${materialitySummary(categories)})` : output.summary;
     this.database.authTransaction((db) => {
       db.prepare(`INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
         evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt,
@@ -415,7 +549,7 @@ export class AgentService {
       );
       db.prepare(`INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(`output_${randomBytes(12).toString("hex")}`, input.taskId, input.companyId, input.workflowId, executionId, input.revision, output.kind, outputArtifact.id, evidence.id, sessionRef, summary, this.now().toISOString());
     });
-    return { evidence, result: { leadSessionRef: sessionRef, leadExecutionId: executionId, leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: outputArtifact.id, leadOutputKind: output.kind, leadSummary: summary } };
+    return { evidence, result: { leadSessionRef: sessionRef, leadExecutionId: executionId, leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: outputArtifact.id, leadOutputKind: output.kind, leadSummary: summary, materialCategories: categories, material: categories.length > 0 } };
   }
 }
 

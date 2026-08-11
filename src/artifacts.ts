@@ -12,7 +12,7 @@ export interface ArtifactInput {
 export interface StoredArtifact {
   id: string;
   companyId: string;
-  kind: "task-brief" | "task-image" | "agent-evidence" | "lead-plan" | "decision-blocker";
+  kind: "task-brief" | "task-image" | "agent-evidence" | "lead-plan" | "decision-blocker" | "supplemental-review" | "plan-decision";
   filename: string;
   mimeType: string;
   byteSize: number;

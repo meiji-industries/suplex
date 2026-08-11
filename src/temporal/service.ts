@@ -6,9 +6,9 @@ import { randomUUID } from "node:crypto";
 import type { ForgeConfig } from "../config.js";
 import type { HealthCheck } from "../health.js";
 import { isLegacyDurableIdentifier, runtimeIdentifiers } from "../runtime-identifiers.js";
-import { issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, recordProgressUpdate, startPlanningUpdate } from "./workflows.js";
+import { approvePlanUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, recordProgressUpdate, rejectPlanUpdate, requestSupplementalReviewUpdate, startPlanningUpdate } from "./workflows.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueWorkflowInput, type IssueWorkflowState, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
+import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
 
 export const REQUIRED_SEARCH_ATTRIBUTES = ["CompanyId", "ProjectId", "IssueId"] as const;
@@ -216,6 +216,30 @@ export async function startIssuePlanning(config: ForgeConfig, workflowId: string
   } finally {
     temporalClient.connection.close();
   }
+}
+
+async function issuePlanUpdate(config: ForgeConfig, workflowId: string, input: PlanCommandInput, update: typeof requestSupplementalReviewUpdate | typeof approvePlanUpdate | typeof rejectPlanUpdate): Promise<IssueWorkflowState> {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  const validatedInput = PlanCommandInputSchema.parse(input);
+  assertPayloadWithinLimit("plan command", validatedInput);
+  const temporalClient = await connectTemporal(config);
+  try {
+    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(update, { args: [validatedInput] }));
+  } finally { temporalClient.connection.close(); }
+}
+
+export function requestIssueSupplementalReview(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
+  return issuePlanUpdate(config, workflowId, input, requestSupplementalReviewUpdate);
+}
+
+export function approveIssuePlan(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
+  return issuePlanUpdate(config, workflowId, { ...input, ...(input.note !== undefined ? { note: input.note } : {}) }, approvePlanUpdate);
+}
+
+export function rejectIssuePlan(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
+  return issuePlanUpdate(config, workflowId, { ...input, ...(input.note !== undefined ? { note: input.note } : {}) }, rejectPlanUpdate);
 }
 
 export async function queryIssueWorkflow(config: ForgeConfig, workflowId: string): Promise<IssueWorkflowState> {

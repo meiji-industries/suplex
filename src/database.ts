@@ -39,11 +39,17 @@ export interface IssueProjectionRecord {
   projectId: string;
   workflowId: string;
   revision: number;
-  phase: "backlog" | "planning";
+  phase: "backlog" | "planning" | "approval" | "ready_for_development";
   owner: "human" | "lead";
   allowedCommands: string[];
   pendingAction: string | null;
   lastEventId: string;
+  planRevision?: number | null;
+  planMaterial?: boolean | null;
+  materialCategories?: string[];
+  supplementalReviewUsed?: boolean;
+  supplementalReviewArtifactId?: string | null;
+  decisionId?: string | null;
 }
 
 export interface DatabaseHealth {
@@ -174,12 +180,12 @@ export class ForgeDatabase {
   projectIssueState(state: IssueProjectionRecord): void {
     this.db.transaction(() => {
       const current = this.db.prepare("SELECT revision FROM forge_issue_projections WHERE task_id = ?").get(state.taskId) as { revision: number } | undefined;
-      if (current && current.revision >= state.revision) return;
+      if (current && current.revision > state.revision) return;
       const updatedAt = new Date().toISOString();
       this.db.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, project_id = excluded.project_id, workflow_id = excluded.workflow_id, revision = excluded.revision, phase = excluded.phase, owner = excluded.owner, allowed_commands_json = excluded.allowed_commands_json, pending_action = excluded.pending_action, updated_at = excluded.updated_at, last_event_id = excluded.last_event_id
-        WHERE forge_issue_projections.revision < excluded.revision`).run(
+        WHERE forge_issue_projections.revision <= excluded.revision`).run(
         state.taskId,
         state.companyId,
         state.projectId,
@@ -202,6 +208,18 @@ export class ForgeDatabase {
         state.phase === "backlog" ? "task_created" : "planning_started",
         JSON.stringify({ revision: state.revision }),
         updatedAt,
+      );
+      this.db.prepare(`INSERT INTO forge_issue_governance (task_id, company_id, plan_revision, plan_material, material_categories_json, supplemental_review_used, supplemental_review_artifact_id, decision_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, plan_revision = excluded.plan_revision, plan_material = excluded.plan_material, material_categories_json = excluded.material_categories_json, supplemental_review_used = excluded.supplemental_review_used, supplemental_review_artifact_id = excluded.supplemental_review_artifact_id, decision_id = excluded.decision_id`).run(
+        state.taskId,
+        state.companyId,
+        state.planRevision ?? null,
+        state.planMaterial === undefined || state.planMaterial === null ? null : state.planMaterial ? 1 : 0,
+        JSON.stringify(state.materialCategories ?? []),
+        state.supplementalReviewUsed ? 1 : 0,
+        state.supplementalReviewArtifactId ?? null,
+        state.decisionId ?? null,
       );
     })();
   }

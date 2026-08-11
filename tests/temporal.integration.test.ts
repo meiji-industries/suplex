@@ -16,7 +16,7 @@ import { createForgeServer, type ForgeServer } from "../src/server.js";
 import { ForgeDatabase } from "../src/database.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 import { createActivities } from "../src/temporal/activities.js";
-import { connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, recordIssueProgress, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
+import { approveIssuePlan, connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, rejectIssuePlan, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
 
 const execFileAsync = promisify(execFile);
 const replayDurationKeys = new Set(["firstWorkflowTaskBackoff", "workflowTaskTimeout", "startToCloseTimeout", "scheduleToCloseTimeout", "scheduleToStartTimeout", "heartbeatTimeout", "initialInterval", "maximumInterval"]);
@@ -116,7 +116,7 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     temporalConnection.close();
 
     database = new ForgeDatabase(config.databasePath);
-    const integrationAgent = { runLeadPlanning: async () => ({ leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan" as const, leadSummary: "Integration plan" }) };
+    const integrationAgent = { runLeadPlanning: async () => ({ leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan" as const, leadSummary: "Integration plan", materialCategories: ["security_permissions" as const], material: true }) };
     workerConnection = await NativeConnection.connect({ address: config.temporalAddress });
     worker = await Worker.create({
       connection: workerConnection,
@@ -161,8 +161,12 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     }
     expect(issueState).toMatchObject({ issueId: "issue-restart", phase: "backlog", revision: 0, allowedCommands: ["start_planning"] });
     const plannedIssue = await startIssuePlanning(config, startedIssue.workflowId, { expectedRevision: 0, actorUserId: "issue-admin" });
-    expect(plannedIssue).toMatchObject({ phase: "planning", revision: 1, owner: "lead" });
-    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-restart'").get())).toEqual({ revision: 1, phase: "planning" });
+    expect(plannedIssue).toMatchObject({ phase: "approval", revision: 1, owner: "human", planMaterial: true, materialCategories: ["security_permissions"] });
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-restart'").get())).toEqual({ revision: 1, phase: "approval" });
+    const revisionRequested = await rejectIssuePlan(config, startedIssue.workflowId, { expectedRevision: 1, actorUserId: "issue-admin", note: "Please address the security boundary" });
+    expect(revisionRequested).toMatchObject({ phase: "planning", revision: 2, allowedCommands: ["start_planning"], planRevision: null, planMaterial: null });
+    const replannedIssue = await startIssuePlanning(config, startedIssue.workflowId, { expectedRevision: 2, actorUserId: "issue-admin" });
+    expect(replannedIssue).toMatchObject({ phase: "approval", revision: 3, planRevision: 3, planMaterial: true });
 
     const startedContinuation = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-continuation", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, continueAsNewAfter: 2 });
     let continuationState = await queryIssueWorkflow(config, startedContinuation.workflowId);
@@ -172,15 +176,16 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     }
     expect(continuationState).toMatchObject({ phase: "backlog", revision: 0, continuationCount: 0 });
     await startIssuePlanning(config, startedContinuation.workflowId, { expectedRevision: 0, actorUserId: "issue-admin" });
-    const progressState = await recordIssueProgress(config, startedContinuation.workflowId, { expectedRevision: 1, summaryHash: "a".repeat(64) });
-    expect(progressState).toMatchObject({ phase: "planning", revision: 2, continuationCount: 0, lastSummaryHash: "a".repeat(64) });
+    const progressState = await approveIssuePlan(config, startedContinuation.workflowId, { expectedRevision: 1, actorUserId: "issue-admin", note: "Approved for development" });
+    expect(progressState).toMatchObject({ phase: "ready_for_development", revision: 2, continuationCount: 0 });
     for (let attempt = 0; attempt < 30; attempt += 1) {
       continuationState = await queryIssueWorkflow(config, startedContinuation.workflowId);
       if (continuationState.continuationCount === 1) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    expect(continuationState).toEqual({ workflowId: startedContinuation.workflowId, companyId: "issue-company", projectId: "issue-project", issueId: "issue-continuation", projectRevisionId: "issue-revision", phase: "planning", revision: 2, owner: "lead", allowedCommands: ["record_progress"], pendingAction: "Lead planning", lastEventId: `${startedContinuation.workflowId}:2`, continuationCount: 1, lastSummaryHash: "a".repeat(64), leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan", leadSummary: "Integration plan" });
-    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-continuation'").get())).toEqual({ revision: 2, phase: "planning" });
+    expect(continuationState).toMatchObject({ workflowId: startedContinuation.workflowId, companyId: "issue-company", projectId: "issue-project", issueId: "issue-continuation", projectRevisionId: "issue-revision", phase: "ready_for_development", revision: 2, owner: "lead", allowedCommands: [], pendingAction: null, lastEventId: `${startedContinuation.workflowId}:2`, continuationCount: 1, lastSummaryHash: null, leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan", leadSummary: "Integration plan", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], supplementalReviewUsed: false });
+    expect(continuationState.decisionId).toMatch(/^decision_/);
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-continuation'").get())).toEqual({ revision: 2, phase: "ready_for_development" });
     expect(database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = 'issue-continuation' ORDER BY revision").all())).toEqual([{ revision: 0 }, { revision: 1 }, { revision: 2 }]);
     if (process.env.FORGE_REPLAY_CAPTURE_PATH) {
       const replayClient = await connectTemporal(config);

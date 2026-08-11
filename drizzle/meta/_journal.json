@@ -36,6 +36,13 @@
       "when": 1786425900000,
       "tag": "0004_agent_planning",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1786426000000,
+      "tag": "0005_plan_governance",
+      "breakpoints": true
     }
   ]
 }

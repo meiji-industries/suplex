@@ -40,7 +40,10 @@ test("task API creates an idempotent backlog card and accepts only the current p
   const active = await projects.activateProject("admin-1", project.id);
   const workflow: IssueWorkflowPort = {
     async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) { return { workflowId: input.workflowId!, runId: "run" }; },
-    async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return { workflowId, companyId: company.id, projectId: active.id, issueId: workflowId.split("-issue-")[1]!, projectRevisionId: active.activeRevisionId!, phase: "planning", revision: input.expectedRevision + 1, owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null }; },
+    async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return { workflowId, companyId: company.id, projectId: active.id, issueId: workflowId.split("-issue-")[1]!, projectRevisionId: active.activeRevisionId!, phase: "approval", revision: input.expectedRevision + 1, owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "reject_plan"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null, planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: false }; },
+    async requestSupplementalReview(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return { workflowId, companyId: company.id, projectId: active.id, issueId: workflowId.split("-issue-")[1]!, projectRevisionId: active.activeRevisionId!, phase: "approval", revision: input.expectedRevision + 1, owner: "human", allowedCommands: ["approve_plan", "reject_plan"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null, planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: true }; },
+    async approvePlan(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return { workflowId, companyId: company.id, projectId: active.id, issueId: workflowId.split("-issue-")[1]!, projectRevisionId: active.activeRevisionId!, phase: "ready_for_development", revision: input.expectedRevision + 1, owner: "lead", allowedCommands: [], pendingAction: null, lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null, planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: true }; },
+    async rejectPlan(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return { workflowId, companyId: company.id, projectId: active.id, issueId: workflowId.split("-issue-")[1]!, projectRevisionId: active.activeRevisionId!, phase: "planning", revision: input.expectedRevision + 1, owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null, planRevision: null, planMaterial: null, materialCategories: [], supplementalReviewUsed: false }; },
   };
   const tasks = new TaskService(database, auth, projects, config, { workflow });
   const app = createApp({ config, auth, projects, tasks, health: {
@@ -52,7 +55,7 @@ test("task API creates an idempotent backlog card and accepts only the current p
   const rawCookie = enrolled.headers["set-cookie"];
   const cookie = (Array.isArray(rawCookie) ? rawCookie[0] : rawCookie)?.split(";", 1)[0] ?? "";
   try {
-    const created = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie }, payload: { projectId: project.id, title: "API task", description: "# Details", idempotencyKey: "api-task-0001", images: [{ filename: "note.png", mimeType: "image/png", base64: Buffer.from("image").toString("base64") }] } });
+    const created = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie }, payload: { projectId: project.id, title: "API task", description: "# Details", idempotencyKey: "api-task-0001", supplementalReview: true, images: [{ filename: "note.png", mimeType: "image/png", base64: Buffer.from("image").toString("base64") }] } });
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ title: "API task", phase: "backlog", revision: 0, allowedCommands: ["start_planning"] });
     const duplicate = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie }, payload: { projectId: project.id, title: "Other", description: "Other", idempotencyKey: "api-task-0001", images: [] } });
@@ -61,7 +64,14 @@ test("task API creates an idempotent backlog card and accepts only the current p
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie }, payload: { expectedRevision: 9 } })).statusCode).toBe(409);
     const started = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie }, payload: { expectedRevision: 0 } });
     expect(started.statusCode).toBe(200);
-    expect(started.json()).toMatchObject({ phase: "planning", owner: "lead", revision: 1 });
+    expect(started.json()).toMatchObject({ phase: "approval", owner: "human", revision: 1, planMaterial: true });
+    const reviewed = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/request-supplemental-review`, headers: { cookie }, payload: { expectedRevision: 1 } });
+    expect(reviewed.statusCode).toBe(200);
+    expect(reviewed.json()).toMatchObject({ phase: "approval", revision: 2, supplementalReviewUsed: true });
+    const approved = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie }, payload: { expectedRevision: 2, note: "Self-approved" } });
+    expect(approved.statusCode).toBe(200);
+    expect(approved.json()).toMatchObject({ phase: "ready_for_development", owner: "lead", revision: 3 });
+    expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie }, payload: { expectedRevision: 2 } })).statusCode).toBe(409);
     expect((await app.inject({ method: "GET", url: "/api/tasks", headers: { cookie } })).json().tasks).toHaveLength(1);
     expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/images/does-not-exist`, headers: { cookie } })).statusCode).toBe(404);
   } finally {

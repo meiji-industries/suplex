@@ -1,15 +1,19 @@
 import { z } from "zod";
 
+import { PlanMaterialCategorySchema, type PlanMaterialCategory } from "../plan-governance.js";
+
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
-export const IssuePhaseSchema = z.enum(["backlog", "planning"]);
+export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development"]);
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
+export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "record_progress"]);
+export const IssuePlanDecisionSchema = z.enum(["approve", "reject"]);
 
 export const IssueContinuationStateSchema = z.object({
   phase: IssuePhaseSchema,
   revision: z.number().int().nonnegative(),
   owner: z.enum(["human", "lead"]),
-  allowedCommands: z.array(z.enum(["start_planning", "record_progress"])),
+  allowedCommands: z.array(IssueCommandSchema),
   pendingAction: z.string().max(200).nullable(),
   lastEventId: durableId,
   continuationCount: z.number().int().nonnegative(),
@@ -20,6 +24,12 @@ export const IssueContinuationStateSchema = z.object({
   leadOutputArtifactId: durableId.nullable().optional(),
   leadOutputKind: IssueLeadOutputKindSchema.nullable().optional(),
   leadSummary: z.string().max(2_000).nullable().optional(),
+  planRevision: z.number().int().nonnegative().nullable().optional(),
+  planMaterial: z.boolean().nullable().optional(),
+  materialCategories: z.array(PlanMaterialCategorySchema).max(6).optional(),
+  supplementalReviewUsed: z.boolean().optional(),
+  supplementalReviewArtifactId: durableId.nullable().optional(),
+  decisionId: durableId.nullable().optional(),
 });
 
 export const IssueWorkflowInputWithContinuationSchema = z.object({
@@ -49,7 +59,7 @@ export const IssueWorkflowStateSchema = z.object({
   phase: IssuePhaseSchema,
   revision: z.number().int().nonnegative(),
   owner: z.enum(["human", "lead"]),
-  allowedCommands: z.array(z.enum(["start_planning", "record_progress"])),
+  allowedCommands: z.array(IssueCommandSchema),
   pendingAction: z.string().max(200).nullable(),
   lastEventId: durableId,
   continuationCount: z.number().int().nonnegative(),
@@ -60,6 +70,12 @@ export const IssueWorkflowStateSchema = z.object({
   leadOutputArtifactId: durableId.nullable().optional(),
   leadOutputKind: IssueLeadOutputKindSchema.nullable().optional(),
   leadSummary: z.string().max(2_000).nullable().optional(),
+  planRevision: z.number().int().nonnegative().nullable().optional(),
+  planMaterial: z.boolean().nullable().optional(),
+  materialCategories: z.array(PlanMaterialCategorySchema).max(6).optional(),
+  supplementalReviewUsed: z.boolean().optional(),
+  supplementalReviewArtifactId: durableId.nullable().optional(),
+  decisionId: durableId.nullable().optional(),
 });
 
 export const StartPlanningInputSchema = z.object({
@@ -72,10 +88,17 @@ export const RecordProgressInputSchema = z.object({
   summaryHash: z.string().regex(/^[a-f0-9]{64}$/),
 });
 
+export const PlanCommandInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  actorUserId: durableId,
+  note: z.string().max(4_000).optional(),
+});
+
 export type IssueWorkflowInput = z.infer<typeof IssueWorkflowInputSchema>;
 export type IssueWorkflowState = z.infer<typeof IssueWorkflowStateSchema>;
 export type StartPlanningInput = z.infer<typeof StartPlanningInputSchema>;
 export type RecordProgressInput = z.infer<typeof RecordProgressInputSchema>;
+export type PlanCommandInput = z.infer<typeof PlanCommandInputSchema>;
 
 export interface LeadPlanningActivityInput {
   taskId: string;
@@ -96,9 +119,62 @@ export interface LeadPlanningResult {
   leadOutputArtifactId: string;
   leadOutputKind: "plan" | "decision_blocker";
   leadSummary: string;
+  materialCategories: PlanMaterialCategory[];
+  material: boolean;
+}
+
+export interface SupplementalReviewActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  projectId: string;
+  projectRevisionId: string;
+  briefArtifactId: string;
+  imageArtifactIds: string[];
+  roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
+  revision: number;
+  leadOutputArtifactId: string;
+  leadEvidenceArtifactId: string;
+}
+
+export interface SupplementalReviewResult {
+  reviewId: string;
+  reviewArtifactId: string;
+  evidenceArtifactId: string;
+  executionId: string;
+  sessionRef: string;
+  summary: string;
+}
+
+export interface ConsolidateLeadPlanActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  projectId: string;
+  projectRevisionId: string;
+  briefArtifactId: string;
+  imageArtifactIds: string[];
+  roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
+  revision: number;
+  leadSessionRef: string;
+  leadOutputArtifactId: string;
+  supplementalReviewArtifactId: string;
+}
+
+export interface PlanDecisionActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  planRevision: number;
+  actorUserId: string;
+  decision: "approve" | "reject";
+  note: string;
 }
 
 export interface IssueActivities {
   projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState>;
   runLeadPlanning(input: LeadPlanningActivityInput): Promise<LeadPlanningResult>;
+  runSupplementalReview(input: SupplementalReviewActivityInput): Promise<SupplementalReviewResult>;
+  consolidateLeadPlan(input: ConsolidateLeadPlanActivityInput): Promise<LeadPlanningResult>;
+  recordPlanDecision(input: PlanDecisionActivityInput): Promise<{ decisionId: string }>;
 }

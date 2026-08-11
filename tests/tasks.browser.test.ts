@@ -36,6 +36,7 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
   const profile = projects.createProfile("admin-1", { name: "Browser task profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const project = await projects.createProject("admin-1", company.id, { name: "Browser task project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
   await projects.activateProject("admin-1", project.id);
+  let plannedState: IssueWorkflowState | undefined;
   const workflow: IssueWorkflowPort = { async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) { return { workflowId: input.workflowId!, runId: "run" }; }, async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     const taskId = workflowId.split("-issue-")[1]!;
     const artifactStore = new ArtifactStore(config.artifactRoot);
@@ -47,7 +48,17 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
       db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_browser', ?, ?, ?, 'lead', 'completed', 1, 'session_browser', ?, ?, ?)").run(taskId, company.id, workflowId, now, now, evidence.id);
       db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_browser', ?, ?, ?, 'agent_browser', ?, 'plan', ?, ?, 'session_browser', 'A focused browser plan', ?)").run(taskId, company.id, workflowId, input.expectedRevision + 1, output.id, evidence.id, now);
     });
-    return { workflowId, companyId: company.id, projectId: project.id, issueId: taskId, projectRevisionId: project.activeRevisionId!, phase: "planning", revision: input.expectedRevision + 1, owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: output.id, leadOutputKind: "plan", leadSummary: "A focused browser plan" };
+    plannedState = { workflowId, companyId: company.id, projectId: project.id, issueId: taskId, projectRevisionId: project.activeRevisionId!, phase: "approval", revision: input.expectedRevision + 1, owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "reject_plan"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: output.id, leadOutputKind: "plan", leadSummary: "A focused browser plan", planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: false };
+    return plannedState;
+  }, async requestSupplementalReview(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, allowedCommands: ["approve_plan", "reject_plan"], pendingAction: "Approve final plan", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}`, supplementalReviewUsed: true };
+    return plannedState;
+  }, async approvePlan(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: [], pendingAction: null, lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    return plannedState;
+  }, async rejectPlan(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead plan revision", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    return plannedState;
   } };
   const tasks = new TaskService(database, auth, projects, config, { workflow });
   const app = createApp({ config, auth, projects, tasks, health: { temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }), database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }), artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }), worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }), codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }), ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }) } });
@@ -77,10 +88,14 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
       await page.getByRole("button", { name: /Browser task/ }).waitFor();
       await page.getByRole("button", { name: "Start planning", exact: true }).waitFor();
       await page.getByRole("button", { name: "Start planning", exact: true }).click();
-      await page.getByText(/planning · revision 1/).waitFor();
+      await page.getByText(/approval · revision 1/).waitFor();
       await page.getByText("evidence.png", { exact: true }).waitFor();
       await page.getByText("Lead plan", { exact: true }).waitFor();
       await page.getByText("Inspect repository", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "Request review", exact: true }).click();
+      await page.getByText(/approval · revision 2/).waitFor();
+      await page.getByRole("button", { name: "Approve plan", exact: true }).click();
+      await page.getByText(/ready_for_development · revision 3/).waitFor();
       const narrow = await context.newPage(); await narrow.setViewportSize({ width: 390, height: 844 }); await narrow.goto(`${baseUrl}/tasks`); expect(await narrow.getByRole("button", { name: "Open navigation" }).isVisible()).toBe(true); await narrow.close(); await page.close(); await context.close();
     } finally { await browser.close(); }
   } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }

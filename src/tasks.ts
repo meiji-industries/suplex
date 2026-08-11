@@ -8,10 +8,10 @@ import { ArtifactFailure, ArtifactStore, type StoredArtifact } from "./artifacts
 import { LeadOutputSchema, type LeadOutput } from "./codex-lead.js";
 import { ForgeDatabase } from "./database.js";
 import { ProjectFailure, ProjectService, type ProjectRole } from "./projects.js";
-import { startIssuePlanning, startIssueWorkflow } from "./temporal/service.js";
+import { approveIssuePlan, rejectIssuePlan, requestIssueSupplementalReview, startIssuePlanning, startIssueWorkflow } from "./temporal/service.js";
 import type { IssueWorkflowInput, IssueWorkflowState, StartPlanningInput } from "./temporal/issue-contracts.js";
 
-export type TaskPhase = "backlog" | "planning";
+export type TaskPhase = "backlog" | "planning" | "approval" | "ready_for_development";
 
 export interface TaskFinding {
   code: string;
@@ -84,6 +84,12 @@ export interface ForgeTask {
   createdAt: string;
   updatedAt: string;
   timeline: TaskTimelineEntry[];
+  planRevision?: number | null;
+  planMaterial?: boolean | null;
+  materialCategories?: string[];
+  supplementalReviewUsed?: boolean;
+  supplementalReviewArtifactId?: string | null;
+  decisionId?: string | null;
   leadOutput?: {
     kind: "plan" | "decision_blocker";
     summary: string;
@@ -105,6 +111,9 @@ export interface TaskEvent {
 export interface IssueWorkflowPort {
   start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string }>;
   startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState>;
+  requestSupplementalReview?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
+  approvePlan?: (workflowId: string, input: StartPlanningInput & { note?: string }) => Promise<IssueWorkflowState>;
+  rejectPlan?: (workflowId: string, input: StartPlanningInput & { note?: string }) => Promise<IssueWorkflowState>;
 }
 
 interface TaskServiceOptions {
@@ -215,6 +224,9 @@ export class TaskService {
     this.workflow = options.workflow ?? {
       start: (input) => startIssueWorkflow(config, input),
       startPlanning: (workflowId, input) => startIssuePlanning(config, workflowId, input),
+      requestSupplementalReview: (workflowId, input) => requestIssueSupplementalReview(config, workflowId, input),
+      approvePlan: (workflowId, input) => approveIssuePlan(config, workflowId, input),
+      rejectPlan: (workflowId, input) => rejectIssuePlan(config, workflowId, input),
     };
   }
 
@@ -321,7 +333,34 @@ export class TaskService {
       const message = error instanceof Error && /stale workflow revision/i.test(error.message) ? "Task changed before this action was accepted" : "Planning command could not be accepted";
       throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409);
     }
-    this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId });
+    this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, ...(state.planRevision !== undefined ? { planRevision: state.planRevision } : {}), ...(state.planMaterial !== undefined ? { planMaterial: state.planMaterial } : {}), ...(state.materialCategories !== undefined ? { materialCategories: state.materialCategories } : {}), ...(state.supplementalReviewUsed !== undefined ? { supplementalReviewUsed: state.supplementalReviewUsed } : {}), ...(state.supplementalReviewArtifactId !== undefined ? { supplementalReviewArtifactId: state.supplementalReviewArtifactId } : {}), ...(state.decisionId !== undefined ? { decisionId: state.decisionId } : {}) });
+    const updated = this.getTask(actorUserId, taskId);
+    this.events.emit("task", { type: "invalidate", taskId, companyId: updated.companyId, revision: updated.revision });
+    return updated;
+  }
+
+  async requestSupplementalReview(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
+    return this.planCommand(actorUserId, taskId, expectedRevision, "request_supplemental_review", (workflowId, input) => this.workflow.requestSupplementalReview ? this.workflow.requestSupplementalReview(workflowId, input) : Promise.reject(new Error("Supplemental review workflow is unavailable")));
+  }
+
+  async approvePlan(actorUserId: string, taskId: string, expectedRevision: number, note?: string): Promise<ForgeTask> {
+    return this.planCommand(actorUserId, taskId, expectedRevision, "approve_plan", (workflowId, input) => this.workflow.approvePlan ? this.workflow.approvePlan(workflowId, { ...input, ...(note !== undefined ? { note } : {}) }) : Promise.reject(new Error("Plan approval workflow is unavailable")));
+  }
+
+  async rejectPlan(actorUserId: string, taskId: string, expectedRevision: number, note?: string): Promise<ForgeTask> {
+    return this.planCommand(actorUserId, taskId, expectedRevision, "reject_plan", (workflowId, input) => this.workflow.rejectPlan ? this.workflow.rejectPlan(workflowId, { ...input, ...(note !== undefined ? { note } : {}) }) : Promise.reject(new Error("Plan revision workflow is unavailable")));
+  }
+
+  private async planCommand(actorUserId: string, taskId: string, expectedRevision: number, commandName: string, command: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>): Promise<ForgeTask> {
+    const task = this.getTask(actorUserId, taskId);
+    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409);
+    if (!task.allowedCommands.includes(commandName)) throw new TaskFailure("Plan action is not available", [finding("illegal-command", "phase", "This plan action is not available")], 409);
+    let state: IssueWorkflowState;
+    try { state = await command(task.workflowId, { expectedRevision, actorUserId }); } catch (error) {
+      const message = error instanceof Error && /stale workflow revision/i.test(error.message) ? "Task changed before this action was accepted" : "Plan action could not be accepted";
+      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409);
+    }
+    this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, ...(state.planRevision !== undefined ? { planRevision: state.planRevision } : {}), ...(state.planMaterial !== undefined ? { planMaterial: state.planMaterial } : {}), ...(state.materialCategories !== undefined ? { materialCategories: state.materialCategories } : {}), ...(state.supplementalReviewUsed !== undefined ? { supplementalReviewUsed: state.supplementalReviewUsed } : {}), ...(state.supplementalReviewArtifactId !== undefined ? { supplementalReviewArtifactId: state.supplementalReviewArtifactId } : {}), ...(state.decisionId !== undefined ? { decisionId: state.decisionId } : {}) });
     const updated = this.getTask(actorUserId, taskId);
     this.events.emit("task", { type: "invalidate", taskId, companyId: updated.companyId, revision: updated.revision });
     return updated;
@@ -385,7 +424,8 @@ export class TaskService {
     void actorUserId;
     const timeline = this.database.authQuery((db) => db.prepare("SELECT id, revision, event_type, metadata_json, created_at FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision, id").all(row.id) as TimelineRow[]).map((entry) => ({ id: entry.id, revision: entry.revision, eventType: entry.event_type, metadata: parseMetadata(entry.metadata_json), createdAt: entry.created_at }));
     const leadOutput = this.leadOutput(row.id, row.company_id);
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, timeline, ...(leadOutput ? { leadOutput } : {}) };
+    const governance = this.database.authQuery((db) => db.prepare("SELECT plan_revision, plan_material, material_categories_json, supplemental_review_used, supplemental_review_artifact_id, decision_id FROM forge_issue_governance WHERE task_id = ? AND company_id = ?").get(row.id, row.company_id) as { plan_revision: number | null; plan_material: number | null; material_categories_json: string | null; supplemental_review_used: number; supplemental_review_artifact_id: string | null; decision_id: string | null } | undefined);
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, timeline, ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(leadOutput ? { leadOutput } : {}) };
   }
 
   private leadOutput(taskId: string, companyId: string): ForgeTask["leadOutput"] {

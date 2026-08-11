@@ -1,10 +1,11 @@
-import { ArrowLeft, Bell, Building2, CreditCard, Key, Menu, Palette, Settings2, Shield, Terminal, Users, X, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Bell, Building2, CreditCard, Key, Menu, Palette, Settings2, Shield, Terminal, Users, type LucideIcon } from "lucide-react";
 import { useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import { Button } from "../ui/button.js";
-import { Dialog } from "../ui/dialog.js";
 import { Field, FieldLabel } from "../ui/field.js";
 import { Input } from "../ui/input.js";
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "../ui/sheet.js";
+import { ScrollArea } from "../ui/scroll-area.js";
 import { companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 import { CompanySwitcher } from "./company-switcher.js";
@@ -69,7 +70,8 @@ function SettingsNavContent({ groups, activeHref, search, setSearch, backHref }:
           <Input id="settings-search" value={search} onChange={(event) => setSearch(event.target.value)} />
         </Field>
       </div>
-      <div className="flex-1 space-y-5 overflow-y-auto px-3 pb-4">
+      <ScrollArea className="flex-1 space-y-5 px-3 pb-4">
+        <div className="space-y-5">
         {filtered.map((group) => (
           <section key={group.title}>
             <div className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{group.title}</div>
@@ -79,7 +81,8 @@ function SettingsNavContent({ groups, activeHref, search, setSearch, backHref }:
           </section>
         ))}
         {filtered.length === 0 ? <div className="px-2 py-4 text-[11px] text-muted-foreground">No settings found.</div> : null}
-      </div>
+        </div>
+      </ScrollArea>
     </div>
   );
 }
@@ -88,21 +91,17 @@ function SettingsMobileNavigation({ title, groups, activeHref, backHref }: { tit
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   return (
-    <Dialog.Root open={open} onOpenChange={setOpen}>
-      <Dialog.Trigger render={<Button variant="ghost" size="icon" aria-label="Open settings navigation" title="Open settings navigation"><Menu className="size-4" /></Button>} />
-      <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-black/20" />
-        <Dialog.Popup data-slot="settings-mobile-nav" className="fixed inset-y-0 left-0 z-50 w-64 border-r border-sidebar-border bg-sidebar px-0 py-0 outline-none">
-          <div className="flex h-12 items-center justify-between border-b border-sidebar-border px-3">
-            <span className="text-[13px] font-semibold">{title}</span>
-            <Dialog.Close render={<Button variant="ghost" size="icon" aria-label="Close settings navigation" title="Close settings navigation"><X className="size-3.5" /></Button>} />
-          </div>
-          <div className="h-[calc(100%-3rem)]">
-            <SettingsNavContent groups={groups} activeHref={activeHref} search={search} setSearch={setSearch} backHref={backHref} />
-          </div>
-        </Dialog.Popup>
-      </Dialog.Portal>
-    </Dialog.Root>
+    <Sheet open={open} onOpenChange={setOpen}>
+      <SheetTrigger render={<Button variant="ghost" size="icon" aria-label="Open settings navigation" title="Open settings navigation"><Menu className="size-4" /></Button>} />
+      <SheetContent data-slot="settings-mobile-nav" side="left" className="w-64 bg-sidebar px-0 py-0" showCloseButton closeLabel="Close settings navigation">
+        <SheetHeader className="h-12 px-3">
+          <SheetTitle className="text-[13px]">{title}</SheetTitle>
+        </SheetHeader>
+        <div className="h-[calc(100%-3rem)]">
+          <SettingsNavContent groups={groups} activeHref={activeHref} search={search} setSearch={setSearch} backHref={backHref} />
+        </div>
+      </SheetContent>
+    </Sheet>
   );
 }
 
@@ -113,11 +112,11 @@ export function SettingsLayout({ title, companyId, backHref, activeHref, content
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="flex min-h-screen">
-        <aside className="hidden w-60 shrink-0 flex-col border-r border-sidebar-border bg-sidebar lg:flex">
+        <aside className="hidden w-60 shrink-0 flex-col bg-sidebar lg:flex">
           <SettingsNavContent groups={groups} activeHref={activeHref} search={search} setSearch={setSearch} backHref={backHref} />
         </aside>
         <main className="min-w-0 flex-1">
-          <header className="flex h-12 items-center gap-3 border-b border-border/70 px-4 lg:px-6">
+          <header className="flex h-12 items-center gap-3 px-4 lg:px-6">
             <div className="lg:hidden"><SettingsMobileNavigation title={title} groups={groups} activeHref={activeHref} backHref={backHref} /></div>
             <h1 className="min-w-0 truncate text-lg font-semibold">{title}</h1>
             <div className="ml-auto min-w-0 w-52 max-w-[50%]"><CompanySwitcher /></div>
@@ -134,14 +133,14 @@ export function SettingsSection({ title, description, children }: { title?: stri
     <section className="mb-6">
       {title ? <h2 className="mb-1 text-sm font-semibold">{title}</h2> : null}
       {description ? <p className="mb-3 text-xs text-muted-foreground">{description}</p> : null}
-      <div className="overflow-hidden rounded-md border border-border bg-card">{children}</div>
+      <div className="overflow-hidden rounded-md bg-card">{children}</div>
     </section>
   );
 }
 
 export function SettingRow({ label, description, children, destructive }: { label: string; description?: string; children: ReactNode; destructive?: boolean }): ReactElement {
   return (
-    <div className="flex flex-col gap-2 border-b border-border/70 px-4 py-3.5 last:border-b-0 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+    <div className="flex flex-col gap-2 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <div className="min-w-0 flex-1">
         <div className={destructive ? "text-[13px] font-medium text-rose-700" : "text-[13px] font-medium"}>{label}</div>
         {description ? <div className="mt-0.5 text-xs text-muted-foreground">{description}</div> : null}

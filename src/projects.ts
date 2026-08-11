@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { access, constants, mkdir, mkdtemp, realpath, rename, rm, stat } from "node:fs/promises";
+import { access, constants, lstat, mkdir, mkdtemp, realpath, rename, rm, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -12,7 +12,7 @@ import { ForgeDatabase } from "./database.js";
 
 const execFileAsync = promisify(execFile);
 
-export type ProjectStatus = "draft" | "active" | "paused" | "archived";
+export type ProjectStatus = "draft" | "active" | "paused" | "needs-reactivation" | "archived";
 export type ProjectRole = "lead" | "developer" | "reviewer";
 export type ReasoningLevel = "low" | "medium" | "high";
 export type ServicePriority = "standard" | "priority";
@@ -158,6 +158,7 @@ interface ProjectRow {
   configuration_identity?: string;
   base_sha?: string | null;
   target_sha?: string | null;
+  active_revision_state?: "draft" | "accepted" | null;
 }
 
 interface ProfileRow {
@@ -191,7 +192,7 @@ const modelIdPattern = /^[a-z0-9][a-z0-9._-]{1,119}$/;
 const approvedSetupCommands = new Set(["pnpm install", "pnpm install --frozen-lockfile", "npm install", "npm ci", "yarn install", "yarn install --immutable", "bun install", "mise run setup", "cargo fetch --locked"]);
 const approvedVerificationCommands = new Set(["pnpm test", "pnpm typecheck", "pnpm lint", "npm test", "npm run typecheck", "npm run lint", "yarn test", "yarn typecheck", "yarn lint", "bun test", "mise run test", "mise run typecheck", "mise run lint", "cargo test", "make test", "make check"]);
 
-const projectRevisionColumns = `p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha`;
+const projectRevisionColumns = `p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id AND r.state = 'accepted'), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id AND r.state = 'accepted') AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha, (SELECT r.state FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS active_revision_state`;
 
 function identifier(prefix: string): string {
   return `${prefix}_${randomBytes(12).toString("hex")}`;
@@ -200,6 +201,17 @@ function identifier(prefix: string): string {
 function withinRoot(candidate: string, root: string): boolean {
   const path = relative(root, candidate);
   return path === "" || (!path.startsWith(`..${sep}`) && path !== "..");
+}
+
+async function containsSymlink(root: string, candidate: string): Promise<boolean> {
+  const path = relative(root, candidate);
+  if (path === "" || path.startsWith(`..${sep}`) || path === "..") return false;
+  let current = root;
+  for (const segment of path.split(sep).filter(Boolean)) {
+    current = join(current, segment);
+    if ((await lstat(current)).isSymbolicLink()) return true;
+  }
+  return false;
 }
 
 function asJson<T>(value: string, fallback: T): T {
@@ -222,10 +234,8 @@ function normalizedInput(input: ProjectInput, paths: { repositoryPath: string; w
     verificationCommand: input.verificationCommand.trim(),
     requiredChecks: [...new Set(input.requiredChecks.map((check) => check.trim()).filter(Boolean))].sort(),
     allowedProfileIds: [...new Set(input.allowedProfileIds.map((profileId) => profileId.trim()).filter(Boolean))].sort(),
-    roleDefaults: Object.fromEntries(Object.entries(input.roleDefaults).filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim().length > 0).sort(([left], [right]) => left.localeCompare(right))) as Partial<Record<ProjectRole, string>>,
+    roleDefaults: Object.fromEntries(Object.entries(input.roleDefaults).flatMap(([role, profileId]) => typeof profileId === "string" && profileId.trim().length > 0 ? [[role, profileId.trim()] as [string, string]] : []).sort(([left], [right]) => left.localeCompare(right))) as Partial<Record<ProjectRole, string>>,
   };
-  if (input.baseSha) normalized.baseSha = input.baseSha.trim().toLowerCase();
-  if (input.targetSha) normalized.targetSha = input.targetSha.trim().toLowerCase();
   return normalized;
 }
 
@@ -252,6 +262,7 @@ function publicModel(row: ModelRow): CodexModel {
 }
 
 function publicProject(row: ProjectRow): Project {
+  const needsReactivation = row.status === "active" && Boolean(row.active_revision_id) && (!row.base_sha || !row.target_sha);
   return {
     id: row.id,
     companyId: row.company_id,
@@ -266,7 +277,7 @@ function publicProject(row: ProjectRow): Project {
     requiredChecks: asJson<string[]>(row.required_checks_json, []),
     allowedProfileIds: asJson<string[]>(row.allowed_profiles_json, []),
     roleDefaults: asJson<Partial<Record<ProjectRole, string>>>(row.role_defaults_json, {}),
-    status: row.status,
+    status: needsReactivation ? "needs-reactivation" : row.status,
     ...(row.active_revision_id ? { activeRevisionId: row.active_revision_id } : {}),
     configurationRevision: row.configuration_revision ?? 0,
     ...(row.configuration_identity ? { configurationIdentity: row.configuration_identity } : {}),
@@ -447,9 +458,8 @@ async function canonicalDirectory(raw: string, rootRaw: string, field: string): 
   const absolute = resolve(trimmed);
   try {
     const rootAbsolute = resolve(rootRaw);
-    const [root, canonical] = await Promise.all([realpath(rootAbsolute), realpath(absolute)]);
-    const expectedCanonical = resolve(root, relative(rootAbsolute, absolute));
-    if (canonical !== expectedCanonical) {
+    const [root, canonical, symlinked] = await Promise.all([realpath(rootAbsolute), realpath(absolute), containsSymlink(rootAbsolute, absolute)]);
+    if (symlinked) {
       findings.push(finding("symlink-ambiguous", field, "Symlinked paths are not accepted"));
     }
     if (!withinRoot(canonical, root)) {
@@ -680,6 +690,8 @@ export class ProjectService {
       if (!inspection.clean) findings.push(finding("repository-dirty", "repositoryPath", "Repository must be clean before activation"));
       if (!inspection.baseSha) findings.push(finding("base-ref-missing", "baseBranch", "Base branch does not resolve to a canonical commit"));
       if (!inspection.targetSha) findings.push(finding("target-ref-missing", "targetBranch", "Target branch does not resolve to a canonical commit"));
+      if (inspection.baseSha && !/^[a-f0-9]{40,64}$/i.test(inspection.baseSha)) findings.push(finding("base-sha-invalid", "baseBranch", "Base branch must resolve to an exact Git commit SHA"));
+      if (inspection.targetSha && !/^[a-f0-9]{40,64}$/i.test(inspection.targetSha)) findings.push(finding("target-sha-invalid", "targetBranch", "Target branch must resolve to an exact Git commit SHA"));
       if (inspection.remoteRepository !== project.repository) findings.push(finding("repository-mismatch", "repository", "Local origin does not match configured repository identity"));
     }
     if (findings.length === 0) {
@@ -693,8 +705,10 @@ export class ProjectService {
         if (remoteUrl.pathname.replace(/\.git$/, "").toLowerCase() !== expectedPath.toLowerCase()) findings.push(finding("provider-path", "repository", "Repository URL path does not match configured identity"));
         if (remoteUrl.username || remoteUrl.password) findings.push(finding("credential-url", "repository", "Credential-bearing repository URLs are not accepted"));
       } catch (error) {
-        const code = error instanceof GithubFailure && error.code === "authentication" ? "github-auth-unavailable" : "github-repository-unavailable";
-        findings.push(finding(code, "repository", code === "github-auth-unavailable" ? "Host GitHub CLI authentication is unavailable" : "GitHub repository identity could not be verified"));
+        const code = error instanceof GithubFailure
+          ? error.code === "authentication" ? "github-auth-unavailable" : error.code === "repository" ? "github-repository-unavailable" : "github-command-failed"
+          : "github-repository-unavailable";
+        findings.push(finding(code, "repository", code === "github-auth-unavailable" ? "Host GitHub CLI authentication is unavailable" : code === "github-command-failed" ? "The host GitHub CLI could not complete a read-only validation" : "GitHub repository identity could not be verified"));
       }
     }
     if (findings.length > 0) throw new ProjectFailure("Project activation failed", findings, 422);
@@ -716,10 +730,10 @@ export class ProjectService {
     const identity = configIdentity(normalized);
     this.database.authTransaction((db) => {
       const now = this.now().toISOString();
-      const existingRevision = db.prepare("SELECT id, revision FROM forge_project_revisions WHERE project_id = ? AND identity = ?").get(project.id, identity) as { id: string; revision: number } | undefined;
+      const existingRevision = db.prepare("SELECT id, revision FROM forge_project_revisions WHERE project_id = ? AND identity = ? AND state = 'accepted'").get(project.id, identity) as { id: string; revision: number } | undefined;
       const revisionId = existingRevision?.id ?? identifier("project-revision");
       const nextRevision = existingRevision?.revision ?? Number((db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM forge_project_revisions WHERE project_id = ?").get(project.id) as { revision: number }).revision) + 1;
-      if (!existingRevision) db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revisionId, project.id, nextRevision, identity, JSON.stringify(normalized), normalized.baseSha ?? null, normalized.targetSha ?? null, actorUserId, now);
+      if (!existingRevision) db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, state, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?)").run(revisionId, project.id, nextRevision, identity, JSON.stringify(normalized), normalized.baseSha, normalized.targetSha, actorUserId, now);
       db.prepare("UPDATE forge_projects SET repository_identity = ?, status = 'active', active_revision_id = ?, updated_at = ? WHERE id = ?").run(project.repository, revisionId, now, project.id);
       this.auth.recordAuditEventInTransaction(db, actorUserId, "project_activated", undefined, project.companyId, { projectId: project.id, revision: String(nextRevision), identity });
       return { revision: nextRevision, identity };
@@ -729,6 +743,7 @@ export class ProjectService {
 
   pauseProject(actorUserId: string, projectId: string): Project { return this.setProjectStatus(actorUserId, projectId, "paused"); }
   archiveProject(actorUserId: string, projectId: string): Project { return this.setProjectStatus(actorUserId, projectId, "archived"); }
+  reactivateProject(actorUserId: string, projectId: string): Promise<Project> { return this.activateProject(actorUserId, projectId); }
 
   getProject(actorUserId: string, projectId: string): Project {
     const row = this.database.authQuery((db) => {
@@ -782,7 +797,7 @@ export class ProjectService {
     for (const [role, profileId] of Object.entries(normalized.roleDefaults)) if (!normalized.allowedProfileIds.includes(profileId)) findings.push(finding("profile-ineligible", `roleDefaults.${role}`, "Role defaults must reference an allowed profile"));
     if (findings.length) throw new ProjectFailure("Project configuration is invalid", findings, 422);
     const now = this.now().toISOString();
-    let row: { id: string; revision: number; identity: string };
+    let row: { id: string };
     try {
       row = this.database.authTransaction((db) => {
       const id = projectId ?? identifier("project");
@@ -794,13 +809,8 @@ export class ProjectService {
       } else {
         db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NULL, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.allowedProfileIds), JSON.stringify(normalized.roleDefaults), now, now);
       }
-      const identity = configIdentity(normalized);
-      const existingRevision = db.prepare("SELECT id, revision FROM forge_project_revisions WHERE project_id = ? AND identity = ?").get(id, identity) as { id: string; revision: number } | undefined;
-      const revisionId = existingRevision?.id ?? identifier("project-revision");
-      const revision = existingRevision?.revision ?? Number((db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM forge_project_revisions WHERE project_id = ?").get(id) as { revision: number }).revision) + 1;
-      if (!existingRevision) db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revisionId, id, revision, identity, JSON.stringify(normalized), normalized.baseSha ?? null, normalized.targetSha ?? null, actorUserId, now);
-        this.auth.recordAuditEventInTransaction(db, actorUserId, updating ? "project_updated" : "project_created", undefined, companyId, { projectId: id, revision: String(revision), identity });
-        return { id, revision, identity };
+      this.auth.recordAuditEventInTransaction(db, actorUserId, updating ? "project_updated" : "project_created", undefined, companyId, { projectId: id });
+      return { id };
       });
     } catch (error) {
       if (error instanceof Error && (error.message.includes("forge_projects.") || error.message.includes("forge_projects_repository_identity_unique"))) {
@@ -816,6 +826,7 @@ export class ProjectService {
   private setProjectStatus(actorUserId: string, projectId: string, status: "paused" | "archived"): Project {
     const project = this.getProject(actorUserId, projectId);
     if (project.status === "archived") throw new ProjectFailure("Project status change failed", [finding("project-archived", "status", "Archived projects cannot change status")], 409);
+    if (status === "paused" && !project.activeRevisionId) throw new ProjectFailure("Project status change failed", [finding("project-inactive", "status", "Only a project with an accepted revision can be paused")], 409);
     this.database.authTransaction((db) => {
       db.prepare("UPDATE forge_projects SET status = ?, updated_at = ? WHERE id = ?").run(status, this.now().toISOString(), projectId);
       this.auth.recordAuditEventInTransaction(db, actorUserId, `project_${status}`, undefined, project.companyId, { projectId });

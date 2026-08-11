@@ -344,7 +344,10 @@ export class TaskService {
     if (company.status !== "active") throw new TaskFailure("Task creation failed", [finding("company-inactive", "companyId", "Task creation requires an active company")], 409);
     const project = this.projects.getProject(actorUserId, input.projectId);
     if (project.companyId !== companyId) throw new TaskFailure("Not found", [], 404);
-    if (project.status !== "active" || !project.activeRevisionId) throw new TaskFailure("Task creation failed", [finding("project-inactive", "projectId", "Tasks require an active project")], 409);
+    if (project.status !== "active" || !project.activeRevisionId) {
+      const needsReactivation = project.status === "needs-reactivation";
+      throw new TaskFailure("Task creation failed", [finding(needsReactivation ? "project-needs-reactivation" : "project-inactive", "projectId", needsReactivation ? "Project must be reactivated before tasks can be created" : "Tasks require an active project")], 409);
+    }
     const validation = this.validateTaskInput(input);
     if (validation.length) throw new TaskFailure("Task brief is invalid", validation, 422);
 

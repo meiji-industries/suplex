@@ -31,6 +31,7 @@ function webAuthn(): WebAuthnAdapter {
 const github: GithubAdapter = {
   async checkAuthentication() {},
   async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; },
+  async listChecks() { return [{ name: "Tests / unit", status: "completed", conclusion: "success" }]; },
 };
 
 function responseCookie(response: { headers: OutgoingHttpHeaders }, name: string): { name: string; value: string } {
@@ -44,15 +45,11 @@ test("projects desktop flow activates valid configuration and shows actionable v
   const root = await mkdtemp(join(tmpdir(), "forge-project-browser-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
-  const repositoryPath = join(repositoryRoot, "repo");
+  const repositoryPath = join(repositoryRoot, "acme", "forge");
   await mkdir(repositoryPath, { recursive: true });
   await mkdir(worktreeRoot, { recursive: true });
-  const unsafeRepository = join(repositoryRoot, "unsafe");
-  const unsafeWorktree = join(worktreeRoot, "unsafe");
-  const narrowRepository = join(repositoryRoot, "narrow");
-  const narrowWorktree = join(worktreeRoot, "narrow");
-  await mkdir(unsafeRepository, { recursive: true });
-  await mkdir(unsafeWorktree, { recursive: true });
+  const narrowRepository = join(repositoryRoot, "acme", "narrow");
+  const narrowWorktree = join(worktreeRoot, "acme", "narrow");
   await mkdir(narrowRepository, { recursive: true });
   await mkdir(narrowWorktree, { recursive: true });
   await execFileAsync("git", ["init", "-b", "main", repositoryPath]);
@@ -70,7 +67,10 @@ test("projects desktop flow activates valid configuration and shows actionable v
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111", repositoryRoot, worktreeRoot });
   const auth = new AuthService(database, config, { webAuthn: webAuthn() });
-  const projects = new ProjectService(database, auth, config, { github });
+  const projects = new ProjectService(database, auth, config, {
+    github,
+    repositoryProvisioner: { async ensure(input) { await mkdir(input.repositoryPath, { recursive: true }); await mkdir(input.worktreeRoot, { recursive: true }); } },
+  });
   const app = createApp({ config, auth, projects, health: {
     temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }),
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
@@ -93,29 +93,46 @@ test("projects desktop flow activates valid configuration and shows actionable v
       const session = responseCookie(enrolled, SESSION_COOKIE_NAME);
       const csrf = responseCookie(enrolled, CSRF_COOKIE_NAME);
       await context.addCookies([{ ...session, domain: "127.0.0.1", path: "/" }, { ...csrf, domain: "127.0.0.1", path: "/" }]);
-      const profile = projects.createProfile((await auth.getUserBySession(session.value))!.id, { name: "Browser profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-      auth.createCompany((await auth.getUserBySession(session.value))!.id, "Browser Projects");
+      const adminId = (await auth.getUserBySession(session.value))!.id;
+      projects.createProfile(adminId, { name: "Browser profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
+      auth.createCompany(adminId, "Browser Projects");
       const page = await context.newPage();
       await page.goto(`${baseUrl}/projects`);
       await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
-      const fill = async (field: string, value: string): Promise<void> => { await page.getByLabel(field, { exact: true }).fill(value); };
       await page.getByRole("button", { name: "Create", exact: true }).click();
-      await fill("Project name", "Browser project"); await fill("Repository path", repositoryPath); await fill("Worktree root", worktreeRoot); await fill("GitHub repository (owner/name)", "acme/forge"); await fill("Base branch", "main"); await fill("Target branch", "main"); await fill("Setup command", "pnpm install"); await fill("Verification command", "pnpm test"); await fill("Required checks (comma separated)", "Tests / unit"); await fill("Allowed profiles (comma separated)", profile.id); await fill("Lead default", profile.id); await fill("Developer default", profile.id);
+      await page.getByLabel("GitHub repository URL", { exact: true }).fill("https://github.com/acme/forge.git");
       await page.getByRole("button", { name: "Create project" }).click();
-      await page.getByText("Browser project", { exact: true }).waitFor();
+      await page.getByText("forge", { exact: true }).waitFor();
+      const forgeProject = page.locator("article").filter({ hasText: "forge" });
+      await forgeProject.locator('[data-slot="badge"][data-status="draft"]', { hasText: "Draft" }).waitFor();
+      await page.getByRole("button", { name: "Configure" }).click();
+      await page.getByText("Ready", { exact: true }).waitFor();
+      expect(await page.getByLabel("Base branch").inputValue()).toBe("main");
+      expect(await page.getByLabel("Target branch").inputValue()).toBe("main");
+      expect(await page.getByRole("group", { name: "Required GitHub checks" }).getByRole("checkbox", { name: /Tests \/ unit/ }).isChecked()).toBe(true);
+      expect(await page.getByRole("group", { name: "Profiles" }).getByRole("checkbox", { name: "Browser profile" }).isChecked()).toBe(true);
+      await page.getByRole("button", { name: "Save settings" }).click();
       await page.getByRole("button", { name: "Activate" }).click();
-      await page.getByText(/active · revision 2/).waitFor();
+      await forgeProject.getByText("active", { exact: true }).waitFor();
+      await forgeProject.getByText("revision 1", { exact: true }).waitFor();
       await page.getByRole("button", { name: "Create", exact: true }).click();
-      await fill("Project name", "Unsafe project"); await fill("Repository path", unsafeRepository); await fill("Worktree root", unsafeWorktree); await fill("Setup command", "pnpm test && curl https://example.com");
+      await page.getByLabel("GitHub repository URL", { exact: true }).fill("https://token@github.com/acme/unsafe.git");
       await page.getByRole("button", { name: "Create project" }).click();
-      await page.getByRole("alert").filter({ hasText: "Project configuration is invalid" }).waitFor();
-      await page.getByText(/setupCommand: Setup must be one approved literal command/).waitFor();
+      await page.getByRole("alert").filter({ hasText: "GitHub repository URL is invalid" }).waitFor();
+      await page.getByText(/repositoryUrl: Use an HTTPS or SSH URL for one GitHub repository/).waitFor();
       expect(await page.locator("body").innerText()).not.toMatch(/token@|ghp_/);
       await page.getByRole("button", { name: "Cancel" }).click();
       const projectsNav = page.getByRole("link", { name: "Projects" }).first();
       expect(await projectsNav.getAttribute("aria-current")).toBe("page");
       const healthNav = page.getByRole("link", { name: "Host health" }).first();
       expect(await healthNav.getAttribute("aria-current")).toBe(null);
+      expect(await page.getByRole("link", { name: "Settings", exact: true }).count()).toBe(1);
+      expect(await page.getByRole("link", { name: "Administration", exact: true }).count()).toBe(0);
+
+      await page.goto(`${baseUrl}/admin/profiles`);
+      await page.getByRole("heading", { name: "Profiles", exact: true }).waitFor();
+      await page.getByText("Model catalog", { exact: true }).waitFor();
+      expect(await page.getByLabel("Model").locator("option").allTextContents()).toEqual(expect.arrayContaining([expect.stringContaining("GPT-5.6 Sol"), expect.stringContaining("GPT-5.6 Terra")]));
 
       const narrow = await context.newPage();
       await narrow.setViewportSize({ width: 390, height: 844 });
@@ -127,24 +144,10 @@ test("projects desktop flow activates valid configuration and shows actionable v
       expect(await narrowProjects.getAttribute("aria-current")).toBe("page");
       await narrowNav.getByRole("button", { name: "Close navigation" }).click();
       await narrow.getByRole("button", { name: "Create", exact: true }).click();
-      await narrow.getByLabel("Project name").fill("Narrow project");
-      await narrow.getByLabel("Repository path").fill(narrowRepository);
-      await narrow.getByLabel("Worktree root").fill(narrowWorktree);
-      await narrow.getByLabel("GitHub repository (owner/name)").fill("acme/narrow");
-      await narrow.getByLabel("Lead default").fill(profile.id);
-      await narrow.getByLabel("Developer default").fill(profile.id);
-      await narrow.getByLabel("Setup command").fill("pnpm install");
-      await narrow.getByLabel("Verification command").fill("pnpm test");
-      await narrow.getByLabel("Required checks (comma separated)").fill("Tests / unit");
-      await narrow.getByLabel("Allowed profiles (comma separated)").fill(profile.id);
-      await narrow.getByLabel("Base branch").fill("main");
-      await narrow.getByLabel("Target branch").fill("main");
-      // The form submits via the dialog footer button; pressing Enter in the last input also submits.
-      await narrow.getByLabel("Target branch").press("Enter");
-      await narrow.getByText("Narrow project", { exact: true }).waitFor();
-      await narrow.getByRole("button", { name: "Activate" }).click();
-      await narrow.getByText(/active · revision 2/).waitFor();
-      await expect.poll(async () => narrow.getByText("Browser project", { exact: true }).isVisible({ timeout: 1000 })).toBe(true);
+      await narrow.getByLabel("GitHub repository URL").fill("git@github.com:acme/narrow.git");
+      await narrow.getByLabel("GitHub repository URL").press("Enter");
+      await narrow.getByText("narrow", { exact: true }).waitFor();
+      await expect.poll(async () => narrow.getByText("forge", { exact: true }).isVisible({ timeout: 1000 })).toBe(true);
       await expect.poll(async () => narrow.getByRole("button", { name: "Pause" }).first().isVisible({ timeout: 1000 })).toBe(true);
       await expect.poll(async () => narrow.getByRole("button", { name: "Archive" }).first().isVisible({ timeout: 1000 })).toBe(true);
       await narrow.close(); await page.close(); await context.close();

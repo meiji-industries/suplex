@@ -85,6 +85,23 @@ export interface DatabaseHealth {
   writable: boolean;
 }
 
+export interface RepositoryIdentityCollision {
+  projectId: string;
+  companyId: string;
+  repositoryIdentity: string;
+}
+
+export class DatabaseMigrationFailure extends Error {
+  readonly code = "repository_identity_collision" as const;
+  readonly collisions: RepositoryIdentityCollision[];
+
+  constructor(collisions: RepositoryIdentityCollision[]) {
+    super("Project repository identities must be unique before migrations can continue");
+    this.name = "DatabaseMigrationFailure";
+    this.collisions = collisions;
+  }
+}
+
 function migrationFolder(): string {
   const candidates = [
     resolve(process.cwd(), "drizzle"),
@@ -163,8 +180,14 @@ export class ForgeDatabase {
     this.db.pragma("synchronous = FULL");
     this.db.pragma("foreign_keys = ON");
     this.orm = drizzle(this.db, { schema: { ...authSchema, probeWorkflows, workerRegistrations } });
-    migrate(this.orm, { migrationsFolder: migrationFolder() });
-    this.ensureModelCatalog();
+    try {
+      this.preflightProjectRepositoryIdentities();
+      migrate(this.orm, { migrationsFolder: migrationFolder() });
+      this.ensureModelCatalog();
+    } catch (error) {
+      this.db.close();
+      throw error;
+    }
   }
 
   private ensureModelCatalog(): void {
@@ -185,6 +208,29 @@ export class ForgeDatabase {
       seed.run("gpt-5.6-terra", "GPT-5.6 Terra", "Balanced model for everyday coding work.", 20, timestamp, timestamp);
       seed.run("gpt-5.6-luna", "GPT-5.6 Luna", "Fast, cost-efficient model for routine coding work.", 30, timestamp, timestamp);
       seed.run("gpt-5.3-codex", "GPT-5.3 Codex", "Previous-generation Codex model retained for compatibility.", 40, timestamp, timestamp);
+    })();
+  }
+
+  private preflightProjectRepositoryIdentities(): void {
+    const table = this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'forge_projects'").get() as { name: string } | undefined;
+    if (!table) return;
+
+    const rows = this.db.prepare("SELECT id, company_id, repository_identity FROM forge_projects WHERE repository_identity IS NOT NULL").all() as Array<{ id: string; company_id: string; repository_identity: string }>;
+    const normalized = rows.map((row) => ({ ...row, repository_identity: row.repository_identity.trim().toLowerCase() }));
+    const byIdentity = new Map<string, RepositoryIdentityCollision[]>();
+    for (const row of normalized) {
+      const collision = { projectId: row.id, companyId: row.company_id, repositoryIdentity: row.repository_identity } satisfies RepositoryIdentityCollision;
+      const entries = byIdentity.get(row.repository_identity) ?? [];
+      entries.push(collision);
+      byIdentity.set(row.repository_identity, entries);
+    }
+    const collisions = [...byIdentity.values()].filter((entries) => entries.length > 1).flat().sort((left, right) => left.repositoryIdentity.localeCompare(right.repositoryIdentity) || left.projectId.localeCompare(right.projectId));
+    if (collisions.length) throw new DatabaseMigrationFailure(collisions);
+
+    this.db.transaction(() => {
+      for (const row of normalized) {
+        this.db.prepare("UPDATE forge_projects SET repository_identity = ? WHERE id = ? AND repository_identity IS NOT NULL").run(row.repository_identity, row.id);
+      }
     })();
   }
 

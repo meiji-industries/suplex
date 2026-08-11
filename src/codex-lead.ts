@@ -334,9 +334,18 @@ async function taskScopedPath(root: string, candidate: string): Promise<string> 
   return absoluteCandidate;
 }
 
+function pinnedRepositoryPath(normalizedJson: string): string {
+  try {
+    const parsed = JSON.parse(normalizedJson) as { repositoryPath?: unknown };
+    if (typeof parsed.repositoryPath === "string" && parsed.repositoryPath.length > 0) return parsed.repositoryPath;
+  } catch {
+    // Keep revision failures redacted at the activity boundary.
+  }
+  throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain a repository path");
+}
+
 interface PlanningRow {
   title: string;
-  repository_path: string;
   normalized_json: string;
   brief_storage_path: string;
   brief_sha256: string;
@@ -360,7 +369,6 @@ interface ImageRow {
 
 interface DeliveryReviewContext {
   title: string;
-  repositoryPath: string;
   normalizedJson: string;
   briefStoragePath: string;
   briefSha256: string;
@@ -397,12 +405,12 @@ export class AgentService {
 
   async runLeadPlanning(rawInput: LeadPlanningActivityInput): Promise<LeadPlanningResult> {
     const input = LeadPlanningActivityInputSchema.parse(rawInput);
-    const row = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.repository_path, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256
-      FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id JOIN forge_project_revisions r ON r.id = t.project_revision_id
+    const row = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256
+      FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId, input.projectRevisionId, input.briefArtifactId) as PlanningRow | undefined);
     if (!row) throw new AgentFailure("scoped-input-missing", "Lead planning evidence is unavailable");
-    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(row.repository_path));
+    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
     const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
     const images = this.database.authQuery((db) => {
       if (!input.imageArtifactIds.length) return [] as ImageRow[];
@@ -578,15 +586,14 @@ export class AgentService {
       const findings = this.database.authQuery((db) => db.prepare("SELECT id AS findingId, severity, rationale, evidence_ref AS evidenceRef, disposition, repair_instruction AS repairInstruction FROM forge_final_review_findings WHERE review_id = ? ORDER BY id").all(existingFinal.id) as DeliveryReview["findings"]);
       return { reviewId: existingFinal.id, leadExecutionId: existingFinal.leadExecutionId, leadSessionRef: existingFinal.sessionRef, opinionArtifactId: existingFinal.opinionArtifactId, evidenceArtifactId: existingFinal.evidenceArtifactId, outcome: existingFinal.outcome, summary: existingFinal.summary, repairPlan: null, findings, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree };
     }
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.repository_path AS repositoryPath, r.normalized_json AS normalizedJson,
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson,
       b.storage_path AS briefStoragePath, b.sha256 AS briefSha256,
       pa.storage_path AS planStoragePath, pa.sha256 AS planSha256,
       da.storage_path AS deliveryStoragePath, da.sha256 AS deliverySha256,
       ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256,
       de.session_ref AS developerSessionRef
       FROM forge_tasks t
-      JOIN forge_projects p ON p.id = t.project_id
-      JOIN forge_project_revisions r ON r.id = t.project_revision_id
+      JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id
       JOIN forge_issue_outputs io ON io.task_id = t.id AND io.workflow_id = t.workflow_id AND io.output_artifact_id = ? AND io.revision = ?
       JOIN forge_artifacts pa ON pa.id = io.output_artifact_id
@@ -607,7 +614,7 @@ export class AgentService {
     ) as DeliveryReviewContext | undefined);
     if (!context || !context.developerSessionRef) throw new AgentFailure("scoped-input-missing", "Exact Developer delivery evidence is unavailable");
     if (context.developerSessionRef === input.leadSessionRef) throw new AgentFailure("session-identity-conflict", "Lead review must reuse the Lead session and remain distinct from Developer");
-    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(context.repositoryPath));
+    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(context.normalizedJson)));
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
     const [brief, plan, delivery, developerEvidence, gitEvidence] = await Promise.all([
       this.artifacts.read({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
@@ -677,13 +684,13 @@ export class AgentService {
     const input = rawInput;
     const profile = this.database.authQuery((db) => db.prepare("SELECT id, model, provider FROM forge_profiles WHERE id = ?").get(input.roleProfiles.reviewer) as { id: string; model: string; provider: string } | undefined);
     if (!profile || profile.provider !== "codex") throw new AgentFailure("reviewer-profile-unavailable", "Supplemental review requires an allowed profile");
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.repository_path, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256, oa.storage_path AS output_storage_path, oa.sha256 AS output_sha256, e.storage_path AS evidence_storage_path, e.sha256 AS evidence_sha256
-      FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id JOIN forge_project_revisions r ON r.id = t.project_revision_id
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256, oa.storage_path AS output_storage_path, oa.sha256 AS output_sha256, e.storage_path AS evidence_storage_path, e.sha256 AS evidence_sha256
+      FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_issue_outputs io ON io.task_id = t.id AND io.output_artifact_id = ?
       JOIN forge_artifacts oa ON oa.id = io.output_artifact_id JOIN forge_artifacts e ON e.id = io.evidence_artifact_id
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId, input.briefArtifactId) as { title: string; repository_path: string; normalized_json: string; brief_storage_path: string; brief_sha256: string; output_storage_path: string; output_sha256: string; evidence_storage_path: string; evidence_sha256: string } | undefined);
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId, input.briefArtifactId) as { title: string; normalized_json: string; brief_storage_path: string; brief_sha256: string; output_storage_path: string; output_sha256: string; evidence_storage_path: string; evidence_sha256: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Supplemental review evidence is unavailable");
-    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(context.repository_path));
+    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(context.normalized_json)));
     const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
     const draft = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
     const priorEvidence = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.evidence_storage_path, sha256: context.evidence_sha256 })).toString("utf8");
@@ -797,9 +804,9 @@ export class AgentService {
   }
 
   private async consolidationRepositoryPath(input: ConsolidateLeadPlanActivityInput): Promise<string> {
-    const row = this.database.authQuery((db) => db.prepare("SELECT p.repository_path FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?").get(input.taskId, input.companyId, input.projectId, input.projectRevisionId) as { repository_path: string } | undefined);
+    const row = this.database.authQuery((db) => db.prepare("SELECT r.normalized_json FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?").get(input.taskId, input.companyId, input.projectId, input.projectRevisionId) as { normalized_json: string } | undefined);
     if (!row) throw new AgentFailure("scoped-input-missing", "Consolidation repository is unavailable");
-    return taskScopedPath(this.config.repositoryRoot, await realpath(row.repository_path));
+    return taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
   }
 
   private async databaseHeartbeat(executionId: string, status: "running"): Promise<void> {

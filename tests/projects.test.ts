@@ -25,7 +25,7 @@ interface Fixture {
 const localRepository: LocalRepositoryAdapter = {
   async inspect(input) {
     const identity = input.repositoryPath.includes("unavailable") ? "acme/unavailable" : input.repositoryPath.includes("cross") ? "acme/cross" : "acme/forge";
-    return { canonicalPath: input.repositoryPath, remoteRepository: identity, clean: true, baseSha: "base-sha", targetSha: "target-sha" };
+    return { canonicalPath: input.repositoryPath, remoteRepository: identity, clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) };
   },
 };
 
@@ -144,20 +144,22 @@ test("activates a validated project and records an immutable normalized revision
     expect(draft.status).toBe("draft");
     const active = await value.projects.activateProject(value.adminId, draft.id);
     expect(active.status).toBe("active");
-    expect(active.configurationRevision).toBe(2);
+    expect(active.configurationRevision).toBe(1);
     expect(active.configurationIdentity).toMatch(/^[a-f0-9]{64}$/);
-    expect(active.baseSha).toBe("base-sha");
-    expect(active.targetSha).toBe("target-sha");
+    expect(active.baseSha).toBe("a".repeat(40));
+    expect(active.targetSha).toBe("b".repeat(40));
     const unchanged = await value.projects.updateProject(value.adminId, draft.id, input(value));
-    expect(unchanged.configurationRevision).toBe(2);
+    expect(unchanged.status).toBe("draft");
+    expect(unchanged.configurationRevision).toBe(1);
+    const reactivated = await value.projects.activateProject(value.adminId, draft.id);
+    expect(reactivated.configurationRevision).toBe(1);
     const changed = await value.projects.updateProject(value.adminId, draft.id, input(value, { targetBranch: "release" }));
-    expect(changed.configurationRevision).toBe(3);
+    expect(changed.configurationRevision).toBe(1);
+    await value.projects.activateProject(value.adminId, draft.id);
     const revisions = value.database.authQuery((db) => db.prepare("SELECT revision, identity, normalized_json FROM forge_project_revisions WHERE project_id = ? ORDER BY revision").all(draft.id) as Array<{ revision: number; identity: string; normalized_json: string }>);
-    expect(revisions).toHaveLength(3);
-    expect(revisions[0]?.identity).not.toBe(revisions[1]?.identity);
-    expect(revisions[2]?.identity).not.toBe(revisions[1]?.identity);
+    expect(revisions).toHaveLength(2);
     expect(revisions[0]?.normalized_json).not.toContain("token");
-    expect(JSON.parse(revisions[1]?.normalized_json ?? "{}")).toMatchObject({ baseSha: "base-sha", targetSha: "target-sha" });
+    expect(JSON.parse(revisions[0]?.normalized_json ?? "{}")).toMatchObject({ baseSha: "a".repeat(40), targetSha: "b".repeat(40) });
   } finally {
     await close(value);
   }
@@ -187,7 +189,7 @@ test("fails closed for provider mismatch, unavailable profiles, and cross-compan
   try {
     const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
     const mismatched = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
-      localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "other/repo", clean: true, baseSha: "base-sha", targetSha: "target-sha" }; } },
+      localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "other/repo", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } },
       github,
     });
     await expect(mismatched.activateProject(value.adminId, project.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "repository-mismatch" })]) });
@@ -220,8 +222,8 @@ test("rejects duplicate repository identity across companies and preserves exact
   try {
     const first = await value.projects.createProject(value.adminId, value.companyId, input(value, { repository: "acme/forge" }));
     const firstActive = await value.projects.activateProject(value.adminId, first.id);
-    expect(firstActive.baseSha).toBe("base-sha");
-    expect(firstActive.targetSha).toBe("target-sha");
+    expect(firstActive.baseSha).toBe("a".repeat(40));
+    expect(firstActive.targetSha).toBe("b".repeat(40));
 
     value.database.authQuery((db) => {
       db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-b', 'Other', 'active', '2026-08-11T00:00:00.000Z')").run();
@@ -233,9 +235,9 @@ test("rejects duplicate repository identity across companies and preserves exact
     await mkdir(secondWorktree, { recursive: true });
     await expect(value.projects.createProject(value.adminId, "company-b", input(value, { name: "Second", repositoryPath: secondPath, worktreeRoot: secondWorktree, repository: "acme/forge" }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "already-assigned", field: "repository" })]) });
 
-    const updatedSha = "updated-sha";
+    const updatedSha = "c".repeat(40);
     const sameBranches = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
-      localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: updatedSha, targetSha: "target-sha" }; } },
+      localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: updatedSha, targetSha: "b".repeat(40) }; } },
       github,
     });
     const reactivated = await sameBranches.activateProject(value.adminId, first.id);

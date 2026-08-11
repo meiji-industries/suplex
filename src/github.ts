@@ -43,7 +43,9 @@ async function runGh(command: string, args: string[], cwd?: string): Promise<{ s
     return await execFileAsync(command, args, { cwd, timeout: 8_000, maxBuffer: 64 * 1024 });
   } catch (error) {
     const message = error instanceof Error ? redactOutput(error.message) : "command failed";
-    throw new GithubFailure(message.includes("auth") ? "authentication" : "command");
+    if (/auth|not logged in|login required|oauth|credential/i.test(message)) throw new GithubFailure("authentication");
+    if (args[0] === "repo" && args[1] === "view") throw new GithubFailure("repository");
+    throw new GithubFailure("command");
   }
 }
 

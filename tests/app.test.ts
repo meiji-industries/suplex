@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";
@@ -30,10 +29,10 @@ test("health page renders the exact reachable address and distinct states", asyn
   });
 
   const response = await app.inject({ method: "GET", url: "/health" });
-  assert.equal(response.statusCode, 200);
-  assert.match(response.headers["content-type"] ?? "", /text\/html/);
-  assert.match(response.body, /http:\/\/forge\.tailnet\.ts\.net:4111/);
-  assert.match(response.body, /data-status="healthy"/);
-  assert.match(response.body, /data-status="unhealthy"/);
+  expect(response.statusCode).toBe(200);
+  expect(response.headers["content-type"] ?? "").toMatch(/text\/html/);
+  expect(response.body).toMatch(/http:\/\/forge\.tailnet\.ts\.net:4111/);
+  expect(response.body).toMatch(/data-status="healthy"/);
+  expect(response.body).toMatch(/data-status="unhealthy"/);
   await app.close();
 });

@@ -18,6 +18,7 @@ export interface TemporalContainer {
   id: string;
   name: string;
   legacy?: boolean | undefined;
+  address?: string | undefined;
 }
 
 export interface TailscaleServe {
@@ -97,7 +98,7 @@ export async function stopOwnedProcesses(registry: ProcessRegistry, controller: 
     await controller.signal(ownedProcess.pid, "SIGTERM");
     report.stopped.push(ownedProcess.pid);
   }
-  if (registry.temporalContainer) {
+  if (registry.temporalContainer && !registry.temporalContainer.legacy) {
     await controller.stopContainer(registry.temporalContainer.id);
     report.containersStopped.push(registry.temporalContainer.id);
   }

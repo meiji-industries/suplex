@@ -1,8 +1,7 @@
-import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 
 import { isTailscaleDaemonUnavailable, upsertForgeEnvironment } from "../src/setup.js";
 
@@ -22,16 +21,16 @@ test("setup upserts Forge choices without duplicating or overwriting unrelated s
     });
     const contents = await readFile(filename, "utf8");
 
-    assert.match(contents, /FORGE_TAILSCALE_EXPOSURE=direct/);
-    assert.match(contents, /FORGE_TAILSCALE_ADDRESS=new-host\.tail1234\.ts\.net/);
-    assert.match(contents, /FORGE_PORT=4222/);
-    assert.equal((contents.match(/FORGE_PORT=/g) ?? []).length, 1);
+    expect(contents).toMatch(/FORGE_TAILSCALE_EXPOSURE=direct/);
+    expect(contents).toMatch(/FORGE_TAILSCALE_ADDRESS=new-host\.tail1234\.ts\.net/);
+    expect(contents).toMatch(/FORGE_PORT=4222/);
+    expect((contents.match(/FORGE_PORT=/g) ?? []).length).toBe(1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
 test("recognizes the actionable Tailscale daemon-not-running failure", () => {
-  assert.equal(isTailscaleDaemonUnavailable(new Error("dial unix /var/run/tailscaled.socket: connect: no such file or directory")), true);
-  assert.equal(isTailscaleDaemonUnavailable(new Error("HTTPS capability is not enabled")), false);
+  expect(isTailscaleDaemonUnavailable(new Error("dial unix /var/run/tailscaled.socket: connect: no such file or directory"))).toBe(true);
+  expect(isTailscaleDaemonUnavailable(new Error("HTTPS capability is not enabled"))).toBe(false);
 });

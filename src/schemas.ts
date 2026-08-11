@@ -48,6 +48,7 @@ export const TemporalContainerSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   legacy: z.boolean().optional(),
+  address: z.string().regex(/^[^:\s]+:\d+$/).optional(),
 });
 
 export const TailscaleServeSchema = z.object({
@@ -75,6 +76,16 @@ export const TailscaleServeStatusSchema = z.object({
   ).optional(),
 });
 
+export const DockerContainerInspectionSchema = z.object({
+  Id: z.string().min(1),
+  Config: z.object({
+    Cmd: z.array(z.string()).optional(),
+    Labels: z.record(z.string(), z.string()).optional(),
+  }).optional(),
+  State: z.object({ Status: z.string().min(1) }),
+  Mounts: z.array(z.object({ Name: z.string().optional() })).optional(),
+});
+
 export const GhAuthStatusSchema = z.object({
   hosts: z.record(z.string(), z.array(z.object({
     state: z.string(),
@@ -83,13 +94,14 @@ export const GhAuthStatusSchema = z.object({
 });
 
 const identifier = z.string().min(1).max(256);
+const durableIdentifier = identifier.regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
 export const CompanyIdSchema = z.string().min(1).max(64).regex(/^[a-z0-9](?:[a-z0-9_-]{0,62}[a-z0-9])?$/);
 
 export const ProbeWorkflowInputSchema = z.object({
-  workflowId: identifier,
-  probeId: identifier,
-  companyId: identifier,
+  workflowId: durableIdentifier,
+  probeId: durableIdentifier,
+  companyId: durableIdentifier,
 });
 
 export const ProbeWorkflowStateSchema = ProbeWorkflowInputSchema.extend({

@@ -8,7 +8,6 @@ export function createActivities(database: ForgeDatabase): ProbeActivities {
     async recordProbeStarted(input: ProbeWorkflowInput): Promise<ProbeWorkflowState> {
       const validatedInput = ProbeWorkflowInputSchema.parse(input);
       logger.child(activityLogContext()).info("Probe activity started", {
-        workflowId: validatedInput.workflowId,
         companyId: validatedInput.companyId,
       });
       database.recordProbe({

@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 
 import { chromium } from "playwright";
 
@@ -31,40 +30,46 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
   });
   await app.listen({ host: "127.0.0.1", port: 0 });
   const address = app.server.address();
-  assert.ok(address && typeof address === "object");
+  expect(address && typeof address === "object").toBeTruthy();
+  if (!address || typeof address !== "object") throw new Error("Test server did not expose a TCP address");
 
   let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   try {
     browser = await chromium.launch({ headless: true });
     const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
     await page.goto(`http://127.0.0.1:${address.port}/health`);
-    await assert.doesNotReject(() => page.locator("h1").waitFor());
-    await assert.doesNotReject(() => page.getByRole("heading", { name: "Owned services", exact: true }).waitFor());
-    assert.equal(await page.locator('[data-status="healthy"]').count(), 1);
-    assert.equal(await page.locator('[data-status="unhealthy"]').count(), 1);
-    assert.equal(await page.locator('[data-slot="health-row"]').count(), 2);
-    assert.match(await page.locator("body").innerText(), /forge\.tailnet\.ts\.net/);
-    assert.doesNotMatch(await page.locator("body").innerText(), /Truthful readiness/);
+    await page.locator("h1").waitFor();
+    await page.getByRole("heading", { name: "Owned services", exact: true }).waitFor();
+    expect(await page.locator('[data-status="healthy"]').count()).toBe(1);
+    expect(await page.locator('[data-status="unhealthy"]').count()).toBe(1);
+    expect(await page.locator('[data-slot="health-row"]').count()).toBe(2);
+    expect(await page.locator("body").innerText()).toMatch(/forge\.tailnet\.ts\.net/);
+    expect(await page.locator("body").innerText()).not.toMatch(/Truthful readiness/);
 
     const navigationTrigger = page.getByRole("button", { name: "Open navigation" });
-    await navigationTrigger.click();
-    assert.equal(await page.locator('[data-slot="mobile-nav"]').isVisible(), true);
+    await navigationTrigger.focus();
+    await page.keyboard.press("Enter");
+    expect(await page.locator('[data-slot="mobile-nav"]').isVisible()).toBe(true);
     await page.keyboard.press("Escape");
-    assert.equal(await navigationTrigger.evaluate((element) => element === document.activeElement), true);
+    expect(await navigationTrigger.evaluate((element) => element === document.activeElement)).toBe(true);
 
     await page.locator('[data-slot="health-row"]').first().locator("button").click();
-    await assert.doesNotReject(() => page.getByText("walMode").waitFor());
+    await page.getByText("walMode").waitFor();
     const apiHealth = await page.evaluate(async () => {
       const response = await fetch("/api/health");
       return { status: response.status, body: await response.json() as { ready: boolean } };
     });
-    assert.equal(apiHealth.status, 200);
-    assert.equal(apiHealth.body.ready, true);
+    expect(apiHealth.status).toBe(200);
+    expect(apiHealth.body.ready).toBe(true);
+
+    const refreshResponse = page.waitForResponse((response) => response.url().endsWith("/api/health"));
+    await page.getByRole("button", { name: "Refresh health" }).click();
+    expect((await refreshResponse).status()).toBe(200);
 
     const desktop = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await desktop.goto(`http://127.0.0.1:${address.port}/health`);
-    assert.equal(await desktop.locator("aside").isVisible(), true);
-    assert.equal(await desktop.locator('[data-slot="health-row"]').count(), 2);
+    expect(await desktop.locator("aside").isVisible()).toBe(true);
+    expect(await desktop.locator('[data-slot="health-row"]').count()).toBe(2);
   } finally {
     await browser?.close();
     await app.close();

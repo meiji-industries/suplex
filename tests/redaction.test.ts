@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 
 import { redact, StructuredLogger } from "../src/logging.js";
 
@@ -13,7 +12,7 @@ test("redacts credential-shaped keys and values before serialization", () => {
     },
   });
 
-  assert.deepEqual(result, {
+  expect(result).toEqual({
     correlationId: "corr-123",
     authorization: "[REDACTED]",
     nested: {
@@ -28,7 +27,7 @@ test("does not mutate the object supplied by a caller", () => {
 
   redact(input);
 
-  assert.deepEqual(input, { token: "secret", safe: "value" });
+  expect(input).toEqual({ token: "secret", safe: "value" });
 });
 
 test("emits Pino JSON with correlation fields and redacted values", () => {
@@ -38,9 +37,9 @@ test("emits Pino JSON with correlation fields and redacted values", () => {
   });
 
   const record = JSON.parse(lines[0] ?? "{}");
-  assert.equal(record.message, "provider failed");
-  assert.equal(record.workflowId, "workflow-1");
-  assert.equal(record.runId, "run-1");
-  assert.equal(record.authorization, "[REDACTED]");
-  assert.doesNotMatch(lines[0] ?? "", /secret-token/);
+  expect(record.message).toBe("provider failed");
+  expect(record.workflowId).toBe("workflow-1");
+  expect(record.runId).toBe("run-1");
+  expect(record.authorization).toBe("[REDACTED]");
+  expect(lines[0] ?? "").not.toMatch(/secret-token/);
 });

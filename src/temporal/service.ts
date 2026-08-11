@@ -5,9 +5,9 @@ import { randomUUID } from "node:crypto";
 
 import type { ForgeConfig } from "../config.js";
 import type { HealthCheck } from "../health.js";
-import { runtimeIdentifiers } from "../runtime-identifiers.js";
+import { isLegacyDurableIdentifier, runtimeIdentifiers } from "../runtime-identifiers.js";
 import { probeStateQuery, probeWorkflow } from "./workflows.js";
-import { ProbeWorkflowInputSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
+import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 
 export const REQUIRED_SEARCH_ATTRIBUTES = ["CompanyId", "ProjectId", "IssueId"] as const;
 export const LEGACY_SEARCH_ATTRIBUTES = ["ForgeCompanyId", "ForgeProjectId", "ForgeIssueId"] as const;
@@ -79,6 +79,19 @@ export async function ensureTemporalFoundation(connection: Connection, config: F
   }
 }
 
+export async function assertLegacyNamespaceProbeOnly(client: Client): Promise<void> {
+  let inspected = 0;
+  for await (const execution of client.workflow.list()) {
+    inspected += 1;
+    if (inspected > 1_000) {
+      throw new Error("Refusing legacy Temporal migration with more than 1000 executions to inspect");
+    }
+    if (execution.type !== "probeWorkflow") {
+      throw new Error(`Refusing legacy Temporal migration with non-probe workflow type ${execution.type}`);
+    }
+  }
+}
+
 export class TemporalHealthProbe {
   constructor(private readonly config: ForgeConfig) {}
 
@@ -121,7 +134,11 @@ export class TemporalHealthProbe {
 }
 
 export async function startProbeWorkflow(config: ForgeConfig, input: Omit<ProbeWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string }> {
-  const workflowId = input.workflowId ?? `${runtimeIdentifiers(config.installationId).workflowPrefix}-${randomUUID()}`;
+  const identifiers = runtimeIdentifiers(config.installationId);
+  const workflowId = input.workflowId ?? `${identifiers.workflowPrefix}-${randomUUID()}`;
+  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-`)) {
+    throw new Error(`Refusing workflow ID outside this neutral installation scope: ${workflowId}`);
+  }
   const validatedInput = ProbeWorkflowInputSchema.parse({ ...input, workflowId });
   const temporalClient = await connectTemporal(config);
   try {
@@ -141,7 +158,7 @@ export async function queryProbeWorkflow(config: ForgeConfig, workflowId: string
   const temporalClient = await connectTemporal(config);
   try {
     const handle: WorkflowHandle<typeof probeWorkflow> = temporalClient.client.workflow.getHandle(workflowId, runId);
-    return await handle.query(probeStateQuery);
+    return ProbeWorkflowStateSchema.parse(await handle.query(probeStateQuery));
   } finally {
     temporalClient.connection.close();
   }

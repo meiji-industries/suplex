@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,17 +18,17 @@ test("initializes migrations in WAL mode and preserves probe state after reopeni
       companyId: "company-1",
       status: "running",
     });
-    assert.equal(first.health().walMode, true);
+    expect(first.health().walMode).toBe(true);
     first.close();
 
     const reopened = new ForgeDatabase(filename);
-    assert.deepEqual(reopened.getProbe("probe-1"), {
+    expect(reopened.getProbe("probe-1")).toEqual({
       workflowId: "probe-workflow-1",
       probeId: "probe-1",
       companyId: "company-1",
       status: "running",
     });
-    assert.equal(reopened.health().migrationVersion, 1);
+    expect(reopened.health().migrationVersion).toBe(1);
     reopened.close();
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -58,6 +57,8 @@ test("adopts a pre-Drizzle database without rewriting existing probe state", asy
       );
       INSERT INTO probe_workflows (probe_id, workflow_id, company_id, status)
       VALUES ('legacy-probe', 'legacy-workflow', 'legacy-company', 'running');
+      INSERT INTO worker_registrations (worker_id, task_queue, build_id, heartbeat_at)
+      VALUES ('legacy-worker', 'legacy-tasks', 'legacy-build', '${new Date().toISOString()}');
       PRAGMA user_version = 1;
     `);
     legacy.close();
@@ -71,6 +72,10 @@ test("adopts a pre-Drizzle database without rewriting existing probe state", asy
     });
     expect(adopted.health()).toMatchObject({ walMode: true, migrationVersion: 1 });
     adopted.close();
+
+    const reopened = new ForgeDatabase(filename);
+    expect(reopened.workerHealth("legacy-tasks")).toMatchObject({ workerId: "legacy-worker", buildId: "legacy-build" });
+    reopened.close();
   } finally {
     await rm(root, { recursive: true, force: true });
   }

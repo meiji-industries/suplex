@@ -1,11 +1,10 @@
-import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
-import { test } from "vitest";
+import { expect, test } from "vitest";
 import { fileURLToPath } from "node:url";
 
 import { Connection } from "@temporalio/client";
@@ -36,12 +35,28 @@ async function publishedTemporalPort(name: string): Promise<number> {
   return Number(match[1]);
 }
 
+async function containerStatus(name: string): Promise<string | undefined> {
+  try {
+    const result = await execFileAsync("docker", ["inspect", "--format", "{{.State.Status}}", name]);
+    return result.stdout.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 test("starts, persists, restarts, and queries a probe Workflow without touching the live Forge container", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-temporal-test-"));
   const containerName = `temporal-test-${process.pid}-${randomUUID().slice(0, 8)}`;
   const liveForgeContainerId = await containerId("forge-temporal");
+  if (!liveForgeContainerId) {
+    await rm(root, { recursive: true, force: true });
+    throw new Error("The live Forge Temporal container is required for the non-disruptive integration proof");
+  }
+  expect(await containerStatus("forge-temporal")).toBe("running");
+  expect(await publishedTemporalPort("forge-temporal")).toBe(7233);
   let config = createTestConfig(root, { taskQueue: `tasks-test-${process.pid}-${randomUUID().slice(0, 8)}` });
   let worker: Worker | undefined;
+  let workerRun: Promise<void> | undefined;
   let workerConnection: NativeConnection | undefined;
   let database: ForgeDatabase | undefined;
   let api: ForgeServer | undefined;
@@ -66,7 +81,10 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
         await new Promise((resolve) => setTimeout(resolve, 500));
       }
     }
-    assert.ok(temporalConnection);
+    expect(temporalConnection).toBeDefined();
+    if (!temporalConnection) {
+      throw new Error("Temporal connection was not established");
+    }
     await ensureTemporalFoundation(temporalConnection, config);
     temporalConnection.close();
 
@@ -79,9 +97,9 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
       workflowsPath: fileURLToPath(new URL("../src/temporal/workflows.ts", import.meta.url)),
       activities: createActivities(database),
     });
-    const workerRun = worker.run();
+    workerRun = worker.run();
     api = await createForgeServer(config);
-    assert.equal((await api.app.inject({ method: "GET", url: "/api/health" })).statusCode, 200);
+    expect((await api.app.inject({ method: "GET", url: "/api/health" })).statusCode).toBe(200);
 
     const started = await startProbeWorkflow(config, { probeId: "probe-restart", companyId: "company-1" });
     workflowId = started.workflowId;
@@ -90,8 +108,8 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
       await new Promise((resolve) => setTimeout(resolve, 100));
       state = await queryProbeWorkflow(config, workflowId, started.runId);
     }
-    assert.equal(state.status, "running");
-    assert.deepEqual(database.getProbe("probe-restart"), {
+    expect(state.status).toBe("running");
+    expect(database.getProbe("probe-restart")).toEqual({
       workflowId,
       probeId: "probe-restart",
       companyId: "company-1",
@@ -100,6 +118,7 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
 
     worker.shutdown();
     await workerRun;
+    workerRun = undefined;
     worker = undefined;
     await workerConnection.close();
     workerConnection = undefined;
@@ -119,14 +138,15 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
       workflowsPath: fileURLToPath(new URL("../src/temporal/workflows.ts", import.meta.url)),
       activities: createActivities(reopenedDatabase),
     });
-    const restartedWorkerRun = worker.run();
+    workerRun = worker.run();
     api = await createForgeServer(config);
-    assert.equal((await api.app.inject({ method: "GET", url: "/api/health" })).statusCode, 200);
+    expect((await api.app.inject({ method: "GET", url: "/api/health" })).statusCode).toBe(200);
     const afterRestart = await queryProbeWorkflow(config, workflowId, started.runId);
-    assert.equal(afterRestart.status, "running");
-    assert.equal(reopenedDatabase.getProbe("probe-restart")?.workflowId, workflowId);
+    expect(afterRestart.status).toBe("running");
+    expect(reopenedDatabase.getProbe("probe-restart")?.workflowId).toBe(workflowId);
     worker.shutdown();
-    await restartedWorkerRun;
+    await workerRun;
+    workerRun = undefined;
     worker = undefined;
     await workerConnection.close();
     workerConnection = undefined;
@@ -137,6 +157,7 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     api = undefined;
   } finally {
     worker?.shutdown();
+    await workerRun?.catch(() => undefined);
     await workerConnection?.close();
     database?.close();
     if (api) {
@@ -144,7 +165,9 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
       api.database.close();
     }
     await execFileAsync("docker", ["rm", "--force", containerName]).catch(() => undefined);
-    assert.equal(await containerId("forge-temporal"), liveForgeContainerId);
+    expect(await containerId("forge-temporal")).toBe(liveForgeContainerId);
+    expect(await containerStatus("forge-temporal")).toBe("running");
+    expect(await publishedTemporalPort("forge-temporal")).toBe(7233);
     await rm(root, { recursive: true, force: true });
   }
 });

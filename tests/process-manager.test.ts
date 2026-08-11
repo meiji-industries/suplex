@@ -1,7 +1,9 @@
-import assert from "node:assert/strict";
-import { test } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { expect, test } from "vitest";
 
-import { stopOwnedProcesses, type OwnedProcess, type ProcessController } from "../src/process-manager.js";
+import { readProcessRegistry, stopOwnedProcesses, type OwnedProcess, type ProcessController } from "../src/process-manager.js";
 
 test("shutdown signals only the recorded owned process identities", async () => {
   const owned: OwnedProcess = {
@@ -28,7 +30,7 @@ test("shutdown signals only the recorded owned process identities", async () => 
       return undefined;
     },
     async signal(pid, signal) {
-      assert.equal(signal, "SIGTERM");
+      expect(signal).toBe("SIGTERM");
       signalled.push(pid);
     },
     async stopContainer() {
@@ -45,8 +47,8 @@ test("shutdown signals only the recorded owned process identities", async () => 
     controller,
   );
 
-  assert.deepEqual(signalled, [owned.pid]);
-  assert.equal(signalled.includes(unrelated.pid), false);
+  expect(signalled).toEqual([owned.pid]);
+  expect(signalled.includes(unrelated.pid)).toBe(false);
 });
 
 test("shutdown refuses a reused PID whose command identity no longer matches", async () => {
@@ -79,8 +81,8 @@ test("shutdown refuses a reused PID whose command identity no longer matches", a
     controller,
   );
 
-  assert.deepEqual(signalled, []);
-  assert.deepEqual(report.skipped, [{ pid: 4101, reason: "identity-mismatch" }]);
+  expect(signalled).toEqual([]);
+  expect(report.skipped).toEqual([{ pid: 4101, reason: "identity-mismatch" }]);
 });
 
 test("shutdown passes the recorded Serve backend to cleanup", async () => {
@@ -102,5 +104,38 @@ test("shutdown passes the recorded Serve backend to cleanup", async () => {
     tailscaleServe: { port: 4111, backend: "http://127.0.0.1:4111" },
   }, controller);
 
-  assert.equal(stoppedBackend, "http://127.0.0.1:4111");
+  expect(stoppedBackend).toBe("http://127.0.0.1:4111");
+});
+
+test("shutdown preserves an adopted legacy Temporal container", async () => {
+  let stopped = false;
+  const controller: ProcessController = {
+    async inspect() {
+      return undefined;
+    },
+    async signal() {},
+    async stopContainer() {
+      stopped = true;
+    },
+  };
+
+  const report = await stopOwnedProcesses({
+    version: 1,
+    processes: [],
+    temporalContainer: { id: "legacy-id", name: "forge-temporal", legacy: true },
+  }, controller);
+
+  expect(stopped).toBe(false);
+  expect(report.containersStopped).toEqual([]);
+});
+
+test("rejects a tampered process registry", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-registry-schema-test-"));
+  const filename = join(root, "owned-processes.json");
+  try {
+    await writeFile(filename, JSON.stringify({ version: 2, processes: [] }));
+    await expect(readProcessRegistry(filename)).rejects.toThrow(/process registry is invalid/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });

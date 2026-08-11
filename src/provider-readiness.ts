@@ -1,12 +1,33 @@
+import { basename } from "node:path";
 import { spawn } from "node:child_process";
 
 import type { HealthCheck } from "./health.js";
 import { GhAuthStatusSchema } from "./schemas.js";
 
+export type GithubFailure = "command-missing" | "auth-timeout" | "auth-format" | "unauthenticated" | "auth-failed";
+
 export type CommandResult = { stdout: string; stderr: string };
 export type CommandRunner = (command: string, args: string[], options: { timeout: number; maxBuffer: number; cwd?: string }) => Promise<CommandResult>;
 
 const codexReadinessCacheMs = 5 * 60_000;
+
+export const MINIMUM_CODEX_VERSION = "0.140.0";
+
+function parseSemver(value: string): number[] {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(value);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : [];
+}
+
+export function isSupportedCodexVersion(version: string): boolean {
+  const parsed = parseSemver(version);
+  const minimum = parseSemver(MINIMUM_CODEX_VERSION);
+  if (parsed.length !== 3 || minimum.length !== 3) return false;
+  for (let i = 0; i < 3; i += 1) {
+    if (parsed[i]! > minimum[i]!) return true;
+    if (parsed[i]! < minimum[i]!) return false;
+  }
+  return true;
+}
 
 const runCommand: CommandRunner = (command, args, options) => new Promise((resolve, reject) => {
   const child = spawn(command, args, { cwd: options.cwd, stdio: ["ignore", "pipe", "pipe"] });
@@ -70,6 +91,9 @@ export class CodexReadinessProbe {
         failure = "unsupported-version";
       } else {
         version = versionMatch[0];
+        if (!isSupportedCodexVersion(version)) {
+          failure = "version-unsupported";
+        }
       }
     } catch (error) {
       failure = commandFailure(error, "version-unavailable", "version-timeout");
@@ -88,6 +112,8 @@ export class CodexReadinessProbe {
       return this.cached.check;
     }
 
+    const safeCommand = basename(this.command);
+    const cacheExpiresAt = new Date(Date.now() + this.cacheDurationMs).toISOString();
     let check: HealthCheck;
     const testedAt = new Date().toISOString();
     if (!authenticated || failure) {
@@ -95,8 +121,12 @@ export class CodexReadinessProbe {
         id: "codex-auth",
         label: "Codex readiness",
         status: "unhealthy",
-        summary: failure === "version-unavailable" || failure === "command-missing" ? "Codex version is unavailable" : "Codex local authentication is unavailable",
-        details: { command: this.command, version, authentication: "unavailable", smoke: "not-run", workingDirectory: this.workingDirectory, failure: failure ?? "unauthenticated", testedAt },
+        summary: failure === "version-unavailable" || failure === "command-missing"
+          ? "Codex version is unavailable"
+          : failure === "version-unsupported" || failure === "unsupported-version"
+            ? `Codex version ${version === "unknown" ? "is unparseable" : version} is not supported`
+            : "Codex local authentication is unavailable",
+        details: { command: safeCommand, version, authentication: "unavailable", smoke: "not-run", failure: failure ?? "unauthenticated", testedAt, cacheExpiresAt, minVersion: MINIMUM_CODEX_VERSION },
       };
     } else {
       try {
@@ -130,7 +160,7 @@ export class CodexReadinessProbe {
           label: "Codex readiness",
           status: "healthy",
           summary: "Codex version, authentication, and structured smoke are ready",
-          details: { command: this.command, version, authentication: "available", smoke: "passed", workingDirectory: this.workingDirectory, failure: "none", testedAt },
+          details: { command: safeCommand, version, authentication: "available", smoke: "passed", failure: "none", testedAt, cacheExpiresAt, minVersion: MINIMUM_CODEX_VERSION },
         };
       } catch (error) {
         const smokeFailure = smokeFailureKind(error);
@@ -139,7 +169,7 @@ export class CodexReadinessProbe {
           label: "Codex readiness",
           status: "unhealthy",
           summary: "Codex authentication is available but the structured smoke failed",
-          details: { command: this.command, version, authentication: "available", smoke: "failed", workingDirectory: this.workingDirectory, failure: smokeFailure, testedAt },
+          details: { command: safeCommand, version, authentication: "available", smoke: "failed", failure: smokeFailure, testedAt, cacheExpiresAt, minVersion: MINIMUM_CODEX_VERSION },
         };
       }
     }
@@ -167,20 +197,38 @@ function smokeFailureKind(error: unknown): string {
 
 export function checkGithubAuthentication(command: string, runner: CommandRunner = runCommand): () => Promise<HealthCheck> {
   return async () => {
+    const safeCommand = basename(command);
+    let failure: GithubFailure | undefined;
+    let authenticated = false;
     try {
       const result = await runner(command, ["auth", "status", "--json", "hosts"], { timeout: 3_000, maxBuffer: 16 * 1024 });
       const parsed = GhAuthStatusSchema.safeParse(JSON.parse(result.stdout));
-      const accounts = parsed.success ? Object.values(parsed.data.hosts).flat() : [];
-      const authenticated = accounts.some((account) => account.active && account.state === "success");
-      return {
-        id: "gh-auth",
-        label: "GitHub CLI authentication",
-        status: authenticated ? "healthy" : "unhealthy",
-        summary: authenticated ? "GitHub CLI authentication is available" : "GitHub CLI authentication is unavailable",
-        details: { command, authentication: authenticated ? "available" : "unavailable" },
-      };
-    } catch {
-      return { id: "gh-auth", label: "GitHub CLI authentication", status: "unhealthy", summary: "GitHub CLI authentication is unavailable", details: { command, authentication: "unavailable" } };
+      if (!parsed.success) {
+        failure = "auth-format";
+      } else {
+        const accounts = Object.values(parsed.data.hosts).flat();
+        authenticated = accounts.some((account) => account.active && account.state === "success");
+        if (!authenticated) failure = "unauthenticated";
+      }
+    } catch (error) {
+      failure = commandFailure(error, "auth-failed", "auth-timeout") as GithubFailure;
+      if (!failure) failure = "auth-failed";
     }
+    const summary = authenticated
+      ? "GitHub CLI authentication is available"
+      : failure === "command-missing"
+        ? "GitHub CLI is not installed"
+        : failure === "auth-timeout"
+          ? "GitHub CLI auth status timed out"
+          : failure === "auth-format"
+            ? "GitHub CLI auth status returned an unexpected format"
+            : "GitHub CLI authentication is unavailable";
+    return {
+      id: "gh-auth",
+      label: "GitHub CLI authentication",
+      status: authenticated ? "healthy" : "unhealthy",
+      summary,
+      details: { command: safeCommand, authentication: authenticated ? "available" : "unavailable", failure: failure ?? "none" },
+    };
   };
 }

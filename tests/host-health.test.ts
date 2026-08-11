@@ -88,7 +88,7 @@ test("GitHub readiness parses bounded JSON without exposing account details", as
     stderr: "",
   }));
   const result = await check();
-  expect(result.details).toEqual({ command: "gh", authentication: "available" });
+  expect(result.details).toMatchObject({ command: "gh", authentication: "available", failure: "none" });
 });
 
 test("Codex readiness reports missing commands and malformed smoke output distinctly", async () => {
@@ -113,6 +113,14 @@ test("Codex readiness reports missing commands and malformed smoke output distin
   });
   const unsupportedResult = await unsupported.check();
   expect(unsupportedResult.details.failure).toBe("unsupported-version");
+
+  const belowMin = new CodexReadinessProbe("codex", async (_command, args) => {
+    if (args[0] === "--version") return { stdout: "codex-cli 0.100.0", stderr: "" };
+    if (args[0] === "login") return { stdout: "logged in", stderr: "" };
+    return { stdout: "", stderr: "" };
+  });
+  const belowMinResult = await belowMin.check();
+  expect(belowMinResult.details.failure).toBe("version-unsupported");
 
   const falseSmoke = new CodexReadinessProbe("codex", async (_command, args) => {
     if (args[0] === "--version") return { stdout: "codex-cli 1.0.0", stderr: "" };

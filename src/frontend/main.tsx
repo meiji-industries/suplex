@@ -509,12 +509,13 @@ function CompanySettingsView(): ReactElement {
   );
 }
 
-function StatusIndicator({ status }: { status: HealthCheck["status"] }): ReactElement {
-  const healthy = status === "healthy";
+function StatusIndicator({ check }: { check: HealthCheck }): ReactElement {
+  const healthy = check.status === "healthy";
+  const degraded = !healthy && !isOwnedHealthCheck(check.id);
   return (
-    <span className={healthy ? "flex items-center gap-1.5 text-xs text-emerald-700" : "flex items-center gap-1.5 text-xs text-rose-700"}>
-      <span className={healthy ? "size-1.5 rounded-full bg-emerald-500" : "size-1.5 rounded-full bg-rose-500"} />
-      {healthy ? "Healthy" : "Unhealthy"}
+    <span className={healthy ? "flex items-center gap-1.5 text-xs text-emerald-700" : degraded ? "flex items-center gap-1.5 text-xs text-amber-700" : "flex items-center gap-1.5 text-xs text-rose-700"}>
+      <span className={healthy ? "size-1.5 rounded-full bg-emerald-500" : degraded ? "size-1.5 rounded-full bg-amber-500" : "size-1.5 rounded-full bg-rose-500"} />
+      {healthy ? "Healthy" : degraded ? "Degraded" : "Unavailable"}
     </span>
   );
 }
@@ -527,7 +528,7 @@ function HealthRow({ check }: { check: HealthCheck }): ReactElement {
         <Icon className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="min-w-0 truncate text-[13px] font-medium text-foreground">{check.label}</span>
         <span className="hidden min-w-0 flex-1 truncate pl-2 text-xs text-muted-foreground sm:block">{check.summary}</span>
-        <StatusIndicator status={check.status} />
+        <StatusIndicator check={check} />
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]:rotate-90" />
       </Collapsible.Trigger>
       <Collapsible.Panel className="border-t border-border/70 bg-muted/20 px-9 py-2.5 sm:px-11">

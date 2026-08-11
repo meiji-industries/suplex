@@ -16,13 +16,22 @@ const workerHeartbeatMaxAgeMs = 30_000;
 export async function checkDatabase(database: ForgeDatabase): Promise<HealthCheck> {
   try {
     const health = database.health();
-    const healthy = health.migrationVersion >= 1 && health.walMode && health.readable && health.writable;
+    const healthy = health.schemaState === "current" && health.walMode && health.readable && health.writable;
     return {
       id: "database",
       label: "SQLite database",
       status: healthy ? "healthy" : "unhealthy",
-      summary: healthy ? "Migrations are current and WAL is enabled" : "Database migration or WAL state is not ready",
-      details: { migrationVersion: health.migrationVersion, walMode: health.walMode },
+      summary: healthy
+        ? "Schema is current and WAL is enabled"
+        : health.schemaState === "current" && !health.walMode
+          ? "Schema is current but WAL is disabled"
+          : `Schema state is ${health.schemaState}`,
+      details: {
+        schemaState: health.schemaState,
+        expectedMigrations: health.expectedMigrations,
+        appliedMigrations: health.appliedMigrations,
+        walMode: health.walMode,
+      },
     };
   } catch {
     return {
@@ -30,7 +39,7 @@ export async function checkDatabase(database: ForgeDatabase): Promise<HealthChec
       label: "SQLite database",
       status: "unhealthy",
       summary: "Database could not be read or written",
-      details: {},
+      details: { schemaState: "unavailable" },
     };
   }
 }
@@ -50,7 +59,7 @@ export async function checkArtifactRoot(root: string): Promise<HealthCheck> {
       label: "Artifact root",
       status: healthy ? "healthy" : "unhealthy",
       summary: healthy ? "Artifact storage is writable with sufficient space" : "Artifact storage is low on space",
-      details: { root, freeBytes },
+      details: { writable: true, readable: true, freeBytes },
     };
   } catch {
     return {
@@ -58,7 +67,7 @@ export async function checkArtifactRoot(root: string): Promise<HealthCheck> {
       label: "Artifact root",
       status: "unhealthy",
       summary: "Artifact storage is not writable or cannot be inspected",
-      details: { root },
+      details: { writable: false, readable: false },
     };
   }
 }

@@ -61,6 +61,8 @@ export interface ProjectInput {
   requiredChecks: string[];
   allowedProfileIds: string[];
   roleDefaults: Partial<Record<ProjectRole, string>>;
+  baseSha?: string | undefined;
+  targetSha?: string | undefined;
 }
 
 export interface Project {
@@ -81,6 +83,8 @@ export interface Project {
   activeRevisionId?: string;
   configurationRevision: number;
   configurationIdentity?: string;
+  baseSha?: string | undefined;
+  targetSha?: string | undefined;
   createdAt: string;
   updatedAt: string;
 }
@@ -123,6 +127,8 @@ interface ProjectRow {
   updated_at: string;
   configuration_revision?: number;
   configuration_identity?: string;
+  base_sha?: string | null;
+  target_sha?: string | null;
 }
 
 interface ProfileRow {
@@ -145,6 +151,7 @@ const secretPattern = /(?:gh[pousr]_|github_pat_|token\s*=|password\s*=|secret\s
 const approvedSetupCommands = new Set(["pnpm install", "pnpm install --frozen-lockfile", "npm install", "npm ci", "yarn install", "yarn install --immutable", "bun install"]);
 const approvedVerificationCommands = new Set(["pnpm test", "pnpm typecheck", "pnpm lint", "npm test", "npm run typecheck", "npm run lint", "yarn test", "yarn typecheck", "yarn lint", "bun test", "mise run test", "mise run typecheck", "mise run lint", "make test", "make check"]);
 
+
 function identifier(prefix: string): string {
   return `${prefix}_${randomBytes(12).toString("hex")}`;
 }
@@ -163,7 +170,7 @@ function asJson<T>(value: string, fallback: T): T {
 }
 
 function normalizedInput(input: ProjectInput, paths: { repositoryPath: string; worktreeRoot: string }): ProjectInput {
-  return {
+  const normalized: ProjectInput = {
     name: input.name.trim(),
     repositoryPath: paths.repositoryPath,
     worktreeRoot: paths.worktreeRoot,
@@ -176,6 +183,9 @@ function normalizedInput(input: ProjectInput, paths: { repositoryPath: string; w
     allowedProfileIds: [...new Set(input.allowedProfileIds.map((profileId) => profileId.trim()).filter(Boolean))].sort(),
     roleDefaults: Object.fromEntries(Object.entries(input.roleDefaults).filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim().length > 0).sort(([left], [right]) => left.localeCompare(right))) as Partial<Record<ProjectRole, string>>,
   };
+  if (input.baseSha) normalized.baseSha = input.baseSha.trim().toLowerCase();
+  if (input.targetSha) normalized.targetSha = input.targetSha.trim().toLowerCase();
+  return normalized;
 }
 
 function configIdentity(input: ProjectInput): string {
@@ -215,6 +225,8 @@ function publicProject(row: ProjectRow): Project {
     ...(row.active_revision_id ? { activeRevisionId: row.active_revision_id } : {}),
     configurationRevision: row.configuration_revision ?? 0,
     ...(row.configuration_identity ? { configurationIdentity: row.configuration_identity } : {}),
+    ...(row.base_sha ? { baseSha: row.base_sha } : {}),
+    ...(row.target_sha ? { targetSha: row.target_sha } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -388,7 +400,11 @@ export class ProjectService {
         await this.github.checkAuthentication();
         const remote = await this.github.getRepository({ cwd: project.repositoryPath, nameWithOwner: project.repository! });
         if (remote.nameWithOwner.toLowerCase() !== project.repository!.toLowerCase()) findings.push(finding("provider-mismatch", "repository", "GitHub repository identity does not match configuration"));
-        if (new URL(remote.url).username || new URL(remote.url).password) findings.push(finding("credential-url", "repository", "Credential-bearing repository URLs are not accepted"));
+        const remoteUrl = new URL(remote.url);
+        if (remoteUrl.hostname.toLowerCase() !== "github.com") findings.push(finding("provider-host", "repository", "Repository URL must be hosted on GitHub"));
+        const expectedPath = `/${project.repository!}`;
+        if (remoteUrl.pathname.replace(/\.git$/, "").toLowerCase() !== expectedPath.toLowerCase()) findings.push(finding("provider-path", "repository", "Repository URL path does not match configured identity"));
+        if (remoteUrl.username || remoteUrl.password) findings.push(finding("credential-url", "repository", "Credential-bearing repository URLs are not accepted"));
       } catch (error) {
         const code = error instanceof GithubFailure && error.code === "authentication" ? "github-auth-unavailable" : "github-repository-unavailable";
         findings.push(finding(code, "repository", code === "github-auth-unavailable" ? "Host GitHub CLI authentication is unavailable" : "GitHub repository identity could not be verified"));
@@ -407,6 +423,8 @@ export class ProjectService {
       requiredChecks: project.requiredChecks,
       allowedProfileIds: project.allowedProfileIds,
       roleDefaults: project.roleDefaults,
+      baseSha: inspection?.baseSha,
+      targetSha: inspection?.targetSha,
     };
     const identity = configIdentity(normalized);
     this.database.authTransaction((db) => {
@@ -414,7 +432,7 @@ export class ProjectService {
       const existingRevision = db.prepare("SELECT id, revision FROM forge_project_revisions WHERE project_id = ? AND identity = ?").get(project.id, identity) as { id: string; revision: number } | undefined;
       const revisionId = existingRevision?.id ?? identifier("project-revision");
       const nextRevision = existingRevision?.revision ?? Number((db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM forge_project_revisions WHERE project_id = ?").get(project.id) as { revision: number }).revision) + 1;
-      if (!existingRevision) db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(revisionId, project.id, nextRevision, identity, JSON.stringify(normalized), actorUserId, now);
+      if (!existingRevision) db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revisionId, project.id, nextRevision, identity, JSON.stringify(normalized), normalized.baseSha ?? null, normalized.targetSha ?? null, actorUserId, now);
       db.prepare("UPDATE forge_projects SET repository_identity = ?, status = 'active', active_revision_id = ?, updated_at = ? WHERE id = ?").run(project.repository, revisionId, now, project.id);
       this.auth.recordAuditEventInTransaction(db, actorUserId, "project_activated", undefined, project.companyId, { projectId: project.id, revision: String(nextRevision), identity });
       return { revision: nextRevision, identity };
@@ -429,8 +447,8 @@ export class ProjectService {
     const row = this.database.authQuery((db) => {
       const user = this.user(actorUserId);
       const result = user.role === "admin"
-        ? db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity FROM forge_projects p WHERE p.id = ?").get(projectId)
-        : db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE p.id = ? AND m.user_id = ?").get(projectId, actorUserId);
+        ? db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p WHERE p.id = ?").get(projectId)
+        : db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE p.id = ? AND m.user_id = ?").get(projectId, actorUserId);
       return result as ProjectRow | undefined;
     });
     if (!row) throw new ProjectFailure("Not found", [], 404);
@@ -442,8 +460,8 @@ export class ProjectService {
       const user = this.user(actorUserId);
       if (companyId) this.auth.requireCompanyAccess(actorUserId, companyId);
       const query = user.role === "admin"
-        ? companyId ? db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity FROM forge_projects p WHERE p.company_id = ? ORDER BY p.name") : db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity FROM forge_projects p ORDER BY p.name")
-        : companyId ? db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? AND p.company_id = ? ORDER BY p.name") : db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? ORDER BY p.name");
+        ? companyId ? db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p WHERE p.company_id = ? ORDER BY p.name") : db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p ORDER BY p.name")
+        : companyId ? db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? AND p.company_id = ? ORDER BY p.name") : db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? ORDER BY p.name");
       const result = companyId ? user.role === "admin" ? query.all(companyId) : query.all(actorUserId, companyId) : user.role === "admin" ? query.all() : query.all(actorUserId);
       return result as ProjectRow[];
     });
@@ -468,7 +486,12 @@ export class ProjectService {
     if (secretPattern.test(input.repository) || secretPattern.test(input.baseBranch) || secretPattern.test(input.targetBranch)) findings.push(finding("secret-shaped-value", "configuration", "Secret-shaped configuration values are not accepted"));
     if (!Array.isArray(input.requiredChecks) || input.requiredChecks.length === 0 || input.requiredChecks.length > 32 || input.requiredChecks.some((check) => !checkPattern.test(check.trim()))) findings.push(finding("invalid-check", "requiredChecks", "At least one safe required check is required"));
     if (!Array.isArray(input.allowedProfileIds) || input.allowedProfileIds.length === 0 || input.allowedProfileIds.length > 16) findings.push(finding("invalid-profiles", "allowedProfileIds", "At least one allowed profile is required"));
+    if (worktree.path) {
+      try { await access(worktree.path, constants.W_OK); } catch { findings.push(finding("worktree-unwritable", "worktreeRoot", "Worktree root must be writable")); }
+    }
     const normalized = normalizedInput(input, { repositoryPath: repository.path ?? resolve(input.repositoryPath), worktreeRoot: worktree.path ?? resolve(input.worktreeRoot) });
+    if (!normalized.roleDefaults.lead) findings.push(finding("missing-default", "roleDefaults.lead", "A Lead profile default is required"));
+    if (!normalized.roleDefaults.developer) findings.push(finding("missing-default", "roleDefaults.developer", "A Developer profile default is required"));
     for (const [role, profileId] of Object.entries(normalized.roleDefaults)) if (!normalized.allowedProfileIds.includes(profileId)) findings.push(finding("profile-ineligible", `roleDefaults.${role}`, "Role defaults must reference an allowed profile"));
     if (findings.length) throw new ProjectFailure("Project configuration is invalid", findings, 422);
     const now = this.now().toISOString();
@@ -488,13 +511,13 @@ export class ProjectService {
       const existingRevision = db.prepare("SELECT id, revision FROM forge_project_revisions WHERE project_id = ? AND identity = ?").get(id, identity) as { id: string; revision: number } | undefined;
       const revisionId = existingRevision?.id ?? identifier("project-revision");
       const revision = existingRevision?.revision ?? Number((db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM forge_project_revisions WHERE project_id = ?").get(id) as { revision: number }).revision) + 1;
-      if (!existingRevision) db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(revisionId, id, revision, identity, JSON.stringify(normalized), actorUserId, now);
+      if (!existingRevision) db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(revisionId, id, revision, identity, JSON.stringify(normalized), normalized.baseSha ?? null, normalized.targetSha ?? null, actorUserId, now);
         this.auth.recordAuditEventInTransaction(db, actorUserId, updating ? "project_updated" : "project_created", undefined, companyId, { projectId: id, revision: String(revision), identity });
         return { id, revision, identity };
       });
     } catch (error) {
-      if (error instanceof Error && error.message.includes("forge_projects.")) {
-        const field = error.message.includes("repository_path") ? "repositoryPath" : error.message.includes("worktree_root") ? "worktreeRoot" : error.message.includes("company_id") && error.message.includes("name") ? "name" : undefined;
+      if (error instanceof Error && (error.message.includes("forge_projects.") || error.message.includes("forge_projects_repository_identity_unique"))) {
+        const field = error.message.includes("repository_path") ? "repositoryPath" : error.message.includes("worktree_root") ? "worktreeRoot" : error.message.includes("repository_identity") ? "repository" : error.message.includes("company_id") && error.message.includes("name") ? "name" : undefined;
         if (!field) throw error;
         throw new ProjectFailure("Project configuration is invalid", [finding("already-assigned", field, "This coordinate is already assigned to another project")], 409);
       }
@@ -514,7 +537,7 @@ export class ProjectService {
   }
 
   private rowForProject(db: import("better-sqlite3").Database, projectId: string): ProjectRow | undefined {
-    return db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity FROM forge_projects p WHERE p.id = ?").get(projectId) as ProjectRow | undefined;
+    return db.prepare("SELECT p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha FROM forge_projects p WHERE p.id = ?").get(projectId) as ProjectRow | undefined;
   }
 
   private user(userId: string): AuthUser {

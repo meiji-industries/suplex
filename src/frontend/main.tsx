@@ -26,7 +26,7 @@ import {
   Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import "./styles.css";
@@ -49,6 +49,22 @@ function relativeTime(timestamp: string): string {
 
 type ApiProfile = { id: string; name: string; model: string; reasoningLevel: string; servicePriority: string; capacity: number };
 type ApiProject = { id: string; companyId: string; name: string; repositoryPath: string; worktreeRoot: string; repository?: string; baseBranch: string; targetBranch: string; setupCommand: string; verificationCommand: string; requiredChecks: string[]; allowedProfileIds: string[]; roleDefaults: Record<string, string>; status: string; configurationRevision: number; configurationIdentity?: string };
+const projectFormFields = [
+  { key: "name", label: "Project name" },
+  { key: "repositoryPath", label: "Repository path" },
+  { key: "worktreeRoot", label: "Worktree root" },
+  { key: "repository", label: "GitHub repository (owner/name)" },
+  { key: "baseBranch", label: "Base branch" },
+  { key: "targetBranch", label: "Target branch" },
+  { key: "setupCommand", label: "Setup command" },
+  { key: "verificationCommand", label: "Verification command" },
+  { key: "requiredChecks", label: "Required checks (comma separated)" },
+  { key: "allowedProfileIds", label: "Allowed profiles (comma separated)" },
+  { key: "leadProfile", label: "Lead default" },
+  { key: "developerProfile", label: "Developer default" },
+  { key: "reviewerProfile", label: "Reviewer default (optional)" },
+] as const;
+
 type ApiAttentionItem = { id: string; companyId: string; taskId: string; taskTitle: string; category: string; summary: string; action: string; evidenceRef?: string; updatedAt: string };
 type ApiAttentionCompany = { companyId: string; companyName: string; companyStatus: string; activeIssueCount: number; phases: Record<string, number>; attentionCount: number; attention: ApiAttentionItem[]; recentOutcomes: Array<{ taskId: string; taskTitle: string; phase: string; updatedAt: string }> };
 type ApiTask = { id: string; companyId: string; projectId: string; title: string; description: string; briefArtifactId: string; images: Array<{ artifactId: string; filename: string; mimeType: string; byteSize: number }>; roleProfiles: Record<string, string>; supplementalReview: boolean; workflowId: string; projectRevisionId: string; phase: "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "delivery_blocked"; revision: number; owner: "human" | "lead"; allowedCommands: string[]; pendingAction: string | null; createdAt: string; updatedAt: string; timeline: Array<{ id: string; revision: number; eventType: string; metadata: Record<string, string | number | boolean>; createdAt: string }>; planRevision?: number | null; planMaterial?: boolean | null; materialCategories?: string[]; supplementalReviewUsed?: boolean; supplementalReviewArtifactId?: string | null; decisionId?: string | null; deliveryReview?: { id: string; outcome: "approved" | "blocking"; summary: string; planRevision: number; baseSha: string; subjectCommit: string; subjectTree: string; findings: Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidenceRef: string; disposition: string; repairInstruction: string | null }> }; developerExecution?: { id: string; status: string; attempt: number; branchName: string; worktreePath: string; targetBaseSha: string; resultCommit?: string | null; resultTree?: string | null; dirtyState?: string | null; deliveryArtifactId?: string | null; deliverySummary?: string | null }; leadOutput?: { kind: "plan" | "decision_blocker"; summary: string; sessionRef: string; executionId: string; outputArtifactId: string; evidenceArtifactId: string; content: { kind: "plan"; summary: string; reproduction: string | null; rootCauseAnalysis: string | null; steps: Array<{ number: number; instruction: string; verification: string }>; compatibilityAnalysis: string; operationalAnalysis: string; verificationStrategy: string; unresolvedTechnicalQuestions: string[] } | { kind: "decision_blocker"; summary: string; evidence: string; owner: "human"; question: string; nextAction: string } } };
@@ -228,7 +244,8 @@ function ProjectsView(): ReactElement {
   const visibleProjects = loadedCompanyId === companyId ? projects : [];
 
   const setField = (key: keyof typeof form, value: string): void => setForm((current) => ({ ...current, [key]: value }));
-  const createProject = async (): Promise<void> => {
+  const createProject = async (event?: React.FormEvent): Promise<void> => {
+    if (event) event.preventDefault();
     if (!companyId || currentCompany?.status !== "active") return;
     setError(""); setFindings([]);
     try {
@@ -259,7 +276,15 @@ function ProjectsView(): ReactElement {
         <div className="grid gap-px border-b border-border/70 bg-border lg:grid-cols-[minmax(260px,360px)_1fr]">
           <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">New project</span><span className="text-[11px] text-muted-foreground">Draft first</span></div>
             {currentCompany ? <div className="mb-3 flex items-center gap-2 border-b border-border/70 pb-2 text-xs"><span className="font-medium truncate">{currentCompany.name}</span><span className="text-[11px] text-muted-foreground">{currentCompany.status}</span></div> : null}
-            {currentCompany?.status === "active" ? <><div className="grid gap-2">{(["name", "repositoryPath", "worktreeRoot", "repository", "baseBranch", "targetBranch", "setupCommand", "verificationCommand", "requiredChecks", "allowedProfileIds", "leadProfile", "developerProfile", "reviewerProfile"] as const).map((field) => <Input key={field} aria-label={field} placeholder={field} value={form[field]} onChange={(event) => setField(field, event.target.value)} />)}</div><Button className="mt-3 w-full" onClick={() => void createProject()} disabled={!companyId}>Create draft</Button></> : currentCompany ? <p className="text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p> : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
+            {currentCompany?.status === "active" ? <form className="grid gap-2" onSubmit={(event: FormEvent) => void createProject(event)}>
+              {projectFormFields.map((field) => (
+                <label key={field.key} className="grid gap-0.5 text-[11px] text-muted-foreground">
+                  {field.label}
+                  <Input name={field.key} value={form[field.key as keyof typeof form]} onChange={(event) => setField(field.key as keyof typeof form, event.target.value)} />
+                </label>
+              ))}
+              <Button className="mt-3 w-full" type="submit" disabled={!companyId}>Create draft</Button>
+            </form> : currentCompany ? <p className="text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p> : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
             {error ? <p role="alert" className="mt-3 text-xs text-rose-700">{error}</p> : null}
             {findings.length ? <ul className="mt-3 space-y-1 text-xs text-rose-700">{findings.map((item, index) => <li key={`${item.field}-${index}`}>{item.field}: {item.message}</li>)}</ul> : null}
           </section>

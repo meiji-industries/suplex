@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,7 +24,8 @@ interface Fixture {
 
 const localRepository: LocalRepositoryAdapter = {
   async inspect(input) {
-    return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "base-sha", targetSha: "target-sha" };
+    const identity = input.repositoryPath.includes("unavailable") ? "acme/unavailable" : input.repositoryPath.includes("cross") ? "acme/cross" : "acme/forge";
+    return { canonicalPath: input.repositoryPath, remoteRepository: identity, clean: true, baseSha: "base-sha", targetSha: "target-sha" };
   },
 };
 
@@ -79,16 +80,20 @@ test("activates a validated project and records an immutable normalized revision
     expect(draft.status).toBe("draft");
     const active = await value.projects.activateProject(value.adminId, draft.id);
     expect(active.status).toBe("active");
-    expect(active.configurationRevision).toBe(1);
+    expect(active.configurationRevision).toBe(2);
     expect(active.configurationIdentity).toMatch(/^[a-f0-9]{64}$/);
+    expect(active.baseSha).toBe("base-sha");
+    expect(active.targetSha).toBe("target-sha");
     const unchanged = await value.projects.updateProject(value.adminId, draft.id, input(value));
-    expect(unchanged.configurationRevision).toBe(1);
+    expect(unchanged.configurationRevision).toBe(2);
     const changed = await value.projects.updateProject(value.adminId, draft.id, input(value, { targetBranch: "release" }));
-    expect(changed.configurationRevision).toBe(2);
+    expect(changed.configurationRevision).toBe(3);
     const revisions = value.database.authQuery((db) => db.prepare("SELECT revision, identity, normalized_json FROM forge_project_revisions WHERE project_id = ? ORDER BY revision").all(draft.id) as Array<{ revision: number; identity: string; normalized_json: string }>);
-    expect(revisions).toHaveLength(2);
+    expect(revisions).toHaveLength(3);
     expect(revisions[0]?.identity).not.toBe(revisions[1]?.identity);
+    expect(revisions[2]?.identity).not.toBe(revisions[1]?.identity);
     expect(revisions[0]?.normalized_json).not.toContain("token");
+    expect(JSON.parse(revisions[1]?.normalized_json ?? "{}")).toMatchObject({ baseSha: "base-sha", targetSha: "target-sha" });
   } finally {
     await close(value);
   }
@@ -126,7 +131,7 @@ test("fails closed for provider mismatch, unavailable profiles, and cross-compan
     const unavailableWorktree = join(value.worktreeRoot, "unavailable");
     await mkdir(unavailableRepository, { recursive: true });
     await mkdir(unavailableWorktree, { recursive: true });
-    const unavailable = await value.projects.createProject(value.adminId, value.companyId, input(value, { name: "Unavailable", repositoryPath: unavailableRepository, worktreeRoot: unavailableWorktree, allowedProfileIds: ["missing-profile"], roleDefaults: { lead: "missing-profile" } }));
+    const unavailable = await value.projects.createProject(value.adminId, value.companyId, input(value, { name: "Unavailable", repositoryPath: unavailableRepository, worktreeRoot: unavailableWorktree, repository: "acme/unavailable", allowedProfileIds: ["missing-profile"], roleDefaults: { lead: "missing-profile", developer: "missing-profile" } }));
     await expect(value.projects.activateProject(value.adminId, unavailable.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "profile-unavailable" })]) });
 
     value.database.authQuery((db) => {
@@ -144,4 +149,66 @@ test("fails closed for provider mismatch, unavailable profiles, and cross-compan
   } finally {
     await close(value);
   }
+});
+
+test("rejects duplicate repository identity across companies and preserves exact Git SHAs on activation", async () => {
+  const value = await fixture();
+  try {
+    const first = await value.projects.createProject(value.adminId, value.companyId, input(value, { repository: "acme/forge" }));
+    const firstActive = await value.projects.activateProject(value.adminId, first.id);
+    expect(firstActive.baseSha).toBe("base-sha");
+    expect(firstActive.targetSha).toBe("target-sha");
+
+    value.database.authQuery((db) => {
+      db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-b', 'Other', 'active', '2026-08-11T00:00:00.000Z')").run();
+      db.prepare("INSERT INTO forge_memberships (user_id, company_id, created_at) VALUES (?, 'company-b', '2026-08-11T00:00:00.000Z')").run(value.adminId);
+    });
+    const secondPath = join(value.root, "repositories", "second");
+    const secondWorktree = join(value.worktreeRoot, "second");
+    await mkdir(secondPath, { recursive: true });
+    await mkdir(secondWorktree, { recursive: true });
+    await expect(value.projects.createProject(value.adminId, "company-b", input(value, { name: "Second", repositoryPath: secondPath, worktreeRoot: secondWorktree, repository: "acme/forge" }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "already-assigned", field: "repository" })]) });
+
+    const updatedSha = "updated-sha";
+    const sameBranches = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
+      localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: updatedSha, targetSha: "target-sha" }; } },
+      github,
+    });
+    const reactivated = await sameBranches.activateProject(value.adminId, first.id);
+    expect(reactivated.configurationRevision).toBeGreaterThan(firstActive.configurationRevision);
+    expect(reactivated.baseSha).toBe(updatedSha);
+  } finally {
+    await close(value);
+  }
+});
+
+test("rejects unwritable worktree root and missing lead or developer defaults", async () => {
+  const value = await fixture();
+  const readOnly = join(value.worktreeRoot, "readonly");
+  await mkdir(readOnly, { recursive: true });
+  await chmod(readOnly, 0o555);
+  try {
+    await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { worktreeRoot: readOnly }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "worktree-unwritable" })]) });
+    await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { roleDefaults: { lead: value.profileId } }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "missing-default", field: "roleDefaults.developer" })]) });
+    await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { roleDefaults: { developer: value.profileId } }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "missing-default", field: "roleDefaults.lead" })]) });
+  } finally {
+    await chmod(readOnly, 0o755);
+    await close(value);
+  }
+});
+
+test("rejects GitHub provider URL with wrong hostname or path", async () => {
+  const value = await fixture();
+  const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
+  const wrongHost = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
+    localRepository,
+    github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: "https://notgithub.com/acme/forge" }; } },
+  });
+  await expect(wrongHost.activateProject(value.adminId, project.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "provider-host" })]) });
+  const wrongPath = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
+    localRepository,
+    github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: "https://github.com/other/repo" }; } },
+  });
+  await expect(wrongPath.activateProject(value.adminId, project.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "provider-path" })]) });
+  await close(value);
 });

@@ -13,7 +13,7 @@ type NavGroup = { title: string; items: NavItem[] };
 function isActive(href: string): boolean {
   const current = window.location.pathname;
   const target = new URL(href, window.location.href).pathname;
-  return current === target || current.startsWith(`${target}/`);
+  return current === target;
 }
 
 function NavigationGroups({ close }: { close?: () => void }): ReactElement {

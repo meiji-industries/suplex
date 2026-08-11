@@ -70,7 +70,7 @@ test("project API activates valid configuration, redacts typed failures, and pre
     expect(project.status).toBe("draft");
     const activated = await app.inject({ method: "POST", url: `/api/projects/${project.id}/activate`, headers: { cookie: adminCookie }, payload: {} });
     expect(activated.statusCode).toBe(200);
-    expect(activated.json()).toMatchObject({ status: "active", configurationRevision: 1, repository: "acme/forge" });
+    expect(activated.json()).toMatchObject({ status: "active", configurationRevision: 2, repository: "acme/forge" });
     const invalid = await app.inject({ method: "POST", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie }, payload: { ...configuration, name: "Unsafe", repositoryPath: join(repositoryRoot, "unsafe"), worktreeRoot: join(worktreeRoot, "unsafe"), repository: "https://token@github.com/acme/forge.git" } });
     expect(invalid.statusCode).toBe(422);
     expect(invalid.json()).toMatchObject({ error: "Project configuration is invalid" });

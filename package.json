@@ -1,0 +1,41 @@
+{
+  "name": "forge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "forge": "dist/src/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "forge": "tsx src/cli.ts",
+    "build": "tsc",
+    "dev": "tsx src/cli.ts start --foreground",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/app.test.ts tests/config.test.ts tests/database.test.ts tests/health.test.ts tests/process-manager.test.ts tests/redaction.test.ts tests/runtime.test.ts tests/setup.test.ts tests/temporal.integration.test.ts",
+    "test:browser": "tsx --test tests/health.browser.test.ts",
+    "test:all": "npm run typecheck && npm test && npm run test:browser"
+  },
+  "dependencies": {
+    "@temporalio/client": "^1.14.0",
+    "@temporalio/proto": "^1.22.0",
+    "@temporalio/worker": "^1.14.0",
+    "@temporalio/workflow": "^1.14.0",
+    "better-sqlite3": "^12.6.2",
+    "fastify": "^5.6.1",
+    "long": "^5.2.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.10.1",
+    "playwright": "^1.57.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

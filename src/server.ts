@@ -1,0 +1,59 @@
+import { mkdir } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
+
+import type { FastifyInstance } from "fastify";
+
+import { createApp } from "./app.js";
+import { loadConfig, type ForgeConfig } from "./config.js";
+import { ForgeDatabase } from "./database.js";
+import { createHostHealthDependencies } from "./host-health.js";
+import { StructuredLogger } from "./logging.js";
+
+export interface ForgeServer {
+  app: FastifyInstance;
+  database: ForgeDatabase;
+}
+
+export async function createForgeServer(config: ForgeConfig = loadConfig()): Promise<ForgeServer> {
+  await mkdir(config.artifactRoot, { recursive: true });
+  const database = new ForgeDatabase(config.databasePath);
+  const app = createApp({
+    config,
+    health: createHostHealthDependencies(config, database),
+  });
+  return { app, database };
+}
+
+export async function startServer(config: ForgeConfig = loadConfig()): Promise<void> {
+  const server = await createForgeServer(config);
+  let closed = false;
+  try {
+    await server.app.listen({ host: config.bindAddress, port: config.port });
+    await new Promise<void>((resolve) => {
+      const shutdown = async (): Promise<void> => {
+        if (closed) {
+          return;
+        }
+        closed = true;
+        await server.app.close();
+        server.database.close();
+        resolve();
+      };
+      process.once("SIGTERM", () => void shutdown());
+      process.once("SIGINT", () => void shutdown());
+    });
+  } finally {
+    if (!closed) {
+      closed = true;
+      await server.app.close().catch(() => undefined);
+      server.database.close();
+    }
+  }
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  startServer().catch((error: unknown) => {
+    new StructuredLogger().error("Forge API stopped", {}, { error: error instanceof Error ? error.message : "unknown error" });
+    process.exitCode = 1;
+  });
+}

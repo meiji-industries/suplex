@@ -137,7 +137,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
           }
           const headSha = merged.mergeCommit ?? context.subjectCommit;
           const headTree = merged.tree ?? context.subjectTree;
-          return { releaseId: "", repository: context.repository, branchName: input.branchName || context.branchName, headSha, headTree, pullRequestNumber: 0, pullRequestUrl: "", isDraft: false, reused: false, baseDriftMerged: true, targetBaseSha: currentBaseSha, priorHead: merged.priorHead, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}) };
+          return { releaseId: "", repository: context.repository, branchName: input.branchName || context.branchName, headSha, headTree, pullRequestNumber: 0, pullRequestUrl: "", isDraft: false, reused: false, baseDriftMerged: true, targetBaseSha: currentBaseSha, priorHead: merged.priorHead, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), ...(merged.mergeCommit ? { mergeCommit: merged.mergeCommit } : {}), ...(merged.tree ? { tree: merged.tree } : {}) };
         }
       }
       const result = await release.publish({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, repositoryPath: context.worktreePath, repository: context.repository, branchName: input.branchName || context.branchName, baseBranch: context.baseBranch, targetBaseSha: input.targetBaseSha || context.targetBaseSha, subjectCommit: input.subjectCommit || context.subjectCommit, subjectTree: input.subjectTree || context.subjectTree, reviewId: input.reviewId, planSummary: input.planSummary || context.title, deliverySummary: input.deliverySummary || context.deliverySummary, verificationSummary: input.verificationSummary });

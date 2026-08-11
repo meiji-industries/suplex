@@ -101,9 +101,18 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
     expect(await adminPage.locator("body").innerText()).not.toMatch(/password/i);
 
     await adminPage.goto(`${baseUrl}/admin`);
-    await adminPage.getByPlaceholder("Company name").fill("Browser Company");
+    await adminPage.getByRole("button", { name: "Switch company" }).click();
+    await adminPage.getByRole("menuitem", { name: /Create company/ }).click();
+    await adminPage.getByLabel("Company name", { exact: true }).fill("Browser Company");
     await adminPage.getByRole("button", { name: "Create", exact: true }).click();
-    await adminPage.getByText("Browser Company", { exact: true }).waitFor();
+    await adminPage.getByRole("heading", { name: "Company settings", exact: true }).waitFor();
+    await adminPage.goto(`${baseUrl}/admin`);
+    const secondCompany = await adminPage.evaluate(async () => (await (await fetch("/api/admin/companies", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "Second Browser Company" }) })).json()) as { id: string });
+    await adminPage.reload();
+    await adminPage.getByRole("button", { name: "Switch company" }).click();
+    await adminPage.getByRole("menuitem", { name: /Second Browser Company/ }).click();
+    expect(new URL(adminPage.url()).searchParams.get("company")).toBe(secondCompany.id);
+    expect(await adminPage.evaluate(() => window.localStorage.getItem("forge.activeCompanyId"))).toBe(secondCompany.id);
     await adminPage.getByPlaceholder("Display name").fill("Browser Member");
     await adminPage.getByRole("button", { name: "Invite", exact: true }).click();
     await adminPage.locator("code").waitFor();
@@ -120,10 +129,10 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
     await memberPage.locator("h1").filter({ hasText: "Host health" }).waitFor();
 
     await adminPage.reload();
-    await adminPage.getByRole("button", { name: /\+ Browser Member/ }).click();
-    await adminPage.getByRole("button", { name: /− Browser Member/ }).waitFor();
-    await adminPage.getByRole("button", { name: /− Browser Member/ }).click();
-    await adminPage.getByRole("button", { name: /\+ Browser Member/ }).waitFor();
+    await adminPage.getByRole("button", { name: /\+ Browser Member/ }).first().click();
+    await adminPage.getByRole("button", { name: /− Browser Member/ }).first().waitFor();
+    await adminPage.getByRole("button", { name: /− Browser Member/ }).first().click();
+    await adminPage.getByRole("button", { name: /\+ Browser Member/ }).first().waitFor();
 
     await adminPage.evaluate(async () => { await fetch("/api/auth/sign-out", { method: "POST" }); });
     await adminPage.goto(`${baseUrl}/auth`);

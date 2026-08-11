@@ -103,6 +103,23 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
     }
     return reply.type("text/html; charset=utf-8").send(renderApplicationPage("admin"));
   });
+  app.get<{ Params: { companyId: string } }>("/companies/:companyId/settings", async (request, reply) => {
+    const user = auth ? await sessionUser(request) : undefined;
+    if (auth && !user) {
+      return reply.redirect("/auth");
+    }
+    if (auth && (!user || user.role !== "admin")) {
+      return reply.code(404).type("text/plain; charset=utf-8").send("Not found");
+    }
+    if (auth && user) {
+      try {
+        auth.requireCompanyAccess(user.id, request.params.companyId);
+      } catch {
+        return reply.code(404).type("text/plain; charset=utf-8").send("Not found");
+      }
+    }
+    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("company-settings"));
+  });
   app.get("/projects", async (request, reply) => {
     if (auth && !(await sessionUser(request))) {
       return reply.redirect("/auth");
@@ -231,6 +248,24 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
       if (!user) return reply;
       try {
         return reply.code(201).send(auth.createCompany(user.id, textBody(request, "name")));
+      } catch (error) {
+        return sendAuthError(reply, error);
+      }
+    });
+    app.patch<{ Params: { companyId: string } }>("/api/admin/companies/:companyId", async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return reply;
+      try {
+        return reply.send(auth.renameCompany(user.id, request.params.companyId, textBody(request, "name")));
+      } catch (error) {
+        return sendAuthError(reply, error);
+      }
+    });
+    app.post<{ Params: { companyId: string; status: "active" | "paused" | "archived" } }>("/api/admin/companies/:companyId/status/:status", async (request, reply) => {
+      const user = await requireUser(request, reply);
+      if (!user) return reply;
+      try {
+        return reply.send(auth.setCompanyStatus(user.id, request.params.companyId, request.params.status));
       } catch (error) {
         return sendAuthError(reply, error);
       }
@@ -367,11 +402,6 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
           try { return reply.send(await (action === "activateProject" ? projects.activateProject(user.id, request.params.projectId) : action === "pauseProject" ? projects.pauseProject(user.id, request.params.projectId) : projects.archiveProject(user.id, request.params.projectId))); } catch (error) { return sendProjectError(reply, error); }
         });
       }
-      app.post<{ Params: { companyId: string; status: "active" | "paused" | "archived" } }>("/api/admin/companies/:companyId/status/:status", async (request, reply) => {
-        const user = await requireUser(request, reply);
-        if (!user) return reply;
-        try { return reply.send(auth.setCompanyStatus(user.id, request.params.companyId, request.params.status)); } catch (error) { return sendAuthError(reply, error); }
-      });
     }
     if (tasks) {
       const sendTaskError = (reply: { code: (statusCode: number) => { send: (body: object) => unknown } }, error: unknown): unknown => {

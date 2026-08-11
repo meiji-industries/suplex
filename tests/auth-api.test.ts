@@ -65,14 +65,25 @@ test("API enrollment and authorization fail closed before company details are re
 
     const companyA = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie }, payload: { name: "API A" } })).json() as { id: string };
     const companyB = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie }, payload: { name: "API B" } })).json() as { id: string };
+    const renamed = await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie }, payload: { name: "  API A renamed  " } });
+    expect(renamed.statusCode).toBe(200);
+    expect(renamed.json()).toMatchObject({ id: companyA.id, name: "API A renamed", status: "active" });
+    expect((await app.inject({ method: "POST", url: `/api/admin/companies/${companyA.id}/status/paused`, headers: { cookie: adminCookie }, payload: {} })).statusCode).toBe(200);
+    expect((await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie }, payload: { name: "" } })).json()).toEqual({ error: "Company name is invalid" });
+    expect((await app.inject({ method: "DELETE", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie } })).statusCode).toBe(404);
     const invite = (await app.inject({ method: "POST", url: "/api/admin/invitations", headers: { cookie: adminCookie }, payload: { displayName: "API member" } })).json() as { token: string; user: { id: string } };
     const memberOptions = await app.inject({ method: "POST", url: "/api/auth/invitation/options", payload: { token: invite.token } });
     const memberCeremony = memberOptions.json() as { challengeId: string };
     const memberEnrolled = await app.inject({ method: "POST", url: "/api/auth/invitation/verify", payload: { token: invite.token, challengeId: memberCeremony.challengeId, response: { id: "member-api-credential", type: "public-key" } } });
     const memberCookie = sessionCookie(memberEnrolled);
 
+    const memberRename = await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: memberCookie }, payload: { name: "Member rename" } });
+    expect(memberRename.statusCode).toBe(404);
+
     const membership = await app.inject({ method: "POST", url: `/api/admin/companies/${companyA.id}/members`, headers: { cookie: adminCookie }, payload: { userId: invite.user.id } });
     expect(membership.statusCode).toBe(204);
+    expect((await app.inject({ method: "GET", url: `/companies/${companyA.id}/settings`, headers: { cookie: adminCookie } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/companies/${companyA.id}/settings`, headers: { cookie: memberCookie } })).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: `/api/companies/${companyA.id}`, headers: { cookie: memberCookie } })).statusCode).toBe(200);
     const crossScope = await app.inject({ method: "GET", url: `/api/companies/${companyB.id}`, headers: { cookie: memberCookie } });
     expect(crossScope.statusCode).toBe(404);

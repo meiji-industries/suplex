@@ -79,11 +79,10 @@ test("projects desktop flow activates valid configuration and shows actionable v
       const context = await browser.newContext({ viewport: { width: 1100, height: 800 } });
       await context.addCookies([{ ...sessionCookie(enrolled), domain: "127.0.0.1", path: "/" }]);
       const profile = projects.createProfile((await auth.getUserBySession(sessionCookie(enrolled).value))!.id, { name: "Browser profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-      const company = auth.createCompany((await auth.getUserBySession(sessionCookie(enrolled).value))!.id, "Browser Projects");
+      auth.createCompany((await auth.getUserBySession(sessionCookie(enrolled).value))!.id, "Browser Projects");
       const page = await context.newPage();
       await page.goto(`${baseUrl}/projects`);
       await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
-      await page.locator("#project-company").selectOption(company.id);
       const fill = async (field: string, value: string): Promise<void> => { await page.getByLabel(field, { exact: true }).fill(value); };
       await fill("name", "Browser project"); await fill("repositoryPath", repositoryPath); await fill("worktreeRoot", worktreeRoot); await fill("repository", "acme/forge"); await fill("baseBranch", "main"); await fill("targetBranch", "main"); await fill("setupCommand", "pnpm install"); await fill("verificationCommand", "pnpm test"); await fill("requiredChecks", "Tests / unit"); await fill("allowedProfileIds", profile.id); await fill("leadProfile", profile.id); await fill("developerProfile", profile.id);
       await page.getByRole("button", { name: "Create draft" }).click();

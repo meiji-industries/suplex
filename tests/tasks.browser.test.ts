@@ -79,7 +79,6 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
       const page = await context.newPage();
       await page.goto(`${baseUrl}/tasks`);
       await page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();
-      await page.locator("#task-company").selectOption(company.id);
       await page.locator("#task-project").selectOption(project.id);
       await page.getByLabel("Task title", { exact: true }).fill("Browser task");
       await page.getByLabel("Task description", { exact: true }).fill("## Browser brief\n\nImage attached.");

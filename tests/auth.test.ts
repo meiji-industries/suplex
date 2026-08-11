@@ -189,6 +189,40 @@ test("company access is membership-scoped and membership authority is audited", 
   }
 });
 
+test("company renames are admin-only, transactional, and audited", async () => {
+  const value = await fixture();
+  try {
+    const bootstrap = value.auth.ensureBootstrapInvitation()!;
+    const admin = await enrollBootstrap(value.auth, bootstrap.token);
+    const company = value.auth.createCompany(admin.user.id, "Original name");
+
+    expect(value.auth.renameCompany(admin.user.id, company.id, "  Renamed name  ")).toMatchObject({ id: company.id, name: "Renamed name", status: "active" });
+    value.auth.setCompanyStatus(admin.user.id, company.id, "paused");
+    expect(value.auth.renameCompany(admin.user.id, company.id, "Archived name")).toMatchObject({ name: "Archived name", status: "paused" });
+    value.auth.setCompanyStatus(admin.user.id, company.id, "archived");
+    expect(value.auth.renameCompany(admin.user.id, company.id, "Archived again")).toMatchObject({ name: "Archived again", status: "archived" });
+
+    const beforeUnchanged = value.auth.listAuditEvents(admin.user.id).filter((event) => event.action === "company_renamed");
+    expect(value.auth.renameCompany(admin.user.id, company.id, " Archived again ")).toMatchObject({ name: "Archived again" });
+    const afterUnchanged = value.auth.listAuditEvents(admin.user.id).filter((event) => event.action === "company_renamed");
+    expect(afterUnchanged).toHaveLength(beforeUnchanged.length);
+    expect(afterUnchanged).toContainEqual(expect.objectContaining({ companyId: company.id, metadata: { previousName: "Archived name", newName: "Archived again" } }));
+
+    expect(() => value.auth.renameCompany(admin.user.id, company.id, "")).toThrowError("Company name is invalid");
+    expect(() => value.auth.renameCompany(admin.user.id, "", "No id")).toThrowError("Not found");
+    expect(() => value.auth.renameCompany(admin.user.id, "company_missing", "Missing")).toThrowError("Not found");
+    expect(() => value.auth.renameCompany(admin.user.id, company.id, "x".repeat(121))).toThrowError("Company name is invalid");
+    const duplicate = value.auth.createCompany(admin.user.id, "Duplicate target");
+    expect(() => value.auth.renameCompany(admin.user.id, company.id, duplicate.name)).toThrowError("Company name is already in use");
+
+    const invitation = value.auth.inviteUser(admin.user.id, { displayName: "Member" });
+    const member = await enrollUser(value.auth, invitation.token, "rename-member-credential");
+    expect(() => value.auth.renameCompany(member.user.id, company.id, "Member rename")).toThrowError("Not found");
+  } finally {
+    await closeFixture(value);
+  }
+});
+
 test("revoking a user removes passkey authority and active sessions", async () => {
   const value = await fixture();
   try {

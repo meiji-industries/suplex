@@ -514,8 +514,36 @@ export class AuthService {
     });
   }
 
+  renameCompany(actorUserId: string, companyId: string, rawName: string): Company {
+    return this.database.authTransaction((db) => {
+      this.requireAdmin(db, actorUserId);
+      if (!idSchema.safeParse(companyId).success) {
+        throw new AuthFailure("Not found", 404);
+      }
+      const name = companyNameSchema.safeParse(rawName);
+      if (!name.success) {
+        throw new AuthFailure("Company name is invalid");
+      }
+      const company = db.prepare("SELECT id, name, status, created_at FROM forge_companies WHERE id = ?").get(companyId) as CompanyRow | undefined;
+      if (!company) {
+        throw new AuthFailure("Not found", 404);
+      }
+      if (company.name === name.data) {
+        return { id: company.id, name: company.name, status: company.status, createdAt: company.created_at };
+      }
+      try {
+        db.prepare("UPDATE forge_companies SET name = ? WHERE id = ?").run(name.data, companyId);
+      } catch {
+        throw new AuthFailure("Company name is already in use");
+      }
+      this.audit(db, actorUserId, "company_renamed", null, companyId, { previousName: company.name, newName: name.data });
+      return { id: company.id, name: name.data, status: company.status, createdAt: company.created_at };
+    });
+  }
+
   setCompanyStatus(actorUserId: string, companyId: string, status: "active" | "paused" | "archived"): Company {
     if (!["active", "paused", "archived"].includes(status)) throw new AuthFailure("Company status is invalid");
+    if (!idSchema.safeParse(companyId).success) throw new AuthFailure("Not found", 404);
     return this.database.authTransaction((db) => {
       this.requireAdmin(db, actorUserId);
       const company = db.prepare("SELECT id, name, status, created_at FROM forge_companies WHERE id = ?").get(companyId) as CompanyRow | undefined;

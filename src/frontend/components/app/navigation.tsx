@@ -1,5 +1,5 @@
-import { AlertTriangle, Columns3, ClipboardList, FolderGit2, Menu, Settings, ShieldCheck, type LucideIcon } from "lucide-react";
-import { useMemo, useState, type ReactElement } from "react";
+import { AlertTriangle, Columns3, ClipboardList, FolderGit2, Menu, Settings, ShieldCheck, SquarePen, type LucideIcon } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
 
 import { Button } from "../ui/button.js";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "../ui/sheet.js";
@@ -61,10 +61,38 @@ function SettingsLink({ close }: { close?: () => void }): ReactElement | null {
   return <a className="flex h-7 items-center gap-2 rounded-md px-2 text-[13px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground" href={href} onClick={close}><Settings className="size-3.5" />Settings</a>;
 }
 
+function requestNewTask(companyId?: string): void {
+  if (window.location.pathname === "/tasks") {
+    window.dispatchEvent(new Event("forge:new-task"));
+    return;
+  }
+  window.location.assign(withCompany("/tasks?new=1", companyId));
+}
+
+function NewTaskButton({ close }: { close?: () => void }): ReactElement {
+  const context = useOptionalCompanyContext();
+  const company = context?.currentCompany;
+  return (
+    <Button variant="outline" size="icon-sm" aria-label="New task" title="New task (⌘N)" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(company?.id); }}>
+      <SquarePen />
+    </Button>
+  );
+}
+
 export function AppSidebar(): ReactElement {
+  const context = useOptionalCompanyContext();
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent): void => {
+      if (!event.metaKey || event.altKey || event.ctrlKey || event.shiftKey || event.key.toLowerCase() !== "n" || context?.currentCompany?.status !== "active") return;
+      event.preventDefault();
+      requestNewTask(context.currentCompany.id);
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [context?.currentCompany?.id, context?.currentCompany?.status]);
   return (
     <aside className="hidden w-52 shrink-0 flex-col bg-sidebar px-2.5 py-2.5 lg:flex">
-      <CompanySwitcher />
+      <div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div><NewTaskButton /></div>
       <div className="mt-3"><NavigationGroups /></div>
       <div className="mt-auto pt-2"><SettingsLink /></div>
       <div className="mt-1 pt-1">
@@ -82,7 +110,7 @@ export function MobileNavigation(): ReactElement {
       <SheetContent data-slot="mobile-nav" side="left" className="w-60 bg-sidebar px-2.5 py-2.5" showCloseButton closeLabel="Close navigation">
         <SheetHeader className="h-8 p-0">
           <SheetTitle className="sr-only">Forge navigation</SheetTitle>
-          <CompanySwitcher />
+          <div className="flex items-center gap-1 pr-8"><div className="min-w-0 flex-1"><CompanySwitcher /></div><NewTaskButton close={() => setOpen(false)} /></div>
         </SheetHeader>
         <div className="mt-3 flex h-[calc(100%-2.75rem)] flex-col"><NavigationGroups close={() => setOpen(false)} /><div className="mt-auto pt-2"><SettingsLink close={() => setOpen(false)} /></div></div>
       </SheetContent>

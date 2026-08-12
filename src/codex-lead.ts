@@ -1,7 +1,8 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
+import { accessSync, constants, realpathSync } from "node:fs";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { basename, delimiter, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { z } from "zod";
@@ -93,6 +94,20 @@ export interface LeadProcessResult {
 }
 
 export type LeadProcessRunner = (invocation: LeadInvocation) => Promise<LeadProcessResult>;
+
+export function resolveAgentCommand(command: string, executablePath = process.env.PATH ?? ""): string {
+  if (command !== "codex") return command;
+  let fallback: string | undefined;
+  for (const directory of executablePath.split(delimiter).filter(Boolean)) {
+    const candidate = join(directory, command);
+    try {
+      accessSync(candidate, constants.X_OK);
+      fallback ??= candidate;
+      if (!/^mise(?:\.exe)?$/i.test(basename(realpathSync(candidate)))) return candidate;
+    } catch { /* Continue to the next PATH entry. */ }
+  }
+  return fallback ?? command;
+}
 
 export class AgentFailure extends Error {
   readonly code: string;
@@ -423,7 +438,7 @@ export class AgentService {
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: AgentServiceOptions = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot);
-    this.command = options.command ?? process.env.FORGE_CODEX_COMMAND ?? "codex";
+    this.command = resolveAgentCommand(options.command ?? process.env.FORGE_CODEX_COMMAND ?? "codex");
     this.processRunner = options.processRunner ?? defaultProcessRunner;
     this.sessionStore = options.sessionStore ?? new FileSessionStore(config.runtimeRoot);
     this.now = options.now ?? (() => new Date());

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -23,6 +23,7 @@ async function fixture() {
   await git(["init", "-b", "main"], repositoryPath);
   await git(["config", "user.name", "Forge Test"], repositoryPath);
   await git(["config", "user.email", "forge-test@example.invalid"], repositoryPath);
+  await git(["config", "commit.gpgsign", "false"], repositoryPath);
   await writeFile(join(repositoryPath, "README.md"), "fixture\n");
   await git(["add", "README.md"], repositoryPath);
   await git(["commit", "-m", "fixture"], repositoryPath);
@@ -37,6 +38,10 @@ test("creates a deterministic exact-base worktree and guards prohibited Git/prov
     expect(record).toMatchObject({ branchName: "forge/issue/task_exact_base", targetBaseSha: value.baseSha });
     expect(await git(["rev-parse", "HEAD"], record.worktreePath)).toBe(value.baseSha);
     expect(await manager.inspectDelivery(record.worktreePath)).toMatchObject({ branchName: record.branchName, headSha: value.baseSha, dirtyState: "clean" });
+    expect(await manager.metadataDirectories(value.repositoryPath, record.worktreePath)).toEqual([
+      await realpath(join(value.repositoryPath, ".git", "worktrees", "task_exact_base")),
+      await realpath(join(value.repositoryPath, ".git")),
+    ]);
     const guard = await createGitCommandGuard(join(value.root, "runtime"));
     try {
       await expect(execFileAsync("git", ["push"], { cwd: record.worktreePath, env: guard.env })).rejects.toThrow();
@@ -65,5 +70,24 @@ test("rejects an invalid target-base commit before creating a branch", async () 
   const value = await fixture();
   try {
     await expect(new WorktreeManager().create({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_invalid", targetBaseSha: "0".repeat(40) })).rejects.toMatchObject({ code: "base-commit-mismatch" });
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("reads the current delivery diff from the recorded base through committed and tracked worktree changes", async () => {
+  const value = await fixture();
+  try {
+    const manager = new WorktreeManager();
+    const record = await manager.create({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_diff", targetBaseSha: value.baseSha });
+    await writeFile(join(record.worktreePath, "DELIVERED.md"), "committed delivery\n");
+    await git(["add", "DELIVERED.md"], record.worktreePath);
+    await git(["commit", "-m", "deliver fixture"], record.worktreePath);
+    await writeFile(join(record.worktreePath, "README.md"), "tracked current change\n");
+
+    const current = await manager.currentDiff({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_diff", targetBaseSha: value.baseSha, branchName: record.branchName, worktreePath: record.worktreePath });
+    expect(current.headSha).toBe(await git(["rev-parse", "HEAD"], record.worktreePath));
+    expect(current.patch).toContain("diff --git a/DELIVERED.md b/DELIVERED.md");
+    expect(current.patch).toContain("+committed delivery");
+    expect(current.patch).toContain("+tracked current change");
+    await expect(manager.currentDiff({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_diff", targetBaseSha: value.baseSha, branchName: record.branchName, worktreePath: value.repositoryPath })).rejects.toMatchObject({ code: "worktree-reuse-mismatch" });
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });

@@ -1,6 +1,8 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { expect, test } from "vitest";
 
@@ -14,6 +16,13 @@ import type { GithubAdapter } from "../src/github.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, type IssueWorkflowInput, type IssueWorkflowState, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
 import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
+import { WorktreeManager } from "../src/worktrees.js";
+
+const execFileAsync = promisify(execFile);
+
+async function git(args: string[], cwd: string): Promise<string> {
+  return (await execFileAsync("git", args, { cwd })).stdout.trim();
+}
 
 function fakeWebAuthn(): WebAuthnAdapter {
   return {
@@ -31,6 +40,13 @@ test("task API creates an idempotent backlog card and accepts only the current p
   const root = await mkdtemp(join(tmpdir(), "forge-task-api-test-"));
   const repositoryRoot = join(root, "repositories"); const worktreeRoot = join(root, "worktrees"); const repositoryPath = join(repositoryRoot, "repo");
   await mkdir(repositoryPath, { recursive: true }); await mkdir(worktreeRoot, { recursive: true });
+  await git(["init", "-b", "main"], repositoryPath);
+  await git(["config", "user.name", "Forge Test"], repositoryPath);
+  await git(["config", "user.email", "forge-test@example.invalid"], repositoryPath);
+  await git(["config", "commit.gpgsign", "false"], repositoryPath);
+  await writeFile(join(repositoryPath, "README.md"), "base\n");
+  await git(["add", "README.md"], repositoryPath);
+  await git(["commit", "-m", "base"], repositoryPath);
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin-1', 'Admin', 'admin@forge.local', 'admin', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run());
   const config = createTestConfig(root, { repositoryRoot, worktreeRoot, reachableAddress: "http://127.0.0.1:4111" });
@@ -75,7 +91,7 @@ test("task API creates an idempotent backlog card and accepts only the current p
     expect(created.json()).toMatchObject({ title: "API task", phase: "backlog", revision: 0, allowedCommands: ["start_planning"] });
     const duplicate = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload: { projectId: project.id, title: "API task", description: "# Details", idempotencyKey: "api-task-0001", supplementalReview: true, images: [{ filename: "note.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] } });
     expect(duplicate.statusCode).toBe(200);
-    const task = created.json() as { id: string };
+    const task = created.json() as { id: string; workflowId: string };
     const body = await new ArtifactStore(config.artifactRoot).put(company.id, "release-public-body", { filename: "release.md", mimeType: "text/markdown", bytes: Buffer.from("## Summary\n\nAPI task") });
     database.authTransaction((db) => {
       const now = new Date().toISOString();
@@ -92,6 +108,7 @@ test("task API creates an idempotent backlog card and accepts only the current p
     expect(releaseBody.headers["cache-control"]).toBe("private, no-store");
     expect(releaseBody.body).toBe("## Summary\n\nAPI task");
     expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/release/artifacts/does-not-exist`, headers: { cookie, origin } })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/developer-diff`, headers: { cookie, origin } })).statusCode).toBe(409);
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie, origin }, payload: { expectedRevision: 9 } })).statusCode).toBe(409);
     const started = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie, origin }, payload: { expectedRevision: 0 } });
     expect(started.statusCode).toBe(200);
@@ -102,7 +119,7 @@ test("task API creates an idempotent backlog card and accepts only the current p
     const approved = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: { expectedRevision: 2, note: "Self-approved" } });
     expect(approved.statusCode).toBe(200);
     expect(approved.json()).toMatchObject({ phase: "ready_for_development", owner: "lead", revision: 3 });
-    const workflowId = (created.json() as { workflowId: string }).workflowId;
+    const workflowId = task.workflowId;
     const baseSha = "a".repeat(40); const headSha = "b".repeat(40); const treeSha = "c".repeat(40); const observedAt = "2026-08-11T12:00:00.000Z";
     database.authTransaction((db) => {
       db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, created_at, updated_at) VALUES ('release-ci-api', ?, ?, ?, 'api-release', 'acme/forge', 'issue/api-task', 'main', ?, ?, ?, 'draft', 88, 'https://github.com/acme/forge/pull/88', 'API release', ?, ?)").run(task.id, company.id, workflowId, baseSha, headSha, treeSha, observedAt, observedAt);
@@ -115,6 +132,20 @@ test("task API creates an idempotent backlog card and accepts only the current p
     expect(projected.statusCode, projected.body).toBe(200);
     expect(projected.json()).toMatchObject({ ci: { runId: "ci-api", policy: { projectRevisionId: active.activeRevisionId, requiredChecks: ["Tests / unit"], acceptedConclusions: ["success"] }, attempts: [{ id: "ci-attempt-api", checks: [{ providerCheckId: "1", selectedForEvaluation: true }] }] } });
     expect(projected.body).not.toMatch(/session_ref|worktree_path|provider response body|raw logs/i);
+
+    const targetBaseSha = await git(["rev-parse", "HEAD"], repositoryPath);
+    const delivery = await new WorktreeManager().create({ repositoryPath, worktreeRoot, taskId: task.id, targetBaseSha });
+    await writeFile(join(delivery.worktreePath, "DELIVERED.md"), "API delivery\n");
+    await git(["add", "DELIVERED.md"], delivery.worktreePath);
+    await git(["commit", "-m", "deliver API fixture"], delivery.worktreePath);
+    const resultCommit = await git(["rev-parse", "HEAD"], delivery.worktreePath);
+    const resultTree = await git(["rev-parse", "HEAD^{tree}"], delivery.worktreePath);
+    const now = "2026-08-11T00:01:00.000Z";
+    database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-api-diff', ?, ?, ?, 1, 1, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, 'clean')").run(task.id, company.id, task.workflowId, delivery.branchName, delivery.worktreePath, targetBaseSha, now, now, now, resultCommit, resultTree));
+    const developerDiff = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/developer-diff`, headers: { cookie, origin } });
+    expect(developerDiff.statusCode).toBe(200);
+    expect(developerDiff.json()).toMatchObject({ branchName: delivery.branchName, baseSha: targetBaseSha, headSha: resultCommit, patch: expect.stringContaining("+API delivery") });
+    expect(JSON.stringify(developerDiff.json())).not.toContain(delivery.worktreePath);
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: { expectedRevision: 2 } })).statusCode).toBe(409);
     expect((await app.inject({ method: "GET", url: "/api/tasks", headers: { cookie, origin } })).json().tasks).toHaveLength(1);
     expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/images/does-not-exist`, headers: { cookie, origin } })).statusCode).toBe(404);

@@ -128,6 +128,8 @@ const leadPlanningPatch = "forge-lead-planning-v1";
 const planGovernancePatch = "forge-plan-governance-v1";
 const planningProjectionIntegrityPatch = "forge-planning-projection-integrity-v1";
 const distinctPlanningStatesPatch = "forge-distinct-planning-states-v1";
+const developerFailureRecoveryPatch = "forge-developer-failure-recovery-v1";
+const captureInitialProjectionStatePatch = "forge-capture-initial-projection-state-v1";
 const artifactBackedConflictPatch = "forge-artifact-backed-conflict-evidence-v1";
 const artifactBackedReviewPatch = "forge-artifact-backed-review-evidence-v1";
 const typedReleaseResultPatch = "forge-typed-release-result-v1";
@@ -161,6 +163,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     continuationCount: continuation ? continuation.continuationCount + 1 : 0,
   });
   let continuationRequested = false;
+  let initialProjectionComplete = Boolean(continuation);
   const shouldContinueAsNew = (revision: number): boolean => {
     return workflowInfo().continueAsNewSuggested || (continueAfter > 0 && revision >= continueAfter) || workflowInfo().historyLength >= WORKFLOW_HISTORY_EVENT_LIMIT;
   };
@@ -176,7 +179,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (commandId !== "legacy-command" && !processed.includes(commandId)) state = IssueWorkflowStateSchema.parse({ ...state, processedCommandIds: [...processed, commandId].slice(-64) });
   };
   setHandler(issueStateQuery, () => state);
+  const captureInitialProjectionState = patched(captureInitialProjectionStatePatch);
+  const initialProjectionState = state;
   setHandler(startPlanningUpdate, async (rawInput) => {
+    if (captureInitialProjectionState) await condition(() => initialProjectionComplete);
     assertPayloadWithinLimit("startPlanning command", rawInput);
     StartPlanningInputSchema.parse(rawInput);
     const next = IssueWorkflowStateSchema.parse({
@@ -281,10 +287,24 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       markCommandProcessed(command.commandId);
     });
     await projectIssueState(state);
-    const result = await runDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, executionId });
+    const recoverDeveloperFailures = patched(developerFailureRecoveryPatch);
+    let result: Awaited<ReturnType<typeof runDeveloperExecution>>;
+    try {
+      result = await runDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, executionId });
+    } catch (error) {
+      if (!recoverDeveloperFailures) throw error;
+      const applied = await withStateMutation(() => {
+        if (state.activeOperation?.commandId !== command.commandId || state.phase !== "development") return false;
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Developer execution failed; retry is available", lastEventId: `${state.workflowId}:${state.revision + 1}`, activeOperation: null });
+        if (shouldContinueAsNew(state.revision)) continuationRequested = true;
+        return true;
+      });
+      if (applied) await projectIssueState(state);
+      return state;
+    }
     const applied = await withStateMutation(() => {
       if (state.activeOperation?.commandId !== command.commandId || state.phase !== "development") return false;
-      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], pendingAction: result.outcome === "completed" ? "Lead delivery review" : "Resolve Developer blocker", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, activeOperation: null });
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["retry_development", "cancel_issue"], pendingAction: result.outcome === "completed" ? "Lead delivery review" : "Developer retry is available", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, activeOperation: null });
       if (shouldContinueAsNew(state.revision)) continuationRequested = true;
       return true;
     });
@@ -686,6 +706,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     return reconcileMergeTurn();
   });
   setHandler(cancelIssueUpdate, async (rawInput) => {
+    if (captureInitialProjectionState) await condition(() => initialProjectionComplete);
     const command = StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== state.revision || ["done", "cancelled"].includes(state.phase)) throw new Error("Issue cancellation is not available in the current phase");
     if (state.phase === "development" && state.developerExecutionId) await cancelDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, executionId: state.developerExecutionId });
@@ -697,7 +718,17 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     assertPayloadWithinLimit("cancel development command", rawInput);
     const command = StartPlanningInputSchema.parse(rawInput);
     if (commandAlreadyProcessed(command.commandId)) return state;
-    const executionId = state.developerExecutionId!;
+    if (!state.developerExecutionId) {
+      await withStateMutation(() => {
+        if (state.revision !== command.expectedRevision || state.phase !== "development") throw new Error("Developer cancellation was superseded by another command");
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${state.workflowId}:${state.revision + 1}`, activeOperation: null });
+        markCommandProcessed(command.commandId);
+        if (shouldContinueAsNew(state.revision)) continuationRequested = true;
+      });
+      await projectIssueState(state);
+      return state;
+    }
+    const executionId = state.developerExecutionId;
     await withStateMutation(() => {
       if (state.revision !== command.expectedRevision || state.phase !== "development") throw new Error("Developer cancellation was superseded by another command");
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: [], pendingAction: "Cancelling Developer turn", lastEventId: `${state.workflowId}:${state.revision + 1}`, activeOperation: null });
@@ -716,7 +747,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const command = StartPlanningInputSchema.parse(rawInput);
     if (commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
-    if (state.phase !== "development" || !state.developerExecutionId) throw new Error("Developer cancellation is not available in the current phase");
+    if (state.phase !== "development") throw new Error("Developer cancellation is not available in the current phase");
   } });
   setHandler(rejectPlanUpdate, async (rawInput) => {
     assertPayloadWithinLimit("plan revision command", rawInput);
@@ -767,7 +798,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   // previous run already projected that revision, so emitting it again with a
   // different continuationCount would correctly look like conflicting
   // authoritative history to the projection boundary.
-  if (!continuation) await projectIssueState(state);
+  if (!continuation) await projectIssueState(captureInitialProjectionState ? initialProjectionState : state);
+  initialProjectionComplete = true;
   while (true) {
     if (state.phase === "cancelled" || state.phase === "done") return state;
     if (state.phase === "releasing" && state.releaseRetryAt) {

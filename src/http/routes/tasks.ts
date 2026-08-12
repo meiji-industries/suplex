@@ -6,7 +6,7 @@ import type { TaskEvent } from "../../tasks.js";
 import type { TaskService } from "../../tasks.js";
 import type { ProjectRole } from "../../projects.js";
 import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, ExpectedRevisionNoteBodySchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
-import { ContinueWorkResponseSchema, TaskBodySchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { ContinueWorkResponseSchema, TaskBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;
@@ -39,6 +39,9 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
     const release = tasks.getRelease(request.forgeUser.id, request.params.taskId);
     if (!release) return reply.code(404).send({ error: "Not found" });
     return reply.header("Cache-Control", "private, no-store").send(release);
+  });
+  typed.get("/api/tasks/:taskId/developer-diff", { schema: { params: TaskIdParamsSchema, response: { 200: TaskDeveloperDiffResponseSchema } } }, async (request, reply) => {
+    return reply.header("Cache-Control", "private, no-store").send(await tasks.getDeveloperDiff(request.forgeUser.id, request.params.taskId));
   });
   typed.post("/api/tasks/:taskId/start-planning", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.startPlanning(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/request-supplemental-review", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.requestSupplementalReview(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));

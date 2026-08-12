@@ -36,6 +36,15 @@ export interface DeliveryGitState {
   dirtyState: "clean" | "dirty";
 }
 
+export interface WorktreeDiffInput extends WorktreeInput {
+  worktreePath: string;
+}
+
+export interface WorktreeDiff {
+  patch: string;
+  headSha: string;
+}
+
 interface GitAdapter {
   run(args: string[], cwd: string): Promise<string>;
 }
@@ -51,7 +60,7 @@ function withinRoot(root: string, candidate: string): boolean {
 
 const defaultGit: GitAdapter = {
   async run(args, cwd) {
-    const result = await execFileAsync("git", args, { cwd, timeout: 30_000, maxBuffer: 64 * 1024 });
+    const result = await execFileAsync("git", args, { cwd, timeout: 30_000, maxBuffer: 2 * 1024 * 1024 });
     return result.stdout.trim();
   },
 };
@@ -71,6 +80,24 @@ async function canonicalDirectory(raw: string, code: string): Promise<string> {
 
 export class WorktreeManager {
   constructor(private readonly git: GitAdapter = defaultGit) {}
+
+  async metadataDirectories(repositoryPath: string, worktreePath: string): Promise<string[]> {
+    const repository = await canonicalDirectory(repositoryPath, "repository-unavailable");
+    const repositoryGit = await canonicalDirectory(join(repository, ".git"), "git-metadata-unavailable");
+    const worktree = await canonicalDirectory(worktreePath, "worktree-unavailable");
+    try {
+      const [rawGitDirectory, rawCommonDirectory] = await Promise.all([
+        this.git.run(["rev-parse", "--absolute-git-dir"], worktree),
+        this.git.run(["rev-parse", "--git-common-dir"], worktree),
+      ]);
+      const directories = await Promise.all([rawGitDirectory, rawCommonDirectory].map((path) => realpath(resolve(worktree, path))));
+      if (directories.some((path) => !withinRoot(repositoryGit, path))) throw new WorktreeFailure("git-metadata-mismatch", "Issue worktree Git metadata escaped the recorded target repository");
+      return [...new Set(directories)];
+    } catch (error) {
+      if (error instanceof WorktreeFailure) throw error;
+      throw new WorktreeFailure("git-metadata-unavailable", "Git metadata for the isolated issue worktree is unavailable");
+    }
+  }
 
   async create(input: WorktreeInput): Promise<WorktreeRecord> {
     if (!taskIdPattern.test(input.taskId)) throw new WorktreeFailure("unsafe-task-id", "Issue identity is not safe for a worktree coordinate");
@@ -127,6 +154,21 @@ export class WorktreeManager {
       return { branchName, headSha, treeSha, dirtyState: status ? "dirty" : "clean" };
     } catch {
       throw new WorktreeFailure("delivery-inspection-failed", "Git could not inspect the exact Developer delivery");
+    }
+  }
+
+  async currentDiff(input: WorktreeDiffInput): Promise<WorktreeDiff> {
+    const record = await this.reuse(input);
+    if (resolve(input.worktreePath) !== record.worktreePath) throw new WorktreeFailure("worktree-reuse-mismatch", "Recorded Developer worktree did not match the task worktree coordinate");
+    try {
+      const [patch, headSha] = await Promise.all([
+        this.git.run(["diff", "--no-ext-diff", "--find-renames", input.targetBaseSha, "--"], record.worktreePath),
+        this.git.run(["rev-parse", "HEAD"], record.worktreePath),
+      ]);
+      return { patch, headSha };
+    } catch (error) {
+      if (error instanceof WorktreeFailure) throw error;
+      throw new WorktreeFailure("diff-unavailable", "Git could not read the current Developer delivery diff");
     }
   }
 

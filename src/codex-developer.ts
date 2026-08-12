@@ -8,7 +8,7 @@ import { z } from "zod";
 
 import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
-import { AgentFailure, agentProcessFailure, FileSessionStore, runCodexProcess, type LeadProcessRunner, type SessionStore } from "./codex-lead.js";
+import { AgentFailure, agentProcessFailure, FileSessionStore, resolveAgentCommand, runCodexProcess, type LeadProcessRunner, type SessionStore } from "./codex-lead.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import type { GithubReleasePort } from "./github-release.js";
@@ -174,7 +174,7 @@ export class DeveloperService {
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: DeveloperServiceOptions = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot);
-    this.command = options.command ?? process.env.FORGE_CODEX_COMMAND ?? "codex";
+    this.command = resolveAgentCommand(options.command ?? process.env.FORGE_CODEX_COMMAND ?? "codex");
     this.processRunner = options.processRunner ?? runCodexProcess;
     this.sessionStore = options.sessionStore ?? new FileSessionStore(config.runtimeRoot);
     this.worktrees = options.worktrees ?? new WorktreeManager();
@@ -202,8 +202,10 @@ export class DeveloperService {
     if (plan.kind !== "plan" || !Array.isArray(plan.steps) || !plan.steps.length) throw new AgentFailure("plan-unavailable", "A final Lead plan is required before development");
     const profile = this.database.authQuery((db) => db.prepare("SELECT id, model, provider FROM forge_profiles WHERE id = ?").get(input.roleProfiles.developer) as DeveloperProfile | undefined);
     if (!profile || profile.provider !== "codex") throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
-    const prior = input.supersedesExecutionId ? this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.supersedesExecutionId, input.taskId, input.companyId, input.workflowId) as PriorDeveloperExecution | undefined) : undefined;
-    if (input.supersedesExecutionId && (!prior || !["interrupted", "cancelled", "failed"].includes(prior.status))) throw new AgentFailure("retry-not-available", "Only an interrupted or cancelled Developer attempt can be retried");
+    const prior = input.supersedesExecutionId
+      ? this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.supersedesExecutionId, input.taskId, input.companyId, input.workflowId) as PriorDeveloperExecution | undefined)
+      : this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND plan_revision = ? AND status IN ('interrupted', 'cancelled', 'failed', 'blocked') ORDER BY attempt DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.planRevision) as PriorDeveloperExecution | undefined);
+    if (input.supersedesExecutionId && (!prior || !["interrupted", "cancelled", "failed", "blocked"].includes(prior.status))) throw new AgentFailure("retry-not-available", "Only an interrupted, cancelled, failed, or blocked Developer attempt can be retried");
     const targetBaseSha = prior?.target_base_sha ?? projectRevision.data.targetSha;
     if (!/^[a-f0-9]{40,64}$/i.test(targetBaseSha)) throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain an exact target SHA");
     const branchName = `forge/issue/${input.taskId}`;
@@ -212,7 +214,14 @@ export class DeveloperService {
     const executionId = input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
     let worktree;
     try {
-      worktree = input.reuseWorktree ? await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName }) : await this.worktrees.create({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName });
+      worktree = input.reuseWorktree || prior ? await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName }) : await this.worktrees.create({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName });
+    } catch (error) {
+      if (error instanceof Error && "code" in error) throw new AgentFailure(String((error as { code: string }).code), error.message);
+      throw error;
+    }
+    let metadataDirectories: string[];
+    try {
+      metadataDirectories = await this.worktrees.metadataDirectories(repositoryPath, worktree.worktreePath);
     } catch (error) {
       if (error instanceof Error && "code" in error) throw new AgentFailure(String((error as { code: string }).code), error.message);
       throw error;
@@ -232,7 +241,7 @@ export class DeveloperService {
       try {
         const result = await this.processRunner({
           command: this.command,
-          args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", "--model", profile.model, prompt],
+          args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", ...metadataDirectories.flatMap((directory) => ["--add-dir", directory]), "--model", profile.model, prompt],
           cwd: worktree.worktreePath,
           env: guard.env,
           detached: true,
@@ -246,11 +255,14 @@ export class DeveloperService {
             await this.heartbeat(executionId);
           },
         });
-        if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines, profile.model);
+        if (result.exitCode !== 0) {
+          evidenceLines.push(JSON.stringify({ type: "forge.process-failure", exitCode: result.exitCode, stderr: redact(result.stderr) }));
+          throw agentProcessFailure(result, outputLines, profile.model);
+        }
         if (!sessionRef || !rawSessionId || sessionRef === input.leadSessionRef) throw new AgentFailure("session-identity-conflict", "Developer session must be distinct from the Lead session");
         const report = parseDeliveryReport(evidenceLines);
         const gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
-        if (gitState.branchName !== worktree.branchName || gitState.headSha === worktree.targetBaseSha) throw new AgentFailure("delivery-revision-invalid", "Developer delivery did not produce a new commit on the isolated issue branch");
+        if (gitState.branchName !== worktree.branchName) throw new AgentFailure("delivery-revision-invalid", "Developer delivery was produced on the wrong issue branch");
         const expectedNumbers = plan.steps.map((step) => step.number).sort((a, b) => a - b);
         const actualNumbers = report.steps.map((step) => step.number).sort((a, b) => a - b);
         if (JSON.stringify(expectedNumbers) !== JSON.stringify(actualNumbers)) throw new AgentFailure("delivery-step-mismatch", "Developer delivery does not map every approved plan step");
@@ -258,7 +270,7 @@ export class DeveloperService {
         if (report.resultCommit.toLowerCase() !== gitState.headSha.toLowerCase() || report.resultTree.toLowerCase() !== gitState.treeSha.toLowerCase() || report.dirtyState !== gitState.dirtyState) throw new AgentFailure("delivery-revision-mismatch", "Developer delivery report does not match the exact Git result");
         const deliveryArtifact = await this.artifacts.put(input.companyId, "developer-delivery", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, branchName: worktree.branchName, worktreePath: worktree.worktreePath, targetBaseSha: worktree.targetBaseSha }, null, 2), "utf8") });
         const evidence = await this.persistEvidence(input.companyId, evidenceLines);
-        const blocked = report.authorizedStepsNotCompleted.length > 0 || report.dirtyState !== "clean" || report.blocker !== null;
+        const blocked = gitState.headSha === worktree.targetBaseSha || report.authorizedStepsNotCompleted.length > 0 || report.dirtyState !== "clean" || report.blocker !== null;
         this.database.authTransaction((db) => {
           db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, deliveryArtifact.id, deliveryArtifact.companyId, deliveryArtifact.kind, deliveryArtifact.filename, deliveryArtifact.mimeType, deliveryArtifact.byteSize, deliveryArtifact.sha256, deliveryArtifact.storagePath, deliveryArtifact.createdAt);
           db.prepare("UPDATE forge_developer_executions SET status = ?, session_ref = ?, finished_at = ?, heartbeat_at = ?, current_step = ?, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(blocked ? "blocked" : "completed", sessionRef, this.now().toISOString(), this.now().toISOString(), report.steps.at(-1)?.number ?? null, gitState.headSha, gitState.treeSha, gitState.dirtyState, deliveryArtifact.id, evidence.id, executionId);

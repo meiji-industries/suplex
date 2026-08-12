@@ -10,16 +10,19 @@ import { InlineAttachmentPicker } from "./components/ui/inline-attachment-picker
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select.js";
 import { Textarea } from "./components/ui/textarea.js";
 import { Skeleton } from "./components/ui/skeleton.js";
-import { Separator } from "./components/ui/separator.js";
-import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "./components/ui/breadcrumb.js";
-import { Timeline, TimelineContent, TimelineDate, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "./components/ui/timeline.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./components/ui/alert-dialog.js";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog.js";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./components/ui/dropdown-menu.js";
 import { CreateButton } from "./components/ui/create-button.js";
 import { Kanban, KanbanBoard, KanbanColumn, KanbanColumnContent } from "./components/reui/kanban.js";
+import { Badge as ReuiBadge } from "./components/reui/badge.js";
+import { Tabs, TabsList, TabsTrigger } from "./components/ui/tabs.js";
 import { ApplicationFrame } from "./components/app/application-frame.js";
 import { CompanyProvider, useCompanyContext } from "./components/app/company-context.js";
 import { SettingsLayout, SettingsSection, SettingRow } from "./components/app/settings-layout.js";
+import { TaskHistory } from "./components/app/task-history.js";
+import { TaskLeadPlan } from "./components/app/task-lead-plan.js";
+import { TaskProgress } from "./components/app/task-progress.js";
 import { companySettingsPath, isApiError, readJson, withCompany, type ApiUser, type CompanyStatus } from "./lib/api.js";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import type { HealthCheck, HealthSnapshot } from "../health.js";
@@ -33,6 +36,7 @@ import {
   CircleHelp,
   CircleDashed,
   CircleDotDashed,
+  CircleX,
   Clock3,
   Database,
   Ellipsis,
@@ -50,7 +54,7 @@ import {
   Workflow,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactElement } from "react";
 import { createRoot } from "react-dom/client";
 
 import "./styles.css";
@@ -83,25 +87,30 @@ type ApiAttentionCompany = { companyId: string; companyName: string; companyStat
 type ApiAgentInvocation = { id: string; role: "lead" | "reviewer" | "developer"; status: string; attempt: number; sessionPresent: boolean; startedAt: string; finishedAt: string | null; failureCode: string | null; failureSummary: string | null; evidenceArtifactId: string | null };
 type ApiCi = { runId: string; releaseId: string; repository: string; pullRequestNumber: number; pullRequestUrl: string; baseBranch: string; headBranch: string; expectedHeadSha: string; expectedHeadTree: string; status: string; outcome: string | null; reason: string | null; owner: string | null; repairable: boolean; policyHash: string; policy: { projectRevisionId: string; requiredChecks: string[]; acceptedConclusions: ["success"] }; leadSessionContinuity: boolean; developerSessionContinuity: boolean; firstObservedAt: string | null; propagationDeadline: string | null; overallDeadline: string | null; nextRetryAt: string | null; completedAt: string | null; supersededAt: string | null; supersededRuns: Array<{ runId: string; releaseId: string; expectedHeadSha: string; expectedHeadTree: string | null; status: string; supersededAt: string | null }>; attempts: Array<{ id: string; attemptNumber: number; observedRepository: string | null; observedPrNumber: number | null; observedBaseBranch: string | null; observedBaseSha: string | null; observedHeadBranch: string | null; observedHeadSha: string | null; outcome: string; reason: string; owner: string | null; repairable: boolean; retryAt: string | null; summary: string; evidenceArtifactId: string | null; createdAt: string; checks: Array<{ providerCheckId: string; name: string; headSha: string; status: string; conclusion: string | null; detailsUrl: string | null; summary: string | null; startedAt: string | null; completedAt: string | null; selectedForEvaluation: boolean }> }>; repairPlan: { id: string; status: string; ciRunId: string; ciAttemptId: string; failedHeadSha: string; planArtifactId: string; evidenceArtifactId: string; summary: string; steps: Array<{ number: number; instruction: string; verification: string }>; createdAt: string; updatedAt: string; consumedAt: string | null; supersededAt: string | null } | null; repairs: Array<{ id: string; repairPlanId: string; priorCommit: string; priorTree: string; newCommit: string | null; newTree: string | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null; status: string; summary: string | null; createdAt: string; completedAt: string | null }> };
 type ApiRelease = { id: string; status: "reconciling" | "draft" | "blocked"; failureCode: ReleaseFailureCode | null; failureSummary: string | null; retryAt: string | null; repository: string; baseBranch: string; headBranch: string; baseSha: string; headSha: string; headTree: string; reviewedCommit: { abbreviated: string; full: string }; reviewedTree: { abbreviated: string; full: string }; pullRequestNumber: number | null; pullRequestUrl: string | null; isDraft: boolean; reused: boolean; bodyArtifactId: string | null; title: string; bodyPreview: string | null; operation: { kind: string; status: string; attempt: number | null; startedAt: string | null; observedAt: string | null; completedAt: string | null } | null };
-type ApiTaskPhase = "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "merge_conflict_reviewing" | "merge_conflict_required" | "merge_conflict_resolving" | "ci_waiting" | "ci_repair_planning" | "ci_repairing" | "ci_repair_required" | "final_review" | "accepted" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
-type ApiTask = { id: string; companyId: string; projectId: string; title: string; description: string; briefArtifactId: string; images: Array<{ artifactId: string; filename: string; mimeType: string; byteSize: number }>; roleProfiles: Record<string, string>; supplementalReview: boolean; workflowId: string; projectRevisionId: string; phase: ApiTaskPhase; revision: number; owner: "human" | "lead"; allowedCommands: string[]; pendingAction: string | null; createdAt: string; updatedAt: string; projection: { authoritativeRevision: number; projectedRevision: number; projectedAt: string; status: "current" | "lagging" }; timeline: Array<{ id: string; revision: number; eventType: string; metadata: Record<string, string | number | boolean>; createdAt: string }>; agentInvocations: ApiAgentInvocation[]; planRevision?: number | null; planMaterial?: boolean | null; materialCategories?: string[]; supplementalReviewUsed?: boolean; supplementalReviewArtifactId?: string | null; decisionId?: string | null; release?: ApiRelease | null; deliveryReview?: { id: string; outcome: "approved" | "blocking"; summary: string; planRevision: number; baseSha: string; subjectCommit: string; subjectTree: string; findings: Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidenceRef: string; disposition: string; repairInstruction: string | null }> }; developerExecution?: { id: string; status: string; attempt: number; branchName: string; targetBaseSha: string; currentStep?: number | null; resultCommit?: string | null; resultTree?: string | null; dirtyState?: string | null; deliveryArtifactId?: string | null; deliverySummary?: string | null }; leadOutput?: { kind: "plan" | "decision_blocker"; summary: string; executionId: string; outputArtifactId: string; evidenceArtifactId: string; content: { kind: "plan"; summary: string; reproduction: string | null; rootCauseAnalysis: string | null; steps: Array<{ number: number; instruction: string; verification: string }>; compatibilityAnalysis: string; operationalAnalysis: string; verificationStrategy: string; unresolvedTechnicalQuestions: string[] } | { kind: "decision_blocker"; summary: string; evidence: string; owner: "human"; question: string; nextAction: string } } ; ci?: ApiCi };
+type TaskPhase = "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "merge_conflict_reviewing" | "merge_conflict_required" | "merge_conflict_resolving" | "ci_waiting" | "ci_repair_planning" | "ci_repairing" | "ci_repair_required" | "final_review" | "accepted" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
+type ApiTask = { id: string; companyId: string; projectId: string; title: string; description: string; briefArtifactId: string; images: Array<{ artifactId: string; filename: string; mimeType: string; byteSize: number }>; roleProfiles: Record<string, string>; supplementalReview: boolean; workflowId: string; projectRevisionId: string; phase: TaskPhase; revision: number; owner: "human" | "lead"; allowedCommands: string[]; pendingAction: string | null; createdAt: string; updatedAt: string; projection: { authoritativeRevision: number; projectedRevision: number; projectedAt: string; status: "current" | "lagging" }; timeline: Array<{ id: string; revision: number; eventType: string; metadata: Record<string, string | number | boolean>; createdAt: string }>; agentInvocations: ApiAgentInvocation[]; planRevision?: number | null; planMaterial?: boolean | null; materialCategories?: string[]; supplementalReviewUsed?: boolean; supplementalReviewArtifactId?: string | null; decisionId?: string | null; release?: ApiRelease | null; ci?: ApiCi; deliveryReview?: { id: string; outcome: "approved" | "blocking"; summary: string; planRevision: number; baseSha: string; subjectCommit: string; subjectTree: string; findings: Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidenceRef: string; disposition: string; repairInstruction: string | null }> }; developerExecution?: { id: string; status: string; attempt: number; branchName: string; targetBaseSha: string; currentStep?: number | null; resultCommit?: string | null; resultTree?: string | null; dirtyState?: string | null; deliveryArtifactId?: string | null; evidenceArtifactId?: string | null; failureCode?: string | null; failureSummary?: string | null }; leadOutput?: { kind: "plan" | "decision_blocker"; summary: string; executionId: string; outputArtifactId: string; evidenceArtifactId: string; content: { kind: "plan"; summary: string; reproduction: string | null; rootCauseAnalysis: string | null; steps: Array<{ number: number; instruction: string; verification: string }>; compatibilityAnalysis: string; operationalAnalysis: string; verificationStrategy: string; unresolvedTechnicalQuestions: string[] } | { kind: "decision_blocker"; summary: string; evidence: string; owner: "human"; question: string; nextAction: string } } };
 
-const taskPhaseGroups = [
-  { label: "Backlog", phases: ["backlog"] },
-  { label: "Planning", phases: ["planning", "approval", "ready_for_development"] },
-  { label: "Building", phases: ["development", "delivery_ready"] },
-  { label: "Review", phases: ["reviewing_delivery", "repair_required", "delivery_reviewed", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving"] },
-  { label: "CI", phases: ["releasing", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required"] },
-  { label: "Acceptance", phases: ["final_review", "delivery_blocked", "manual_merge"] },
-  { label: "Done", phases: ["accepted", "done", "cancelled", "failed"] },
-] as const satisfies ReadonlyArray<{ label: string; phases: readonly ApiTaskPhase[] }>;
-function taskPhaseGroup(phase: ApiTaskPhase): (typeof taskPhaseGroups)[number]["label"] {
-  const group = taskPhaseGroups.find((candidate) => (candidate.phases as readonly ApiTaskPhase[]).includes(phase));
-  if (!group) throw new Error(`Unhandled task phase: ${phase}`);
-  return group.label;
-}
-function taskPhaseLabel(phase: ApiTaskPhase): string {
-  return phase === "ready_for_development" ? "Ready" : phase === "delivery_ready" ? "Delivered" : phase === "reviewing_delivery" ? "Reviewing" : phase === "repair_required" ? "Repair" : phase === "delivery_reviewed" ? "Reviewed" : phase === "delivery_blocked" ? "Blocked" : phase[0]!.toUpperCase() + phase.slice(1);
+const DeveloperDiff = lazy(() => import("./components/app/developer-diff.js"));
+
+const taskPhases: TaskPhase[] = ["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"];
+
+function taskPhaseLabel(phase: TaskPhase): string {
+  const labels: Partial<Record<TaskPhase, string>> = {
+    ready_for_development: "Ready",
+    delivery_ready: "Delivered",
+    reviewing_delivery: "Reviewing",
+    repair_required: "Repair",
+    delivery_reviewed: "Reviewed",
+    delivery_blocked: "Blocked",
+    merge_conflict_reviewing: "Reviewing conflict",
+    merge_conflict_required: "Conflict resolution",
+    merge_conflict_resolving: "Resolving conflict",
+    ci_waiting: "Waiting for CI",
+    ci_repair_required: "CI repair",
+    final_review: "Final review",
+    manual_merge: "Ready to merge",
+  };
+  return labels[phase] ?? phase.split("_").map((word) => word[0]!.toUpperCase() + word.slice(1)).join(" ");
 }
 
 async function reconcileScopedNotFound(reason: unknown, reloadCompanies: () => Promise<void>): Promise<boolean> {
@@ -694,12 +703,12 @@ async function fileAsImage(file: File): Promise<{ filename: string; mimeType: st
   });
 }
 
-type TaskPlanAction = "request-supplemental-review" | "approve-plan" | "reject-plan" | "start-development" | "retry-development" | "cancel-development" | "review-delivery" | "repair-delivery" | "record-delivery-decision" | "publish-draft" | "reconcile-ci" | "repair-ci" | "final-review" | "accept-delivery" | "request-delivery-changes" | "cancel" | "reconcile-merge";
+type TaskPlanAction = "request-supplemental-review" | "approve-plan" | "reject-plan" | "start-development" | "retry-development" | "cancel-development" | "review-delivery" | "repair-delivery" | "record-delivery-decision" | "publish-draft" | "resolve-merge-conflict" | "reconcile-ci" | "repair-ci" | "final-review" | "accept-delivery" | "request-delivery-changes" | "reconcile-merge" | "cancel";
 
 function TaskActions({ task, busy, onStartPlanning, onPlanAction }: { task: ApiTask; busy: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void> }): ReactElement {
   const disabled = busy || task.projection.status === "lagging";
   return (
-    <div className="flex flex-wrap gap-2">
+    <div data-task-actions className="flex flex-wrap justify-end gap-2">
       {task.allowedCommands.includes("start_planning") ? <Button size="sm" onClick={() => void onStartPlanning()} disabled={disabled}>{busy ? "Planning…" : "Start planning"}</Button> : null}
       {task.allowedCommands.includes("request_supplemental_review") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("request-supplemental-review")} disabled={disabled}>Request review</Button> : null}
       {task.allowedCommands.includes("approve_plan") ? <Button size="sm" onClick={() => void onPlanAction("approve-plan", "Approved final plan")} disabled={disabled}>Approve plan</Button> : null}
@@ -707,16 +716,18 @@ function TaskActions({ task, busy, onStartPlanning, onPlanAction }: { task: ApiT
       {task.allowedCommands.includes("start_development") ? <Button size="sm" onClick={() => void onPlanAction("start-development")} disabled={disabled}>{busy ? "Executing…" : "Start development"}</Button> : null}
       {task.allowedCommands.includes("retry_development") ? <Button size="sm" onClick={() => void onPlanAction("retry-development")} disabled={disabled}>{busy ? "Retrying…" : "Retry development"}</Button> : null}
       {task.allowedCommands.includes("cancel_development") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("cancel-development")} disabled={disabled}>Cancel development</Button> : null}
-      {task.allowedCommands.includes("review_delivery") ? <Button size="sm" onClick={() => void onPlanAction("review-delivery")} disabled={disabled}>{busy ? "Reviewing…" : "Review delivery"}</Button> : null}
+      {task.allowedCommands.includes("review_delivery") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reject-plan", "Member requested delivery changes")} disabled={disabled}>Request changes</Button> : null}
+      {task.allowedCommands.includes("review_delivery") ? <Button size="sm" onClick={() => void onPlanAction("review-delivery")} disabled={disabled}>{busy ? "Reviewing…" : "LGTM"}</Button> : null}
       {task.allowedCommands.includes("repair_delivery") ? <Button size="sm" onClick={() => void onPlanAction("repair-delivery")} disabled={disabled}>{busy ? "Repairing…" : "Repair delivery"}</Button> : null}
       {task.allowedCommands.includes("record_delivery_decision") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("record-delivery-decision", "Member decision recorded")} disabled={disabled}>Record decision</Button> : null}
-      {task.allowedCommands.includes("publish_draft") ? <Button size="sm" onClick={() => void onPlanAction("publish-draft")} disabled={disabled}>{busy ? "Publishing…" : "Publish draft"}</Button> : null}
-      {task.allowedCommands.includes("reconcile_ci") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reconcile-ci")} disabled={disabled}>{busy ? "Reconciling…" : "Retry CI reconciliation"}</Button> : null}
-      {task.allowedCommands.includes("repair_ci") ? <Button size="sm" onClick={() => void onPlanAction("repair-ci")} disabled={disabled}>{busy ? "Repairing…" : "Run CI repair"}</Button> : null}
-      {task.allowedCommands.includes("final_review") ? <Button size="sm" onClick={() => void onPlanAction("final-review")} disabled={disabled}>Final review</Button> : null}
-      {task.allowedCommands.includes("accept_delivery") ? <Button size="sm" onClick={() => void onPlanAction("accept-delivery")} disabled={disabled}>Accept</Button> : null}
-      {task.allowedCommands.includes("request_delivery_changes") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("request-delivery-changes", "Please make the requested delivery changes")} disabled={disabled}>Request changes</Button> : null}
-      {task.allowedCommands.includes("reconcile_merge") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reconcile-merge")} disabled={disabled}>Reconcile merge</Button> : null}
+      {task.allowedCommands.includes("publish_draft") ? <Button size="sm" onClick={() => void onPlanAction("publish-draft")} disabled={disabled}>{busy ? "Publishing…" : task.release?.status === "blocked" ? "Retry release" : "Publish draft"}</Button> : null}
+      {task.allowedCommands.includes("resolve_merge_conflict") ? <Button size="sm" onClick={() => void onPlanAction("resolve-merge-conflict")} disabled={disabled}>{busy ? "Resolving…" : "Resolve conflict"}</Button> : null}
+      {task.allowedCommands.includes("reconcile_ci") ? <Button size="sm" onClick={() => void onPlanAction("reconcile-ci")} disabled={disabled}>{busy ? "Checking…" : "Check CI"}</Button> : null}
+      {task.allowedCommands.includes("repair_ci") ? <Button size="sm" onClick={() => void onPlanAction("repair-ci")} disabled={disabled}>{busy ? "Repairing…" : "Repair CI"}</Button> : null}
+      {task.allowedCommands.includes("final_review") ? <Button size="sm" onClick={() => void onPlanAction("final-review")} disabled={disabled}>{busy ? "Reviewing…" : "Final review"}</Button> : null}
+      {task.allowedCommands.includes("request_delivery_changes") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("request-delivery-changes", "Member requested delivery changes")} disabled={disabled}>Request changes</Button> : null}
+      {task.allowedCommands.includes("accept_delivery") ? <Button size="sm" onClick={() => void onPlanAction("accept-delivery")} disabled={disabled}>{busy ? "Accepting…" : "Accept delivery"}</Button> : null}
+      {task.allowedCommands.includes("reconcile_merge") ? <Button size="sm" onClick={() => void onPlanAction("reconcile-merge")} disabled={disabled}>{busy ? "Checking…" : "Check merge"}</Button> : null}
       {task.allowedCommands.includes("cancel_issue") ? <Button size="sm" variant="ghost" onClick={() => void onPlanAction("cancel")} disabled={disabled}>Cancel</Button> : null}
     </div>
   );
@@ -726,7 +737,7 @@ function ReleasePanel({ release }: { release: ApiRelease }): ReactElement {
   const copy = (value: string): void => { void navigator.clipboard?.writeText(value); };
   const statusLabel = release.status === "draft" ? "Draft" : release.status === "reconciling" ? "Reconciling" : "Blocked";
   return <section className="space-y-2" aria-label="Draft publication">
-    <div className="flex flex-wrap items-center justify-between gap-2"><h2 className="text-xs font-semibold">Draft publication</h2><Badge variant={release.status === "blocked" ? "destructive" : "secondary"}>{statusLabel}</Badge></div>
+    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold">Draft publication</h3><Badge variant={release.status === "blocked" ? "destructive" : "secondary"}>{statusLabel}</Badge></div>
     <div className="text-[13px]">{release.repository} · {release.baseBranch} ← {release.headBranch}</div>
     <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground"><Button variant="ghost" size="sm" title={release.reviewedCommit.full} aria-label={`Copy reviewed commit ${release.reviewedCommit.full}`} onClick={() => copy(release.reviewedCommit.full)}>{release.reviewedCommit.abbreviated}</Button><Button variant="ghost" size="sm" title={release.reviewedTree.full} aria-label={`Copy reviewed tree ${release.reviewedTree.full}`} onClick={() => copy(release.reviewedTree.full)}>{release.reviewedTree.abbreviated}</Button></div>
     {release.pullRequestUrl ? <a className="text-xs underline underline-offset-2" href={release.pullRequestUrl} target="_blank" rel="noreferrer">Pull request #{release.pullRequestNumber}</a> : null}
@@ -739,40 +750,53 @@ function ReleasePanel({ release }: { release: ApiRelease }): ReactElement {
   </section>;
 }
 
-function TaskDetailsPage({ task, project, profiles, companyId, returnTo = "tasks", busy, error, onStartPlanning, onPlanAction }: { task: ApiTask; project: ApiProject | undefined; profiles: ApiProfile[]; companyId: string; returnTo?: "tasks" | "board"; busy: boolean; error: string; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void> }): ReactElement {
-  const ci = task.ci;
-  const latestAttempt = ci?.attempts[0];
-  const requiredChecks = ci?.policy.requiredChecks ?? [];
+function CiPanel({ task, ci }: { task: ApiTask; ci: ApiCi }): ReactElement {
+  const latestAttempt = ci.attempts[0];
+  return <section className="space-y-3 border-y py-3" data-task-ci>
+    <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold">Exact-head CI</h3><div className="flex items-center gap-2"><Badge variant={ci.outcome === "failed" ? "destructive" : "secondary"}>{ci.outcome ?? ci.status}</Badge><a className="text-xs underline" href={ci.pullRequestUrl} target="_blank" rel="noreferrer">PR #{ci.pullRequestNumber}</a></div></div>
+    <div className="grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-2"><span title={ci.expectedHeadSha}>Expected {ci.expectedHeadSha.slice(0, 10)}…</span><span title={latestAttempt?.observedHeadSha ?? undefined}>Observed {latestAttempt?.observedHeadSha ? `${latestAttempt.observedHeadSha.slice(0, 10)}…` : "—"}</span><span>Revision {ci.policy.projectRevisionId.slice(0, 10)}… · policy {ci.policyHash.slice(0, 8)}…</span><span>{ci.baseBranch} → {ci.headBranch} · {ci.repository}</span></div>
+    <div className="space-y-1"><div className="text-[11px] font-medium">Required checks</div>{ci.policy.requiredChecks.map((name) => { const check = latestAttempt?.checks.find((candidate) => candidate.name === name && candidate.selectedForEvaluation); return <div className="flex items-center justify-between gap-2 border-b py-1 text-[11px]" key={name}><span className="min-w-0 break-words">{name}</span><span className="shrink-0 text-muted-foreground">{check ? `${check.status}${check.conclusion ? ` · ${check.conclusion}` : ""}` : "missing"}</span></div>; })}</div>
+    <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span>Next retry {ci.nextRetryAt ? adminDate(ci.nextRetryAt) : "—"}</span><span>Propagation {ci.propagationDeadline ? adminDate(ci.propagationDeadline) : "—"}</span><span>Overall deadline {ci.overallDeadline ? adminDate(ci.overallDeadline) : "—"}</span><span>Owner {ci.owner ?? "—"}</span></div>
+    {ci.reason || latestAttempt?.summary ? <p className="break-words text-[12px]">{ci.reason ? `${ci.reason}: ` : ""}{latestAttempt?.summary ?? ""}</p> : null}
+    <div className="flex flex-wrap gap-2 text-[11px]">{latestAttempt?.evidenceArtifactId ? <a className="underline" href={`/api/tasks/${task.id}/artifacts/${latestAttempt.evidenceArtifactId}`}>CI evidence</a> : null}{ci.repairPlan ? <a className="underline" href={`/api/tasks/${task.id}/artifacts/${ci.repairPlan.planArtifactId}`}>Repair plan · {ci.repairPlan.status}</a> : null}<span>Lead continuity {ci.leadSessionContinuity ? "verified" : "—"}</span><span>Developer continuity {ci.developerSessionContinuity ? "verified" : "—"}</span></div>
+  </section>;
+}
+
+function TaskOptions(): ReactElement {
   return (
-    <ApplicationFrame title={task.title}>
+    <DropdownMenu>
+      <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Task options" title="Task options" />}><Ellipsis /></DropdownMenuTrigger>
+      <DropdownMenuContent align="start"><DropdownMenuItem disabled>Coming soon</DropdownMenuItem></DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function TaskDetailsPage({ task, project, busy, error, onStartPlanning, onPlanAction }: { task: ApiTask; project: ApiProject | undefined; busy: boolean; error: string; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void> }): ReactElement {
+  return (
+    <ApplicationFrame title={task.title} headerActions={<TaskOptions />}>
       <article data-task-detail className="min-w-0">
-        <header className="space-y-4 px-4 py-4 sm:px-6 lg:px-10">
-          <Breadcrumb>
-            <BreadcrumbList>
-              <BreadcrumbItem><BreadcrumbLink href={withCompany(`/${returnTo}`, companyId)}>{returnTo === "board" ? "Board" : "Tasks"}</BreadcrumbLink></BreadcrumbItem>
-              <BreadcrumbSeparator />
-              <BreadcrumbItem><BreadcrumbPage>{project?.name ?? "Unknown project"}</BreadcrumbPage></BreadcrumbItem>
-            </BreadcrumbList>
-          </Breadcrumb>
-          <div className="flex flex-wrap items-center gap-2"><h2 className="text-xl font-semibold tracking-tight">{task.title}</h2><Badge variant="secondary" data-status={task.phase}>{taskPhaseLabel(task.phase)}</Badge></div>
-          <p className="text-xs text-muted-foreground">{project?.name ?? "Unknown project"} · {task.phase} · revision {task.revision}</p>
-          <div aria-live="polite" className="text-[11px] text-muted-foreground">{task.projection.status === "lagging" ? `Projection lag: r${task.projection.projectedRevision} → r${task.projection.authoritativeRevision}` : `Projection current · r${task.projection.projectedRevision}`}</div>
-          <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} />
-          {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-        </header>
-        <Separator />
         <div data-task-body className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_260px]">
-          <div data-task-content className="min-w-0 px-4 py-6 sm:px-6 lg:px-10">
-            <div className="mx-auto max-w-4xl space-y-7">
-              <section className="space-y-2"><h3 className="text-xs font-semibold">Description</h3><pre className="whitespace-pre-wrap font-sans text-[13px] leading-5">{task.description || "No description."}</pre></section>
-              {task.images.length ? <section className="space-y-2"><h3 className="text-xs font-semibold">Attachments</h3><div className="flex flex-wrap gap-3">{task.images.map((image) => <a className="text-xs underline underline-offset-2" href={`/api/tasks/${task.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer" key={image.artifactId}>{image.filename}</a>)}</div></section> : null}
-              {task.agentInvocations.length ? <section className="space-y-2"><div className="flex items-center justify-between"><h3 className="text-xs font-semibold">Invocations</h3><span className="text-[11px] text-muted-foreground">{task.agentInvocations.length} transactions</span></div><div className="space-y-1">{task.agentInvocations.map((invocation) => <div className="grid gap-1 py-2 text-[11px] sm:grid-cols-[88px_80px_minmax(0,1fr)_auto] sm:items-start sm:gap-3" key={invocation.id} title={invocation.id}><div className="font-medium">{invocation.role} · {invocation.attempt}</div><Badge variant={invocation.status === "failed" ? "destructive" : "secondary"}>{invocation.status}</Badge><div className="min-w-0"><div className="break-words">{invocation.failureSummary ?? "Invocation completed"}</div><div className="mt-0.5 truncate text-muted-foreground">{invocation.failureCode ?? invocation.evidenceArtifactId ?? invocation.id}</div></div><time className="text-muted-foreground" dateTime={invocation.startedAt}>{adminDate(invocation.startedAt)}</time></div>)}</div></section> : null}
-              {task.leadOutput ? <section className="space-y-2"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">{task.leadOutput.kind === "plan" ? "Lead plan" : "Decision blocker"}</h3><span className="text-[11px] text-muted-foreground">{task.leadOutput.summary}</span></div>{task.leadOutput.content.kind === "plan" ? <><p className="whitespace-pre-wrap text-[13px]">{task.leadOutput.content.compatibilityAnalysis}</p><ol className="list-decimal space-y-2 pl-5 text-[13px]">{task.leadOutput.content.steps.map((step) => <li key={step.number}><div>{step.instruction}</div><div className="text-[11px] text-muted-foreground">Verify: {step.verification}</div></li>)}</ol><p className="whitespace-pre-wrap text-[13px]">{task.leadOutput.content.verificationStrategy}</p></> : <div className="space-y-2 text-[13px]"><p className="whitespace-pre-wrap">{task.leadOutput.content.evidence}</p><div><span className="font-medium">Question: </span>{task.leadOutput.content.question}</div><div><span className="font-medium">Next: </span>{task.leadOutput.content.nextAction}</div></div>}</section> : null}
-              {ci ? <section className="space-y-3 border-y py-3" data-task-ci><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold">Exact-head CI</h3><div className="flex items-center gap-2"><Badge variant={ci.outcome === "failed" ? "destructive" : "secondary"}>{ci.outcome ?? ci.status}</Badge><a className="text-xs underline" href={ci.pullRequestUrl} target="_blank" rel="noreferrer">PR #{ci.pullRequestNumber}</a></div></div><div className="grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-2"><span title={ci.expectedHeadSha}>Expected {ci.expectedHeadSha.slice(0, 10)}…</span><span title={latestAttempt?.observedHeadSha ?? undefined}>Observed {latestAttempt?.observedHeadSha ? `${latestAttempt.observedHeadSha.slice(0, 10)}…` : "—"}</span><span>Revision {ci.policy.projectRevisionId.slice(0, 10)}… · policy {ci.policyHash.slice(0, 8)}…</span><span>{ci.baseBranch} → {ci.headBranch} · {ci.repository}</span></div><div className="space-y-1"><div className="text-[11px] font-medium">Required checks</div>{requiredChecks.map((name) => { const check = latestAttempt?.checks.find((candidate) => candidate.name === name && candidate.selectedForEvaluation); return <div className="flex items-center justify-between gap-2 border-b py-1 text-[11px]" key={name}><span className="min-w-0 break-words">{name}</span><span className="shrink-0 text-muted-foreground">{check ? `${check.status}${check.conclusion ? ` · ${check.conclusion}` : ""}` : "missing"}</span></div>; })}</div><div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span>Next retry {ci.nextRetryAt ? adminDate(ci.nextRetryAt) : "—"}</span><span>Propagation {ci.propagationDeadline ? adminDate(ci.propagationDeadline) : "—"}</span><span>Overall deadline {ci.overallDeadline ? adminDate(ci.overallDeadline) : "—"}</span><span>Owner {ci.owner ?? "—"}</span></div>{ci.reason || latestAttempt?.summary ? <p className="break-words text-[12px]">{ci.reason ? `${ci.reason}: ` : ""}{latestAttempt?.summary ?? ""}</p> : null}<div className="flex flex-wrap gap-2 text-[11px]">{latestAttempt?.evidenceArtifactId ? <a className="underline" href={`/api/tasks/${task.id}/artifacts/${latestAttempt.evidenceArtifactId}`}>CI evidence</a> : null}{ci.repairPlan ? <a className="underline" href={`/api/tasks/${task.id}/artifacts/${ci.repairPlan.planArtifactId}`}>Repair plan · {ci.repairPlan.status}</a> : null}<span>Lead continuity {ci.leadSessionContinuity ? "verified" : "—"}</span><span>Developer continuity {ci.developerSessionContinuity ? "verified" : "—"}</span></div>{ci.repairPlan ? <ol className="list-decimal space-y-1 pl-5 text-[11px]">{ci.repairPlan.steps.map((step) => <li key={step.number}><span>{step.instruction}</span><span className="block text-muted-foreground">Verify: {step.verification}</span></li>)}</ol> : null}{ci.repairs.length ? <div className="space-y-1 text-[11px]"><div className="font-medium">Repair lineage</div>{ci.repairs.map((repair) => <div className="flex flex-wrap gap-1" key={repair.id}><span>{repair.priorCommit.slice(0, 10)}…</span><span>→</span><span>{repair.newCommit ? `${repair.newCommit.slice(0, 10)}…` : "blocked"}</span><span className="text-muted-foreground">{repair.status}</span></div>)}</div> : null}{ci.supersededRuns.length ? <div className="space-y-1 text-[11px] text-muted-foreground"><div className="font-medium text-foreground">Superseded runs</div>{ci.supersededRuns.map((run) => <div className="flex flex-wrap gap-2" key={run.runId}><span>{run.runId.slice(0, 12)}…</span><span>{run.status}</span><span>{run.expectedHeadSha.slice(0, 10)}…</span></div>)}</div> : null}</section> : null}
-              {task.developerExecution ? <section className="space-y-2"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">Developer delivery</h3><Badge variant="secondary">{task.developerExecution.status}</Badge></div><div className="text-[13px]">{task.developerExecution.deliverySummary ?? task.pendingAction}</div><div className="text-[11px] text-muted-foreground">{task.developerExecution.branchName} · {task.developerExecution.resultCommit ?? "no commit yet"}</div></section> : null}
-              {task.deliveryReview ? <section className="space-y-2"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">Delivery review</h3><Badge variant={task.deliveryReview.outcome === "blocking" ? "destructive" : "secondary"}>{task.deliveryReview.outcome}</Badge></div><div className="text-[13px]">{task.deliveryReview.summary}</div><div className="space-y-2">{task.deliveryReview.findings.map((finding) => <div className="pl-2 text-[13px]" key={finding.id}><div className="font-medium">{finding.severity} · {finding.disposition}</div><div className="text-[11px] text-muted-foreground">{finding.rationale}</div></div>)}</div></section> : null}
-              {task.release ? <ReleasePanel release={task.release} /> : null}
-              <section className="space-y-3"><h3 className="text-xs font-semibold">Activity</h3><div data-task-activity-scroll className="overflow-x-auto pb-2"><div className="min-w-[48rem]"><Timeline orientation="horizontal" value={task.timeline.length}>{task.timeline.map((entry, index) => <TimelineItem key={entry.id} step={index + 1}><TimelineHeader><TimelineDate dateTime={entry.createdAt}>{adminDate(entry.createdAt)}</TimelineDate><TimelineTitle>{entry.eventType}</TimelineTitle></TimelineHeader><TimelineIndicator /><TimelineSeparator /><TimelineContent>revision {entry.revision}</TimelineContent></TimelineItem>)}</Timeline></div></div></section>
+          <div className="min-w-0">
+            <header className="px-4 pt-4 pb-3 sm:px-6 lg:px-10">
+              <div data-task-header-content className="mx-auto max-w-4xl space-y-4">
+                <div className="flex min-w-0 flex-wrap items-center gap-2"><h2 className="text-xl font-semibold tracking-tight">{task.title}</h2><Badge variant="secondary" data-status={task.phase}>{taskPhaseLabel(task.phase)}</Badge></div>
+                <div aria-live="polite" className="text-[11px] text-muted-foreground">{task.projection.status === "lagging" ? `Projection lag: r${task.projection.projectedRevision} → r${task.projection.authoritativeRevision}` : `Projection current · r${task.projection.projectedRevision}`}</div>
+                <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} />
+                {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+              </div>
+            </header>
+            <div data-task-content className="min-w-0 px-4 pt-4 pb-6 sm:px-6 lg:px-10">
+              <div data-task-content-inner className="mx-auto max-w-4xl space-y-7">
+                <pre className="whitespace-pre-wrap font-sans text-[13px] leading-5">{task.description || "No description."}</pre>
+                <TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} />
+                {task.images.length ? <section className="space-y-2"><h3 className="text-xs font-semibold">Attachments</h3><div className="flex flex-wrap gap-3">{task.images.map((image) => <a className="text-xs underline underline-offset-2" href={`/api/tasks/${task.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer" key={image.artifactId}>{image.filename}</a>)}</div></section> : null}
+                {task.leadOutput ? <TaskLeadPlan output={task.leadOutput} planRevision={task.planRevision} planMaterial={task.planMaterial} materialCategories={task.materialCategories ?? []} /> : null}
+                {task.developerExecution ? <section className="space-y-3"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">Developer delivery</h3><Badge variant="secondary">{task.developerExecution.status}</Badge></div><div className="text-[13px]">{task.developerExecution.failureSummary ?? task.pendingAction}</div><div className="text-[11px] text-muted-foreground">{task.developerExecution.branchName} · {task.developerExecution.resultCommit ?? "no commit yet"}</div>{task.developerExecution.status === "completed" ? <Suspense fallback={<Skeleton className="h-40 w-full" />}><DeveloperDiff taskId={task.id} executionId={task.developerExecution.id} /></Suspense> : null}</section> : null}
+                {task.deliveryReview ? <section className="space-y-2"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">Delivery review</h3><Badge variant={task.deliveryReview.outcome === "blocking" ? "destructive" : "secondary"}>{task.deliveryReview.outcome}</Badge></div><div className="text-[13px]">{task.deliveryReview.summary}</div><div className="space-y-2">{task.deliveryReview.findings.map((finding) => <div className="pl-2 text-[13px]" key={finding.id}><div className="font-medium">{finding.severity} · {finding.disposition}</div><div className="text-[11px] text-muted-foreground">{finding.rationale}</div></div>)}</div></section> : null}
+                {task.ci ? <CiPanel task={task} ci={task.ci} /> : null}
+                {task.release ? <ReleasePanel release={task.release} /> : null}
+                <TaskHistory activity={task.timeline} invocations={task.agentInvocations} />
+              </div>
             </div>
           </div>
           <aside data-task-properties className="border-border border-t bg-muted/20 px-4 py-6 sm:px-6 lg:sticky lg:top-0 lg:h-fit lg:border-t-0 lg:border-l">
@@ -783,8 +807,6 @@ function TaskDetailsPage({ task, project, profiles, companyId, returnTo = "tasks
               <div className="space-y-1"><dt className="text-muted-foreground">Owner</dt><dd>{task.owner}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd>{task.pendingAction ?? "None"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Projection</dt><dd>{task.projection.status === "lagging" ? `Lagging r${task.projection.projectedRevision} → r${task.projection.authoritativeRevision}` : `Current · r${task.projection.projectedRevision}`}</dd></div>
-              <div className="space-y-1"><dt className="text-muted-foreground">Profiles</dt><dd>{Object.entries(task.roleProfiles).length ? Object.entries(task.roleProfiles).map(([role, profileId]) => <div key={role}>{role}: {profiles.find((profile) => profile.id === profileId)?.name ?? profileId}</div>) : "Project defaults"}</dd></div>
-              <div className="space-y-1"><dt className="text-muted-foreground">Supplemental review</dt><dd>{task.supplementalReview ? "Enabled" : "Off"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Updated</dt><dd>{adminDate(task.updatedAt)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Task ID</dt><dd><code className="break-all text-[11px]">{task.id}</code></dd></div>
@@ -805,10 +827,76 @@ function TaskDetailsNotFound({ companyId, returnTo = "tasks" }: { companyId: str
   return <ApplicationFrame title="Task not found"><div className="space-y-3 px-4 py-8 sm:px-6 lg:px-10"><p className="text-xs text-muted-foreground">Task not found for this company.</p><a className="text-xs underline underline-offset-2" href={withCompany(`/${returnTo}`, companyId)}>Back to {returnTo === "board" ? "Board" : "Tasks"}</a></div></ApplicationFrame>;
 }
 
+type TaskListFilter = "active" | "backlog" | "all";
+
+const activeTaskPhases = new Set<TaskPhase>(["planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_required", "final_review", "accepted", "manual_merge"]);
+const blockedTaskPhases = new Set<TaskPhase>(["delivery_blocked", "failed"]);
+
+function taskListDate(timestamp: string): string {
+  const date = new Date(timestamp);
+  const today = new Date();
+  if (date.toDateString() === today.toDateString()) return relativeTime(timestamp);
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
+}
+
+function taskPhaseAppearance(phase: TaskPhase): { icon: LucideIcon; iconClass: string; badge: "secondary" | "success-light" | "warning-light" | "destructive-light" | "primary-light" } {
+  if (phase === "done") return { icon: CheckCircle2, iconClass: "text-emerald-500", badge: "success-light" };
+  if (blockedTaskPhases.has(phase) || phase === "cancelled") return { icon: CircleX, iconClass: "text-rose-500", badge: "destructive-light" };
+  if (["development", "repair_required", "releasing", "merge_conflict_resolving", "ci_repair_required"].includes(phase)) return { icon: CircleDotDashed, iconClass: "text-amber-500", badge: "warning-light" };
+  if (["approval", "ready_for_development", "delivery_ready", "reviewing_delivery", "delivery_reviewed", "final_review", "accepted", "manual_merge"].includes(phase)) return { icon: CircleDotDashed, iconClass: "text-blue-500", badge: "primary-light" };
+  return { icon: CircleDashed, iconClass: "text-muted-foreground", badge: "secondary" };
+}
+
+function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, projects, projectId, onProjectChange, title, onTitleChange, description, onDescriptionChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  companyName: string | undefined;
+  companyStatus: CompanyStatus | undefined;
+  projects: ApiProject[];
+  projectId: string;
+  onProjectChange: (projectId: string) => void;
+  title: string;
+  onTitleChange: (title: string) => void;
+  description: string;
+  onDescriptionChange: (description: string) => void;
+  images: Array<{ filename: string; mimeType: string; base64: string }>;
+  onAddImages: (files: File[]) => Promise<void>;
+  onRemoveImage: (index: number) => void;
+  busy: boolean;
+  error: string;
+  onSubmit: () => Promise<void>;
+}): ReactElement {
+  const active = companyStatus === "active";
+  return (
+    <Dialog open={open} onOpenChange={(nextOpen) => { if (!busy) onOpenChange(nextOpen); }}>
+      <DialogContent className="max-h-[85vh] w-[min(92vw,520px)] overflow-y-auto" showCloseButton>
+        <DialogHeader>
+          <DialogTitle>New task</DialogTitle>
+          <DialogDescription>{companyName ? `Create in ${companyName}.` : "Select a company to create a task."}</DialogDescription>
+        </DialogHeader>
+        {active ? (
+          <form onSubmit={(event) => { event.preventDefault(); void onSubmit(); }}>
+            <FieldGroup>
+              <Field><FieldLabel htmlFor="task-project">Project</FieldLabel><Select value={projectId || null} onValueChange={(value) => onProjectChange(value ?? "")}><SelectTrigger id="task-project"><SelectValue placeholder="Select a project">{(value) => projects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Select a project")}</SelectValue></SelectTrigger><SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select></Field>
+              <Field><FieldLabel htmlFor="task-title">Task title</FieldLabel><Input id="task-title" autoFocus value={title} onChange={(event) => onTitleChange(event.target.value)} /></Field>
+              <Field><FieldLabel htmlFor="task-description">Task description</FieldLabel><Textarea id="task-description" placeholder="Markdown description" value={description} onChange={(event) => onDescriptionChange(event.target.value)} /></Field>
+              <InlineAttachmentPicker attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={onAddImages} onRemove={onRemoveImage} disabled={busy} />
+            </FieldGroup>
+            {error ? <Alert variant="destructive" className="mt-3"><AlertDescription>{error}</AlertDescription></Alert> : null}
+            <DialogFooter>
+              <DialogClose render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} />
+              <Button type="submit" size="sm" disabled={busy || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button>
+            </DialogFooter>
+          </form>
+        ) : <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New tasks are unavailable." : companyStatus === "archived" ? "Company archived. New tasks are unavailable." : "No active company is available."}</p>}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactElement {
   const { currentCompany, loading, user, error: companyError, reloadCompanies } = useCompanyContext();
   const [projects, setProjects] = useState<ApiProject[]>([]);
-  const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   const [tasks, setTasks] = useState<ApiTask[]>([]);
   const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [selectedState, setSelected] = useState<ApiTask>();
@@ -817,9 +905,10 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [images, setImages] = useState<Array<{ filename: string; mimeType: string; base64: string }>>([]);
-  const [roleProfiles, setRoleProfiles] = useState<Record<string, string>>({});
-  const [supplementalReview, setSupplementalReview] = useState(false);
   const [error, setError] = useState("");
+  const [createError, setCreateError] = useState("");
+  const [createOpen, setCreateOpen] = useState(() => mode === "tasks" && new URLSearchParams(window.location.search).get("new") === "1");
+  const [taskFilter, setTaskFilter] = useState<TaskListFilter>("all");
   const [busy, setBusy] = useState(false);
   const [detailNotFound, setDetailNotFound] = useState(false);
   const selectedRef = useRef<ApiTask | undefined>(undefined);
@@ -833,13 +922,12 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
     setError("");
     if (!companyId || loading) { setLoadedCompanyId(""); setProjects([]); setTasks([]); return; }
     try {
-      const [projectResult, taskResult, profileResult] = await Promise.all([
+      const [projectResult, taskResult] = await Promise.all([
         readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
         readJson<{ tasks: ApiTask[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks`),
-        readJson<{ profiles: ApiProfile[] }>("/api/profiles"),
       ]);
       if (token !== requestToken.current) return;
-      setProjects(projectResult.projects); setTasks(taskResult.tasks); setProfiles(profileResult.profiles);
+      setProjects(projectResult.projects); setTasks(taskResult.tasks);
       setProjectId((current) => projectResult.projects.some((project) => project.id === current && project.status === "active") ? current : projectResult.projects.find((project) => project.status === "active")?.id ?? "");
       const detailPrefix = mode === "board" ? "/board/" : "/tasks/";
       const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
@@ -856,8 +944,20 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
   }, [companyId, loading, mode, reloadCompanies]);
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
+    if (mode !== "tasks") return;
+    const openNewTask = (): void => { setCreateError(""); setCreateOpen(true); };
+    window.addEventListener("forge:new-task", openNewTask);
+    const url = new URL(window.location.href);
+    if (url.searchParams.get("new") === "1") {
+      openNewTask();
+      url.searchParams.delete("new");
+      window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+    }
+    return () => window.removeEventListener("forge:new-task", openNewTask);
+  }, [mode]);
+  useEffect(() => {
     selectedRef.current = undefined;
-    setSelected(undefined); setProjectId(""); setTitle(""); setDescription(""); setImages([]); setRoleProfiles({}); setSupplementalReview(false); setDetailNotFound(false);
+    setSelected(undefined); setProjectId(""); setTitle(""); setDescription(""); setImages([]); setCreateError(""); setDetailNotFound(false);
   }, [companyId]);
   useEffect(() => {
     const events = new EventSource("/api/tasks/events");
@@ -873,30 +973,40 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
   const visibleProjects = scopeLoaded ? projects : [];
   const visibleTasks = scopeLoaded ? tasks : [];
   const boardTasks = boardProjectId === "all" ? visibleTasks : visibleTasks.filter((task) => task.projectId === boardProjectId);
-  const taskBoard = Object.fromEntries(taskPhaseGroups.map((group) => [group.label, boardTasks.filter((task) => taskPhaseGroup(task.phase) === group.label)])) as Record<(typeof taskPhaseGroups)[number]["label"], ApiTask[]>;
+  const taskBoard = Object.fromEntries(taskPhases.map((phase) => [phase, boardTasks.filter((task) => task.phase === phase)])) as Record<(typeof taskPhases)[number], ApiTask[]>;
   const selected = scopeLoaded ? selectedState : undefined;
   const availableProjects = visibleProjects.filter((project) => project.companyId === companyId && project.status === "active");
+  const activeCount = visibleTasks.filter((task) => activeTaskPhases.has(task.phase)).length;
+  const backlogCount = visibleTasks.filter((task) => task.phase === "backlog").length;
+  const taskGroups = [
+    { id: "active", title: "In progress", phases: activeTaskPhases, tasks: visibleTasks.filter((task) => activeTaskPhases.has(task.phase)) },
+    { id: "backlog", title: "Backlog", phases: new Set<TaskPhase>(["backlog"]), tasks: visibleTasks.filter((task) => task.phase === "backlog") },
+    { id: "blocked", title: "Blocked", phases: blockedTaskPhases, tasks: visibleTasks.filter((task) => blockedTaskPhases.has(task.phase)) },
+    { id: "completed", title: "Completed", phases: new Set<TaskPhase>(["done", "cancelled"]), tasks: visibleTasks.filter((task) => task.phase === "done" || task.phase === "cancelled") },
+  ].filter((group) => taskFilter === "all" ? group.tasks.length > 0 : group.id === taskFilter).map((group) => ({ ...group, tasks: [...group.tasks].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)) }));
   const selectTask = (task: ApiTask): void => { setSelected(task); selectedRef.current = task; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`${routeBase}/${encodeURIComponent(task.id)}`, companyId)); };
   const addImages = async (files: File[]): Promise<void> => {
-    setError("");
-    if (images.length + files.length > 8) { setError("At most eight images may be attached"); return; }
-    if (files.some((file) => !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type))) { setError("Only PNG, JPEG, WebP, and GIF images are accepted"); return; }
-    if (files.some((file) => file.size > 9_000_000)) { setError("Each image must be smaller than 9 MB"); return; }
+    setCreateError("");
+    if (images.length + files.length > 8) { setCreateError("At most eight images may be attached"); return; }
+    if (files.some((file) => !["image/png", "image/jpeg", "image/webp", "image/gif"].includes(file.type))) { setCreateError("Only PNG, JPEG, WebP, and GIF images are accepted"); return; }
+    if (files.some((file) => file.size > 9_000_000)) { setCreateError("Each image must be smaller than 9 MB"); return; }
     try { const nextImages = await Promise.all(files.map(fileAsImage)); setImages((current) => [...current, ...nextImages]); }
-    catch { setError("Unable to read image"); }
+    catch { setCreateError("Unable to read image"); }
   };
   const create = async (): Promise<void> => {
     if (!companyId || currentCompany?.status !== "active") return;
-    setBusy(true); setError("");
+    setBusy(true); setCreateError("");
     try {
-      const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, roleProfiles, supplementalReview, idempotencyKey: crypto.randomUUID() }) });
+      const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, idempotencyKey: crypto.randomUUID() }) });
       window.location.assign(withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId));
-    } catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to create task"); }
+    } catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setCreateError(reason instanceof Error ? reason.message : "Unable to create task"); }
     finally { setBusy(false); }
   };
   const startPlanning = async (): Promise<void> => {
     if (!selected) return;
     setBusy(true); setError("");
+    const optimistic: ApiTask = { ...selected, phase: "planning", revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Lead planning" };
+    selectedRef.current = optimistic; setSelected(optimistic); setTasks((current) => current.map((task) => task.id === optimistic.id ? optimistic : task));
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); selectedRef.current = updated; setSelected(updated); setTasks((current) => current.map((task) => task.id === updated.id ? updated : task)); await reload(); }
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
     finally { setBusy(false); }
@@ -905,7 +1015,7 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
     if (!selected) return;
     setBusy(true); setError("");
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/${path}`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision, ...(note ? { note } : {}) }) }); selectedRef.current = updated; setSelected(updated); await reload(); }
-    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; if (isApiError(reason, 409)) await reload(); setError(reason instanceof Error ? reason.message : "Unable to update the plan"); }
+    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to update the plan"); }
     finally { setBusy(false); }
   };
 
@@ -914,7 +1024,7 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
   if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
   if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
-  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} profiles={profiles} companyId={companyId} returnTo={mode} busy={busy} error={error} onStartPlanning={startPlanning} onPlanAction={planAction} />;
+  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} busy={busy} error={error} onStartPlanning={startPlanning} onPlanAction={planAction} />;
 
   if (mode === "board") {
     return (
@@ -938,16 +1048,16 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
           <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-2">
             <Kanban value={taskBoard} onValueChange={() => {}} getItemValue={(task) => task.id} className="h-full">
               <KanbanBoard className="h-full min-w-max grid-flow-col auto-cols-[286px] grid-cols-none gap-2">
-                {taskPhaseGroups.map((group) => {
-                  const statusClass = group.label === "Done" ? "text-indigo-500" : group.label === "Acceptance" ? "text-blue-500" : group.label === "Building" || group.label === "Review" || group.label === "CI" ? "text-amber-500" : "text-muted-foreground";
-                  const StatusIcon = group.label === "Done" ? CheckCircle2 : group.label === "Building" || group.label === "Review" || group.label === "CI" ? CircleDotDashed : CircleDashed;
-                  return <KanbanColumn disabled key={group.label} value={group.label} className="min-h-0 rounded-md bg-muted/45">
+                {taskPhases.map((phase) => {
+                  const statusClass = phase === "failed" || phase === "delivery_blocked" ? "text-rose-500" : phase === "delivery_reviewed" ? "text-indigo-500" : phase === "development" || phase === "delivery_ready" || phase === "reviewing_delivery" ? "text-amber-500" : phase === "backlog" || phase === "planning" ? "text-muted-foreground" : "text-blue-500";
+                  const StatusIcon = phase === "delivery_reviewed" ? CheckCircle2 : phase === "failed" || phase === "delivery_blocked" ? CircleX : phase === "development" || phase === "delivery_ready" || phase === "reviewing_delivery" ? CircleDotDashed : CircleDashed;
+                  return <KanbanColumn disabled key={phase} value={phase} className="min-h-0 rounded-md bg-muted/45">
                     <div className="flex h-10 shrink-0 items-center justify-between px-3 text-xs">
-                      <div className="flex min-w-0 items-center gap-2"><StatusIcon className={`size-3.5 shrink-0 ${statusClass}`} /><span className="truncate font-medium">{group.label}</span><span className="text-muted-foreground">{taskBoard[group.label].length}</span></div>
-                      <div className="flex items-center gap-0.5 text-muted-foreground"><Button variant="ghost" size="icon-sm" className="size-6" aria-label={`${group.label} options`}><Ellipsis className="size-3.5" /></Button><Button render={<a href={withCompany("/tasks", companyId)} />} variant="ghost" size="icon-sm" className="size-6" aria-label="Create task"><Plus className="size-3.5" /></Button></div>
+                      <div className="flex min-w-0 items-center gap-2"><StatusIcon className={`size-3.5 shrink-0 ${statusClass}`} /><span className="truncate font-medium">{taskPhaseLabel(phase)}</span><span className="text-muted-foreground">{taskBoard[phase].length}</span></div>
+                      <div className="flex items-center gap-0.5 text-muted-foreground"><Button variant="ghost" size="icon-sm" className="size-6" aria-label={`${taskPhaseLabel(phase)} options`}><Ellipsis className="size-3.5" /></Button><Button render={<a href={withCompany("/tasks", companyId)} />} variant="ghost" size="icon-sm" className="size-6" aria-label="Create task"><Plus className="size-3.5" /></Button></div>
                     </div>
-                    <KanbanColumnContent value={group.label} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
-                      {taskBoard[group.label].map((task) => {
+                    <KanbanColumnContent value={phase} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
+                      {taskBoard[phase].map((task) => {
                         const project = visibleProjects.find((candidate) => candidate.id === task.projectId);
                         return <button type="button" className="block w-full rounded-md border border-border/90 bg-card px-3 py-2.5 text-left text-xs transition-colors hover:border-muted-foreground/35 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring" key={task.id} onClick={() => selectTask(task)}>
                           <span className="block font-medium leading-4 text-card-foreground">{task.title}</span>
@@ -969,27 +1079,56 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
 
   return (
     <ApplicationFrame title="Tasks">
-      <div className="bg-background text-foreground">
-        <section className="max-w-[440px] bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">New task</span><a className="text-[11px] text-muted-foreground hover:text-foreground" href={withCompany("/board", companyId)}>Open board</a></div>
-            {currentCompany ? <div className="mb-3 flex items-center gap-2 pb-2 text-xs"><span className="font-medium truncate">{currentCompany.name}</span><span className="text-[11px] text-muted-foreground">{currentCompany.status}</span></div> : null}
-            {currentCompany?.status === "active" ? <FieldGroup>
-              <Field><FieldLabel htmlFor="task-project">Project</FieldLabel><Select value={projectId || null} onValueChange={(value) => { setProjectId(value ?? ""); setRoleProfiles({}); }}><SelectTrigger id="task-project"><SelectValue placeholder="Select a project">{(value) => availableProjects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Select a project")}</SelectValue></SelectTrigger><SelectContent>{availableProjects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select></Field>
-              <Field><FieldLabel htmlFor="task-title">Task title</FieldLabel><Input id="task-title" value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
-              <Field><FieldLabel htmlFor="task-description">Task description</FieldLabel><Textarea id="task-description" placeholder="Markdown description" value={description} onChange={(event) => setDescription(event.target.value)} /></Field>
-              <details className="text-xs"><summary className="cursor-pointer py-1 font-medium">Advanced choices</summary><FieldSet>
-                <FieldLegend variant="label">Role and review overrides</FieldLegend>
-                {(["lead", "developer", "reviewer"] as const).map((role) => {
-                  const project = availableProjects.find((candidate) => candidate.id === projectId);
-                  const allowed = profiles.filter((profile) => project?.allowedProfileIds.includes(profile.id));
-                  return <Field key={role}><FieldLabel htmlFor={`task-${role}-profile`}>{role[0]!.toUpperCase() + role.slice(1)} profile</FieldLabel><Select value={roleProfiles[role] ?? null} onValueChange={(value) => setRoleProfiles((current) => value ? { ...current, [role]: value } : Object.fromEntries(Object.entries(current).filter(([key]) => key !== role)))}><SelectTrigger id={`task-${role}-profile`}><SelectValue placeholder="Project default">{(value) => allowed.find((profile) => profile.id === value)?.name ?? (value ? "Unavailable profile" : "Project default")}</SelectValue></SelectTrigger><SelectContent><SelectItem value={null}>Project default</SelectItem>{allowed.map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>)}</SelectContent></Select></Field>;
-                })}
-                <Field orientation="horizontal"><Checkbox id="task-supplemental-review" checked={supplementalReview} onCheckedChange={(checked) => setSupplementalReview(checked === true)} /><FieldLabel htmlFor="task-supplemental-review">Request supplemental review</FieldLabel></Field>
-              </FieldSet></details>
-              <InlineAttachmentPicker attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} disabled={busy} />
-            </FieldGroup> : currentCompany ? <p className="text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New tasks are unavailable." : "Company archived. New tasks are unavailable."}</p> : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
-            {currentCompany?.status === "active" ? <Button className="mt-3 w-full" onClick={() => void create()} disabled={busy || !companyId || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button> : null}
-            {error ? <Alert variant="destructive" className="mt-3 text-xs text-rose-700"><AlertDescription>{error}</AlertDescription></Alert> : null}
-          </section>
+      <div data-task-list className="min-h-[calc(100vh-2.5rem)] border-t border-border/70 bg-background text-foreground">
+        <div className="flex min-h-11 items-center justify-between gap-3 border-b border-border/70 px-3 py-1 sm:px-4">
+          <Tabs value={taskFilter} onValueChange={(value) => setTaskFilter(value as TaskListFilter)}>
+            <TabsList>
+              <TabsTrigger value="active">Active <span className="text-[11px] text-muted-foreground">{activeCount}</span></TabsTrigger>
+              <TabsTrigger value="backlog">Backlog <span className="text-[11px] text-muted-foreground">{backlogCount}</span></TabsTrigger>
+              <TabsTrigger value="all">All tasks <span className="text-[11px] text-muted-foreground">{visibleTasks.length}</span></TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <a className="shrink-0 text-[11px] text-muted-foreground hover:text-foreground" href={withCompany("/board", companyId)}>Open board</a>
+        </div>
+        {error ? <div className="p-3 sm:p-4"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
+        {!scopeLoaded && !error ? <div className="space-y-px p-2" aria-label="Loading tasks" aria-busy="true"><Skeleton className="h-8 w-full" /><Skeleton className="h-9 w-full" /><Skeleton className="h-9 w-full" /></div> : null}
+        {scopeLoaded && taskGroups.length === 0 ? <div className="px-4 py-8 text-xs text-muted-foreground">{taskFilter === "active" ? "No active tasks." : taskFilter === "backlog" ? "No backlog tasks." : "No tasks yet. Press ⌘N to create one."}</div> : null}
+        {scopeLoaded ? <div aria-label="Task groups">
+          {taskGroups.map((group) => {
+            const GroupIcon = group.id === "completed" ? CheckCircle2 : group.id === "blocked" ? CircleX : group.id === "active" ? CircleDotDashed : CircleDashed;
+            const groupIconClass = group.id === "completed" ? "text-emerald-500" : group.id === "blocked" ? "text-rose-500" : group.id === "active" ? "text-amber-500" : "text-muted-foreground";
+            return (
+              <Collapsible.Root key={group.id} defaultOpen className="group/task-group border-b border-border/70">
+                <Collapsible.Trigger className="flex h-8 w-full items-center gap-2 bg-muted/45 px-3 text-left text-xs outline-none transition-colors hover:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring/50 sm:px-4">
+                  <ChevronRight className="size-3 text-muted-foreground transition-transform group-data-[open]/task-group:rotate-90" />
+                  <GroupIcon className={`size-3.5 ${groupIconClass}`} />
+                  <span className="font-medium">{group.title}</span>
+                  <span className="text-muted-foreground">{group.tasks.length}</span>
+                </Collapsible.Trigger>
+                <Collapsible.Panel>
+                  {group.tasks.map((task) => {
+                    const project = visibleProjects.find((candidate) => candidate.id === task.projectId);
+                    const appearance = taskPhaseAppearance(task.phase);
+                    const StatusIcon = appearance.icon;
+                    return (
+                      <a data-task-row key={task.id} href={withCompany(`/tasks/${encodeURIComponent(task.id)}`, companyId)} className="group/task-row grid min-h-9 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 border-t border-border/55 px-3 text-[13px] outline-none transition-colors first:border-t-0 hover:bg-muted/40 focus-visible:bg-muted/50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring/50 sm:grid-cols-[auto_minmax(0,1fr)_auto_auto] sm:px-4">
+                        <StatusIcon className={`size-3.5 ${appearance.iconClass}`} />
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className="truncate font-medium">{task.title}</span>
+                          {project ? <><ChevronRight className="hidden size-3 shrink-0 text-muted-foreground/60 md:block" /><span className="hidden truncate text-xs text-muted-foreground md:block">{project.name}</span></> : null}
+                        </span>
+                        <span className="hidden sm:inline-flex"><ReuiBadge variant={appearance.badge} size="sm" radius="full">{taskPhaseLabel(task.phase)}</ReuiBadge></span>
+                        <time dateTime={task.updatedAt} className="w-16 text-right text-[11px] text-muted-foreground">{taskListDate(task.updatedAt)}</time>
+                      </a>
+                    );
+                  })}
+                </Collapsible.Panel>
+              </Collapsible.Root>
+            );
+          })}
+        </div> : null}
+        {!currentCompany && scopeLoaded ? <div className="px-4 py-8 text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</div> : null}
+        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); }} companyName={currentCompany?.name} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={setProjectId} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} />
       </div>
     </ApplicationFrame>
   );

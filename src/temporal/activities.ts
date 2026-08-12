@@ -108,14 +108,16 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     const request = capacity.request({ ...input, turnKind });
     const admitted = capacity.tryAcquire(request.id);
     if (!admitted.acquired) throw new CapacityWaitError(request.id, capacity.position(request.id) ?? 1);
+    let releaseReason = "turn-completed";
     try {
       return await operation();
     } catch (error) {
+      releaseReason = "turn-failed";
       const permanentFailure = asNonRetryableApplicationFailure(error);
       if (permanentFailure) throw permanentFailure;
       throw error;
     } finally {
-      capacity.release(request.id, "turn-completed");
+      capacity.release(request.id, releaseReason);
     }
   };
   const latestWorktree = (input: { taskId: string; companyId: string; workflowId: string; branchName?: string }, executionId?: string): string => {
@@ -281,10 +283,12 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       }
       if (!conflictFiles.length) throw new Error("Merge-conflict files are unavailable");
       const rawInput: MergeConflictResolutionActivityInput = { ...input, worktreePath, conflictFiles };
-      return withCapacity(input, "developer", () => (developer?.runMergeConflictResolution ?? defaultDeveloper.runMergeConflictResolution.bind(defaultDeveloper))(rawInput));
+      const operation = developer.runMergeConflictResolution ? developer.runMergeConflictResolution.bind(developer) : defaultDeveloper.runMergeConflictResolution.bind(defaultDeveloper);
+      return withCapacity(input, "developer", () => operation(rawInput));
     },
     async runDeveloperExecution(input) {
-      const result = await withCapacity(input, "developer", () => (developer.run ?? defaultDeveloper.run.bind(defaultDeveloper))(input));
+      const operation = developer.run ? developer.run.bind(developer) : defaultDeveloper.run.bind(defaultDeveloper);
+      const result = await withCapacity(input, "developer", () => operation(input));
       if (input.executionId && result.developerExecutionId !== input.executionId) throw new Error("Developer execution identity did not match the durable Workflow operation");
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
@@ -303,7 +307,8 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         repairPlan = review.repairPlan;
       }
       if (!blockingFindings || !repairPlan) throw new Error("Delivery review repair evidence is unavailable");
-      const result = await withCapacity(input, "developer", () => (developer.runRepair ?? defaultDeveloper.runRepair.bind(defaultDeveloper))({ ...input, worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree!, blockingFindings, repairPlan }));
+      const operation = developer.runRepair ? developer.runRepair.bind(developer) : defaultDeveloper.runRepair.bind(defaultDeveloper);
+      const result = await withCapacity(input, "developer", () => operation({ ...input, worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree!, blockingFindings, repairPlan }));
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;
@@ -311,7 +316,8 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     },
     async runCiRepair(input: WorkflowCiRepairActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);
-      const result = await withCapacity(input, "developer", () => (developer.runCiRepair ?? defaultDeveloper.runCiRepair.bind(defaultDeveloper))({ ...input, worktreePath }));
+      const operation = developer.runCiRepair ? developer.runCiRepair.bind(developer) : defaultDeveloper.runCiRepair.bind(defaultDeveloper);
+      const result = await withCapacity(input, "developer", () => operation({ ...input, worktreePath }));
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;

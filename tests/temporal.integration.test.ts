@@ -18,7 +18,7 @@ import { createActivities } from "../src/temporal/activities.js";
 import { replayIssueHistory, type ReplayHistory } from "../src/temporal/replay.js";
 import { AgentFailure } from "../src/codex-lead.js";
 import { ProjectionRebuildService } from "../src/projection-rebuild.js";
-import { approveIssuePlan, cancelIssue, connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, rejectIssuePlan, repairIssueDelivery, reviewIssueDelivery, startIssueDevelopment, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
+import { approveIssuePlan, cancelIssue, cancelIssueDevelopment, connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, rejectIssuePlan, repairIssueDelivery, reviewIssueDelivery, startIssueDevelopment, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
 import { activityPayloadInterceptors } from "../src/temporal/payload-boundary-interceptors.js";
 import { buildProductionWorkflowBundle, temporalDataConverter } from "../src/temporal/workflow-bundle.js";
 import { runReplayScenarioCorpus } from "./replay-scenario-driver.js";
@@ -82,6 +82,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     database = new ForgeDatabase(config.databasePath);
     let permanentPlanningFailure = false;
     let permanentPlanningCalls = 0;
+    let developerFailure = false;
     let holdPlanning = false;
     let releasePlanning = (): void => {};
     let planningGate = Promise.resolve();
@@ -102,7 +103,10 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       },
     };
     const integrationDeveloper = {
-      run: async (input: { executionId?: string }) => ({ developerExecutionId: input.executionId ?? "developer_integration", developerSessionRef: "session_developer_integration", worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), currentStep: 1, resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_developer_evidence", deliverySummary: "Developer delivery", outcome: "completed" as const }),
+      run: async (input: { executionId?: string }) => {
+        if (developerFailure) throw new AgentFailure("process-exited", "The agent invocation did not complete.");
+        return { developerExecutionId: input.executionId ?? "developer_integration", developerSessionRef: "session_developer_integration", worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), currentStep: 1, resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_developer_evidence", deliverySummary: "Developer delivery", outcome: "completed" as const };
+      },
       runRepair: async (input: { developerExecutionId: string }) => ({ developerExecutionId: "developer_repair_integration", developerSessionRef: "session_developer_integration", supersedesExecutionId: input.developerExecutionId, worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "d".repeat(40), resultTree: "e".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_repaired_delivery", evidenceArtifactId: "artifact_repaired_evidence", deliverySummary: "Developer repair", outcome: "completed" as const, cycle: 1 }),
     };
     const ciCalls = new Map<string, number>();
@@ -175,6 +179,8 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-restart', 'issue-company', 'issue-project', 'Restart issue', 'issue-brief', '[]', '{}', 0, ?, 'issue-revision', 'issue-restart-key', ?, ?)").run(`${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-restart`, new Date().toISOString(), new Date().toISOString());
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-continuation', 'issue-company', 'issue-project', 'Continue issue', 'issue-brief', '[]', '{}', 0, ?, 'issue-revision', 'issue-continuation-key', ?, ?)").run(`${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-continuation`, new Date().toISOString(), new Date().toISOString());
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-permanent-failure', 'issue-company', 'issue-project', 'Permanent failure issue', 'issue-brief', '[]', '{}', 0, ?, 'issue-revision', 'issue-permanent-failure-key', ?, ?)").run(`${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-permanent-failure`, new Date().toISOString(), new Date().toISOString());
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-start-failure', 'issue-company', 'issue-project', 'Developer start failure', 'issue-brief', '[]', '{}', 0, ?, 'issue-revision', 'issue-start-failure-key', ?, ?)").run(`${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-start-failure`, new Date().toISOString(), new Date().toISOString());
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-developer-failure', 'issue-company', 'issue-project', 'Developer activity failure', 'issue-brief', '[]', '{}', 0, ?, 'issue-revision', 'issue-developer-failure-key', ?, ?)").run(`${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-developer-failure`, new Date().toISOString(), new Date().toISOString());
     });
     const startedIssue = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-restart", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false });
     const duplicateIssue = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-restart", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false });
@@ -249,6 +255,20 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
         await replayIssueHistory(history as ReplayHistory, `ci-${name}-replay`);
       }
     } finally { ciReplayClient.connection.close(); }
+
+    const recoveryWorkflowId = `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-start-failure`;
+    await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-start-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, continuationState: { phase: "development", revision: 4, owner: "lead", allowedCommands: ["cancel_development", "reject_plan", "cancel_issue"], pendingAction: "Developer execution", lastEventId: `${recoveryWorkflowId}:4`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_integration", leadOutputArtifactId: "artifact_integration_output", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], supplementalReviewUsed: false, repairCycle: 0 } });
+    const recoveredStart = await cancelIssueDevelopment(config, recoveryWorkflowId, { expectedRevision: 4, actorUserId: "issue-admin" });
+    expect(recoveredStart).toMatchObject({ phase: "ready_for_development", revision: 5, owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development" });
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-start-failure'").get())).toEqual({ revision: 5, phase: "ready_for_development" });
+
+    const developerFailureWorkflowId = `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-developer-failure`;
+    await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-developer-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, continuationState: { phase: "ready_for_development", revision: 3, owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${developerFailureWorkflowId}:3`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_integration", leadOutputArtifactId: "artifact_integration_output", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], supplementalReviewUsed: false, repairCycle: 0 } });
+    developerFailure = true;
+    const recoveredDeveloperFailure = await startIssueDevelopment(config, developerFailureWorkflowId, { expectedRevision: 3, actorUserId: "issue-admin" });
+    expect(recoveredDeveloperFailure).toMatchObject({ phase: "ready_for_development", revision: 5, owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Developer execution failed; retry is available" });
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = 'issue-developer-failure'").get())).toEqual({ revision: 5, phase: "ready_for_development", pending_action: "Developer execution failed; retry is available" });
+    developerFailure = false;
 
     permanentPlanningFailure = true;
     const startedPermanentFailure = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-permanent-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false });

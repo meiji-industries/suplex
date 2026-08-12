@@ -11,6 +11,7 @@ import { canonicalJson } from "./canonical-json.js";
 import { ProjectFailure, ProjectService, type ProjectRole } from "./projects.js";
 import { acceptIssueDelivery, acceptIssuePlanning, approveIssuePlan, cancelIssue, cancelIssueDevelopment, finalReviewIssue, IssueWorkflowStartFailure, publishIssueDraft, recordIssueDeliveryDecision, reconcileIssueCI, reconcileIssueMerge, rejectIssuePlan, repairIssueCI, repairIssueDelivery, requestIssueDeliveryChanges, requestIssueSupplementalReview, resolveIssueMergeConflict, retryIssueDevelopment, reviewIssueDelivery, startIssueDevelopment, startIssueWorkflow } from "./temporal/service.js";
 import type { IssueWorkflowInput, IssueWorkflowState, PlanCommandInput, StartPlanningInput } from "./temporal/issue-contracts.js";
+import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 
 export type TaskPhase = "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "merge_conflict_reviewing" | "merge_conflict_required" | "merge_conflict_resolving" | "ci_waiting" | "ci_repair_planning" | "ci_repairing" | "ci_repair_required" | "final_review" | "accepted" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
 
@@ -230,6 +231,13 @@ export interface TaskEvent {
   taskId: string;
   companyId: string;
   revision: number;
+}
+
+export interface TaskDeveloperDiff {
+  patch: string;
+  branchName: string;
+  baseSha: string;
+  headSha: string;
 }
 
 export interface IssueWorkflowPort {
@@ -544,6 +552,30 @@ export class TaskService {
     return this.publicTask(actorUserId, row);
   }
 
+  async getDeveloperDiff(actorUserId: string, taskId: string): Promise<TaskDeveloperDiff> {
+    const task = this.getTask(actorUserId, taskId);
+    const execution = task.developerExecution;
+    if (!execution || execution.status !== "completed") throw new TaskFailure("Developer diff is not available until development completes", [], 409);
+    const worktree = this.database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ?").get(execution.id, task.id, task.companyId) as { worktreePath: string } | undefined);
+    if (!worktree) throw new TaskFailure("Developer diff is unavailable", [], 409);
+    const project = this.projects.getProject(actorUserId, task.projectId);
+    if (project.companyId !== task.companyId) throw new TaskFailure("Not found", [], 404);
+    try {
+      const diff = await new WorktreeManager().currentDiff({
+        repositoryPath: project.repositoryPath,
+        worktreeRoot: project.worktreeRoot,
+        taskId: task.id,
+        targetBaseSha: execution.targetBaseSha,
+        branchName: execution.branchName,
+        worktreePath: worktree.worktreePath,
+      });
+      return { patch: diff.patch, branchName: execution.branchName, baseSha: execution.targetBaseSha, headSha: diff.headSha };
+    } catch (error) {
+      if (error instanceof WorktreeFailure) throw new TaskFailure(error.message, [finding(error.code, "developerExecution", error.message)], 409);
+      throw error;
+    }
+  }
+
   async createTask(actorUserId: string, companyId: string, input: TaskInput): Promise<{ task: ForgeTask; created: boolean }> {
     const company = this.auth.requireCompanyAccess(actorUserId, companyId);
     if (company.status !== "active") throw new TaskFailure("Task creation failed", [finding("company-inactive", "companyId", "Task creation requires an active company")], 409);
@@ -856,7 +888,9 @@ export class TaskService {
   }
 
   async rejectPlan(actorUserId: string, taskId: string, expectedRevision: number, note?: string): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "reject_plan", (workflowId, input) => this.workflow.rejectPlan ? this.workflow.rejectPlan(workflowId, { ...input, ...(note !== undefined ? { note } : {}) }) : Promise.reject(new Error("Plan revision workflow is unavailable")));
+    const task = this.getTask(actorUserId, taskId);
+    const authorization = task.phase === "delivery_ready" && task.allowedCommands.includes("review_delivery") ? "review_delivery" : "reject_plan";
+    return this.planCommand(actorUserId, taskId, expectedRevision, authorization, (workflowId, input) => this.workflow.rejectPlan ? this.workflow.rejectPlan(workflowId, { ...input, ...(note !== undefined ? { note } : {}) }) : Promise.reject(new Error("Plan revision workflow is unavailable")));
   }
 
   async publishDraft(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {

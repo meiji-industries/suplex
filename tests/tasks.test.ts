@@ -15,11 +15,11 @@ import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkfl
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
 const github: GithubAdapter = { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } };
 
-function project(database: ForgeDatabase, state: IssueWorkflowState, runId = "run-1"): void {
+function projectState(database: ForgeDatabase, state: IssueWorkflowState, runId = "run-1"): void {
   database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId, eventId: state.lastEventId, state }));
 }
 
-async function fixture(): Promise<{ root: string; config: ForgeConfig; database: ForgeDatabase; auth: AuthService; projects: ProjectService; tasks: TaskService; workflow: IssueWorkflowPort; adminId: string; companyId: string; projectId: string; profileId: string }> {
+async function fixture(): Promise<{ root: string; config: ForgeConfig; database: ForgeDatabase; auth: AuthService; projects: ProjectService; tasks: TaskService; workflow: IssueWorkflowPort; stateByTask: Map<string, IssueWorkflowState>; adminId: string; companyId: string; projectId: string; profileId: string }> {
   const root = await mkdtemp(join(tmpdir(), "forge-task-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
@@ -50,9 +50,17 @@ async function fixture(): Promise<{ root: string; config: ForgeConfig; database:
       database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run-1", eventId: next.lastEventId, state: next }));
       return next;
     },
+    async publishDraft(workflowId: string, input: StartPlanningInput) {
+      const current = [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
+      if (input.expectedRevision !== current.revision) throw new Error("Stale workflow revision");
+      const next = { ...current, phase: "releasing" as const, revision: current.revision + 1, owner: "lead" as const, allowedCommands: [], pendingAction: "Publishing one exact draft pull request", lastEventId: `${workflowId}:${current.revision + 1}` };
+      stateByTask.set(next.issueId, next);
+      projectState(database, next);
+      return next;
+    },
   };
   const tasks = new TaskService(database, auth, projects, config, { workflow });
-  return { root, config, database, auth, projects, tasks, workflow, adminId: "admin-1", companyId: company.id, projectId: project.id, profileId: profile.id };
+  return { root, config, database, auth, projects, tasks, workflow, stateByTask, adminId: "admin-1", companyId: company.id, projectId: project.id, profileId: profile.id };
 }
 
 test("a creator that loses its lease cannot advance the creation intent", async () => {
@@ -155,7 +163,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     const initialState = JSON.parse(initialSnapshot.state_json) as IssueWorkflowState;
     expect(initialState).toMatchObject({ issueId: first.task.id, repairCycle: 0 });
     expect(initialState).not.toHaveProperty("taskId");
-    expect(() => project(value.database, initialState)).not.toThrow();
+    expect(() => projectState(value.database, initialState)).not.toThrow();
     const duplicate = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Investigate queue", description: "## Reproduce\n\nPlease inspect the queue.", idempotencyKey: "queue-task-0001", supplementalReview: true, images: [{ filename: "evidence.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] });
     expect(duplicate.created).toBe(false);
     expect(duplicate.task.id).toBe(first.task.id);
@@ -170,6 +178,22 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
   }
 });
 
+test("retries draft publication from a typed provider-failure state", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Retry release", description: "Reviewed delivery", idempotencyKey: "retry-release-0001", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    const blocked: IssueWorkflowState = { ...initial, revision: 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "GitHub provider request failed", deliveryReviewId: "review-a", releaseStatus: "blocked", releaseFailureCode: "provider-unavailable", releaseFailureSummary: "GitHub provider request failed", lastEventId: `${initial.workflowId}:1` };
+    value.stateByTask.set(created.task.id, blocked);
+    projectState(value.database, blocked);
+
+    const retried = await value.tasks.publishDraft(value.adminId, created.task.id, 1);
+    expect(retried).toMatchObject({ phase: "releasing", revision: 2, pendingAction: "Publishing one exact draft pull request" });
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("repairs the legacy revision-zero seed before applying the Temporal initial projection", async () => {
   const value = await fixture();
   try {
@@ -178,8 +202,8 @@ test("repairs the legacy revision-zero seed before applying the Temporal initial
     const canonical = JSON.parse(snapshot.state_json) as IssueWorkflowState;
     const planning = IssueWorkflowStateSchema.parse({ ...canonical, revision: 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${canonical.workflowId}:1` });
     const approval = IssueWorkflowStateSchema.parse({ ...planning, revision: 2, phase: "approval", owner: "human", allowedCommands: ["approve_plan", "reject_plan", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${canonical.workflowId}:2` });
-    project(value.database, planning);
-    project(value.database, approval);
+    projectState(value.database, planning);
+    projectState(value.database, approval);
     const { issueId, repairCycle: _repairCycle, ...seed } = canonical;
     const legacy = { ...seed, taskId: issueId };
     const legacyHash = projectionStateHash(legacy);
@@ -189,7 +213,7 @@ test("repairs the legacy revision-zero seed before applying the Temporal initial
       db.prepare("UPDATE forge_issue_projections SET event_hash = ? WHERE task_id = ? AND revision = 0").run(legacyHash, issueId);
     });
 
-    expect(() => project(value.database, canonical)).not.toThrow();
+    expect(() => projectState(value.database, canonical)).not.toThrow();
     const repaired = value.database.authQuery((db) => ({
       snapshot: db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(issueId) as { state_json: string },
       timeline: db.prepare("SELECT event_hash FROM forge_issue_timeline WHERE task_id = ? AND revision = 0").get(issueId) as { event_hash: string },
@@ -218,7 +242,7 @@ test("streams projection changes written by the Temporal worker process", async 
     const unsubscribeDenied = value.tasks.subscribe("sync-member", (event) => deniedEvents.push(event));
     const workerDatabase = new ForgeDatabase(join(value.root, "forge.sqlite"));
     try {
-      project(workerDatabase, IssueWorkflowStateSchema.parse({ ...created.task, issueId: created.task.id, projectRevisionId: created.task.projectRevisionId, revision: 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${created.task.workflowId}:1`, continuationCount: 0, lastSummaryHash: null, repairCycle: 0 }), "run-worker");
+      projectState(workerDatabase, IssueWorkflowStateSchema.parse({ ...created.task, issueId: created.task.id, projectRevisionId: created.task.projectRevisionId, revision: 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${created.task.workflowId}:1`, continuationCount: 0, lastSummaryHash: null, repairCycle: 0 }), "run-worker");
       await expect.poll(() => events).toEqual([{ type: "invalidate", taskId: created.task.id, companyId: created.task.companyId, revision: 1 }]);
       expect(deniedEvents).toEqual([]);
     } finally {

@@ -17,6 +17,7 @@ export interface OwnedProcess {
   startId?: string | undefined;
   executable?: string | undefined;
   argv?: string[] | undefined;
+  ownerUid?: number | undefined;
   ready?: boolean | undefined;
 }
 
@@ -38,7 +39,20 @@ export interface ProcessInspection {
   argv: string[];
   processGroup: number;
   startTime: string;
+  ownerUid?: number | undefined;
 }
+
+export type ProcessIdentityComparison =
+  | { kind: "exact_match"; inspection: ProcessInspection }
+  | { kind: "not_running" }
+  | { kind: "incomplete_identity"; field: string }
+  | { kind: "pid_reused" }
+  | { kind: "wrong_process_group" }
+  | { kind: "wrong_start_time" }
+  | { kind: "wrong_executable" }
+  | { kind: "wrong_argv" }
+  | { kind: "wrong_owner" }
+  | { kind: "ambiguous"; reason: string };
 
 export interface ProcessController {
   inspect(pid: number): Promise<ProcessInspection | undefined>;
@@ -73,7 +87,8 @@ async function processField(pid: number, field: string): Promise<string | undefi
 }
 
 async function inspectProcessOnce(pid: number): Promise<ProcessInspection | undefined> {
-  const [command, pgidValue, startTime, executable] = await Promise.all([
+  const [ownerUidValue, command, pgidValue, startTime, executable] = await Promise.all([
+    processField(pid, "uid="),
     processField(pid, "command="),
     processField(pid, "pgid="),
     processField(pid, "lstart="),
@@ -82,7 +97,16 @@ async function inspectProcessOnce(pid: number): Promise<ProcessInspection | unde
   if (!command || !pgidValue || !startTime || !executable) return undefined;
   const processGroup = Number(pgidValue);
   if (!Number.isSafeInteger(processGroup) || processGroup <= 0) return undefined;
-  return { pid, command, executable, argv: normalizeArgv(command), processGroup, startTime };
+  const ownerUid = ownerUidValue === undefined ? undefined : Number(ownerUidValue);
+  return {
+    pid,
+    command,
+    executable,
+    argv: normalizeArgv(command),
+    processGroup,
+    startTime,
+    ...(ownerUid !== undefined && Number.isSafeInteger(ownerUid) && ownerUid >= 0 ? { ownerUid } : {}),
+  };
 }
 
 export const defaultProcessController: ProcessController = {
@@ -124,22 +148,28 @@ export const defaultProcessController: ProcessController = {
   },
 };
 
-export function processIdentityMatches(owned: OwnedProcess, inspection: ProcessInspection): boolean {
+export function compareProcessIdentity(owned: OwnedProcess, inspection: ProcessInspection | undefined): ProcessIdentityComparison {
+  if (!inspection) return { kind: "not_running" };
   if (
     owned.processGroup === undefined
     || owned.startTime === undefined
     || owned.executable === undefined
     || owned.argv === undefined
   ) {
-    return false;
+    return { kind: "incomplete_identity", field: owned.processGroup === undefined ? "processGroup" : owned.startTime === undefined ? "startTime" : owned.executable === undefined ? "executable" : "argv" };
   }
-  return inspection.pid === owned.pid
-    && inspection.processGroup === owned.processGroup
-    && inspection.command === owned.command
-    && inspection.startTime === owned.startTime
-    && inspection.executable === owned.executable
-    && inspection.argv.length === owned.argv.length
-    && inspection.argv.every((argument, index) => argument === owned.argv![index]);
+  if (inspection.pid !== owned.pid) return { kind: "pid_reused" };
+  if (inspection.processGroup !== owned.processGroup) return { kind: "wrong_process_group" };
+  if (inspection.startTime !== owned.startTime) return { kind: "wrong_start_time" };
+  if (inspection.executable !== owned.executable) return { kind: "wrong_executable" };
+  if (inspection.argv.length !== owned.argv.length || !inspection.argv.every((argument, index) => argument === owned.argv![index])) return { kind: "wrong_argv" };
+  if (owned.ownerUid !== undefined && inspection.ownerUid === undefined) return { kind: "incomplete_identity", field: "ownerUid" };
+  if (owned.ownerUid !== undefined && inspection.ownerUid !== owned.ownerUid) return { kind: "wrong_owner" };
+  return { kind: "exact_match", inspection };
+}
+
+export function processIdentityMatches(owned: OwnedProcess, inspection: ProcessInspection): boolean {
+  return compareProcessIdentity(owned, inspection).kind === "exact_match";
 }
 
 export function hasCompleteProcessIdentity(owned: OwnedProcess): boolean {

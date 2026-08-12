@@ -5,6 +5,7 @@ import { relative, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { z } from "zod";
+import type Database from "better-sqlite3";
 
 import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
@@ -16,7 +17,7 @@ import { createGitCommandGuard, WorktreeManager } from "./worktrees.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { runPinnedVerification } from "./verification.js";
 import { parseAcceptedProjectRevision } from "./projects.js";
-import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
+import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -162,6 +163,16 @@ interface PriorDeveloperExecution {
   target_base_sha: string;
 }
 
+function registerArtifact(db: Database.Database, artifact: StoredArtifact): void {
+  db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+  const row = db.prepare("SELECT company_id AS companyId, kind, filename, mime_type AS mimeType, byte_size AS byteSize, sha256, storage_path AS storagePath, created_at AS createdAt FROM forge_artifacts WHERE id = ?").get(artifact.id) as Omit<StoredArtifact, "id"> | undefined;
+  if (!row || row.companyId !== artifact.companyId || row.kind !== artifact.kind || row.filename !== artifact.filename || row.mimeType !== artifact.mimeType || row.byteSize !== artifact.byteSize || row.sha256 !== artifact.sha256 || row.storagePath !== artifact.storagePath || row.createdAt !== artifact.createdAt) throw new AgentFailure("artifact-idempotency-conflict", "Developer artifact metadata conflicts with an existing stable claim artifact", { nonRetryable: true });
+}
+
+function isSupervisorTerminalError(error: unknown): boolean {
+  return error instanceof Error && error.name === "SupervisedDeveloperTerminalError";
+}
+
 export interface DeveloperServiceOptions {
   command?: string;
   processRunner?: LeadProcessRunner;
@@ -250,7 +261,7 @@ export class DeveloperService {
     this.github = options.github;
   }
 
-  async run(rawInput: DeveloperExecutionActivityInput): Promise<DeveloperExecutionResult> {
+  async run(rawInput: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<DeveloperExecutionResult> {
     const input = rawInput;
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256
       FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
@@ -281,11 +292,15 @@ export class DeveloperService {
     if (!/^[a-f0-9]{40,64}$/i.test(targetBaseSha)) throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain an exact target SHA");
     let branchName = `forge/issue/${input.taskId}`;
     const worktreeRoot = await scopedRepository(this.config.worktreeRoot, projectRevision.data.worktreeRoot);
-    const attempt = Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
-    const executionId = input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
+    const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
+    const executionId = input.developerTurnExecutionId ?? input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
+    const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; planRevision: number; attempt: number; status: string; branchName: string; worktreePath: string; targetBaseSha: string; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
+    if (existing && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== branchName || existing.targetBaseSha !== targetBaseSha || existing.supersedesExecutionId !== (prior?.id ?? null) || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic Developer execution ID is already bound to different coordinates", { nonRetryable: true });
     let worktree;
     try {
-      if (revisionAuthorization?.disposition === "reuse") {
+      if (existing) {
+        worktree = { branchName: existing.branchName, worktreePath: await scopedRepository(this.config.worktreeRoot, existing.worktreePath), targetBaseSha: existing.targetBaseSha };
+      } else if (revisionAuthorization?.disposition === "reuse") {
         if (!revisionAuthorization.worktreePath || !revisionAuthorization.branchName || !revisionAuthorization.baseSha || !revisionAuthorization.headSha || !revisionAuthorization.treeSha) throw new AgentFailure("revision-coordinates-missing", "Authorized preserved worktree coordinates are incomplete");
         const inspected = await this.worktrees.inspectForPlanRevision({ repositoryPath, worktreeRoot, worktreePath: revisionAuthorization.worktreePath, branchName: revisionAuthorization.branchName, baseSha: revisionAuthorization.baseSha, resultCommit: revisionAuthorization.headSha, resultTree: revisionAuthorization.treeSha });
         branchName = inspected.branchName;
@@ -305,12 +320,12 @@ export class DeveloperService {
     const wrapperId = `wrapper_${randomBytes(12).toString("hex")}`;
     let guard: Awaited<ReturnType<typeof createGitCommandGuard>> | undefined;
     guard = await createGitCommandGuard(this.config.runtimeRoot);
-    this.database.authTransaction((db) => db.prepare(`INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, 1)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, wrapperId, guard!.directory, prior?.id ?? null, startedAt, startedAt));
+    this.database.authTransaction((db) => db.prepare(`INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, 1)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, wrapperId, guard!.directory, prior?.id ?? null, startedAt, startedAt));
     const prompt = this.prompt(context.title, brief, planText, leadEvidence, worktree);
     const evidenceLines = [JSON.stringify({ type: "forge.prompt", text: redact(prompt) })];
     const outputLines: string[] = [];
-    let sessionRef: string | undefined;
-    let rawSessionId: string | undefined;
+    let sessionRef: string | undefined = existing?.sessionRef ?? undefined;
+    let rawSessionId: string | undefined = sessionRef ? await this.sessionStore.read(sessionRef) : undefined;
     try {
       const heartbeat = setInterval(() => void this.heartbeat(executionId), 5_000);
       try {
@@ -326,6 +341,7 @@ export class DeveloperService {
             evidenceLines.push(sanitized);
             outputLines.push(line);
             const event = eventValue(line);
+            if (event.threadId && rawSessionId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer returned a different session identity for the same durable execution");
             if (event.threadId && !sessionRef) { rawSessionId = event.threadId; sessionRef = await this.sessionStore.create(rawSessionId); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET session_ref = ?, heartbeat_at = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), executionId)); }
             await this.heartbeat(executionId);
           },
@@ -343,11 +359,12 @@ export class DeveloperService {
         if (JSON.stringify(expectedNumbers) !== JSON.stringify(actualNumbers)) throw new AgentFailure("delivery-step-mismatch", "Developer delivery does not map every approved plan step");
         if (JSON.stringify(report.authorizedStepsNotCompleted.sort((a, b) => a - b)) !== JSON.stringify(report.steps.filter((step) => step.status !== "completed").map((step) => step.number).sort((a, b) => a - b))) throw new AgentFailure("delivery-step-mismatch", "Developer delivery did not identify incomplete authorized steps consistently");
         if (report.resultCommit.toLowerCase() !== gitState.headSha.toLowerCase() || report.resultTree.toLowerCase() !== gitState.treeSha.toLowerCase() || report.dirtyState !== gitState.dirtyState) throw new AgentFailure("delivery-revision-mismatch", "Developer delivery report does not match the exact Git result");
-        const deliveryArtifact = await this.artifacts.put(input.companyId, "developer-delivery", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, branchName: worktree.branchName, worktreePath: worktree.worktreePath, targetBaseSha: worktree.targetBaseSha }, null, 2), "utf8") });
-        const evidence = await this.persistEvidence(input.companyId, evidenceLines);
+        const deliveryArtifact = await this.artifacts.putIdempotent(input.companyId, "developer-delivery", `${executionId}:delivery`, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, branchName: worktree.branchName, worktreePath: worktree.worktreePath, targetBaseSha: worktree.targetBaseSha }, null, 2), "utf8") });
+        const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
         const blocked = gitState.headSha === worktree.targetBaseSha || report.authorizedStepsNotCompleted.length > 0 || report.dirtyState !== "clean" || report.blocker !== null;
         const terminalStatus = this.database.authTransaction((db) => {
-          db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, deliveryArtifact.id, deliveryArtifact.companyId, deliveryArtifact.kind, deliveryArtifact.filename, deliveryArtifact.mimeType, deliveryArtifact.byteSize, deliveryArtifact.sha256, deliveryArtifact.storagePath, deliveryArtifact.createdAt);
+          registerArtifact(db, evidence);
+          registerArtifact(db, deliveryArtifact);
           const updated = db.prepare("UPDATE forge_developer_executions SET status = ?, session_ref = ?, finished_at = ?, heartbeat_at = ?, current_step = ?, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ? AND status IN ('starting', 'running')").run(blocked ? "blocked" : "completed", sessionRef, this.now().toISOString(), this.now().toISOString(), report.steps.at(-1)?.number ?? null, gitState.headSha, gitState.treeSha, gitState.dirtyState, deliveryArtifact.id, evidence.id, executionId);
           return updated.changes === 1 ? blocked ? "blocked" : "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
         });
@@ -356,10 +373,11 @@ export class DeveloperService {
         return { developerExecutionId: executionId, developerSessionRef: sessionRef, worktreePath: worktree.worktreePath, branchName: worktree.branchName, targetBaseSha: worktree.targetBaseSha, currentStep: report.steps.at(-1)?.number ?? null, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, deliveryArtifactId: deliveryArtifact.id, evidenceArtifactId: evidence.id, deliverySummary: report.summary, outcome: blocked ? "blocked" : "completed" };
       } finally { clearInterval(heartbeat); }
     } catch (error) {
+      if (isSupervisorTerminalError(error)) throw error;
       const failure = error instanceof AgentFailure ? error : new AgentFailure("developer-failed", "Codex Developer execution failed");
-      const evidence = await this.persistEvidence(input.companyId, evidenceLines);
+      const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
       this.database.authTransaction((db) => {
-        db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
+        registerArtifact(db, evidence);
         const finishedAt = this.now().toISOString();
         db.prepare("UPDATE forge_developer_executions SET status = CASE WHEN status IN ('starting', 'running') THEN 'failed' ELSE status END, session_ref = COALESCE(session_ref, ?), finished_at = COALESCE(finished_at, ?), heartbeat_at = ?, failure_code = CASE WHEN status IN ('starting', 'running') THEN ? ELSE failure_code END, failure_summary = CASE WHEN status IN ('starting', 'running') THEN ? ELSE failure_summary END, evidence_artifact_id = COALESCE(evidence_artifact_id, ?) WHERE id = ?").run(sessionRef ?? null, finishedAt, finishedAt, failure.code, failure.message, evidence.id, executionId);
       });
@@ -367,7 +385,7 @@ export class DeveloperService {
     } finally { await guard?.cleanup(); }
   }
 
-  async runMergeConflictResolution(rawInput: MergeConflictResolutionInput): Promise<MergeConflictResolutionActivityResult> {
+  async runMergeConflictResolution(rawInput: MergeConflictResolutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<MergeConflictResolutionActivityResult> {
     const input = rawInput;
     const prior = this.database.authQuery((db) => db.prepare(`SELECT id, status, session_ref, branch_name, worktree_path, delivery_artifact_id, evidence_artifact_id
       FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; status: string; session_ref: string | null; branch_name: string; worktree_path: string; delivery_artifact_id: string | null; evidence_artifact_id: string | null } | undefined);
@@ -390,11 +408,13 @@ export class DeveloperService {
     }
     const plan = (await this.artifacts.read({ companyId: input.companyId, storagePath: planRow.storage_path, sha256: planRow.sha256 })).toString("utf8");
     const rawSessionId = await this.sessionStore.read(input.developerSessionRef);
-    const executionId = `developer_${randomBytes(12).toString("hex")}`;
-    const attempt = Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
+    const executionId = input.developerTurnExecutionId ?? `developer_${randomBytes(12).toString("hex")}`;
+    const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
+    const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; planRevision: number; attempt: number; status: string; branchName: string; worktreePath: string; targetBaseSha: string; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
+    if (existing && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== input.branchName || existing.worktreePath !== input.worktreePath || existing.targetBaseSha !== input.targetBaseSha || existing.supersedesExecutionId !== input.developerExecutionId || existing.sessionRef !== input.developerSessionRef || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic merge-resolution ID is already bound to different coordinates", { nonRetryable: true });
     const guard = await createGitCommandGuard(this.config.runtimeRoot);
     const startedAt = this.now().toISOString();
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at, execution_kind) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'forward_merge')").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, input.worktreePath, input.targetBaseSha, `wrapper_${randomBytes(12).toString("hex")}`, guard.directory, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt));
+    this.database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at, execution_kind) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'forward_merge')").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, input.worktreePath, input.targetBaseSha, `wrapper_${randomBytes(12).toString("hex")}`, guard.directory, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt));
     const evidenceLines: string[] = [];
     const expectedRawSessionId = rawSessionId;
     let verificationArtifact: StoredArtifact | undefined;
@@ -429,28 +449,28 @@ export class DeveloperService {
       let parsed;
       try { parsed = parseAcceptedProjectRevision(revision.normalized_json); } catch { throw new AgentFailure("artifact_unavailable", "The accepted project revision does not contain valid pinned verification commands"); }
       const verification = await runPinnedVerification({ worktreePath: input.worktreePath, setupCommand: parsed.setupCommand, verificationCommand: parsed.verificationCommand }, { guard });
-      const verificationArtifactRecord = await this.artifacts.put(input.companyId, "forward-merge-verification", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(verification), "utf8") });
+      const verificationArtifactRecord = await this.artifacts.putIdempotent(input.companyId, "forward-merge-verification", `${executionId}:verification`, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(verification), "utf8") });
       verificationArtifact = verificationArtifactRecord;
       const afterVerification = await this.worktrees.inspectDelivery(input.worktreePath);
       const afterParents = (await execFileAsync("git", ["rev-list", "--parents", "-n", "1", "HEAD"], { cwd: input.worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim().split(/\s+/);
       if (afterVerification.branchName !== input.branchName || afterVerification.headSha.toLowerCase() !== gitState.headSha.toLowerCase() || afterVerification.treeSha.toLowerCase() !== gitState.treeSha.toLowerCase() || afterVerification.dirtyState !== "clean" || afterParents.length !== 3 || afterParents[1]?.toLowerCase() !== input.priorHead.toLowerCase() || afterParents[2]?.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new AgentFailure("merge_state_ownership_mismatch", "Pinned verification changed the forward-merge delivery");
       if (verification.outcome !== "passed") throw new AgentFailure(verification.code ?? "verification_failed", verification.summary);
-      const resolutionArtifact = await this.artifacts.put(input.companyId, "merge-conflict-resolution", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(report, null, 2), "utf8") });
-      const deliveryArtifact = await this.artifacts.put(input.companyId, "forward-merge-delivery", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkId: input.forwardMergeId, priorHead: input.priorHead, priorTree: conflict.priorTree, targetBaseSha: input.targetBaseSha, resultCommit: gitState.headSha, resultTree: gitState.treeSha, developerExecutionId: executionId, supersedesDeveloperExecutionId: input.developerExecutionId, supersededDeliveryArtifactId: prior.delivery_artifact_id, supersededEvidenceArtifactId: prior.evidence_artifact_id, verificationArtifactId: verificationArtifactRecord.id, verification }, null, 2), "utf8") });
-      const evidence = await this.artifacts.put(input.companyId, "agent-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
+      const resolutionArtifact = await this.artifacts.putIdempotent(input.companyId, "merge-conflict-resolution", `${executionId}:resolution`, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(report, null, 2), "utf8") });
+      const deliveryArtifact = await this.artifacts.putIdempotent(input.companyId, "forward-merge-delivery", `${executionId}:delivery`, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkId: input.forwardMergeId, priorHead: input.priorHead, priorTree: conflict.priorTree, targetBaseSha: input.targetBaseSha, resultCommit: gitState.headSha, resultTree: gitState.treeSha, developerExecutionId: executionId, supersedesDeveloperExecutionId: input.developerExecutionId, supersededDeliveryArtifactId: prior.delivery_artifact_id, supersededEvidenceArtifactId: prior.evidence_artifact_id, verificationArtifactId: verificationArtifactRecord.id, verification }, null, 2), "utf8") });
+      const evidence = await this.artifacts.putIdempotent(input.companyId, "agent-evidence", `${executionId}:evidence`, { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
       const now = this.now().toISOString();
       this.database.authTransaction((db) => {
         const artifacts = [evidence, resolutionArtifact, verificationArtifactRecord, deliveryArtifact];
-        const insert = db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        for (const artifact of artifacts) insert.run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+        for (const artifact of artifacts) registerArtifact(db, artifact);
         db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = 'clean', delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(now, now, gitState.headSha, gitState.treeSha, deliveryArtifact.id, evidence.id, executionId);
         db.prepare("UPDATE forge_forward_merges SET status = 'merged', merge_commit = ?, tree = ?, result_head = ?, result_tree = ?, developer_execution_id = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, delivery_artifact_id = ?, delivery_artifact_sha256 = ?, updated_at = ? WHERE task_id = ? AND company_id = ? AND conflict_artifact_id = ?").run(gitState.headSha, gitState.treeSha, gitState.headSha, gitState.treeSha, executionId, verificationArtifactRecord.id, verificationArtifactRecord.sha256, deliveryArtifact.id, deliveryArtifact.sha256, now, input.taskId, input.companyId, input.conflictArtifact.id);
         db.prepare("UPDATE forge_merge_conflict_resolutions SET developer_execution_id = ?, developer_session_ref = ?, result_commit = ?, result_tree = ?, status = 'completed', updated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ?").run(executionId, input.developerSessionRef, gitState.headSha, gitState.treeSha, now, input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha);
       });
       return { developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, resultCommit: gitState.headSha, resultTree: gitState.treeSha, deliveryArtifactId: deliveryArtifact.id, deliveryArtifactSha256: deliveryArtifact.sha256, evidenceArtifactId: evidence.id, evidenceArtifactSha256: evidence.sha256, verificationArtifactId: verificationArtifactRecord.id, verificationArtifactSha256: verificationArtifactRecord.sha256, summary: report.summary };
     } catch (error) {
+      if (isSupervisorTerminalError(error)) throw error;
       const failure = error instanceof AgentFailure ? error : new AgentFailure("merge-resolution-failed", "Codex Developer merge-conflict resolution failed");
-      const evidence = await this.artifacts.put(input.companyId, "agent-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
+      const evidence = await this.artifacts.putIdempotent(input.companyId, "agent-evidence", `${executionId}:evidence`, { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
       if (verificationArtifact && completedMerge && ["verification_failed", "verification_timed_out", "verification_evidence_too_large"].includes(failure.code)) {
         const blockedVerificationArtifact = verificationArtifact;
         const blockedMerge = completedMerge;
@@ -464,7 +484,7 @@ export class DeveloperService {
         return { outcome: "verification_blocked", developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, resultCommit: blockedMerge.headSha, resultTree: blockedMerge.treeSha, evidenceArtifactId: evidence.id, verificationArtifact: { id: blockedVerificationArtifact.id, sha256: blockedVerificationArtifact.sha256, kind: "forward-merge-verification" as const }, code: failure.code as "verification_failed" | "verification_timed_out" | "verification_evidence_too_large", summary: failure.message };
       }
       this.database.authTransaction((db) => {
-        db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
+        registerArtifact(db, evidence);
         db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId);
         db.prepare("UPDATE forge_merge_conflict_resolutions SET developer_execution_id = ?, developer_session_ref = ?, status = 'blocked', updated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ?").run(executionId, input.developerSessionRef, this.now().toISOString(), input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha);
       });
@@ -482,8 +502,8 @@ export class DeveloperService {
     return { head, mergeHead, conflicts: files.split("\n").filter(Boolean).sort() };
   }
 
-  async runRepair(rawInput: DeveloperRepairActivityInput): Promise<DeveloperRepairActivityResult> {
-    const input = DeveloperRepairActivityInputSchema.parse(rawInput);
+  async runRepair(rawInput: DeveloperRepairActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<DeveloperRepairActivityResult> {
+    const input = { ...DeveloperRepairActivityInputSchema.parse(rawInput), ...(rawInput.developerTurnExecutionId ? { developerTurnExecutionId: rawInput.developerTurnExecutionId } : {}), ...(rawInput.developerAttempt ? { developerAttempt: rawInput.developerAttempt } : {}), ...(rawInput.turnKind ? { turnKind: rawInput.turnKind } : {}) };
     let repairPlan = input.repairPlan;
     if (input.repairPlanArtifactId) {
       const plan = this.database.authQuery((db) => db.prepare("SELECT filename, storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'delivery-repair-plan'").get(input.repairPlanArtifactId, input.companyId) as { filename: string; storagePath: string; sha256: string } | undefined);
@@ -499,11 +519,15 @@ export class DeveloperService {
       FROM forge_delivery_reviews WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.reviewId, input.taskId, input.companyId, input.workflowId) as { id: string; task_id: string; company_id: string; workflow_id: string; plan_revision: number; base_sha: string; subject_commit: string; subject_tree: string; session_ref: string; outcome: string } | undefined);
     if (!prior || !review) throw new AgentFailure("repair-identity-mismatch", "Developer repair coordinates do not match the immutable review subject");
     const priorSubject = DeliveryReviewSubjectSchema.parse({ planRevision: review.plan_revision, targetBaseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, developerExecutionId: prior.id, deliveryArtifactId: prior.delivery_artifact_id, developerEvidenceArtifactId: prior.evidence_artifact_id, leadSessionRef: review.session_ref, developerSessionRef: prior.session_ref });
-    const executionId = `developer_${randomBytes(12).toString("hex")}`;
+    const executionId = input.developerTurnExecutionId ?? `developer_${randomBytes(12).toString("hex")}`;
+    const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; planRevision: number; attempt: number; status: string; branchName: string; worktreePath: string; targetBaseSha: string; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
+    const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
+    if (existing && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== input.branchName || existing.targetBaseSha !== input.targetBaseSha || existing.supersedesExecutionId !== input.developerExecutionId || existing.sessionRef !== input.developerSessionRef || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic Developer repair ID is already bound to different coordinates", { nonRetryable: true });
+    const previousRepairs = this.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_delivery_repairs WHERE workflow_id = ? AND review_id = ?").get(input.workflowId, input.reviewId) as { count: number }).count;
+    if (previousRepairs !== input.cycle - (existing ? 0 : 1)) throw new AgentFailure("repair-cycle-conflict", "Developer repair cycle does not match the durable review history");
     const startedAt = this.now().toISOString();
-    const attempt = Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
     const wrapperId = `wrapper_${randomBytes(12).toString("hex")}`;
-    const repairAttemptId = `delivery_repair_${randomBytes(12).toString("hex")}`;
+    const repairAttemptId = `delivery_repair_${executionId.slice("developer_".length)}`;
     let guard: Awaited<ReturnType<typeof createGitCommandGuard>> | undefined;
     let repairRowCreated = false;
     let worktreePath = input.worktreePath;
@@ -513,8 +537,8 @@ export class DeveloperService {
     try {
       guard = await createGitCommandGuard(this.config.runtimeRoot);
       this.database.authTransaction((db) => {
-        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, worktreePath, input.targetBaseSha, wrapperId, guard!.directory, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt);
-        db.prepare("INSERT INTO forge_delivery_repairs (id, task_id, company_id, workflow_id, review_id, developer_execution_id, cycle, status, subject_commit, subject_tree, developer_session_ref, branch_name, worktree_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?)").run(repairAttemptId, input.taskId, input.companyId, input.workflowId, input.reviewId, executionId, input.cycle, input.subjectCommit, input.subjectTree, input.developerSessionRef, input.branchName, worktreePath, startedAt);
+        db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, worktreePath, input.targetBaseSha, wrapperId, guard!.directory, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt);
+        db.prepare("INSERT OR IGNORE INTO forge_delivery_repairs (id, task_id, company_id, workflow_id, review_id, developer_execution_id, cycle, status, subject_commit, subject_tree, developer_session_ref, branch_name, worktree_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?)").run(repairAttemptId, input.taskId, input.companyId, input.workflowId, input.reviewId, executionId, input.cycle, input.subjectCommit, input.subjectTree, input.developerSessionRef, input.branchName, worktreePath, startedAt);
         repairRowCreated = true;
       });
       if (input.cycle > input.repairCycleLimit) throw new AgentFailure("repair-cap-exhausted", "The configured Developer repair-cycle limit has been reached");
@@ -566,14 +590,15 @@ export class DeveloperService {
         const completedTurnLacksChildCommit = report.blocker === null && (gitState.branchName !== input.branchName || gitState.headSha.toLowerCase() === input.subjectCommit.toLowerCase() || parents.length !== 2 || (parents[1] ?? "").toLowerCase() !== input.subjectCommit.toLowerCase());
         if (blockedTurnChangedSubject || completedTurnLacksChildCommit) throw new AgentFailure("repair-revision-invalid", "Developer repair must preserve the reviewed revision when blocked or create one ordinary child commit when completed");
         if (report.resultCommit.toLowerCase() !== gitState.headSha.toLowerCase() || report.resultTree.toLowerCase() !== gitState.treeSha.toLowerCase() || report.dirtyState !== gitState.dirtyState) throw new AgentFailure("repair-revision-mismatch", "Developer repair report does not match the exact Git result");
-        const repairArtifact = await this.artifacts.put(input.companyId, "developer-repair", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, cycle: input.cycle, reviewId: input.reviewId, supersedesExecutionId: input.developerExecutionId }, null, 2), "utf8") });
-        const evidence = await this.persistEvidence(input.companyId, evidenceLines);
+        const repairArtifact = await this.artifacts.putIdempotent(input.companyId, "developer-repair", `${executionId}:delivery`, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, cycle: input.cycle, reviewId: input.reviewId, supersedesExecutionId: input.developerExecutionId }, null, 2), "utf8") });
+        const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
         const blocked = report.blocker !== null || report.dirtyState !== "clean";
         this.database.authTransaction((db) => {
           const row = db.prepare("SELECT id FROM forge_delivery_repairs WHERE developer_execution_id = ? AND cycle = ?").get(executionId, input.cycle) as { id: string } | undefined;
           const failureCode = blocked ? report.blocker !== null ? "repair-scope" : "worktree-unsafe" : null;
           const failureSummary = blocked ? report.blocker ?? "The Developer repair did not leave a clean worktree." : null;
-          db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, repairArtifact.id, repairArtifact.companyId, repairArtifact.kind, repairArtifact.filename, repairArtifact.mimeType, repairArtifact.byteSize, repairArtifact.sha256, repairArtifact.storagePath, repairArtifact.createdAt);
+          registerArtifact(db, evidence);
+          registerArtifact(db, repairArtifact);
           db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(blocked ? "blocked" : "completed", this.now().toISOString(), this.now().toISOString(), gitState.headSha, gitState.treeSha, gitState.dirtyState, repairArtifact.id, evidence.id, executionId);
           db.prepare("UPDATE forge_delivery_repairs SET status = ?, result_commit = ?, result_tree = ?, delivery_artifact_id = ?, evidence_artifact_id = ?, failure_code = ?, failure_summary = ?, finished_at = ? WHERE id = ?").run(blocked ? "blocked" : "completed", gitState.headSha, gitState.treeSha, repairArtifact.id, evidence.id, failureCode, failureSummary, this.now().toISOString(), row?.id);
           return row?.id;
@@ -582,9 +607,10 @@ export class DeveloperService {
         return DeveloperRepairActivityResultSchema.parse({ outcome: "completed", repairAttemptId, cycle: input.cycle, reviewId: input.reviewId, subject: priorSubject, developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, worktreePath, branchName: input.branchName, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: "clean", deliveryArtifactId: repairArtifact.id, evidenceArtifactId: evidence.id, summary: report.summary });
       } finally { clearInterval(heartbeat); }
     } catch (error) {
+      if (isSupervisorTerminalError(error)) throw error;
       const expectedFailure = error instanceof AgentFailure;
       const failure = error instanceof AgentFailure ? error : new AgentFailure("developer-repair-failed", "Codex Developer repair failed");
-      const evidence = await this.persistEvidence(input.companyId, evidenceLines);
+      const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
       const code = repairBlockCode(failure);
       const expected = expectedFailure && ["invalid-output", "repair-cap-exhausted", "repair-incomplete", "repair-scope", "session-conflict", "subject-changed", "worktree-unsafe", "authentication-required", "rate-limited", "process-failed", "evidence-too-large"].includes(code);
       let observed: { headSha: string; treeSha: string; dirtyState: "clean" | "dirty" } | undefined;
@@ -602,7 +628,7 @@ export class DeveloperService {
       const effectiveSummary = worktreeUnsafe ? "The failed repair changed or dirtied the reviewed worktree." : repairSummary[effectiveCode];
       const effectiveExpected = expected && ["invalid-output", "repair-cap-exhausted", "repair-incomplete", "repair-scope", "session-conflict", "subject-changed", "worktree-unsafe", "authentication-required", "rate-limited", "process-failed", "evidence-too-large"].includes(effectiveCode);
       this.database.authTransaction((db) => {
-        db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
+        registerArtifact(db, evidence);
         db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, result_commit = ?, result_tree = ?, dirty_state = ?, evidence_artifact_id = ? WHERE id = ?").run(effectiveExpected ? "blocked" : "failed", this.now().toISOString(), this.now().toISOString(), effectiveCode, effectiveSummary, observed?.headSha ?? null, observed?.treeSha ?? null, observed?.dirtyState ?? null, evidence.id, executionId);
         if (repairRowCreated) db.prepare("UPDATE forge_delivery_repairs SET status = ?, result_commit = ?, result_tree = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ?, finished_at = ? WHERE developer_execution_id = ? AND cycle = ?").run(effectiveExpected ? "blocked" : "failed", observed?.headSha ?? null, observed?.treeSha ?? null, effectiveCode, effectiveSummary, evidence.id, this.now().toISOString(), executionId, input.cycle);
       });
@@ -753,8 +779,9 @@ ${JSON.stringify(worktree)}`;
     this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running')").run(this.now().toISOString(), executionId));
   }
 
-  private async persistEvidence(companyId: string, lines: string[]): Promise<StoredArtifact> {
+  private async persistEvidence(companyId: string, lines: string[], stableKey?: string): Promise<StoredArtifact> {
     const content = Buffer.from(`${lines.join("\n")}\n`, "utf8");
-    return this.artifacts.put(companyId, "agent-evidence", { filename: `developer_${randomBytes(12).toString("hex")}.jsonl`, mimeType: "application/x-ndjson", bytes: content.length ? content : Buffer.from("{\"type\":\"empty\"}\n") });
+    const artifactInput = { filename: stableKey ? `${stableKey.split(":")[0]}.jsonl` : `developer_${randomBytes(12).toString("hex")}.jsonl`, mimeType: "application/x-ndjson", bytes: content.length ? content : Buffer.from("{\"type\":\"empty\"}\n") };
+    return stableKey ? this.artifacts.putIdempotent(companyId, "agent-evidence", stableKey, artifactInput) : this.artifacts.put(companyId, "agent-evidence", artifactInput);
   }
 }

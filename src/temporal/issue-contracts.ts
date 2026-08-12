@@ -185,6 +185,18 @@ export const ActiveOperationSchema = z.object({
 
 export type ActiveOperation = z.infer<typeof ActiveOperationSchema>;
 
+export const DeveloperRecoveryStatusSchema = z.enum(["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling", "interrupted", "cancelled", "ownership_ambiguous", "failed"]);
+export type DeveloperRecoveryStatus = z.infer<typeof DeveloperRecoveryStatusSchema>;
+
+const DeveloperRecoveryFields = {
+  developerAttempt: z.number().int().positive().optional(),
+  developerTurnKind: z.enum(["implementation", "repair", "merge_conflict_resolution"]).optional(),
+  developerRecoveryStatus: DeveloperRecoveryStatusSchema.nullable().optional(),
+  developerRecoveryReasonCode: z.string().max(100).nullable().optional(),
+  developerRecoverySummary: SafeSummarySchema.nullable().optional(),
+  developerLastHeartbeatAt: z.string().datetime().nullable().optional(),
+};
+
 export const DeliveryFindingSchema = z.object({
   findingId: durableId,
   severity: z.enum(["blocking", "advisory"]),
@@ -241,7 +253,7 @@ export type MergeConflictPlan = z.infer<typeof MergeConflictPlanSchema>;
 
 export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"]);
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
-export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "revise_plan", "record_progress", "start_development", "retry_development", "cancel_development", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "reconcile_acceptance", "cancel_issue", "reconcile_merge", "continue_work"]);
+export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "revise_plan", "record_progress", "start_development", "retry_development", "cancel_development", "verify_developer_ownership", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "reconcile_acceptance", "cancel_issue", "reconcile_merge", "continue_work"]);
 export type IssueCommand = z.infer<typeof IssueCommandSchema>;
 export const IssuePlanDecisionSchema = z.enum(["approve", "reject"]);
 export const RepairAuthoritySchema = z.enum(["delivery_review", "final_review", "ci_failure", "member_requested_changes"]);
@@ -257,6 +269,7 @@ export const IssueContinuationStateSchema = z.object({
   lastSummaryHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
   activeOperation: ActiveOperationSchema.optional(),
   processedCommandIds: z.array(durableId).max(64).optional(),
+  ...DeveloperRecoveryFields,
   leadSessionRef: durableId.nullable().optional(),
   leadExecutionId: durableId.nullable().optional(),
   leadEvidenceArtifactId: durableId.nullable().optional(),
@@ -433,6 +446,7 @@ export const IssueWorkflowStateSchema = z.object({
   lastSummaryHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
   activeOperation: ActiveOperationSchema.optional(),
   processedCommandIds: z.array(durableId).max(64).optional(),
+  ...DeveloperRecoveryFields,
   leadSessionRef: durableId.nullable().optional(),
   leadExecutionId: durableId.nullable().optional(),
   leadEvidenceArtifactId: durableId.nullable().optional(),
@@ -891,6 +905,9 @@ export interface DeveloperExecutionActivityInput {
   leadOutputArtifactId: string;
   revisionRequestId?: string;
   executionId?: string;
+  developerExecutionId?: string;
+  developerAttempt?: number;
+  turnKind?: DeveloperTurnKind;
   supersedesExecutionId?: string | undefined;
   reuseWorktree?: boolean | undefined;
 }
@@ -912,6 +929,39 @@ export interface DeveloperExecutionResult {
 }
 
 export type WorkflowDeveloperExecutionResult = Omit<DeveloperExecutionResult, "worktreePath">;
+
+export type DeveloperTurnKind = "implementation" | "repair" | "merge_conflict_resolution";
+
+export interface DeveloperSupervisorActivityIdentity {
+  developerTurnExecutionId: string;
+  developerAttempt: number;
+  turnKind: DeveloperTurnKind;
+}
+
+export type DeveloperTurnActivityOutcome<T> =
+  | { status: "completed"; result: T; resultHash: string }
+  | { status: "interrupted"; developerExecutionId: string; reasonCode: string; summary: string; lastHeartbeatAt: string | null }
+  | { status: "ownership_ambiguous"; developerExecutionId: string; reasonCode: string; summary: string; lastHeartbeatAt: string | null }
+  | { status: "failed"; developerExecutionId: string; reasonCode: string; summary: string; evidenceArtifactId: string | null };
+
+export type SupervisedDeveloperExecutionActivityInput = Omit<DeveloperExecutionActivityInput, "executionId"> & DeveloperSupervisorActivityIdentity;
+export type SupervisedDeveloperRepairActivityInput = WorkflowDeveloperRepairActivityInput & DeveloperSupervisorActivityIdentity;
+export type SupervisedMergeConflictResolutionActivityInput = WorkflowMergeConflictResolutionActivityInput & DeveloperSupervisorActivityIdentity;
+
+export type DeveloperCancellationResult =
+  | { status: "cancelled" }
+  | { status: "cancelled_confirmed"; executionId: string; exitCode: number | null; exitSignal: string | null; evidenceArtifactId: string | null }
+  | { status: "completed_before_cancellation"; executionId: string; result: unknown; resultHash: string }
+  | { status: "interrupted" | "ownership_ambiguous"; executionId: string; reasonCode: string; summary: string }
+  | { status: "termination_failed"; executionId: string; reasonCode: string; summary: string; evidenceArtifactId: string | null };
+
+export interface DeveloperOwnershipObservation {
+  executionId: string;
+  status: "active" | "result_ready" | "interrupted" | "ownership_ambiguous";
+  reasonCode: string | null;
+  summary: string;
+  lastHeartbeatAt: string | null;
+}
 
 export interface DeveloperCancellationActivityInput {
   taskId: string;
@@ -1357,7 +1407,8 @@ export interface IssueActivities {
   projectIssueState(event: IssueProjectionEvent): Promise<IssueWorkflowState>;
   runLeadPlanning(input: LeadPlanningActivityInput): Promise<LeadPlanningResult>;
   findActiveDeveloperExecution(input: { taskId: string; companyId: string; workflowId: string }): Promise<{ executionId: string; sessionRef: string } | null>;
-  cancelDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<{ status: "cancelled" | "ownership_ambiguous"; reason?: string | undefined }>;
+  cancelDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<DeveloperCancellationResult>;
+  observeDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<DeveloperOwnershipObservation>;
   preparePlanRevision(input: PreparePlanRevisionActivityInput): Promise<PreparePlanRevisionActivityResult>;
   authorizePlanRevision(input: { taskId: string; companyId: string; workflowId: string; revisionRequestId: string; planRevision: number }): Promise<void>;
   createSuccessor(input: CreateSuccessorActivityInput): Promise<CreateSuccessorActivityResult>;
@@ -1366,8 +1417,10 @@ export interface IssueActivities {
   planDeliveryRepair(input: DeliveryRepairPlanActivityInput): Promise<DeliveryRepairPlanResult>;
   recordPlanDecision(input: PlanDecisionActivityInput): Promise<{ decisionId: string }>;
   runDeveloperExecution(input: DeveloperExecutionActivityInput): Promise<WorkflowDeveloperExecutionResult>;
+  runDeveloperExecutionSupervised(input: SupervisedDeveloperExecutionActivityInput): Promise<DeveloperTurnActivityOutcome<WorkflowDeveloperExecutionResult>>;
   reviewDelivery(input: WorkflowDeliveryReviewActivityInput): Promise<WorkflowDeliveryReviewResult>;
   runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput): Promise<WorkflowDeveloperRepairResult>;
+  runDeveloperRepairSupervised(input: SupervisedDeveloperRepairActivityInput): Promise<DeveloperTurnActivityOutcome<WorkflowDeveloperRepairResult>>;
   recordDeliveryDecision(input: DeliveryDecisionActivityInput): Promise<{ artifactId: string }>;
   publishRelease(input: PublishReleaseActivityInput): Promise<PublishReleaseActivityResult>;
   reconcileTargetBase(input: ReconcileTargetBaseActivityInput): Promise<ReconcileTargetBaseActivityResult>;
@@ -1380,6 +1433,7 @@ export interface IssueActivities {
   reconcileMerge(input: ReconcileMergeActivityInput): Promise<ReconcileMergeActivityResult>;
   planMergeConflict(input: WorkflowMergeConflictPlanActivityInput): Promise<MergeConflictPlanActivityResult>;
   resolveMergeConflict(input: WorkflowMergeConflictResolutionActivityInput): Promise<MergeConflictResolutionActivityResult>;
+  resolveMergeConflictSupervised(input: SupervisedMergeConflictResolutionActivityInput): Promise<DeveloperTurnActivityOutcome<MergeConflictResolutionActivityResult>>;
 }
 
 export interface DeliveryBlockerActivityInput {

@@ -4,7 +4,7 @@ import type { NativeConnection } from "@temporalio/worker";
 import { Worker } from "@temporalio/worker";
 
 import type { DurableArtifactReference, IssueActivities, IssueWorkflowInput, IssueWorkflowState } from "../src/temporal/issue-contracts.js";
-import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, continueWorkUpdate, issueStateQuery, issueWorkflow, publishDraftUpdate, reconcileAcceptanceUpdate, reconcileMergeUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, revisePlanUpdate, reviewDeliveryUpdate, startDevelopmentUpdate, startPlanningUpdate } from "../src/temporal/workflows.js";
+import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, continueWorkUpdate, issueStateQuery, issueWorkflow, publishDraftUpdate, reconcileAcceptanceUpdate, reconcileMergeUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, revisePlanUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, startDevelopmentUpdate, startPlanningUpdate } from "../src/temporal/workflows.js";
 import { buildProductionWorkflowBundle, temporalDataConverter } from "../src/temporal/workflow-bundle.js";
 
 export const replayScenarios = [
@@ -25,6 +25,11 @@ export const replayScenarios = [
   "final_review_failure",
   "plan_revision",
   "successor_creation",
+  "developer_active_worker_loss",
+  "developer_cancellation",
+  "developer_linked_retry",
+  "developer_ownership_ambiguous",
+  "developer_result_claim",
 ] as const;
 
 export type ReplayScenario = typeof replayScenarios[number];
@@ -67,6 +72,8 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
   const planningAttempts = new Map<string, number>();
   const reviewAttempts = new Map<string, number>();
   const ciAttempts = new Map<string, number>();
+  const developmentAttempts = new Map<string, number>();
+  const scenarioByExecutionId = new Map<string, ReplayScenario>();
   const scenarioFor = (workflowId: string): ReplayScenario => replayScenarios.find((scenario) => workflowId.endsWith(scenario))!;
   const activities: IssueActivities = {
     async projectIssueState(event) {
@@ -94,6 +101,18 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
       if (scenario === "active_cancellation" || scenario === "continue_as_new" || scenario === "successor_creation") await developerGates.get(activityInput.workflowId)!.promise;
       return { developerExecutionId: activityInput.executionId!, developerSessionRef: `developer-session-${scenario}`, branchName: `forge/issue/${scenario}`, targetBaseSha: "b".repeat(40), currentStep: 1, resultCommit: "c".repeat(40), resultTree: "d".repeat(40), dirtyState: "clean", deliveryArtifactId: `delivery-${scenario}`, evidenceArtifactId: `developer-evidence-${scenario}`, deliverySummary: "Controlled fixture delivery", outcome: "completed" };
     },
+    async runDeveloperExecutionSupervised(activityInput) {
+      const scenario = scenarioFor(activityInput.workflowId);
+      scenarioByExecutionId.set(activityInput.developerTurnExecutionId, scenario);
+      const attempt = (developmentAttempts.get(activityInput.workflowId) ?? 0) + 1;
+      developmentAttempts.set(activityInput.workflowId, attempt);
+      if (scenario === "developer_active_worker_loss" && attempt === 1) throw new Error("Controlled Activity worker loss before result claim");
+      if (scenario === "active_cancellation" || scenario === "continue_as_new" || scenario === "developer_cancellation" || scenario === "developer_result_claim") await developerGates.get(activityInput.workflowId)!.promise;
+      if (scenario === "developer_linked_retry" && attempt === 1) return { status: "interrupted", developerExecutionId: activityInput.developerTurnExecutionId, reasonCode: "developer-worker-lost", summary: "Controlled Developer worker loss.", lastHeartbeatAt: null };
+      if (scenario === "developer_ownership_ambiguous") return { status: "ownership_ambiguous", developerExecutionId: activityInput.developerTurnExecutionId, reasonCode: "developer-ownership-ambiguous", summary: "Controlled ownership ambiguity.", lastHeartbeatAt: null };
+      const result = { developerExecutionId: activityInput.developerTurnExecutionId, developerSessionRef: `developer-session-${scenario}`, branchName: `forge/issue/${scenario}`, targetBaseSha: "b".repeat(40), currentStep: 1, resultCommit: "c".repeat(40), resultTree: "d".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: `delivery-${scenario}`, evidenceArtifactId: `developer-evidence-${scenario}`, deliverySummary: "Controlled fixture delivery", outcome: "completed" as const };
+      return { status: "completed", result, resultHash: "a".repeat(64) };
+    },
     async reviewDelivery(activityInput) {
       const scenario = scenarioFor(activityInput.workflowId);
       const attempt = (reviewAttempts.get(activityInput.workflowId) ?? 0) + 1;
@@ -105,12 +124,24 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
       const scenario = scenarioFor(activityInput.workflowId);
       return { outcome: "completed" as const, repairAttemptId: `repair-attempt-${scenario}-${activityInput.cycle}`, cycle: activityInput.cycle, reviewId: activityInput.reviewId, subject: { planRevision: activityInput.planRevision, targetBaseSha: activityInput.targetBaseSha, subjectCommit: activityInput.subjectCommit, subjectTree: activityInput.subjectTree, developerExecutionId: activityInput.developerExecutionId, deliveryArtifactId: `delivery-${scenario}`, developerEvidenceArtifactId: `developer-evidence-${scenario}`, leadSessionRef: activityInput.leadSessionRef, developerSessionRef: activityInput.developerSessionRef }, developerExecutionId: `repair-${activityInput.workflowId}`, developerSessionRef: `developer-session-${scenario}`, branchName: activityInput.branchName, resultCommit: "e".repeat(40), resultTree: "f".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: `repaired-delivery-${activityInput.workflowId}`, evidenceArtifactId: `repaired-evidence-${activityInput.workflowId}`, summary: "Controlled repaired delivery" };
     },
+    async runDeveloperRepairSupervised(activityInput) {
+      const scenario = scenarioFor(activityInput.workflowId);
+      const result = { outcome: "completed" as const, repairAttemptId: `repair-attempt-${scenario}-${activityInput.cycle}`, cycle: activityInput.cycle, reviewId: activityInput.reviewId, subject: { planRevision: activityInput.planRevision, targetBaseSha: activityInput.targetBaseSha, subjectCommit: activityInput.subjectCommit, subjectTree: activityInput.subjectTree, developerExecutionId: activityInput.developerExecutionId, deliveryArtifactId: `delivery-${scenario}`, developerEvidenceArtifactId: `developer-evidence-${scenario}`, leadSessionRef: activityInput.leadSessionRef, developerSessionRef: activityInput.developerSessionRef }, developerExecutionId: activityInput.developerTurnExecutionId, developerSessionRef: `developer-session-${scenario}`, branchName: activityInput.branchName, resultCommit: "e".repeat(40), resultTree: "f".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: `repaired-delivery-${activityInput.workflowId}`, evidenceArtifactId: `repaired-evidence-${activityInput.workflowId}`, summary: "Controlled repaired delivery" };
+      return { status: "completed", result, resultHash: "b".repeat(64) };
+    },
     async recordDeliveryDecision() { return { artifactId: "delivery-decision" }; },
-    async cancelDeveloperExecution() { return { status: "cancelled" }; },
     async findActiveDeveloperExecution() { return null; },
     async preparePlanRevision(input) { return { status: "accepted", revisionRequestId: `revision-${input.workflowId}-${input.requestRevision}`, coordinates: { disposition: "new", revisionRequestId: `revision-${input.workflowId}-${input.requestRevision}`, exactBaseSha: input.exactBaseSha! } }; },
     async authorizePlanRevision() {},
     async createSuccessor(input) { return { successorTaskId: input.successorTaskId, successorWorkflowId: input.successorWorkflowId, predecessorTaskId: input.predecessorTaskId, projectRevisionId: "project-revision", creationRevision: input.acceptedRevision }; },
+    async cancelDeveloperExecution(activityInput) {
+      const scenario = scenarioByExecutionId.get(activityInput.executionId);
+      if (scenario === "developer_result_claim") {
+        return { status: "completed_before_cancellation", executionId: activityInput.executionId, result: { developerExecutionId: activityInput.executionId, developerSessionRef: `developer-session-${scenario}`, branchName: `forge/issue/${scenario}`, targetBaseSha: "b".repeat(40), currentStep: 1, resultCommit: "c".repeat(40), resultTree: "d".repeat(40), dirtyState: "clean", deliveryArtifactId: `delivery-${scenario}`, evidenceArtifactId: `developer-evidence-${scenario}`, deliverySummary: "Controlled result won cancellation race", outcome: "completed" }, resultHash: "c".repeat(64) };
+      }
+      return { status: "cancelled_confirmed", executionId: activityInput.executionId, exitCode: null, exitSignal: "SIGTERM", evidenceArtifactId: null };
+    },
+    async observeDeveloperExecution(activityInput) { return { executionId: activityInput.executionId, status: "active", reasonCode: null, summary: "Controlled Developer is active.", lastHeartbeatAt: null }; },
     async publishRelease(activityInput) {
       const scenario = scenarioFor(activityInput.workflowId);
       const base = { outcome: "completed" as const, releaseId: `release-${scenario}`, repository: "example/forge", branchName: activityInput.branchName, baseBranch: "main", headSha: activityInput.subjectCommit, headTree: activityInput.subjectTree, pullRequestNumber: 1, pullRequestUrl: "https://example.test/pull/1", isDraft: true as const, reused: false, attempt: 1, targetBaseSha: activityInput.targetBaseSha };
@@ -156,6 +187,7 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
     },
     async planMergeConflict(activityInput) { return { planId: "conflict-plan", planArtifactId: "conflict-plan-artifact", evidenceArtifactId: "conflict-plan-evidence", leadExecutionId: "conflict-plan-execution", leadSessionRef: activityInput.leadSessionRef, summary: "Controlled conflict plan" }; },
     async resolveMergeConflict() { throw new Error("Conflict resolution is not used by replay scenarios"); },
+    async resolveMergeConflictSupervised() { throw new Error("Conflict resolution is not used by replay scenarios"); },
   };
 
   function projectionsForRelease(releaseId: string): string {
@@ -178,7 +210,7 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
       state = await handle.executeUpdate(approvePlanUpdate, { args: [command(state.revision, `${scenario}-approve`)], updateId: `${scenario}-approve` });
       if (scenario === "continue_as_new") state = await waitForState(handle, (candidate) => candidate.continuationCount === 1);
       const development = await handle.startUpdate(startDevelopmentUpdate, { args: [command(state.revision, `${scenario}-develop`)], updateId: `${scenario}-develop`, waitForStage: "ACCEPTED" });
-      if (scenario === "active_cancellation" || scenario === "continue_as_new" || scenario === "successor_creation") {
+      if (scenario === "active_cancellation" || scenario === "continue_as_new" || scenario === "successor_creation" || scenario === "developer_cancellation" || scenario === "developer_result_claim") {
         state = await waitForState(handle, (candidate) => candidate.phase === "development");
         const cancelCommand = command(state.revision, `${scenario}-cancel`);
         const cancelled = await handle.executeUpdate(cancelDevelopmentUpdate, { args: [cancelCommand], updateId: `${scenario}-cancel` });
@@ -200,7 +232,9 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
       if (scenario === "plan_revision") {
         state = await handle.executeUpdate(revisePlanUpdate, { args: [{ expectedRevision: state.revision, actorUserId: "fixture-user", reason: "Revise the bounded fixture plan.", worktreeDisposition: "new", exactBaseSha: "9".repeat(40) }], updateId: `${scenario}-revise` });
         state = await handle.executeUpdate(startPlanningUpdate, { args: [command(state.revision, `${scenario}-replan`)], updateId: `${scenario}-replan` });
-      } else if (!["active_cancellation", "continue_as_new", "blocked_authentication_resume", "successor_creation"].includes(scenario)) {
+      } else {
+        if (scenario === "developer_linked_retry") state = await handle.executeUpdate(retryDevelopmentUpdate, { args: [command(state.revision, `${scenario}-retry`)], updateId: `${scenario}-retry` });
+        if (!["active_cancellation", "continue_as_new", "blocked_authentication_resume", "successor_creation", "developer_active_worker_loss", "developer_cancellation", "developer_linked_retry", "developer_ownership_ambiguous", "developer_result_claim"].includes(scenario)) {
         state = await handle.executeUpdate(reviewDeliveryUpdate, { args: [command(state.revision, `${scenario}-review`)], updateId: `${scenario}-review` });
         if (scenario === "implementation_repair") state = await handle.executeUpdate(repairDeliveryUpdate, { args: [command(state.revision, `${scenario}-repair`)], updateId: `${scenario}-repair` });
         else state = await handle.executeUpdate(publishDraftUpdate, { args: [command(state.revision, `${scenario}-publish`)], updateId: `${scenario}-publish` });
@@ -212,6 +246,7 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
           if (["normal_success", "manual_merge_open", "manual_merge_closed", "manual_merge_changed"].includes(scenario)) state = await handle.executeUpdate(reconcileMergeUpdate, { args: [command(state.revision, `${scenario}-merge`)], updateId: `${scenario}-merge` });
         } else if (scenario === "ci_wait_retry") state = await waitForState(handle, (candidate) => candidate.phase === "accepted" && candidate.ciRunId === "ci-ci_wait_retry");
         else if (scenario === "final_review_failure") state = await waitForState(handle, (candidate) => candidate.phase === "delivery_blocked" && candidate.finalReviewFailureCode === "final_review_unavailable");
+        }
       }
       executions.push({ scenario, workflowId, firstRunId: handle.firstExecutionRunId, currentPhase: state.phase, finalState: state, projections: projections.get(workflowId)! });
     }

@@ -77,3 +77,22 @@ test("rejects a symlinked company directory before writing", async () => {
     await rm(outside, { recursive: true, force: true });
   }
 });
+
+test("INV-07/INV-08 idempotent Developer artifacts keep one stable object and reject conflicting bytes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-artifact-idempotent-"));
+  try {
+    const store = new ArtifactStore(root);
+    const input = { filename: "developer.json", mimeType: "application/json", bytes: Buffer.from("{\"result\":\"stable\"}") };
+    const [first, duplicate] = await Promise.all([
+      store.putIdempotent("company-stable", "developer-delivery", "developer_0123456789abcdef01234567:delivery", input),
+      store.putIdempotent("company-stable", "developer-delivery", "developer_0123456789abcdef01234567:delivery", input),
+    ]);
+
+    expect(duplicate).toMatchObject({ id: first.id, sha256: first.sha256, storagePath: first.storagePath });
+    expect(await store.read(first)).toEqual(input.bytes);
+    await expect(store.putIdempotent("company-stable", "developer-delivery", "developer_0123456789abcdef01234567:delivery", { ...input, bytes: Buffer.from("{\"result\":\"conflict\"}") })).rejects.toMatchObject({ code: "artifact-idempotency-conflict" });
+    expect((await readdir(dirname(join(root, first.storagePath)))).filter((file) => file.includes(first.id))).toEqual([`${first.id}.bin`]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

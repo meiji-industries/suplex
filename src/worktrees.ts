@@ -279,8 +279,8 @@ export interface GitCommandGuard {
   cleanup(): Promise<void>;
 }
 
-export async function createGitCommandGuard(runtimeRoot: string): Promise<GitCommandGuard> {
-  const directory = join(resolve(runtimeRoot), `developer-guard-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+export async function createGitCommandGuard(runtimeRoot: string, guardParent = runtimeRoot): Promise<GitCommandGuard> {
+  const directory = join(resolve(guardParent), `developer-guard-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const gitBin = process.env.FORGE_GIT_BIN?.trim() || execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   if (!gitBin) throw new WorktreeFailure("git-unavailable", "Git is unavailable for guarded Developer execution");
@@ -303,7 +303,7 @@ exit 125
   await chmod(join(directory, "gh"), 0o700);
   return {
     directory,
-    env: { ...process.env, PATH: `${directory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`, FORGE_GIT_REAL_BIN: gitBin },
+    env: { ...process.env, PATH: `${directory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`, FORGE_GIT_REAL_BIN: gitBin, FORGE_GIT_GUARD_DIR: directory },
     async cleanup() { await rm(directory, { recursive: true, force: true }); },
   };
 }

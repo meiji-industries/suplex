@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
-import { mkdir, open, realpath, rename, rm, lstat } from "node:fs/promises";
+import { mkdir, open, realpath, rename, rm, lstat, link, unlink, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { CompanyIdSchema } from "./schemas.js";
@@ -261,6 +261,57 @@ export class ArtifactStore {
 
   async putWithId(companyId: string, id: string, kind: StoredArtifact["kind"], input: ArtifactInput): Promise<StoredArtifact> {
     return this.write(this.plan(companyId, `put_${id}`, kind, input, id), input.bytes);
+  }
+
+  async putIdempotent(companyId: string, kind: StoredArtifact["kind"], stableKey: string, input: ArtifactInput): Promise<StoredArtifact> {
+    const validatedCompanyId = CompanyIdSchema.parse(companyId);
+    if (!stableKey || stableKey.length > 512 || /[\u0000-\u001f\u007f]/.test(stableKey)) throw new ArtifactFailure("invalid-idempotency-key", "Artifact idempotency key is invalid");
+    const validated = this.plan(validatedCompanyId, `validate_${randomUUID().replaceAll("-", "")}`, kind, input);
+    const id = `artifact_${createHash("sha256").update(`${validatedCompanyId}\0${kind}\0${stableKey}`).digest("hex").slice(0, 32)}`;
+    const storagePath = join(validatedCompanyId, "objects", id.slice(-2), `${id}.bin`);
+    const temporaryStoragePath = join(validatedCompanyId, "objects", id.slice(-2), `.${id}.${randomUUID().replaceAll("-", "")}.tmp`);
+    const absolutePath = safeStoragePath(this.root, storagePath);
+    const temporaryPath = safeStoragePath(this.root, temporaryStoragePath);
+    const stored = (createdAt: string): StoredArtifact => ({ id, companyId: validatedCompanyId, kind, filename: validated.filename, mimeType: validated.mimeType, byteSize: validated.byteSize, sha256: validated.sha256, storagePath, createdAt });
+
+    await mkdir(resolve(this.root), { recursive: true, mode: 0o700 });
+    const rootIdentity = await directoryIdentity(resolve(this.root));
+    const companyRoot = resolve(this.root, validatedCompanyId);
+    const objectDirectory = dirname(absolutePath);
+    await rejectSymlinkComponents(this.root, companyRoot);
+    await mkdir(companyRoot, { recursive: true, mode: 0o700 });
+    await rejectSymlinkComponents(this.root, objectDirectory);
+    await mkdir(objectDirectory, { recursive: true, mode: 0o700 });
+    await rejectSymlinkComponents(this.root, absolutePath);
+    await rejectSymlinkComponents(this.root, temporaryPath);
+    const companyIdentity = await directoryIdentity(companyRoot);
+    const objectIdentity = await directoryIdentity(objectDirectory);
+
+    try {
+      const handle = await open(temporaryPath, constants.O_CREAT | constants.O_EXCL | constants.O_RDWR | noFollowFlag(), 0o600);
+      try {
+        await handle.writeFile(input.bytes);
+        await handle.sync();
+        const stat = await handle.stat();
+        if (!stat.isFile() || stat.size !== validated.byteSize) throw new ArtifactFailure("artifact-corrupt", "Artifact content is unavailable");
+      } finally {
+        await handle.close();
+      }
+      if (!sameIdentity(rootIdentity, await directoryIdentity(resolve(this.root))) || !sameIdentity(companyIdentity, await directoryIdentity(companyRoot)) || !sameIdentity(objectIdentity, await directoryIdentity(objectDirectory))) throw new ArtifactFailure("artifact-symlink", "Artifact directory changed during write");
+      try {
+        await link(temporaryPath, absolutePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      }
+      const existing = await this.read(stored(new Date(0).toISOString()));
+      if (existing.byteLength !== input.bytes.byteLength || !existing.equals(input.bytes)) throw new ArtifactFailure("artifact-idempotency-conflict", "Artifact idempotency key was already used with different bytes");
+      return stored((await stat(absolutePath)).birthtime.toISOString());
+    } catch (error) {
+      if (error instanceof ArtifactFailure && error.code === "hash-mismatch") throw new ArtifactFailure("artifact-idempotency-conflict", "Artifact idempotency key was already used with different bytes");
+      throw error;
+    } finally {
+      await unlink(temporaryPath).catch(() => undefined);
+    }
   }
 
   async removePlanned(planned: Pick<PlannedArtifact, "storagePath" | "stagingPath">): Promise<void> {

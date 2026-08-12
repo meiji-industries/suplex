@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { bundleWorkflowCode, ReplayError } from "@temporalio/worker";
+import { defaultPayloadConverter, type Payload } from "@temporalio/common";
 import { DeterminismViolationError } from "@temporalio/workflow";
 import { expect, test } from "vitest";
 
@@ -50,9 +51,9 @@ async function mutationBundle(mode: "compatible" | "incompatible") {
   });
 }
 
-test("the versioned manifest consumes every sanitized fixture and batch replays the production bundle", async () => {
+test("INV-15 the versioned manifest consumes every sanitized fixture and batch replays the production bundle", async () => {
   const manifest = await readReplayManifest(manifestPath);
-  expect(manifest.fixtures).toHaveLength(21);
+  expect(manifest.fixtures).toHaveLength(26);
   expect(manifest.fixtures.map((fixture) => fixture.scenario)).toEqual(expect.arrayContaining([
     "backlog_planning",
     "normal_success",
@@ -73,6 +74,11 @@ test("the versioned manifest consumes every sanitized fixture and batch replays 
     "revised_delivery",
     "plan_revision",
     "successor_creation",
+    "developer_active_worker_loss",
+    "developer_cancellation",
+    "developer_linked_retry",
+    "developer_ownership_ambiguous",
+    "developer_result_claim",
   ]));
   const continueRuns = manifest.fixtures.filter((fixture) => fixture.scenario === "continue_as_new");
   expect(continueRuns.map((fixture) => fixture.runIndex)).toEqual([0, 1, 2]);
@@ -102,6 +108,30 @@ test("exact delivery review fixtures retain correction, blocker, repair, and sup
   expect(decodedPayloadText(reviewBlocked)).toContain('"code":"process-failed"');
   expect(activityCount(repairBlocked, "runDeveloperRepair")).toBe(2);
   expect(decodedPayloadText(repairBlocked)).toContain('"code":"repair-cap-exhausted"');
+});
+
+test("the five recovery fixtures contain the intended durable Temporal events", async () => {
+  const read = async (scenario: string) => JSON.parse(await readFile(join(process.cwd(), ".scratch/forge-mvp/replay", `issue-workflow-${scenario}.json`), "utf8")) as { events: Array<Record<string, unknown>> };
+  const decoded = (value: unknown, found: unknown[] = []): unknown[] => {
+    if (value && typeof value === "object" && !Array.isArray(value) && typeof (value as { data?: unknown }).data === "string" && (value as { metadata?: unknown }).metadata && typeof (value as { metadata?: unknown }).metadata === "object") {
+      const payload = value as { data: string; metadata: Record<string, string> };
+      try { found.push(defaultPayloadConverter.fromPayload({ ...payload, data: Buffer.from(payload.data, "base64"), metadata: Object.fromEntries(Object.entries(payload.metadata).map(([key, entry]) => [key, Buffer.from(entry, "base64")])) } as Payload)); } catch { /* Non-JSON payloads are irrelevant to these assertions. */ }
+      return found;
+    }
+    if (Array.isArray(value)) for (const child of value) decoded(child, found);
+    else if (value && typeof value === "object") for (const child of Object.values(value)) decoded(child, found);
+    return found;
+  };
+  const workerLoss = await read("developer-active-worker-loss");
+  const started = workerLoss.events.flatMap((event) => event.activityTaskStartedEventAttributes ? [event.activityTaskStartedEventAttributes as { attempt?: number; lastFailure?: { message?: string } }] : []);
+  expect(started).toEqual(expect.arrayContaining([expect.objectContaining({ attempt: 2, lastFailure: expect.objectContaining({ message: "Controlled Activity worker loss before result claim" }) })]));
+
+  const text = async (scenario: string) => JSON.stringify(await read(scenario));
+  const decodedText = async (scenario: string) => JSON.stringify(decoded(await read(scenario)));
+  expect(await text("developer-cancellation")).toContain("cancelDeveloperExecution");
+  expect(await text("developer-linked-retry")).toContain("retryDevelopment");
+  expect(await decodedText("developer-ownership-ambiguous")).toContain("developer-ownership-ambiguous");
+  expect(await decodedText("developer-result-claim")).toContain("Controlled result won cancellation race");
 });
 
 test("an unpatched command-order mutation produces a real DeterminismViolationError", async () => {

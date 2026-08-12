@@ -130,6 +130,11 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       async runDeveloperExecution(input: Parameters<typeof baseActivities.runDeveloperExecution>[0]) {
         return input.taskId.startsWith("ci-") ? integrationDeveloper.run(input) : baseActivities.runDeveloperExecution(input);
       },
+      async runDeveloperExecutionSupervised(input: Parameters<typeof baseActivities.runDeveloperExecutionSupervised>[0]) {
+        if (!input.taskId.startsWith("ci-")) return baseActivities.runDeveloperExecutionSupervised(input);
+        const { worktreePath: _worktreePath, ...result } = await integrationDeveloper.run({ executionId: input.developerTurnExecutionId });
+        return { status: "completed" as const, result, resultHash: "a".repeat(64) };
+      },
       async runLeadPlanning(input: Parameters<typeof baseActivities.runLeadPlanning>[0]) {
         return input.taskId.startsWith("ci-") ? integrationAgent.runLeadPlanning() : baseActivities.runLeadPlanning(input);
       },
@@ -239,7 +244,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     const approvedIssue = await approveIssuePlan(config, startedIssue.workflowId, { expectedRevision: 5, actorUserId: "issue-admin", note: "Approve revised plan" });
     expect(approvedIssue).toMatchObject({ phase: "ready_for_development", revision: 6, allowedCommands: ["start_development", "cancel_issue", "revise_plan"] });
     const deliveredIssue = await startIssueDevelopment(config, startedIssue.workflowId, { expectedRevision: 6, actorUserId: "issue-admin" });
-    expect(deliveredIssue).toMatchObject({ phase: "delivery_ready", revision: 8, allowedCommands: ["review_delivery", "cancel_issue", "revise_plan"], developerExecutionId: expect.stringMatching(`^developer_${startedIssue.workflowId}_command_`), developerSessionRef: "session_developer_integration", branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40) });
+    expect(deliveredIssue).toMatchObject({ phase: "delivery_ready", revision: 8, allowedCommands: ["review_delivery", "cancel_issue", "revise_plan"], developerExecutionId: expect.stringMatching(/^developer_[a-f0-9]{24}$/), developerSessionRef: "session_developer_integration", branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40) });
     const repairRequired = await reviewIssueDelivery(config, startedIssue.workflowId, { expectedRevision: 8, actorUserId: "issue-admin" });
     expect(repairRequired).toMatchObject({ phase: "repair_required", revision: 10, allowedCommands: ["repair_delivery", "cancel_issue", "revise_plan"], deliveryReviewId: "delivery_review_integration", deliveryReviewOutcome: "blocking", repairCycle: 0 });
     const repairedIssue = await repairIssueDelivery(config, startedIssue.workflowId, { expectedRevision: 10, actorUserId: "issue-admin" });
@@ -315,8 +320,8 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-developer-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, continuationState: { phase: "ready_for_development", revision: 3, owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${developerFailureWorkflowId}:3`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_integration", leadOutputArtifactId: "artifact_integration_output", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], supplementalReviewUsed: false, repairCycle: 0 } });
     developerFailure = true;
     const recoveredDeveloperFailure = await startIssueDevelopment(config, developerFailureWorkflowId, { expectedRevision: 3, actorUserId: "issue-admin" });
-    expect(recoveredDeveloperFailure).toMatchObject({ phase: "ready_for_development", revision: 5, owner: "lead", allowedCommands: ["start_development", "cancel_issue", "revise_plan"], pendingAction: "Developer execution failed; retry is available" });
-    expect(database.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = 'issue-developer-failure'").get())).toEqual({ revision: 5, phase: "ready_for_development", pending_action: "Developer execution failed; retry is available" });
+    expect(recoveredDeveloperFailure).toMatchObject({ phase: "delivery_blocked", revision: 5, owner: "human", allowedCommands: ["retry_development", "cancel_issue", "revise_plan"], pendingAction: "The agent invocation did not complete.", developerRecoveryStatus: "failed", developerRecoveryReasonCode: "process-exited" });
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = 'issue-developer-failure'").get())).toEqual({ revision: 5, phase: "delivery_blocked", pending_action: "The agent invocation did not complete." });
     developerFailure = false;
 
     permanentPlanningFailure = true;
@@ -354,7 +359,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     const scenarioClient = await connectTemporal(config);
     try {
       const executions = await runReplayScenarioCorpus({ client: scenarioClient.client.workflow, connection: workerConnection, namespace: config.temporalNamespace, taskQueue: `${config.taskQueue}-replay-scenarios` });
-      expect(executions.map(({ scenario }) => scenario)).toEqual(["normal_success", "implementation_repair", "active_cancellation", "blocked_authentication_resume", "continue_as_new", "release_base_drift_merged", "release_base_drift_conflict", "ci_wait_retry", "acceptance_ready_timeout", "acceptance_requested_changes", "acceptance_provider_outage", "manual_merge_open", "manual_merge_closed", "manual_merge_changed", "final_review_failure", "plan_revision", "successor_creation"]);
+      expect(executions.map(({ scenario }) => scenario)).toEqual(["normal_success", "implementation_repair", "active_cancellation", "blocked_authentication_resume", "continue_as_new", "release_base_drift_merged", "release_base_drift_conflict", "ci_wait_retry", "acceptance_ready_timeout", "acceptance_requested_changes", "acceptance_provider_outage", "manual_merge_open", "manual_merge_closed", "manual_merge_changed", "final_review_failure", "plan_revision", "successor_creation", "developer_active_worker_loss", "developer_cancellation", "developer_linked_retry", "developer_ownership_ambiguous", "developer_result_claim"]);
       expect(executions.find(({ scenario }) => scenario === "normal_success")?.currentPhase).toBe("done");
       expect(executions.find(({ scenario }) => scenario === "continue_as_new")?.finalState.continuationCount).toBe(2);
       for (const execution of executions) {
@@ -362,11 +367,9 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
         expect(new Set(revisions).size).toBe(revisions.length);
       }
       if (process.env.FORGE_REPLAY_CAPTURE_PATH) {
-        const replacementIds: Partial<Record<(typeof executions)[number]["scenario"], string>> = { normal_success: "normal-success-v1", implementation_repair: "implementation-repair-v1", active_cancellation: "active-cancellation-v1", blocked_authentication_resume: "blocked-authentication-resume-v1", continue_as_new: "continue-as-new-run-0-v1", release_base_drift_merged: "release-base-drift-merged-v1", release_base_drift_conflict: "release-base-drift-conflict-v1", ci_wait_retry: "ci-wait-retry-v1", acceptance_ready_timeout: "acceptance-ready-timeout-v1", acceptance_requested_changes: "acceptance-requested-changes-v1", acceptance_provider_outage: "acceptance-provider-outage-v1", manual_merge_open: "manual-merge-open-v1", manual_merge_closed: "manual-merge-closed-v1", manual_merge_changed: "manual-merge-changed-v1", final_review_failure: "final-review-failure-v1" };
-        for (const execution of executions) {
-          const replace = replacementIds[execution.scenario];
-          await captureWorkflowHistory({ address: config.temporalAddress, namespace: config.temporalNamespace, workflowId: execution.workflowId, firstRunId: execution.firstRunId, scenario: execution.scenario, currentPhase: execution.currentPhase, outputDir: process.env.FORGE_REPLAY_CAPTURE_PATH, ...(replace ? { replace } : {}) });
-        }
+        const replacementIds: Partial<Record<(typeof executions)[number]["scenario"], string>> = { normal_success: "normal-success-v1", implementation_repair: "implementation-repair-v1", active_cancellation: "active-cancellation-v1", blocked_authentication_resume: "blocked-authentication-resume-v1", continue_as_new: "continue-as-new-run-0-v1", release_base_drift_merged: "release-base-drift-merged-v1", release_base_drift_conflict: "release-base-drift-conflict-v1", ci_wait_retry: "ci-wait-retry-v1", acceptance_ready_timeout: "acceptance-ready-timeout-v1", acceptance_requested_changes: "acceptance-requested-changes-v1", acceptance_provider_outage: "acceptance-provider-outage-v1", manual_merge_open: "manual-merge-open-v1", manual_merge_closed: "manual-merge-closed-v1", manual_merge_changed: "manual-merge-changed-v1", final_review_failure: "final-review-failure-v1", plan_revision: "plan-revision-v1", successor_creation: "successor-creation-v1", developer_active_worker_loss: "developer-active-worker-loss-v1", developer_cancellation: "developer-cancellation-v1", developer_linked_retry: "developer-linked-retry-v1", developer_ownership_ambiguous: "developer-ownership-ambiguous-v1", developer_result_claim: "developer-result-claim-v1" };
+        const requested = new Set((process.env.FORGE_REPLAY_CAPTURE_SCENARIOS ?? "").split(",").map((value) => value.trim()).filter(Boolean));
+        for (const execution of executions.filter(({ scenario }) => requested.size === 0 || requested.has(scenario))) await captureWorkflowHistory({ address: config.temporalAddress, namespace: config.temporalNamespace, workflowId: execution.workflowId, firstRunId: execution.firstRunId, scenario: execution.scenario, currentPhase: execution.currentPhase, outputDir: process.env.FORGE_REPLAY_CAPTURE_PATH, ...(replacementIds[execution.scenario] ? { replace: replacementIds[execution.scenario] } : {}) });
       }
     } finally {
       scenarioClient.connection.close();

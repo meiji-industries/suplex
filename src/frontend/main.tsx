@@ -24,6 +24,8 @@ import { TaskHistory } from "./components/app/task-history.js";
 import { TaskLeadPlan } from "./components/app/task-lead-plan.js";
 import { TaskProgress } from "./components/app/task-progress.js";
 import { DeliveryReviewPanel } from "./components/app/delivery-review-panel.js";
+import { DeveloperRecoveryStatus } from "./components/app/developer-recovery-status.js";
+import type { DeveloperRecoveryAction } from "./components/app/developer-recovery-actions.js";
 import { companySettingsPath, isApiError, readJson, withCompany, type ApiUser, type CompanyStatus } from "./lib/api.js";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import type { HealthCheck, HealthSnapshot } from "../health.js";
@@ -705,7 +707,7 @@ async function fileAsImage(file: File): Promise<{ filename: string; mimeType: st
   });
 }
 
-type TaskPlanAction = "request-supplemental-review" | "approve-plan" | "reject-plan" | "start-development" | "retry-development" | "cancel-development" | "review-delivery" | "repair-delivery" | "record-delivery-decision" | "publish-draft" | "resolve-merge-conflict" | "retry-target-base-reconciliation" | "retry-forward-merge-verification" | "reconcile-ci" | "repair-ci" | "final-review" | "accept-delivery" | "request-delivery-changes" | "reconcile-acceptance" | "reconcile-merge" | "cancel";
+type TaskPlanAction = "request-supplemental-review" | "approve-plan" | "reject-plan" | "start-development" | "retry-development" | "cancel-development" | "verify-developer-ownership" | "review-delivery" | "repair-delivery" | "record-delivery-decision" | "publish-draft" | "resolve-merge-conflict" | "retry-target-base-reconciliation" | "retry-forward-merge-verification" | "reconcile-ci" | "repair-ci" | "final-review" | "accept-delivery" | "request-delivery-changes" | "reconcile-acceptance" | "reconcile-merge" | "cancel";
 type PlanRevisionInput = { worktreeDisposition: "reuse" | "new"; reason: string; exactBaseSha?: string };
 
 function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork }: { task: ApiTask; busy: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void> }): ReactElement {
@@ -726,8 +728,8 @@ function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, 
       {task.allowedCommands.includes("approve_plan") ? <Button size="sm" onClick={() => void onPlanAction("approve-plan", "Approved final plan")} disabled={disabled}>Approve plan</Button> : null}
       {task.allowedCommands.includes("reject_plan") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reject-plan", "Please revise the plan")} disabled={disabled}>Request changes</Button> : null}
       {task.allowedCommands.includes("start_development") ? <Button size="sm" onClick={() => void onPlanAction("start-development")} disabled={disabled}>{busy ? "Executing…" : "Start development"}</Button> : null}
-      {task.allowedCommands.includes("retry_development") ? <Button size="sm" onClick={() => void onPlanAction("retry-development")} disabled={disabled}>{busy ? "Retrying…" : "Retry development"}</Button> : null}
-      {task.allowedCommands.includes("cancel_development") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("cancel-development")} disabled={disabled}>Cancel development</Button> : null}
+      {!task.developerRecovery && task.allowedCommands.includes("retry_development") ? <Button size="sm" onClick={() => void onPlanAction("retry-development")} disabled={disabled}>{busy ? "Retrying…" : "Retry development"}</Button> : null}
+      {!task.developerRecovery && task.allowedCommands.includes("cancel_development") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("cancel-development")} disabled={disabled}>Cancel development</Button> : null}
       {task.allowedCommands.includes("review_delivery") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reject-plan", "Member requested delivery changes")} disabled={disabled}>Request changes</Button> : null}
       {task.allowedCommands.includes("review_delivery") ? <Button size="sm" onClick={() => void onPlanAction("review-delivery")} disabled={disabled}>{busy ? "Reviewing…" : "LGTM"}</Button> : null}
       {task.allowedCommands.includes("repair_delivery") ? <Button size="sm" onClick={() => void onPlanAction("repair-delivery")} disabled={disabled}>{busy ? "Repairing…" : "Repair delivery"}</Button> : null}
@@ -829,7 +831,7 @@ function TaskOptions(): ReactElement {
   );
 }
 
-function TaskDetailsPage({ task, project, companyId, busy, error, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void> }): ReactElement {
+function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void> }): ReactElement {
   return (
     <ApplicationFrame title={task.title} headerActions={<TaskOptions />}>
       <article data-task-detail className="min-w-0">
@@ -840,6 +842,7 @@ function TaskDetailsPage({ task, project, companyId, busy, error, onStartPlannin
                 <div className="flex min-w-0 flex-wrap items-center gap-2"><h2 className="text-xl font-semibold tracking-tight">{task.title}</h2><Badge variant="secondary" data-status={task.phase}>{taskPhaseLabel(task.phase)}</Badge></div>
                 <div aria-live="polite" className="text-[11px] text-muted-foreground">{task.projection.status === "lagging" ? `Projection lag: r${task.projection.projectedRevision} → r${task.projection.authoritativeRevision}` : `Projection current · r${task.projection.projectedRevision}`}</div>
                 <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} />
+                <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action === "cancel-issue" ? "cancel" : action)} />
                 {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
               </div>
             </header>
@@ -849,7 +852,7 @@ function TaskDetailsPage({ task, project, companyId, busy, error, onStartPlannin
                 <TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} />
                 {task.images.length ? <section className="space-y-2"><h3 className="text-xs font-semibold">Attachments</h3><div className="flex flex-wrap gap-3">{task.images.map((image) => <a className="text-xs underline underline-offset-2" href={`/api/tasks/${task.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer" key={image.artifactId}>{image.filename}</a>)}</div></section> : null}
                 {task.leadOutput ? <TaskLeadPlan output={task.leadOutput} planRevision={task.planRevision} planMaterial={task.planMaterial} materialCategories={task.materialCategories ?? []} /> : null}
-                {task.developerExecution ? <section className="space-y-3"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">Developer delivery</h3><Badge variant="secondary">{task.developerExecution.status}</Badge></div><div className="text-[13px]">{task.developerExecution.failureSummary ?? task.pendingAction}</div><div className="text-[11px] text-muted-foreground">{task.developerExecution.branchName} · {task.developerExecution.resultCommit ?? "no commit yet"}</div>{task.developerExecution.status === "completed" ? <Suspense fallback={<Skeleton className="h-40 w-full" />}><DeveloperDiff taskId={task.id} executionId={task.developerExecution.id} /></Suspense> : null}</section> : null}
+                {task.developerExecution ? <section className="space-y-3"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">Developer delivery</h3><Badge variant="secondary">{task.developerExecution.status}</Badge></div><div className="text-[13px]">{task.developerExecution.deliverySummary ?? task.developerExecution.failureSummary ?? task.pendingAction}</div><div className="text-[11px] text-muted-foreground">{task.developerExecution.branchName} · {task.developerExecution.resultCommit ?? "no commit yet"}</div>{task.developerExecution.status === "completed" ? <Suspense fallback={<Skeleton className="h-40 w-full" />}><DeveloperDiff taskId={task.id} executionId={task.developerExecution.id} /></Suspense> : null}</section> : null}
                 <DeliveryReviewPanel task={task} />
                 {task.ci ? <CiPanel task={task} ci={task.ci} /> : null}
                 {task.release ? <ReleasePanel release={task.release} /> : null}
@@ -1075,7 +1078,12 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
     if (!selected) return;
     setBusy(true); setError("");
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/${path}`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision, ...(note ? { note } : {}) }) }); selectedRef.current = updated; setSelected(updated); await reload(); }
-    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to update the plan"); }
+    catch (reason) {
+      if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
+      const staleRevision = isApiError(reason, 409);
+      if (staleRevision) await reload();
+      setError(staleRevision ? "Issue changed; the latest state was loaded." : reason instanceof Error ? reason.message : "Unable to update the plan");
+    }
     finally { setBusy(false); }
   };
   const revisePlan = async (input: PlanRevisionInput): Promise<void> => {
@@ -1104,7 +1112,7 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
   if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
   if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
-  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} />;
+  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} />;
 
   if (mode === "board") {
     return (

@@ -82,9 +82,17 @@ function candidateFor(database: ForgeDatabase, row: ProjectionRow): AttentionCan
     return { taskId: row.task_id, category: "member_decision", summary: "A member decision is required before this issue can continue.", action: "Review the exact delivery evidence and record a decision." };
   }
 
+  const lease = database.authQuery((db) => db.prepare("SELECT status, failure_code, failure_summary FROM forge_developer_execution_leases WHERE task_id = ? ORDER BY attempt DESC, created_at DESC LIMIT 1").get(row.task_id) as { status: string; failure_code: string | null; failure_summary: string | null } | undefined);
+  if (lease?.status === "ownership_ambiguous") {
+    return { taskId: row.task_id, category: "unsafe_recovery", summary: "Forge cannot prove which process owns the Developer turn.", action: "Inspect the host process and worktree, then recheck ownership.", ...(lease.failure_code ? { evidenceRef: lease.failure_code } : {}) };
+  }
+  if (lease?.status === "interrupted" || lease?.status === "failed") {
+    return { taskId: row.task_id, category: "unsafe_recovery", summary: lease.failure_summary ?? "The Developer turn needs deliberate recovery.", action: "Review the preserved evidence before retrying or cancelling.", ...(lease.failure_code ? { evidenceRef: lease.failure_code } : {}) };
+  }
+
   const execution = database.authQuery((db) => db.prepare("SELECT status, failure_code, failure_summary FROM forge_developer_executions WHERE task_id = ? ORDER BY attempt DESC, started_at DESC LIMIT 1").get(row.task_id) as { status: string; failure_code: string | null; failure_summary: string | null } | undefined);
-  if (execution?.status === "ownership_ambiguous") {
-    return { taskId: row.task_id, category: "unsafe_recovery", summary: "Forge cannot prove which process owns the Developer turn.", action: "Verify the recorded process and worktree ownership before retrying or cancelling.", ...(execution.failure_code ? { evidenceRef: execution.failure_code } : {}) };
+  if (execution?.status === "ownership_ambiguous" || execution?.status === "interrupted" || execution?.status === "failed") {
+    return { taskId: row.task_id, category: "unsafe_recovery", summary: execution.failure_summary ?? "The Developer turn needs deliberate recovery.", action: "Review the preserved evidence before retrying or cancelling.", ...(execution.failure_code ? { evidenceRef: execution.failure_code } : {}) };
   }
 
   const review = database.authQuery((db) => db.prepare("SELECT outcome, repair_cycle FROM forge_delivery_reviews WHERE task_id = ? ORDER BY created_at DESC LIMIT 1").get(row.task_id) as { outcome: string; repair_cycle: number } | undefined);

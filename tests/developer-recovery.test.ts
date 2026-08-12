@@ -5,7 +5,9 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { ForgeDatabase } from "../src/database.js";
+import { DeveloperExecutionLeaseRepository } from "../src/developer-execution-leases.js";
 import { cancelDeveloperExecution, reconcileDeveloperExecutions, reconcileRestoredDeveloperExecutions, type DeveloperProcessController, type DeveloperProcessInspection } from "../src/developer-recovery.js";
+import type { DeveloperSupervisorIdentity } from "../src/developer-supervisor-protocol.js";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "forge-developer-recovery-test-"));
@@ -22,62 +24,78 @@ async function fixture() {
   return { root, database };
 }
 
-function execution(database: ForgeDatabase, id: string, pid: number, status = "running", attempt = 1): void {
+function execution(database: ForgeDatabase, id: string, attempt: number): void {
   const now = new Date().toISOString();
-  database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, process_pid, process_group_id, process_start_identity, started_at, heartbeat_at) VALUES (?, 'task_1', 'company_1', 'workflow_1', 1, ?, ?, 'forge/issue/task_1', '/tmp/forge-worktree-task_1', ?, 'wrapper_1', '/tmp/forge-wrapper-1', ?, ?, ?, ?, ?)").run(id, attempt, status, "a".repeat(40), pid, pid, `${pid}:started`, now, now));
+  database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, 'task_1', 'company_1', 'workflow_1', 1, ?, 'running', 'forge/issue/task_1', '/tmp/forge-worktree-task_1', ?, ?, ?)").run(id, attempt, "a".repeat(40), now, now));
 }
 
-function controller(inspection: DeveloperProcessInspection | undefined, calls: Array<[number, "SIGTERM" | "SIGKILL"]>): DeveloperProcessController {
-  let signalled = false;
-  return { async inspect() { return signalled ? undefined : inspection; }, async signalGroup(pid, signal) { calls.push([pid, signal]); signalled = true; } };
+function lease(database: ForgeDatabase, root: string, id: string, attempt: number): DeveloperExecutionLeaseRepository {
+  execution(database, id, attempt);
+  const repository = new DeveloperExecutionLeaseRepository(database, root);
+  repository.reserve({ executionId: id, companyId: "company_1", taskId: "task_1", workflowId: "workflow_1", attempt, turnKind: "implementation", canonicalWorktreePath: "/tmp/forge-worktree-task_1", worktreeIdentityHash: `worktree-${attempt}` });
+  repository.markSupervisorStarting(id);
+  return repository;
 }
 
-test("reconciliation reattaches a matching live process without starting a duplicate", async () => {
+function identity(pid: number, startTime = "started"): DeveloperSupervisorIdentity {
+  return { pid, processGroup: pid, startTime, executable: "/usr/bin/codex", argv: ["/usr/bin/codex", "exec"], ownerUid: 501 };
+}
+
+function inspection(value: DeveloperSupervisorIdentity): DeveloperProcessInspection {
+  return { pid: value.pid, processGroupId: value.processGroup, processStartIdentity: value.startTime, command: value.argv.join(" "), executable: value.executable, argv: value.argv, ...(value.ownerUid === null ? {} : { ownerUid: value.ownerUid }) };
+}
+
+function controller(inspections: Map<number, DeveloperProcessInspection | undefined>, calls: Array<[number, "SIGTERM" | "SIGKILL"]>): DeveloperProcessController {
+  return { async inspect(pid) { return inspections.get(pid); }, async signalGroup(pid, signal) { calls.push([pid, signal]); } };
+}
+
+test("INV-09 recovery observation reattaches an exact lease without starting a duplicate or writing projection state", async () => {
   const value = await fixture();
   try {
-    execution(value.database, "developer_live", 123);
-    const outcomes = await reconcileDeveloperExecutions(value.database, controller({ pid: 123, processGroupId: 123, processStartIdentity: "123:started", command: "codex exec /tmp/forge-worktree-task_1" }, []));
-    expect(outcomes).toEqual([{ executionId: "developer_live", status: "active" }]);
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = 'developer_live'").get())).toEqual({ status: "running", failure_code: null });
+    const id = `developer_${"a".repeat(24)}`;
+    const repository = lease(value.database, value.root, id, 1);
+    repository.setSupervisorIdentity(id, { ...identity(101), pid: 101, processGroup: 101 });
+    repository.setChildIdentity(id, identity(102));
+    const before = value.database.authQuery((db) => db.prepare("SELECT revision, phase, allowed_commands_json, pending_action FROM forge_issue_projections WHERE task_id = 'task_1'").get());
+    const outcomes = await reconcileDeveloperExecutions(value.database, controller(new Map([[101, inspection(identity(101))], [102, inspection(identity(102))]]), []));
+    expect(outcomes).toEqual([{ executionId: id, status: "active" }]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT revision, phase, allowed_commands_json, pending_action FROM forge_issue_projections WHERE task_id = 'task_1'").get())).toEqual(before);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("missing and mismatched processes become explicit recovery states without signalling", async () => {
+test("INV-12 missing lease identity is ownership ambiguous and never signals", async () => {
   const value = await fixture();
   try {
-    execution(value.database, "developer_missing", 124);
-    const missing = await reconcileDeveloperExecutions(value.database, controller(undefined, []));
-    expect(missing).toEqual([{ executionId: "developer_missing", status: "interrupted", reason: "process-missing" }]);
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = 'developer_missing'").get())).toEqual({ status: "interrupted", failure_code: "process-missing" });
-    expect(value.database.authQuery((db) => db.prepare("SELECT phase, allowed_commands_json, pending_action FROM forge_issue_projections WHERE task_id = 'task_1'").get())).toMatchObject({ phase: "development", allowed_commands_json: '["retry_development","cancel_development"]', pending_action: "Developer turn interrupted" });
-  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
-});
-
-test("PID reuse or command ownership mismatch blocks cancellation, while a verified group is cancelled precisely", async () => {
-  const value = await fixture();
-  try {
-    execution(value.database, "developer_mismatch", 125);
+    const id = `developer_${"b".repeat(24)}`;
+    lease(value.database, value.root, id, 1);
     const calls: Array<[number, "SIGTERM" | "SIGKILL"]> = [];
-    const ambiguous = await cancelDeveloperExecution(value.database, "developer_mismatch", controller({ pid: 125, processGroupId: 125, processStartIdentity: "125:other-start", command: "unrelated-process" }, calls));
-    expect(ambiguous).toEqual({ status: "ownership_ambiguous", reason: "identity-mismatch" });
+    expect(await reconcileDeveloperExecutions(value.database, controller(new Map(), calls))).toEqual([{ executionId: id, status: "ownership_ambiguous", reason: "ownership-missing" }]);
+    expect(await cancelDeveloperExecution(value.database, id, controller(new Map(), calls))).toMatchObject({ status: "ownership_ambiguous", reasonCode: "developer-ownership-incomplete" });
     expect(calls).toEqual([]);
-
-    execution(value.database, "developer_owned", 126, "running", 2);
-    const cancelled = await cancelDeveloperExecution(value.database, "developer_owned", controller({ pid: 126, processGroupId: 126, processStartIdentity: "126:started", command: "codex exec /tmp/forge-worktree-task_1" }, calls));
-    expect(cancelled).toEqual({ status: "cancelled" });
-    expect(calls).toEqual([[126, "SIGTERM"]]);
-    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions WHERE id = 'developer_owned'").get())).toEqual({ status: "cancelled" });
-    expect(value.database.authQuery((db) => db.prepare("SELECT phase, allowed_commands_json FROM forge_issue_projections WHERE task_id = 'task_1'").get())).toMatchObject({ phase: "development", allowed_commands_json: "[]" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("restore invalidates source-host process ownership without starting a duplicate turn", async () => {
+test("INV-04 PID/start mismatch blocks cancellation without a signal", async () => {
   const value = await fixture();
   try {
-    execution(value.database, "developer_restored", 127);
-    const report = reconcileRestoredDeveloperExecutions(value.database);
-    expect(report).toEqual([{ executionId: "developer_restored", status: "interrupted", reason: "restore-invalidated-process-ownership" }]);
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = 'developer_restored'").get())).toEqual({ status: "interrupted", failure_code: "restore-process-invalidated" });
-    expect(value.database.authQuery((db) => db.prepare("SELECT phase, allowed_commands_json, pending_action FROM forge_issue_projections WHERE task_id = 'task_1'").get())).toMatchObject({ phase: "development", allowed_commands_json: '["retry_development","cancel_development","cancel_issue"]', pending_action: "Developer turn interrupted during restore" });
+    const id = `developer_${"c".repeat(24)}`;
+    const repository = lease(value.database, value.root, id, 1);
+    repository.setSupervisorIdentity(id, identity(201));
+    repository.setChildIdentity(id, identity(202));
+    const calls: Array<[number, "SIGTERM" | "SIGKILL"]> = [];
+    const result = await cancelDeveloperExecution(value.database, id, controller(new Map([[201, inspection(identity(201))], [202, inspection(identity(202, "reused"))]]), calls));
+    expect(result).toMatchObject({ status: "ownership_ambiguous", reasonCode: "developer-wrong_start_time" });
+    expect(calls).toEqual([]);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("INV-09 restore recovery is projection-read-only and invalidates local process ownership", async () => {
+  const value = await fixture();
+  try {
+    const id = `developer_${"d".repeat(24)}`;
+    lease(value.database, value.root, id, 1);
+    const before = value.database.authQuery((db) => db.prepare("SELECT revision, phase, allowed_commands_json, pending_action FROM forge_issue_projections WHERE task_id = 'task_1'").get());
+    expect(reconcileRestoredDeveloperExecutions(value.database)).toEqual([{ executionId: id, status: "interrupted", reason: "restore-invalidated-process-ownership" }]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT revision, phase, allowed_commands_json, pending_action FROM forge_issue_projections WHERE task_id = 'task_1'").get())).toEqual(before);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

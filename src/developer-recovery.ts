@@ -1,20 +1,30 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { constants } from "node:fs";
+import { open } from "node:fs/promises";
+import { dirname, join } from "node:path";
+
+import { z } from "zod";
 
 import type { ForgeDatabase } from "./database.js";
-
-const execFileAsync = promisify(execFile);
+import { DeveloperExecutionLeaseRepository, type DeveloperExecutionLease } from "./developer-execution-leases.js";
+import { requestDeveloperSupervisor } from "./developer-supervisor.js";
+import { DeveloperSupervisorSnapshotSchema, validateSupervisorResult, type DeveloperSupervisorResult } from "./developer-supervisor-protocol.js";
+import { compareProcessIdentity, defaultProcessController, type ProcessInspection } from "./process-manager.js";
+import type { DeveloperCancellationResult } from "./temporal/issue-contracts.js";
 
 export interface DeveloperProcessInspection {
   pid: number;
   processGroupId: number;
   processStartIdentity: string;
   command: string;
+  executable?: string;
+  argv?: string[];
+  ownerUid?: number;
 }
 
 export interface DeveloperProcessController {
   inspect(pid: number): Promise<DeveloperProcessInspection | undefined>;
   signalGroup(processGroupId: number, signal: "SIGTERM" | "SIGKILL"): Promise<void>;
+  isProcessGroupAlive?: (processGroupId: number) => Promise<boolean>;
 }
 
 export interface DeveloperRecoveryOutcome {
@@ -29,163 +39,149 @@ export interface RestoredDeveloperRecoveryReport {
   reason: "stored-delivery-result" | "restore-invalidated-process-ownership";
 }
 
-interface DeveloperExecutionRow {
-  id: string;
-  task_id: string;
-  company_id: string;
-  workflow_id: string;
-  status: string;
-  process_pid: number | null;
-  process_group_id: number | null;
-  process_start_identity: string | null;
-  wrapper_id: string | null;
-  wrapper_path: string | null;
-  worktree_path: string;
-  delivery_artifact_id: string | null;
-  evidence_artifact_id: string | null;
-  result_commit: string | null;
-  result_tree: string | null;
-}
+export const DeveloperRecoveryObservationSchema = z.object({
+  executionId: z.string().regex(/^developer_[a-f0-9]{24}$/),
+  status: z.enum(["active", "result_ready", "interrupted", "ownership_ambiguous"]),
+  reasonCode: z.string().max(100).nullable(),
+  summary: z.string().max(500),
+  lastHeartbeatAt: z.string().datetime().nullable(),
+}).strict();
+export type DeveloperRecoveryObservation = z.infer<typeof DeveloperRecoveryObservationSchema>;
 
-const defaultController: DeveloperProcessController = {
+const legacyController: DeveloperProcessController = {
   async inspect(pid) {
-    try {
-      const result = await execFileAsync("ps", ["-p", String(pid), "-o", "pid=", "-o", "pgid=", "-o", "lstart=", "-o", "command="], { maxBuffer: 32 * 1024 });
-      const tokens = result.stdout.trim().split(/\s+/);
-      if (tokens.length < 8) return undefined;
-      const actualPid = Number(tokens[0]);
-      const processGroupId = Number(tokens[1]);
-      const startText = tokens.slice(2, 7).join(" ");
-      const command = tokens.slice(7).join(" ");
-      if (!Number.isInteger(actualPid) || !Number.isInteger(processGroupId) || !command) return undefined;
-      return { pid: actualPid, processGroupId, processStartIdentity: `${actualPid}:${startText}`, command };
-    } catch {
-      return undefined;
-    }
+    const inspection = await defaultProcessController.inspect(pid);
+    return inspection ? { pid: inspection.pid, processGroupId: inspection.processGroup, processStartIdentity: `${inspection.pid}:${inspection.startTime}`, command: inspection.command, executable: inspection.executable, argv: inspection.argv, ...(inspection.ownerUid !== undefined ? { ownerUid: inspection.ownerUid } : {}) } : undefined;
   },
-  async signalGroup(processGroupId, signal) {
-    if (!Number.isInteger(processGroupId) || processGroupId <= 1) throw new Error("Refusing to signal an unsafe process group");
-    process.kill(-processGroupId, signal);
-  },
+  async signalGroup(processGroupId, signal) { await defaultProcessController.signalGroup?.(processGroupId, signal); },
+  async isProcessGroupAlive(processGroupId) { return defaultProcessController.isProcessGroupAlive ? defaultProcessController.isProcessGroupAlive(processGroupId) : false; },
 };
 
-function now(): string { return new Date().toISOString(); }
-function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
-
-function activeRow(database: ForgeDatabase, executionId: string): DeveloperExecutionRow | undefined {
-  return database.authQuery((db) => db.prepare("SELECT id, task_id, company_id, workflow_id, status, process_pid, process_group_id, process_start_identity, wrapper_id, wrapper_path, worktree_path, delivery_artifact_id, evidence_artifact_id, result_commit, result_tree FROM forge_developer_executions WHERE id = ?").get(executionId) as DeveloperExecutionRow | undefined);
+function toInspection(value: DeveloperProcessInspection): ProcessInspection {
+  return { pid: value.pid, processGroup: value.processGroupId, startTime: value.processStartIdentity.includes(":") ? value.processStartIdentity.slice(value.processStartIdentity.indexOf(":") + 1) : value.processStartIdentity, command: value.command, executable: value.executable ?? value.argv?.[0] ?? value.command.split(/\s+/)[0] ?? "", argv: value.argv ?? value.command.split(/\s+/).filter(Boolean), ...(value.ownerUid !== undefined ? { ownerUid: value.ownerUid } : {}) };
 }
 
-function matchesOwnership(row: DeveloperExecutionRow, inspection: DeveloperProcessInspection): boolean {
-  return row.process_pid === inspection.pid
-    && row.process_group_id === inspection.processGroupId
-    && Boolean(row.process_start_identity && row.process_start_identity === inspection.processStartIdentity)
-    && Boolean(row.wrapper_id && row.wrapper_path)
-    && inspection.command.includes(row.worktree_path);
+async function readResult(lease: DeveloperExecutionLease): Promise<DeveloperSupervisorResult | undefined> {
+  const handle = await open(join(lease.executionRoot, lease.resultPath), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch(() => undefined);
+  if (!handle) return undefined;
+  try {
+    const result = validateSupervisorResult(JSON.parse(await handle.readFile("utf8")));
+    return result.executionId === lease.executionId && result.leaseTokenHash === lease.leaseTokenHash ? result : undefined;
+  } catch { return undefined; } finally { await handle.close(); }
 }
 
-function markInterrupted(database: ForgeDatabase, row: DeveloperExecutionRow, code: string, summary: string, status: "interrupted" | "ownership_ambiguous" = "interrupted"): void {
-  database.authTransaction((db) => {
-    db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ? WHERE id = ? AND status IN ('starting', 'running')").run(status, now(), now(), code, summary, row.id);
-    db.prepare("UPDATE forge_issue_projections SET phase = 'development', owner = 'human', allowed_commands_json = ?, pending_action = ?, updated_at = ? WHERE task_id = ? AND phase = 'development'").run(JSON.stringify(status === "ownership_ambiguous" ? [] : ["retry_development", "cancel_development"]), status === "ownership_ambiguous" ? "Operator must verify Developer ownership" : "Developer turn interrupted", now(), row.task_id);
-  });
+function resultHashFromClaim(database: ForgeDatabase, executionId: string): string | undefined {
+  return database.authQuery((db) => (db.prepare("SELECT result_hash FROM forge_developer_result_claims WHERE execution_id = ?").get(executionId) as { result_hash: string } | undefined)?.result_hash);
 }
 
-/**
- * A restored installation cannot trust PIDs, process groups, or wrapper paths
- * copied from the source host. Reconcile those rows before the new worker can
- * admit another Developer turn. A fully persisted result is safe to consume
- * once; every other active row becomes an explicit interrupted attempt.
- */
+function activeLeases(database: ForgeDatabase): DeveloperExecutionLease[] {
+  return new DeveloperExecutionLeaseRepository(database, "").listActive();
+}
+
+/** Read-only observation. Workflow state changes belong to the Temporal Workflow. */
 export function reconcileRestoredDeveloperExecutions(database: ForgeDatabase): RestoredDeveloperRecoveryReport[] {
-  const rows = database.authQuery((db) => db.prepare("SELECT id, task_id, company_id, workflow_id, status, process_pid, process_group_id, process_start_identity, wrapper_id, wrapper_path, worktree_path, delivery_artifact_id, evidence_artifact_id, result_commit, result_tree FROM forge_developer_executions WHERE status IN ('starting', 'running') ORDER BY started_at, id").all() as DeveloperExecutionRow[]);
-  const reports: RestoredDeveloperRecoveryReport[] = [];
-  for (const row of rows) {
-    const restoredAt = now();
-    if (row.delivery_artifact_id && row.evidence_artifact_id && row.result_commit && row.result_tree) {
-      database.authTransaction((db) => {
-        db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running')").run(restoredAt, restoredAt, row.id);
-        db.prepare("UPDATE forge_issue_projections SET phase = 'delivery_ready', owner = 'lead', allowed_commands_json = '[\"review_delivery\",\"cancel_issue\"]', pending_action = 'Lead delivery review', updated_at = ? WHERE task_id = ? AND phase = 'development'").run(restoredAt, row.task_id);
-      });
-      reports.push({ executionId: row.id, status: "recovered", reason: "stored-delivery-result" });
-      continue;
-    }
+  const rows = database.authQuery((db) => db.prepare("SELECT l.execution_id, l.status, c.execution_id AS claim_id FROM forge_developer_execution_leases l LEFT JOIN forge_developer_result_claims c ON c.execution_id = l.execution_id WHERE l.status IN ('reserved', 'supervisor_starting', 'running', 'result_ready', 'cancel_requested', 'cancelling') ORDER BY l.created_at, l.execution_id").all() as Array<{ execution_id: string; status: string; claim_id: string | null }>);
+  const reports = rows.map((row) => row.claim_id ? { executionId: row.execution_id, status: "recovered" as const, reason: "stored-delivery-result" as const } : { executionId: row.execution_id, status: "interrupted" as const, reason: "restore-invalidated-process-ownership" as const });
+  // Pre-lease executions can exist in backups created before the supervisor
+  // lease ledger was introduced. Preserve the established restore behavior
+  // for those rows while keeping the new lease path projection-free.
+  const legacyRows = database.authQuery((db) => db.prepare("SELECT d.id FROM forge_developer_executions d LEFT JOIN forge_developer_execution_leases l ON l.execution_id = d.id WHERE l.execution_id IS NULL AND d.status IN ('starting', 'running', 'cancelling') ORDER BY d.started_at, d.id").all() as Array<{ id: string }>);
+  if (legacyRows.length > 0) {
     database.authTransaction((db) => {
-      db.prepare("UPDATE forge_developer_executions SET status = 'interrupted', finished_at = ?, heartbeat_at = ?, failure_code = 'restore-process-invalidated', failure_summary = 'The source-host Developer process cannot be resumed from a restored installation.' WHERE id = ? AND status IN ('starting', 'running')").run(restoredAt, restoredAt, row.id);
-      db.prepare("UPDATE forge_issue_projections SET phase = 'development', owner = 'human', allowed_commands_json = '[\"retry_development\",\"cancel_development\",\"cancel_issue\"]', pending_action = 'Developer turn interrupted during restore', updated_at = ? WHERE task_id = ? AND phase = 'development'").run(restoredAt, row.task_id);
+      for (const row of legacyRows) db.prepare("UPDATE forge_developer_executions SET status = 'interrupted', failure_code = 'restore-process-invalidated', failure_summary = 'Restore invalidated process ownership.' WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(row.id);
     });
-    reports.push({ executionId: row.id, status: "interrupted", reason: "restore-invalidated-process-ownership" });
+    reports.push(...legacyRows.map((row) => ({ executionId: row.id, status: "interrupted" as const, reason: "restore-invalidated-process-ownership" as const })));
   }
   return reports;
 }
 
-export async function reconcileDeveloperExecutions(database: ForgeDatabase, controller: DeveloperProcessController = defaultController): Promise<DeveloperRecoveryOutcome[]> {
-  const rows = database.authQuery((db) => db.prepare("SELECT id, task_id, company_id, workflow_id, status, process_pid, process_group_id, process_start_identity, wrapper_id, wrapper_path, worktree_path, delivery_artifact_id, evidence_artifact_id, result_commit, result_tree FROM forge_developer_executions WHERE status IN ('starting', 'running') ORDER BY started_at, id").all() as DeveloperExecutionRow[]);
+export async function reconcileDeveloperExecutions(database: ForgeDatabase, controller: DeveloperProcessController = legacyController): Promise<DeveloperRecoveryOutcome[]> {
+  const rows = activeLeases(database);
   const outcomes: DeveloperRecoveryOutcome[] = [];
-  for (const row of rows) {
-    if (!row.process_pid || !row.process_group_id || !row.process_start_identity || !row.wrapper_id || !row.wrapper_path) {
-      markInterrupted(database, row, "ownership-missing", "Developer process ownership evidence is incomplete", "ownership_ambiguous");
-      outcomes.push({ executionId: row.id, status: "ownership_ambiguous", reason: "ownership-missing" });
+  for (const lease of rows) {
+    if (resultHashFromClaim(database, lease.executionId)) {
+      outcomes.push({ executionId: lease.executionId, status: "recovered", reason: "stored-delivery-result" });
       continue;
     }
-    const inspection = await controller.inspect(row.process_pid);
+    if (!lease.supervisor || !lease.child) {
+      outcomes.push({ executionId: lease.executionId, status: "ownership_ambiguous", reason: "ownership-missing" });
+      continue;
+    }
+    const supervisorInspection = await controller.inspect(lease.supervisor.pid);
+    const supervisorComparison = supervisorInspection ? compareProcessIdentity({ name: "developer-supervisor", pid: lease.supervisor.pid, command: lease.supervisor.argv.join(" "), startedAt: lease.supervisor.startTime, processGroup: lease.supervisor.processGroup, startTime: lease.supervisor.startTime, executable: lease.supervisor.executable, argv: lease.supervisor.argv, ...(lease.supervisor.ownerUid !== null ? { ownerUid: lease.supervisor.ownerUid } : {}) }, toInspection(supervisorInspection)) : { kind: "not_running" as const };
+    const inspection = await controller.inspect(lease.child.pid);
     if (!inspection) {
-      if (row.delivery_artifact_id && row.evidence_artifact_id && row.result_commit && row.result_tree) {
-        database.authTransaction((db) => {
-          db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running')").run(now(), now(), row.id);
-          db.prepare("UPDATE forge_issue_projections SET phase = 'delivery_ready', owner = 'lead', allowed_commands_json = '[]', pending_action = 'Lead delivery review', updated_at = ? WHERE task_id = ? AND phase = 'development'").run(now(), row.task_id);
-        });
-        outcomes.push({ executionId: row.id, status: "recovered", reason: "stored-delivery-result" });
-      } else {
-        markInterrupted(database, row, "process-missing", "The recorded Developer process is no longer present");
-        outcomes.push({ executionId: row.id, status: "interrupted", reason: "process-missing" });
-      }
+      if (supervisorComparison.kind === "exact_match") outcomes.push({ executionId: lease.executionId, status: "interrupted", reason: "process-missing" });
+      else outcomes.push({ executionId: lease.executionId, status: "interrupted", reason: "supervisor-and-process-missing" });
       continue;
     }
-    if (!matchesOwnership(row, inspection)) {
-      markInterrupted(database, row, "ownership-ambiguous", "The recorded PID, process group, start identity, wrapper, or worktree does not match");
-      outcomes.push({ executionId: row.id, status: "ownership_ambiguous", reason: "identity-mismatch" });
-      continue;
-    }
-    database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running')").run(now(), row.id));
-    outcomes.push({ executionId: row.id, status: "active" });
+    const comparison = compareProcessIdentity({ name: "developer", pid: lease.child.pid, command: lease.child.argv.join(" "), startedAt: lease.child.startTime, processGroup: lease.child.processGroup, startTime: lease.child.startTime, executable: lease.child.executable, argv: lease.child.argv, ...(lease.child.ownerUid !== null ? { ownerUid: lease.child.ownerUid } : {}) }, toInspection(inspection));
+    outcomes.push(comparison.kind === "exact_match" && supervisorComparison.kind === "exact_match" ? { executionId: lease.executionId, status: "active" } : { executionId: lease.executionId, status: "ownership_ambiguous", reason: comparison.kind === "exact_match" ? `supervisor-${supervisorComparison.kind}` : comparison.kind });
   }
   return outcomes;
 }
 
-export async function cancelDeveloperExecution(database: ForgeDatabase, executionId: string, controller: DeveloperProcessController = defaultController): Promise<{ status: "cancelled" | "ownership_ambiguous"; reason?: string }> {
-  const row = activeRow(database, executionId);
-  if (!row) throw new Error("Developer execution is unavailable");
-  if (!row.process_pid || !row.process_group_id || !row.process_start_identity || !row.wrapper_id || !row.wrapper_path) {
-    markInterrupted(database, row, "ownership-missing", "Forge cannot prove ownership of the recorded Developer process", "ownership_ambiguous");
-    return { status: "ownership_ambiguous", reason: "ownership-missing" };
+/**
+ * Ask the durable supervisor to perform bounded cancellation. This function
+ * never signals a PID or writes an issue projection.
+ */
+export async function cancelDeveloperExecution(database: ForgeDatabase, executionId: string, controller: DeveloperProcessController = legacyController): Promise<DeveloperCancellationResult> {
+  const lease = database.authQuery((db) => db.prepare("SELECT * FROM forge_developer_execution_leases WHERE execution_id = ?").get(executionId) as Record<string, unknown> | undefined);
+  if (!lease) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-lease-missing", summary: "Forge cannot prove ownership of the previous Developer process." };
+  const repository = new DeveloperExecutionLeaseRepository(database, dirname(dirname(String(lease.execution_root))));
+  const current = repository.get(executionId);
+  if (!current) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-lease-missing", summary: "Forge cannot prove ownership of the previous Developer process." };
+  const claim = repository.readClaim(executionId);
+  if (claim) {
+    try { return { status: "completed_before_cancellation", executionId, result: JSON.parse(claim.activityResultJson) as never, resultHash: claim.resultHash }; } catch { return { status: "ownership_ambiguous", executionId, reasonCode: "developer-claim-invalid", summary: "Forge cannot validate the completed Developer result." }; }
   }
-  const inspection = await controller.inspect(row.process_pid);
-  if (!inspection || !matchesOwnership(row, inspection)) {
-    markInterrupted(database, row, "ownership-ambiguous", "Forge refused cancellation because process ownership could not be proven", "ownership_ambiguous");
-    return { status: "ownership_ambiguous", reason: inspection ? "identity-mismatch" : "process-missing" };
+  if (!current.supervisor || !current.child) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-ownership-incomplete", summary: "Forge cannot prove ownership of the previous Developer process." };
+  const inspection = await controller.inspect(current.child.pid);
+  if (!inspection) {
+    if (controller.isProcessGroupAlive && await controller.isProcessGroupAlive(current.child.processGroup)) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-child-group-live", summary: "Forge cannot prove ownership of the previous Developer process." };
+    repository.setStatus(executionId, "interrupted", ["reserved", "supervisor_starting", "running", "result_ready", "cancel_requested", "cancelling"]);
+    return { status: "interrupted", executionId, reasonCode: "developer-child-missing", summary: "The recorded Developer process is no longer running." };
   }
-  await controller.signalGroup(row.process_group_id, "SIGTERM");
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    await delay(50);
-    const remaining = await controller.inspect(row.process_pid);
-    if (!remaining) {
-      database.authTransaction((db) => db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ?, heartbeat_at = ?, failure_code = NULL, failure_summary = NULL WHERE id = ? AND status IN ('starting', 'running')").run(now(), now(), row.id));
-      return { status: "cancelled" };
-    }
-    if (!matchesOwnership(row, remaining)) {
-      markInterrupted(database, row, "ownership-ambiguous", "Forge could not prove ownership while waiting for Developer exit", "ownership_ambiguous");
-      return { status: "ownership_ambiguous", reason: "identity-mismatch" };
-    }
+  const supervisorInspection = await controller.inspect(current.supervisor.pid);
+  if (!supervisorInspection) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-supervisor-missing", summary: "Forge cannot prove ownership of the previous Developer process." };
+  const supervisorComparison = compareProcessIdentity({ name: "developer-supervisor", pid: current.supervisor.pid, command: current.supervisor.argv.join(" "), startedAt: current.supervisor.startTime, processGroup: current.supervisor.processGroup, startTime: current.supervisor.startTime, executable: current.supervisor.executable, argv: current.supervisor.argv, ...(current.supervisor.ownerUid !== null ? { ownerUid: current.supervisor.ownerUid } : {}) }, toInspection(supervisorInspection));
+  if (supervisorComparison.kind !== "exact_match") return { status: "ownership_ambiguous", executionId, reasonCode: `developer-supervisor-${supervisorComparison.kind}`, summary: "Forge cannot prove ownership of the previous Developer process." };
+  const comparison = compareProcessIdentity({ name: "developer", pid: current.child.pid, command: current.child.argv.join(" "), startedAt: current.child.startTime, processGroup: current.child.processGroup, startTime: current.child.startTime, executable: current.child.executable, argv: current.child.argv, ...(current.child.ownerUid !== null ? { ownerUid: current.child.ownerUid } : {}) }, toInspection(inspection));
+  if (comparison.kind !== "exact_match") return { status: "ownership_ambiguous", executionId, reasonCode: `developer-${comparison.kind}`, summary: "Forge cannot prove ownership of the previous Developer process." };
+  const token = await repository.readLeaseToken(executionId).catch(() => undefined);
+  if (!token) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-lease-token-missing", summary: "Forge cannot prove ownership of the previous Developer process." };
+  repository.setStatus(executionId, "cancel_requested", ["reserved", "supervisor_starting", "running", "result_ready"]);
+  repository.recordCancellationEvidence(executionId, "cancellation_requested_at");
+  repository.setStatus(executionId, "cancelling", ["cancel_requested"]);
+  const response = await requestDeveloperSupervisor(current.executionRoot, { version: 1, command: "cancel", executionId, leaseToken: token, termGraceMs: 3_000, killGraceMs: 2_000 }).catch(() => null);
+  if (!response) return { status: "termination_failed", executionId, reasonCode: "developer-supervisor-unavailable", summary: "Forge could not confirm that the Developer supervisor completed cancellation.", evidenceArtifactId: null };
+  if (response.status === "ownership_ambiguous") return { status: "ownership_ambiguous", executionId, reasonCode: response.reasonCode, summary: response.summary };
+  if (response.status === "termination_failed") return { status: "termination_failed", executionId, reasonCode: response.reasonCode, summary: response.summary, evidenceArtifactId: null };
+  if (response.termSentAt) repository.recordCancellationEvidence(executionId, "term_sent_at", response.termSentAt);
+  if (response.killSentAt) repository.recordCancellationEvidence(executionId, "kill_sent_at", response.killSentAt);
+  let result: DeveloperSupervisorResult | undefined;
+  for (let attempt = 0; attempt < 50 && !result; attempt += 1) {
+    result = await readResult(current);
+    if (!result) await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  await controller.signalGroup(row.process_group_id, "SIGKILL");
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    await delay(50);
-    if (!(await controller.inspect(row.process_pid))) {
-      database.authTransaction((db) => db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ?, heartbeat_at = ?, failure_code = NULL, failure_summary = NULL WHERE id = ? AND status IN ('starting', 'running')").run(now(), now(), row.id));
-      return { status: "cancelled" };
-    }
+  if (!result) return { status: "termination_failed", executionId, reasonCode: "developer-result-missing-after-cancel", summary: "Forge could not confirm the cancelled Developer result.", evidenceArtifactId: null };
+  const snapshot = await open(join(current.executionRoot, "supervisor.json"), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).then(async (handle) => { try { return DeveloperSupervisorSnapshotSchema.parse(JSON.parse(await handle.readFile("utf8"))); } catch { return undefined; } finally { await handle.close(); } }).catch(() => undefined);
+  if (snapshot?.termSentAt) repository.recordCancellationEvidence(executionId, "term_sent_at", snapshot.termSentAt);
+  if (snapshot?.killSentAt) repository.recordCancellationEvidence(executionId, "kill_sent_at", snapshot.killSentAt);
+  let completedClaim = repository.readClaim(executionId);
+  for (let attempt = 0; !completedClaim && attempt < 100; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    completedClaim = repository.readClaim(executionId);
   }
-  markInterrupted(database, row, "cancellation-timeout", "Developer process did not exit after termination", "ownership_ambiguous");
-  return { status: "ownership_ambiguous", reason: "cancellation-timeout" };
+  if (completedClaim) {
+    try { return { status: "completed_before_cancellation", executionId, result: JSON.parse(completedClaim.activityResultJson) as never, resultHash: completedClaim.resultHash }; } catch { return { status: "ownership_ambiguous", executionId, reasonCode: "developer-claim-invalid", summary: "Forge cannot validate the completed Developer result." }; }
+  }
+  const confirmedExitAt = snapshot?.confirmedExitAt ?? response.confirmedExitAt;
+  if (!confirmedExitAt) {
+    if (!snapshot?.termSentAt && !snapshot?.killSentAt) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-result-claim-missing", summary: "The Developer produced a result before Forge could claim it or confirm cancellation." };
+    return { status: "termination_failed", executionId, reasonCode: "developer-exit-unconfirmed", summary: "Forge could not confirm Developer process termination after signalling it.", evidenceArtifactId: null };
+  }
+  repository.recordCancellationEvidence(executionId, "confirmed_exit_at", confirmedExitAt);
+  repository.setStatus(executionId, "terminated", ["cancel_requested", "cancelling", "result_ready"]);
+  return { status: "cancelled_confirmed", executionId, exitCode: result.exitCode, exitSignal: result.exitSignal, evidenceArtifactId: null };
 }

@@ -85,7 +85,7 @@ export class CapacityManager {
   reconcileFromLedgers(now = new Date().toISOString()): number {
     const activeRequestIds = this.database.authQuery((db) => new Set((db.prepare(`SELECT c.id
       FROM forge_capacity_requests c
-      WHERE c.status = 'active' AND ((c.turn_kind = 'developer' AND EXISTS (SELECT 1 FROM forge_developer_executions d WHERE d.task_id = c.task_id AND d.workflow_id = c.workflow_id AND d.status IN ('starting', 'running', 'cancelling')))
+      WHERE c.status = 'active' AND ((c.turn_kind = 'developer' AND (EXISTS (SELECT 1 FROM forge_developer_execution_leases l WHERE l.task_id = c.task_id AND l.workflow_id = c.workflow_id AND l.status IN ('reserved', 'supervisor_starting', 'running', 'result_ready', 'cancel_requested', 'cancelling')) OR EXISTS (SELECT 1 FROM forge_developer_executions d WHERE d.task_id = c.task_id AND d.workflow_id = c.workflow_id AND d.status IN ('starting', 'running', 'cancelling'))))
         OR (c.turn_kind IN ('lead', 'review') AND EXISTS (SELECT 1 FROM forge_agent_executions a WHERE a.task_id = c.task_id AND a.workflow_id = c.workflow_id AND a.status IN ('starting', 'running'))))`).all() as Array<{ id: string }>).map((row) => row.id)));
     return this.reconcile(activeRequestIds, "worker-restart-ledger-reconciled", now);
   }

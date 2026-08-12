@@ -7,9 +7,11 @@ import { ProjectionIntegrityFailure, projectionStateHash, type ForgeDatabase } f
 import type { ForgeConfig } from "../config.js";
 import { ArtifactStore, type StoredArtifact } from "../artifacts.js";
 import { redact } from "../logging.js";
-import { AgentFailure, AgentService } from "../codex-lead.js";
+import { AgentFailure, AgentService, type LeadProcessRunner } from "../codex-lead.js";
 import { DeveloperService } from "../codex-developer.js";
-import { cancelDeveloperExecution } from "../developer-recovery.js";
+import { cancelDeveloperExecution, reconcileDeveloperExecutions } from "../developer-recovery.js";
+import { DeveloperExecutionLeaseRepository } from "../developer-execution-leases.js";
+import { runDeveloperTurn, type DeveloperTurnRunResult } from "../developer-turn-runner.js";
 import { AcceptanceService } from "../acceptance.js";
 import { CiService, createGithubCiProvider, type CiProvider } from "../ci.js";
 import { createGithubReleasePort, GithubReleaseFailure, ReleaseService, type GithubReleaseAdapter } from "../github-release.js";
@@ -25,6 +27,7 @@ import {
   DeliveryReviewActivityInputSchema,
   DeliveryReviewActivityResultSchema,
   DeliveryReviewSchema,
+  DeliveryOperationBlockCodeSchema,
   DeveloperRepairActivityInputSchema,
   DeveloperRepairActivityResultSchema,
   DurableArtifactReferenceSchema,
@@ -42,12 +45,15 @@ import {
   type DeliveryBlockerActivityResult,
   type DeliveryReviewActivityResult,
   type DeliveryReviewServiceInput,
+  type DeveloperSupervisorActivityIdentity,
+  type DeveloperTurnActivityOutcome,
   type DeveloperRepairActivityResult,
   type DurableArtifactReference,
   type IssueActivities,
   type IssueProjectionEvent,
   type IssueWorkflowState,
   type MergeConflictPlanActivityInput,
+  type MergeConflictResolutionActivityResult,
   type MergeConflictResolutionActivityInput,
   type PublishReleaseActivityInput,
   type ReconcileAcceptanceActivityInput,
@@ -56,10 +62,13 @@ import {
   type ReconcileTargetBaseActivityInput,
   type ReconcileTargetBaseActivityResult,
   type RevisedExecutionCoordinates,
+  type SupervisedDeveloperRepairActivityInput,
   type TargetBaseBlockerCode,
   type WorkflowCiRepairActivityInput,
   type WorkflowDeliveryReviewActivityInput,
+  type WorkflowDeveloperExecutionResult,
   type WorkflowDeveloperRepairActivityInput,
+  type WorkflowDeveloperRepairResult,
   type WorkflowFinalReviewActivityInput,
   type WorkflowMergeConflictPlanActivityInput,
   type WorkflowMergeConflictResolutionActivityInput,
@@ -80,6 +89,13 @@ export class CapacityWaitError extends Error {
   constructor(readonly requestId: string, readonly position: number) {
     super(`Forge capacity is unavailable; retry request ${requestId} at queue position ${position}`);
     this.name = "CapacityWaitError";
+  }
+}
+
+class SupervisedDeveloperTerminalError extends Error {
+  constructor(readonly result: DeveloperTurnRunResult) {
+    super(`Developer turn ended as ${result.terminal}`);
+    this.name = "SupervisedDeveloperTerminalError";
   }
 }
 
@@ -205,6 +221,122 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       throw error;
     } finally {
       capacity.release(request.id, releaseReason);
+    }
+  };
+  const releaseActiveDeveloperCapacity = (input: { taskId: string; workflowId: string }, reason: string): void => {
+    const active = database.authQuery((db) => db.prepare("SELECT id FROM forge_capacity_requests WHERE task_id = ? AND workflow_id = ? AND turn_kind = 'developer' AND status = 'active' ORDER BY requested_at, id LIMIT 1").get(input.taskId, input.workflowId) as { id: string } | undefined);
+    if (active) capacity.release(active.id, reason);
+  };
+  const recoverFinalizedDeveloperResult = async <T>(input: { taskId: string; companyId: string; workflowId: string; planRevision: number } & DeveloperSupervisorActivityIdentity): Promise<{ result: T; resultHash: string } | undefined> => {
+    const lease = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).get(input.developerTurnExecutionId);
+    if (!lease?.resultHash) return undefined;
+    const row = database.authQuery((db) => db.prepare(`SELECT d.status, d.session_ref AS sessionRef, d.branch_name AS branchName, d.worktree_path AS worktreePath, d.target_base_sha AS targetBaseSha, d.current_step AS currentStep, d.result_commit AS resultCommit, d.result_tree AS resultTree, d.dirty_state AS dirtyState, d.delivery_artifact_id AS deliveryArtifactId, d.evidence_artifact_id AS evidenceArtifactId, a.storage_path AS deliveryStoragePath, a.sha256 AS deliverySha, e.sha256 AS evidenceSha
+      FROM forge_developer_executions d
+      JOIN forge_artifacts a ON a.id = d.delivery_artifact_id AND a.company_id = d.company_id
+      JOIN forge_artifacts e ON e.id = d.evidence_artifact_id AND e.company_id = d.company_id
+      WHERE d.id = ? AND d.task_id = ? AND d.company_id = ? AND d.workflow_id = ? AND d.plan_revision = ? AND d.attempt = ? AND d.status IN ('completed', 'blocked')`).get(input.developerTurnExecutionId, input.taskId, input.companyId, input.workflowId, input.planRevision, input.developerAttempt) as { status: "completed" | "blocked"; sessionRef: string | null; branchName: string; worktreePath: string; targetBaseSha: string; currentStep: number | null; resultCommit: string | null; resultTree: string | null; dirtyState: "clean" | "dirty" | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null; deliveryStoragePath: string; deliverySha: string; evidenceSha: string } | undefined);
+    if (!row?.sessionRef || !row.resultCommit || !row.resultTree || !row.dirtyState || !row.deliveryArtifactId || !row.evidenceArtifactId) return undefined;
+    const artifactPayload = z.object({ summary: SafeSummarySchema }).passthrough().parse(JSON.parse((await artifacts.read({ companyId: input.companyId, storagePath: row.deliveryStoragePath, sha256: row.deliverySha })).toString("utf8")));
+    let result: unknown;
+    if (input.turnKind === "implementation") {
+      result = { developerExecutionId: input.developerTurnExecutionId, developerSessionRef: row.sessionRef, branchName: row.branchName, targetBaseSha: row.targetBaseSha, currentStep: row.currentStep, resultCommit: row.resultCommit, resultTree: row.resultTree, dirtyState: row.dirtyState, deliveryArtifactId: row.deliveryArtifactId, evidenceArtifactId: row.evidenceArtifactId, deliverySummary: artifactPayload.summary, outcome: row.status } satisfies WorkflowDeveloperExecutionResult;
+    } else if (input.turnKind === "repair") {
+      const coordinates = input as typeof input & SupervisedDeveloperRepairActivityInput;
+      const prior = database.authQuery((db) => db.prepare("SELECT delivery_artifact_id AS deliveryArtifactId, evidence_artifact_id AS evidenceArtifactId FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(coordinates.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { deliveryArtifactId: string | null; evidenceArtifactId: string | null } | undefined);
+      const repair = database.authQuery((db) => db.prepare("SELECT id, review_id AS reviewId, cycle, failure_code AS failureCode FROM forge_delivery_repairs WHERE developer_execution_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerTurnExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; reviewId: string; cycle: number; failureCode: string | null } | undefined);
+      if (!prior?.deliveryArtifactId || !prior.evidenceArtifactId || !repair) return undefined;
+      const subject = { planRevision: coordinates.planRevision, targetBaseSha: coordinates.targetBaseSha, subjectCommit: coordinates.subjectCommit, subjectTree: coordinates.subjectTree, developerExecutionId: coordinates.developerExecutionId, deliveryArtifactId: prior.deliveryArtifactId, developerEvidenceArtifactId: prior.evidenceArtifactId, leadSessionRef: coordinates.leadSessionRef, developerSessionRef: coordinates.developerSessionRef };
+      result = row.status === "completed"
+        ? { outcome: "completed", repairAttemptId: repair.id, cycle: repair.cycle, reviewId: repair.reviewId, subject, developerExecutionId: input.developerTurnExecutionId, developerSessionRef: row.sessionRef, branchName: row.branchName, resultCommit: row.resultCommit, resultTree: row.resultTree, dirtyState: "clean", deliveryArtifactId: row.deliveryArtifactId, evidenceArtifactId: row.evidenceArtifactId, summary: artifactPayload.summary } satisfies WorkflowDeveloperRepairResult
+        : { outcome: "blocked", repairAttemptId: repair.id, cycle: repair.cycle, reviewId: repair.reviewId, subject, code: DeliveryOperationBlockCodeSchema.catch("worktree-unsafe").parse(repair.failureCode), summary: artifactPayload.summary, evidenceArtifactId: row.evidenceArtifactId, developerExecutionId: input.developerTurnExecutionId, developerSessionRef: row.sessionRef, branchName: row.branchName, resultCommit: row.resultCommit, resultTree: row.resultTree, dirtyState: row.dirtyState } satisfies WorkflowDeveloperRepairResult;
+    } else {
+      const delivery = z.object({ verificationArtifactId: z.string().min(1) }).passthrough().parse(artifactPayload);
+      const verification = database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'forward-merge-verification'").get(delivery.verificationArtifactId, input.companyId) as { sha256: string } | undefined);
+      if (!verification) return undefined;
+      result = { developerExecutionId: input.developerTurnExecutionId, developerSessionRef: row.sessionRef, resultCommit: row.resultCommit, resultTree: row.resultTree, deliveryArtifactId: row.deliveryArtifactId, deliveryArtifactSha256: row.deliverySha, evidenceArtifactId: row.evidenceArtifactId, evidenceArtifactSha256: row.evidenceSha, verificationArtifactId: delivery.verificationArtifactId, verificationArtifactSha256: verification.sha256, summary: artifactPayload.summary } satisfies MergeConflictResolutionActivityResult;
+    }
+    return { result: result as T, resultHash: lease.resultHash };
+  };
+  const runSupervised = async <T extends { developerExecutionId: string; evidenceArtifactId: string | null; deliveryArtifactId?: string; verificationArtifact?: { id: string } }>(
+    input: { taskId: string; companyId: string; workflowId: string; planRevision: number } & DeveloperSupervisorActivityIdentity,
+    operation: (service: Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution">) => Promise<T>,
+  ): Promise<DeveloperTurnActivityOutcome<T>> => {
+    const leases = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot);
+    const priorClaim = leases.readClaim(input.developerTurnExecutionId);
+    if (priorClaim) {
+      releaseActiveDeveloperCapacity(input, "developer-result-claim-recovered");
+      return { status: "completed", result: JSON.parse(priorClaim.activityResultJson) as T, resultHash: priorClaim.resultHash };
+    }
+    const request = capacity.request({ ...input, turnKind: "developer" });
+    const admitted = capacity.tryAcquire(request.id);
+    if (!admitted.acquired) throw new CapacityWaitError(request.id, capacity.position(request.id) ?? 1);
+    let terminal: DeveloperTurnRunResult | undefined;
+    let releaseCapacity = true;
+    const processRunner: LeadProcessRunner = async (invocation) => {
+      const env = Object.fromEntries(Object.entries(invocation.env ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+      terminal = await runDeveloperTurn({
+        database,
+        config,
+        executionId: input.developerTurnExecutionId,
+        developerAttempt: input.developerAttempt,
+        planRevision: input.planRevision,
+        turnKind: input.turnKind,
+        companyId: input.companyId,
+        taskId: input.taskId,
+        workflowId: input.workflowId,
+        canonicalWorktreePath: invocation.cwd,
+        worktreeIdentityHash: createHash("sha256").update(`${input.companyId}\0${input.workflowId}\0${invocation.cwd}`).digest("hex"),
+        command: invocation.command,
+        args: invocation.args,
+        cwd: invocation.cwd,
+        env,
+      });
+      const lease = leases.get(input.developerTurnExecutionId);
+      if (lease?.child) await invocation.onStart(lease.child.pid, lease.child.startTime);
+      for (const line of terminal.lines) await invocation.onLine(line);
+      if (terminal.terminal !== "result") throw new SupervisedDeveloperTerminalError(terminal);
+      return { exitCode: terminal.exitCode ?? -1, stderr: terminal.exitSignal ? `Developer process exited with ${terminal.exitSignal}` : "" };
+    };
+    try {
+      const recovered = await recoverFinalizedDeveloperResult<T>(input);
+      if (recovered) {
+        const deliveryArtifactId = recovered.result.deliveryArtifactId ?? recovered.result.verificationArtifact?.id;
+        if (!deliveryArtifactId || !recovered.result.evidenceArtifactId) throw new Error("A supervised Developer result requires durable result and evidence artifacts");
+        const claim = leases.claim({ executionId: input.developerTurnExecutionId, resultHash: recovered.resultHash, activityResultJson: JSON.stringify(recovered.result), deliveryArtifactId, evidenceArtifactId: recovered.result.evidenceArtifactId });
+        if (claim.conflict) {
+          releaseCapacity = false;
+          return { status: "ownership_ambiguous", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: leases.get(input.developerTurnExecutionId)?.heartbeatAt ?? null };
+        }
+        return { status: "completed", result: JSON.parse(claim.claim.activityResultJson) as T, resultHash: claim.claim.resultHash };
+      }
+      const service = options.developer ? developer as DeveloperService : new DeveloperService(database, config, { github: githubRelease, processRunner });
+      const result = await operation(service);
+      if (!terminal) {
+        // Explicitly injected Developer ports are test seams and do not launch
+        // an external process. They retain their existing direct behavior.
+        return { status: "completed", result, resultHash: createHash("sha256").update(JSON.stringify(result)).digest("hex") };
+      }
+      const deliveryArtifactId = result.deliveryArtifactId ?? result.verificationArtifact?.id;
+      if (!deliveryArtifactId || !result.evidenceArtifactId) throw new Error("A supervised Developer result requires durable result and evidence artifacts");
+      const claim = leases.claim({ executionId: input.developerTurnExecutionId, resultHash: terminal.resultHash, activityResultJson: JSON.stringify(result), deliveryArtifactId, evidenceArtifactId: result.evidenceArtifactId });
+      if (claim.conflict) {
+        releaseCapacity = false;
+        return { status: "ownership_ambiguous", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: terminal.lastHeartbeatAt };
+      }
+      return { status: "completed", result: JSON.parse(claim.claim.activityResultJson) as T, resultHash: claim.claim.resultHash };
+    } catch (error) {
+      if (error instanceof SupervisedDeveloperTerminalError) {
+        if (error.result.terminal === "ownership_ambiguous") releaseCapacity = false;
+        const status = error.result.terminal === "interrupted" ? "interrupted" as const : "ownership_ambiguous" as const;
+        return { status, developerExecutionId: input.developerTurnExecutionId, reasonCode: status === "interrupted" ? "developer-worker-lost" : "developer-ownership-ambiguous", summary: status === "interrupted" ? "The Developer process ended before Forge could claim a result." : "Forge cannot prove ownership of the previous Developer process.", lastHeartbeatAt: error.result.lastHeartbeatAt };
+      }
+      if (error instanceof AgentFailure) {
+        const evidence = database.authQuery((db) => (db.prepare("SELECT evidence_artifact_id AS evidenceArtifactId FROM forge_developer_executions WHERE id = ?").get(input.developerTurnExecutionId) as { evidenceArtifactId: string | null } | undefined)?.evidenceArtifactId ?? null);
+        return { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: error.code, summary: SafeSummarySchema.parse(error.message), evidenceArtifactId: evidence };
+      }
+      throw error;
+    } finally {
+      if (releaseCapacity) capacity.release(request.id, "developer-turn-terminal");
     }
   };
   const latestWorktree = (input: { taskId: string; companyId: string; workflowId: string; branchName?: string }, executionId?: string): string => {
@@ -589,6 +721,12 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       const operation = developer.runMergeConflictResolution ? developer.runMergeConflictResolution.bind(developer) : defaultDeveloper.runMergeConflictResolution.bind(defaultDeveloper);
       return withCapacity(input, "developer", () => operation(rawInput));
     },
+    async resolveMergeConflictSupervised(input) {
+      return runSupervised<MergeConflictResolutionActivityResult>(input, async (service) => {
+        const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
+        return service.runMergeConflictResolution({ ...input, worktreePath });
+      });
+    },
     async runDeveloperExecution(input) {
       const operation = developer.run ? developer.run.bind(developer) : defaultDeveloper.run.bind(defaultDeveloper);
       const result = await withCapacity(input, "developer", () => operation(input));
@@ -597,6 +735,15 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;
       return { ...safeResult, deliverySummary: SafeSummarySchema.parse(safeResult.deliverySummary) };
+    },
+    async runDeveloperExecutionSupervised(input) {
+      return runSupervised<WorkflowDeveloperExecutionResult>(input, async (service) => {
+        const result = await service.run({ ...input, executionId: input.developerTurnExecutionId });
+        activityWorktrees.set(result.developerExecutionId, result.worktreePath);
+        activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
+        const { worktreePath: _worktreePath, ...safeResult } = result;
+        return { ...safeResult, deliverySummary: SafeSummarySchema.parse(safeResult.deliverySummary) };
+      });
     },
     async runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput) {
       const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null } | undefined) ?? { worktreePath: latestWorktree(input, input.developerExecutionId), branchName: input.branchName, targetBaseSha: input.targetBaseSha, resultCommit: input.subjectCommit, resultTree: input.subjectTree };
@@ -625,6 +772,25 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       const { worktreePath: _worktreePath, ...safeResult } = result;
       return { ...safeResult, summary: SafeSummarySchema.parse(safeResult.summary) };
     },
+    async runDeveloperRepairSupervised(input) {
+      return runSupervised<WorkflowDeveloperRepairResult>(input, async (service) => {
+        const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null } | undefined) ?? { worktreePath: latestWorktree(input, input.developerExecutionId), branchName: input.branchName, targetBaseSha: input.targetBaseSha, resultCommit: input.subjectCommit, resultTree: input.subjectTree };
+        let blockingFindings = input.blockingFindings;
+        let repairPlan = input.repairPlan;
+        if (input.reviewArtifact) {
+          const review = DeliveryReviewSchema.parse(JSON.parse((await verifiedArtifactBytes(database, artifacts, input.companyId, input.reviewArtifact, "delivery-review")).toString("utf8")));
+          if (typeof review.repairPlan !== "string") throw new Error("Delivery review artifact is not repairable");
+          blockingFindings = review.findings;
+          repairPlan = review.repairPlan;
+        }
+        if (!blockingFindings || !repairPlan) throw new Error("Delivery review repair evidence is unavailable");
+        const result = await service.runRepair({ ...input, worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree!, blockingFindings, repairPlan });
+        activityWorktrees.set(result.developerExecutionId, result.worktreePath);
+        activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
+        const { worktreePath: _worktreePath, ...safeResult } = result;
+        return { ...safeResult, summary: SafeSummarySchema.parse(safeResult.summary) };
+      });
+    },
     async runCiRepair(input: WorkflowCiRepairActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);
       const operation = developer.runCiRepair ? developer.runCiRepair.bind(developer) : defaultDeveloper.runCiRepair.bind(defaultDeveloper);
@@ -636,6 +802,14 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     },
     async cancelDeveloperExecution(input) {
       return cancelDeveloperExecution(database, input.executionId);
+    },
+    async observeDeveloperExecution(input) {
+      const lease = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).get(input.executionId);
+      const outcome = (await reconcileDeveloperExecutions(database)).find((entry) => entry.executionId === input.executionId);
+      if (!outcome) return { executionId: input.executionId, status: "ownership_ambiguous", reasonCode: "developer-lease-missing", summary: "Forge cannot prove ownership of the previous Developer process.", lastHeartbeatAt: lease?.heartbeatAt ?? null };
+      if (outcome.status === "recovered") return { executionId: input.executionId, status: "result_ready", reasonCode: outcome.reason ?? null, summary: "The Developer result is durably available.", lastHeartbeatAt: lease?.heartbeatAt ?? null };
+      if (outcome.status === "active") return { executionId: input.executionId, status: "active", reasonCode: null, summary: "Forge confirmed the recorded Developer supervisor and child.", lastHeartbeatAt: lease?.heartbeatAt ?? null };
+      return { executionId: input.executionId, status: outcome.status, reasonCode: outcome.reason ?? null, summary: outcome.status === "interrupted" ? "The recorded Developer process is no longer running." : "Forge cannot prove ownership of the previous Developer process.", lastHeartbeatAt: lease?.heartbeatAt ?? null };
     },
     async recordPlanDecision(input) {
       const actor = database.authQuery((db) => db.prepare("SELECT id, role, status FROM forge_users WHERE id = ?").get(input.actorUserId) as { id: string; role: string; status: string } | undefined);

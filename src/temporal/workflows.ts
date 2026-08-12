@@ -109,6 +109,7 @@ export const reconcileMergeUpdate = defineUpdate<IssueWorkflowState, [StartPlann
 const leadPlanningPatch = "forge-lead-planning-v1";
 const planGovernancePatch = "forge-plan-governance-v1";
 const planningProjectionIntegrityPatch = "forge-planning-projection-integrity-v1";
+const distinctPlanningStatesPatch = "forge-distinct-planning-states-v1";
 
 function permanentActivityFailure(error: unknown): { code: string; summary: string } | undefined {
   if (!(error instanceof ActivityFailure) || !(error.cause instanceof ApplicationFailure) || !error.cause.nonRetryable) return undefined;
@@ -164,7 +165,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     });
     state = next;
     assertPayloadWithinLimit("Issue Workflow result", next);
-    if (!patched(planningProjectionIntegrityPatch)) await projectIssueState(next);
+    const distinctPlanningStates = patched(distinctPlanningStatesPatch);
+    if (distinctPlanningStates || !patched(planningProjectionIntegrityPatch)) await projectIssueState(next);
     if (patched(leadPlanningPatch)) {
       let leadResult;
       try {
@@ -194,7 +196,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         await projectIssueState(state);
         return state;
       }
-      state = IssueWorkflowStateSchema.parse({ ...next, ...leadResult, planRevision: next.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, supplementalReviewUsed: false });
+      state = IssueWorkflowStateSchema.parse({ ...next, ...leadResult, ...(distinctPlanningStates ? { revision: next.revision + 1, lastEventId: `${next.workflowId}:${next.revision + 1}` } : {}), planRevision: next.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, supplementalReviewUsed: false });
       if (patched(planGovernancePatch)) {
         state = leadResult.material
           ? IssueWorkflowStateSchema.parse({ ...state, phase: "approval", owner: "human", allowedCommands: ["approve_plan", "reject_plan", "cancel_issue", ...(validatedInput.supplementalReview ? ["request_supplemental_review" as const] : [])], pendingAction: "Approve final plan" })

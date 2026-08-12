@@ -1,5 +1,4 @@
 import { createHash, randomBytes } from "node:crypto";
-import { EventEmitter } from "node:events";
 
 import type { AuthUser } from "./auth.js";
 import { AuthFailure, AuthService } from "./auth.js";
@@ -346,7 +345,9 @@ export class TaskService {
   private readonly now: () => Date;
   private readonly artifacts: ArtifactStore;
   private readonly workflow: IssueWorkflowPort;
-  private readonly events = new EventEmitter();
+  private readonly eventListeners = new Set<{ afterCursor: number; send: (event: TaskEvent, cursor: number) => void }>();
+  private eventCursor: number | undefined;
+  private eventPoller: NodeJS.Timeout | undefined;
 
   constructor(
     private readonly database: ForgeDatabase,
@@ -381,17 +382,53 @@ export class TaskService {
     };
   }
 
-  subscribe(actorUserId: string, listener: (event: TaskEvent) => void): () => void {
-    const wrapped = (event: TaskEvent): void => {
+  taskEventCursor(): number {
+    return this.database.authQuery((db) => (db.prepare("SELECT COALESCE(MAX(rowid), 0) AS cursor FROM forge_issue_timeline").get() as { cursor: number }).cursor);
+  }
+
+  subscribe(actorUserId: string, listener: (event: TaskEvent, cursor: number) => void, afterCursor = this.taskEventCursor()): () => void {
+    const subscriber = { afterCursor, send: (event: TaskEvent, cursor: number): void => {
       try {
         this.auth.requireCompanyAccess(actorUserId, event.companyId);
-        listener(event);
+        listener(event, cursor);
       } catch {
         // Scope is checked again at delivery time; a revoked membership receives no event.
       }
+    } };
+    if (this.eventListeners.size === 0) this.eventCursor = afterCursor;
+    this.eventListeners.add(subscriber);
+    if (!this.eventPoller) {
+      // ponytail: one SQLite poller is enough for the single-host MVP; use database change notifications if write volume grows.
+      this.eventPoller = setInterval(() => this.pollTaskEvents(), 100);
+      this.eventPoller.unref();
+    }
+    return () => {
+      this.eventListeners.delete(subscriber);
+      if (this.eventListeners.size === 0 && this.eventPoller) {
+        clearInterval(this.eventPoller);
+        this.eventPoller = undefined;
+        this.eventCursor = undefined;
+      }
     };
-    this.events.on("task", wrapped);
-    return () => this.events.off("task", wrapped);
+  }
+
+  private pollTaskEvents(): void {
+    if (this.eventCursor === undefined || this.eventListeners.size === 0) return;
+    try {
+      let rows: Array<{ cursor: number; task_id: string; company_id: string; revision: number }>;
+      do {
+        rows = this.database.authQuery((db) => db.prepare("SELECT rowid AS cursor, task_id, company_id, revision FROM forge_issue_timeline WHERE rowid > ? ORDER BY rowid LIMIT 100").all(this.eventCursor) as Array<{ cursor: number; task_id: string; company_id: string; revision: number }>);
+        for (const row of rows) {
+          this.eventCursor = row.cursor;
+          const event: TaskEvent = { type: "invalidate", taskId: row.task_id, companyId: row.company_id, revision: row.revision };
+          for (const subscriber of this.eventListeners) {
+            if (row.cursor > subscriber.afterCursor) subscriber.send(event, row.cursor);
+          }
+        }
+      } while (rows.length === 100);
+    } catch {
+      // A transient SQLite lock is retried from the same cursor on the next tick.
+    }
   }
 
   listTasks(actorUserId: string, companyId?: string): ForgeTask[] {
@@ -492,7 +529,6 @@ export class TaskService {
       });
       await this.startCreationWorkflow(reserved.intent.id, taskId, companyId, input.projectId, project.activeRevisionId, briefArtifact, imageArtifacts, roleProfiles, input.supplementalReview === true, requestHash, workflowId);
       const task = this.getTask(actorUserId, taskId);
-      this.events.emit("task", { type: "invalidate", taskId, companyId, revision: task.revision });
       return { task, created: true };
     } catch (error) {
       const ambiguousStart = error instanceof TaskFailure && error.findings.some((item) => item.code === "workflow-start-ambiguous");
@@ -621,7 +657,6 @@ export class TaskService {
     }
     this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state, ...(state.planRevision !== undefined ? { planRevision: state.planRevision } : {}), ...(state.planMaterial !== undefined ? { planMaterial: state.planMaterial } : {}), ...(state.materialCategories !== undefined ? { materialCategories: state.materialCategories } : {}), ...(state.supplementalReviewUsed !== undefined ? { supplementalReviewUsed: state.supplementalReviewUsed } : {}), ...(state.supplementalReviewArtifactId !== undefined ? { supplementalReviewArtifactId: state.supplementalReviewArtifactId } : {}), ...(state.decisionId !== undefined ? { decisionId: state.decisionId } : {}) });
     const updated = this.getTask(actorUserId, taskId);
-    this.events.emit("task", { type: "invalidate", taskId, companyId: updated.companyId, revision: updated.revision });
     return updated;
   }
 
@@ -662,7 +697,6 @@ export class TaskService {
     }
     this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state });
     const updated = this.getTask(actorUserId, taskId);
-    this.events.emit("task", { type: "invalidate", taskId, companyId: updated.companyId, revision: updated.revision });
     return updated;
   }
 
@@ -735,7 +769,6 @@ export class TaskService {
     }
     this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state, ...(state.planRevision !== undefined ? { planRevision: state.planRevision } : {}), ...(state.planMaterial !== undefined ? { planMaterial: state.planMaterial } : {}), ...(state.materialCategories !== undefined ? { materialCategories: state.materialCategories } : {}), ...(state.supplementalReviewUsed !== undefined ? { supplementalReviewUsed: state.supplementalReviewUsed } : {}), ...(state.supplementalReviewArtifactId !== undefined ? { supplementalReviewArtifactId: state.supplementalReviewArtifactId } : {}), ...(state.decisionId !== undefined ? { decisionId: state.decisionId } : {}) });
     const updated = this.getTask(actorUserId, taskId);
-    this.events.emit("task", { type: "invalidate", taskId, companyId: updated.companyId, revision: updated.revision });
     return updated;
   }
 
@@ -750,7 +783,6 @@ export class TaskService {
     }
     this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state });
     const updated = this.getTask(actorUserId, taskId);
-    this.events.emit("task", { type: "invalidate", taskId, companyId: updated.companyId, revision: updated.revision });
     return updated;
   }
 

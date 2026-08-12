@@ -55,6 +55,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     const events: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number }> = [];
     const unsubscribe = value.tasks.subscribe(value.adminId, (event) => events.push(event));
     const first = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Investigate queue", description: "## Reproduce\n\nPlease inspect the queue.", idempotencyKey: "queue-task-0001", supplementalReview: true, images: [{ filename: "evidence.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] });
+    await expect.poll(() => events).toHaveLength(1);
     unsubscribe();
     expect(first.created).toBe(true);
     expect(first.task.phase).toBe("backlog");
@@ -73,6 +74,34 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     expect(planning.timeline.map((entry) => entry.eventType)).toEqual(["task_created", "planning_started"]);
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'lead', 'failed', 1, '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId));
     expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "lead", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry." })]);
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("streams projection changes written by the Temporal worker process", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Synced task", description: "body", idempotencyKey: "synced-task-0001", images: [] });
+    const events: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number }> = [];
+    const deniedEvents: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number }> = [];
+    value.database.authQuery((db) => {
+      db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('sync-member', 'Sync Member', 'sync@forge.local', 'member', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run();
+      db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('sync-other-company', 'Other', 'active', '2026-08-11T00:00:00.000Z')").run();
+      db.prepare("INSERT INTO forge_memberships (user_id, company_id, created_at) VALUES ('sync-member', 'sync-other-company', '2026-08-11T00:00:00.000Z')").run();
+    });
+    const unsubscribe = value.tasks.subscribe(value.adminId, (event) => events.push(event));
+    const unsubscribeDenied = value.tasks.subscribe("sync-member", (event) => deniedEvents.push(event));
+    const workerDatabase = new ForgeDatabase(join(value.root, "forge.sqlite"));
+    try {
+      workerDatabase.projectIssueState({ taskId: created.task.id, companyId: created.task.companyId, projectId: created.task.projectId, workflowId: created.task.workflowId, revision: 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${created.task.workflowId}:1` });
+      await expect.poll(() => events).toEqual([{ type: "invalidate", taskId: created.task.id, companyId: created.task.companyId, revision: 1 }]);
+      expect(deniedEvents).toEqual([]);
+    } finally {
+      unsubscribe();
+      unsubscribeDenied();
+      workerDatabase.close();
+    }
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }

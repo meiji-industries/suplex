@@ -29,6 +29,7 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
   await mkdir(repositoryPath, { recursive: true }); await mkdir(worktreeRoot, { recursive: true });
   const imagePath = join(root, "evidence.png"); await writeFile(imagePath, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  const workerDatabase = new ForgeDatabase(join(root, "forge.sqlite"));
   database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin-1', 'Admin', 'admin@forge.local', 'admin', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run());
   const config = createTestConfig(root, { repositoryRoot, worktreeRoot, reachableAddress: "http://127.0.0.1:4111" });
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
@@ -38,8 +39,12 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
   const project = await projects.createProject("admin-1", company.id, { name: "Browser task project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
   await projects.activateProject("admin-1", project.id);
   let plannedState: IssueWorkflowState | undefined;
+  let finishPlanning = (): void => {};
+  const planningGate = new Promise<void>((resolve) => { finishPlanning = resolve; });
   const workflow: IssueWorkflowPort = { async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) { return { workflowId: input.workflowId!, runId: "run" }; }, async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     const taskId = workflowId.split("-issue-")[1]!;
+    workerDatabase.projectIssueState({ taskId, companyId: company.id, projectId: project.id, workflowId, projectRevisionId: project.activeRevisionId!, revision: input.expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
+    await planningGate;
     const artifactStore = new ArtifactStore(config.artifactRoot);
     const evidence = await artifactStore.put(company.id, "agent-evidence", { filename: "agent.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"turn.completed\"}\n") });
     const output = await artifactStore.put(company.id, "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "A focused browser plan", reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect repository", verification: "The issue is understood" }, { number: 2, instruction: "Run focused tests", verification: "The focused suite passes" }], compatibilityAnalysis: "The change is local.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [] })) });
@@ -49,7 +54,7 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
       db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_browser', ?, ?, ?, 'lead', 'completed', 1, 'session_browser', ?, ?, ?)").run(taskId, company.id, workflowId, now, now, evidence.id);
       db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_browser', ?, ?, ?, 'agent_browser', ?, 'plan', ?, ?, 'session_browser', 'A focused browser plan', ?)").run(taskId, company.id, workflowId, input.expectedRevision + 1, output.id, evidence.id, now);
     });
-    plannedState = { workflowId, companyId: company.id, projectId: project.id, issueId: taskId, projectRevisionId: project.activeRevisionId!, phase: "approval", revision: input.expectedRevision + 1, owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "reject_plan"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: output.id, leadOutputKind: "plan", leadSummary: "A focused browser plan", planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: false };
+    plannedState = { workflowId, companyId: company.id, projectId: project.id, issueId: taskId, projectRevisionId: project.activeRevisionId!, phase: "approval", revision: input.expectedRevision + 2, owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "reject_plan"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 2}`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: output.id, leadOutputKind: "plan", leadSummary: "A focused browser plan", planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: false };
     return plannedState;
   }, async requestSupplementalReview(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     plannedState = { ...plannedState!, revision: input.expectedRevision + 1, allowedCommands: ["approve_plan", "reject_plan"], pendingAction: "Approve final plan", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}`, supplementalReviewUsed: true };
@@ -97,15 +102,23 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
       await taskDialog.waitFor();
       expect(await taskDialog.getByRole("heading", { name: "Browser task", exact: true }).isVisible()).toBe(true);
       expect(new URL(page.url()).pathname).toMatch(/^\/tasks\//);
+      const observer = await context.newPage();
+      await observer.goto(page.url());
+      const observerDialog = observer.getByRole("dialog");
+      await observerDialog.getByRole("heading", { name: "Browser task", exact: true }).waitFor();
       await taskDialog.getByRole("button", { name: "Start planning", exact: true }).click();
-      await taskDialog.getByText(/approval · revision 1/).waitFor();
+      await taskDialog.getByText(/planning · revision 1/).waitFor();
+      await observerDialog.getByText(/planning · revision 1/).waitFor();
+      finishPlanning();
+      await taskDialog.getByText(/approval · revision 2/).waitFor();
+      await observerDialog.getByText(/approval · revision 2/).waitFor();
       await taskDialog.getByText("evidence.png", { exact: true }).waitFor();
       await taskDialog.getByText("Lead plan", { exact: true }).waitFor();
       await taskDialog.getByText("Inspect repository", { exact: true }).waitFor();
       await taskDialog.getByRole("button", { name: "Request review", exact: true }).click();
-      await taskDialog.getByText(/approval · revision 2/).waitFor();
+      await taskDialog.getByText(/approval · revision 3/).waitFor();
       await taskDialog.getByRole("button", { name: "Approve plan", exact: true }).click();
-      await taskDialog.getByText(/ready_for_development · revision 3/).waitFor();
+      await taskDialog.getByText(/ready_for_development · revision 4/).waitFor();
       await taskDialog.getByRole("button", { name: "Close", exact: true }).click();
       await expect.poll(async () => taskDialog.count()).toBe(0);
       expect(new URL(page.url()).pathname).toBe("/tasks");
@@ -119,7 +132,7 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
       await narrowDialog.waitFor();
       expect(await narrowDialog.getByRole("heading", { name: "Browser task", exact: true }).isVisible()).toBe(true);
       expect(await narrowDialog.getByText("Description", { exact: true }).isVisible()).toBe(true);
-      await narrow.close(); await page.close(); await context.close();
+      await narrow.close(); await observer.close(); await page.close(); await context.close();
     } finally { await browser.close(); }
-  } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }
+  } finally { await app.close(); workerDatabase.close(); database.close(); await rm(root, { recursive: true, force: true }); }
 });

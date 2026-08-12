@@ -749,9 +749,8 @@ function TasksView(): ReactElement {
 
   const reload = useCallback(async (): Promise<void> => {
     const token = ++requestToken.current;
-    setLoadedCompanyId("");
-    setProjects([]); setTasks([]); setError("");
-    if (!companyId || loading) return;
+    setError("");
+    if (!companyId || loading) { setLoadedCompanyId(""); setProjects([]); setTasks([]); return; }
     try {
       const [projectResult, taskResult] = await Promise.all([
         readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
@@ -779,6 +778,7 @@ function TasksView(): ReactElement {
   }, [companyId]);
   useEffect(() => {
     const events = new EventSource("/api/tasks/events");
+    events.addEventListener("ready", () => void reload());
     events.addEventListener("invalidate", () => void reload());
     return () => events.close();
   }, [reload]);
@@ -811,8 +811,10 @@ function TasksView(): ReactElement {
   const startPlanning = async (): Promise<void> => {
     if (!selected) return;
     setBusy(true); setError("");
-    try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); selectedRef.current = updated; setSelected(updated); await reload(); }
-    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
+    const optimistic: ApiTask = { ...selected, phase: "planning", revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Lead planning" };
+    selectedRef.current = optimistic; setSelected(optimistic); setTasks((current) => current.map((task) => task.id === optimistic.id ? optimistic : task));
+    try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); selectedRef.current = updated; setSelected(updated); setTasks((current) => current.map((task) => task.id === updated.id ? updated : task)); await reload(); }
+    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
     finally { setBusy(false); }
   };
   const planAction = async (path: TaskPlanAction, note?: string): Promise<void> => {

@@ -62,9 +62,10 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   typed.get("/api/tasks/events", async (request, reply) => {
     reply.hijack();
     reply.raw.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-store", Connection: "keep-alive" });
-    const send = (event: TaskEvent): void => { reply.raw.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`); };
-    reply.raw.write("event: ready\ndata: {}\n\n");
-    const unsubscribe = tasks.subscribe(request.forgeUser.id, send);
+    const cursor = tasks.taskEventCursor();
+    const send = (event: TaskEvent, eventCursor: number): void => { reply.raw.write(`id: ${eventCursor}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`); };
+    const unsubscribe = tasks.subscribe(request.forgeUser.id, send, cursor);
+    reply.raw.write(`id: ${cursor}\nevent: ready\ndata: {}\n\n`);
     request.raw.on("close", unsubscribe);
     return reply;
   });

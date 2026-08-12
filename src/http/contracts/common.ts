@@ -13,6 +13,7 @@ export const ExpectedRevisionBodySchema = z.object({
   expectedRevision: z.coerce.number().finite().int().min(0).max(Number.MAX_SAFE_INTEGER),
 });
 export const ExpectedRevisionNoteBodySchema = ExpectedRevisionBodySchema.extend({ note: z.string().optional() });
+export const RequiredRevisionNoteBodySchema = ExpectedRevisionBodySchema.extend({ note: z.string().trim().min(1).max(4_000) });
 export const EmptyBodySchema = z.object({}).passthrough();
 export const TokenBodySchema = z.object({ token: z.string().default("") });
 export const RegistrationVerificationBodySchema = z.object({ token: z.string().default(""), challengeId: z.string().default(""), response: z.unknown() });

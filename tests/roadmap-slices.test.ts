@@ -79,7 +79,7 @@ function fakeGithub(checks: CheckObservation[] = []): GithubReleasePort & Github
     async listPullRequests() { return []; },
     async createDraftPullRequest() { return pullRequest(); },
     async markReadyForReview() { this.ready += 1; },
-    async getPullRequest() { return pullRequest(); },
+    async getPullRequest() { return this.ready ? pullRequest({ isDraft: false }) : pullRequest(); },
     async listChecks() { return checks; },
   } as GithubReleasePort & GithubAcceptancePort & { pushed: number; ready: number };
 }
@@ -227,17 +227,21 @@ test("acceptance records a decision, changes draft visibility only, and reconcil
     value.database.authTransaction((db) => {
       db.prepare("INSERT INTO forge_ci_runs (id, task_id, company_id, release_id, expected_head_sha, expected_head_tree, project_revision_id, policy_hash, policy_json, status, attempt, summary, created_at, updated_at) VALUES ('ci-a', 'task-a', 'company-a', 'release-a', ?, ?, 'revision-a', ?, ?, 'passed', 1, 'passed', ?, ?)").run(headSha, treeSha, "f".repeat(64), JSON.stringify({ projectRevisionId: "revision-a", requiredChecks: ["Tests / unit"], acceptedConclusions: ["success"] }), now, now);
       db.prepare("INSERT INTO forge_ci_attempts (id, run_id, attempt_number, observed_repository, observed_pr_number, observed_base_branch, observed_base_sha, observed_head_branch, observed_head_sha, outcome, reason, owner, repairable, summary, created_at) VALUES ('ci-attempt-a', 'ci-a', 1, 'acme/forge', 12, 'main', ?, 'issue/task-a', ?, 'passed', 'checks_passed', NULL, 0, 'passed', ?)").run(baseSha, headSha, now);
-      db.prepare("INSERT INTO forge_final_reviews (id, task_id, company_id, workflow_id, release_id, ci_run_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, created_at) VALUES ('final-review-a', 'task-a', 'company-a', 'workflow-a', 'release-a', 'ci-a', 1, ?, ?, ?, 'lead-a', 'lead-session', 'approved', 'Approved exact release', 'opinion-a', 'evidence-a', ?)").run(baseSha, headSha, treeSha, now);
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('output-a', 'company-a', 'lead-plan', 'output-a.json', 'application/json', 1, ?, 'company-a/output-a', ?)").run("f".repeat(64), now);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-a', 'task-a', 'company-a', 'workflow-a', 1, 1, 'completed', 'issue/task-a', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean')").run(value.root, baseSha, now, now, headSha, treeSha);
+      db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output-row-a', 'task-a', 'company-a', 'workflow-a', 'lead-a', 1, 'plan', 'output-a', 'evidence-a', 'lead-session', 'Approved plan', ?)").run(now);
+      db.prepare("INSERT INTO forge_final_reviews (id, task_id, company_id, workflow_id, release_id, ci_run_id, delivery_review_id, developer_execution_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, created_at) VALUES ('final-review-a', 'task-a', 'company-a', 'workflow-a', 'release-a', 'ci-a', 'review-a', 'developer-a', 1, ?, ?, ?, 'lead-a', 'lead-session', 'approved', 'Approved exact release', 'opinion-a', 'evidence-a', ?)").run(baseSha, headSha, treeSha, now);
     });
     const github = fakeGithub();
-    const acceptance = new AcceptanceService(value.database, github);
-    await expect(acceptance.accept({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", reviewId: "review-a", finalReviewId: "missing-final-review", ciRunId: "ci-a", repository: "acme/forge", baseBranch: "main", headSha, headTree: treeSha, actorUserId: "admin" })).rejects.toMatchObject({ code: "not-ready" });
-    const result = await acceptance.accept({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", reviewId: "review-a", finalReviewId: "final-review-a", ciRunId: "ci-a", repository: "acme/forge", baseBranch: "main", headSha, headTree: treeSha, actorUserId: "admin" });
+    const acceptance = new AcceptanceService(value.database, github, { artifacts: new ArtifactStore(value.config.artifactRoot) });
+    const acceptanceInput = { taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", projectRevisionId: "revision-a", releaseId: "release-a", deliveryReviewId: "review-a", finalReviewId: "final-review-a", ciRunId: "ci-a", pullRequestNumber: 12, repository: "acme/forge", baseBranch: "main", baseSha, headSha, headTree: treeSha, leadSessionRef: "lead-session", actorUserId: "admin" } as const;
+    await expect(acceptance.accept({ ...acceptanceInput, finalReviewId: "missing-final-review" })).rejects.toMatchObject({ code: "not-ready" });
+    const result = await acceptance.accept(acceptanceInput);
     expect(result.status).toBe("accepted");
     expect(github.ready).toBe(1);
     expect((await acceptance.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", repository: "acme/forge", number: 12, expectedHeadSha: headSha, expectedBaseBranch: "main" })).outcome).toBe("open");
     const mergedGithub = { ...github, async getPullRequest() { return pullRequest({ isDraft: false, state: "merged", mergedAt: now }); } };
-    expect((await new AcceptanceService(value.database, mergedGithub).reconcile({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", repository: "acme/forge", number: 12, expectedHeadSha: headSha, expectedBaseBranch: "main" })).outcome).toBe("merged");
+    expect((await new AcceptanceService(value.database, mergedGithub, { artifacts: new ArtifactStore(value.config.artifactRoot) }).reconcile({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", repository: "acme/forge", number: 12, expectedHeadSha: headSha, expectedBaseBranch: "main" })).outcome).toBe("merged");
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

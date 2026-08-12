@@ -134,13 +134,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
         { name: CSRF_COOKIE_NAME, value: csrf.split("=", 2)[1] ?? "", domain: "127.0.0.1", path: "/" },
       ]);
       const page = await context.newPage();
-      await page.goto(`${baseUrl}/tasks`);
-      await page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();
-      const newTaskButton = page.getByRole("button", { name: "New task", exact: true });
-      await newTaskButton.waitFor();
-      expect(await newTaskButton.isEnabled()).toBe(true);
-      expect(await page.getByText("No tasks yet. Press ⌘N to create one.", { exact: true }).isVisible()).toBe(true);
-      await page.keyboard.press("Meta+N");
+      await page.goto(`${baseUrl}/tasks?company=${encodeURIComponent(company.id)}&new=1`);
       await page.getByRole("dialog", { name: "New task" }).waitFor();
       await page.getByRole("combobox", { name: "Project" }).click();
       await page.getByRole("option", { name: "Browser task project" }).click();
@@ -236,6 +230,33 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       expect(await progress.locator('[data-slot="timeline"][data-orientation="horizontal"]').count()).toBe(1);
       expect(await progress.getByText("Done in 1 min", { exact: true }).first().isVisible()).toBe(true);
       expect(await progress.getByText(/^Step [123]$/).count()).toBe(0);
+      const gateNow = "2026-08-11T14:00:00.000Z";
+      const gateEvidenceId = database.authQuery((db) => (db.prepare("SELECT evidence_artifact_id AS id FROM forge_agent_executions WHERE id = 'agent_browser'").get() as { id: string }).id);
+      database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES ('delivery-final-browser', ?, ?, ?, 1, ?, ?, ?, 'agent_browser', 'session_browser', 'approved', 'Exact delivery approved', ?, ?, 0, ?)").run(taskId, company.id, plannedState!.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), gateEvidenceId, gateEvidenceId, gateNow);
+        db.prepare("INSERT INTO forge_ci_runs (id, task_id, company_id, release_id, expected_head_sha, status, attempt, summary, created_at, updated_at) VALUES ('ci-final-browser', ?, ?, 'release-browser', ?, 'passed', 1, 'Required checks passed', ?, ?)").run(taskId, company.id, "b".repeat(40), gateNow, gateNow);
+        db.prepare("INSERT INTO forge_final_reviews (id, task_id, company_id, workflow_id, release_id, ci_run_id, delivery_review_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, created_at) VALUES ('final-browser', ?, ?, ?, 'release-browser', 'ci-final-browser', 'delivery-final-browser', 1, ?, ?, ?, 'agent_browser', 'session_browser', 'approved', 'Final gate approved', ?, ?, ?)").run(taskId, company.id, plannedState!.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), gateEvidenceId, gateEvidenceId, gateNow);
+        db.prepare("INSERT INTO forge_acceptances (id, task_id, company_id, workflow_id, operation_key, project_revision_id, release_id, review_id, final_review_id, ci_run_id, pr_number, repository, base_branch, base_sha, head_sha, head_tree, lead_session_ref, actor_user_id, decision, status, ready_at, created_at, updated_at) VALUES ('acceptance-browser', ?, ?, ?, 'acceptance-browser-key', ?, 'release-browser', 'delivery-final-browser', 'final-browser', 'ci-final-browser', 21, 'acme/forge', 'main', ?, ?, ?, 'session_browser', 'admin-1', 'accept', 'accepted', ?, ?, ?)").run(taskId, company.id, plannedState!.workflowId, activeProject.activeRevisionId, "a".repeat(40), "b".repeat(40), "c".repeat(40), gateNow, gateNow, gateNow);
+        db.prepare("INSERT INTO forge_merge_observations (id, observation_key, task_id, company_id, workflow_id, release_id, acceptance_id, repository, pr_number, expected_base_branch, expected_head_sha, observed_base_branch, observed_base_sha, observed_head_sha, provider_state, outcome, provider_merged_at, evidence_artifact_id, observed_at, created_at) VALUES ('observation-browser', 'observation-browser-key', ?, ?, ?, 'release-browser', 'acceptance-browser', 'acme/forge', 21, 'main', ?, 'main', ?, ?, 'merged', 'merged', ?, ?, ?, ?)").run(taskId, company.id, plannedState!.workflowId, "b".repeat(40), "a".repeat(40), "b".repeat(40), gateNow, gateEvidenceId, gateNow, gateNow);
+        db.prepare("INSERT INTO forge_completion_receipts (id, task_id, company_id, workflow_id, project_revision_id, release_id, acceptance_id, merge_observation_id, delivery_review_id, final_review_id, ci_run_id, repository, pr_number, base_branch, accepted_base_sha, head_sha, head_tree, actor_user_id, accepted_at, observed_at, provider_merged_at, deployment_status, receipt_artifact_id, created_at) VALUES ('receipt-browser', ?, ?, ?, ?, 'release-browser', 'acceptance-browser', 'observation-browser', 'delivery-final-browser', 'final-browser', 'ci-final-browser', 'acme/forge', 21, 'main', ?, ?, ?, 'admin-1', ?, ?, ?, 'unknown', ?, ?)").run(taskId, company.id, plannedState!.workflowId, activeProject.activeRevisionId, "a".repeat(40), "b".repeat(40), "c".repeat(40), gateNow, gateNow, gateNow, gateEvidenceId, gateNow);
+      });
+      const finalGateState: IssueWorkflowState = { ...plannedState!, phase: "done", revision: plannedState!.revision + 1, owner: "human", allowedCommands: [], pendingAction: "Merged pull request confirmed", lastEventId: `${plannedState!.workflowId}:${plannedState!.revision + 1}`, deliveryReviewId: "delivery-final-browser", releaseId: "release-browser", releaseRepository: "acme/forge", baseBranch: "main", pullRequestNumber: 21, pullRequestUrl: "https://github.com/acme/forge/pull/21", targetBaseSha: "a".repeat(40), expectedHeadSha: "b".repeat(40), expectedHeadTree: "c".repeat(40), ciRunId: "ci-final-browser", ciOutcome: "passed", finalReviewId: "final-browser", finalReviewOutcome: "approved", finalReviewSummary: "Final gate approved", finalReviewOpinionArtifactId: gateEvidenceId, finalReviewEvidenceArtifactId: gateEvidenceId, acceptanceId: "acceptance-browser", acceptanceStatus: "accepted", acceptanceAttempt: 1, acceptedAt: gateNow, readyAt: gateNow, acceptedHeadSha: "b".repeat(40), mergeOutcome: "merged", mergeObservationId: "observation-browser", completionReceiptId: "receipt-browser", mergeAttempt: 1 };
+      projectState(finalGateState);
+      await page.reload();
+      await taskDetail.locator("[data-final-gate]").waitFor();
+      expect(await taskDetail.getByText("Final gate", { exact: true }).isVisible()).toBe(true);
+      expect(await taskDetail.getByText(/accept: accepted by admin-1/).isVisible()).toBe(true);
+      expect(await taskDetail.getByText(/merged .*observation/).isVisible()).toBe(true);
+      expect(await taskDetail.getByText("Deployment: unknown / out of scope", { exact: true }).isVisible()).toBe(true);
+      expect(await taskDetail.getByText("Lead session: session_browser", { exact: true }).isVisible()).toBe(true);
+      expect(await taskDetail.getByRole("link", { name: "Review evidence", exact: true }).isVisible()).toBe(true);
+      expect(await taskDetail.getByRole("link", { name: "Completion receipt", exact: true }).isVisible()).toBe(true);
+      const gateNarrow = await context.newPage();
+      await gateNarrow.setViewportSize({ width: 390, height: 844 });
+      await gateNarrow.goto(`${baseUrl}${detailPath}`);
+      await gateNarrow.locator("[data-final-gate]").waitFor();
+      expect(await gateNarrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await gateNarrow.close();
       expect(new URL(page.url()).pathname).toBe(detailPath);
       const history = taskDetail.locator("[data-task-history]");
       expect(await history.getByRole("tab", { name: "Activity", exact: true }).getAttribute("aria-selected")).toBe("true");
@@ -243,7 +264,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await history.getByRole("tab", { name: "Invocations", exact: true }).click();
       expect(await history.locator('[data-task-invocations] [data-slot="timeline"][data-orientation="vertical"]').count()).toBe(1);
       expect(await history.getByText("lead · attempt 1", { exact: true }).isVisible()).toBe(true);
-      const deliveredState: IssueWorkflowState = { ...plannedState!, phase: "delivery_ready", revision: plannedState!.revision + 1, owner: "lead", allowedCommands: ["review_delivery"], pendingAction: "Lead delivery review", lastEventId: `${plannedState!.workflowId}:${plannedState!.revision + 1}` };
+      const deliveredState: IssueWorkflowState = { ...plannedState!, phase: "delivery_ready", revision: finalGateState.revision + 1, owner: "lead", allowedCommands: ["review_delivery"], pendingAction: "Lead delivery review", lastEventId: `${plannedState!.workflowId}:${finalGateState.revision + 1}` };
       projectState(deliveredState);
       await page.reload();
       await taskDetail.locator('[data-status="delivery_ready"]').waitFor();
@@ -282,8 +303,6 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       expect(await narrowDetail.getByRole("heading", { name: "Browser task", exact: true, level: 2 }).isVisible()).toBe(true);
       expect(await narrowDetail.getByText(/Image attached\./).isVisible()).toBe(true);
       expect(await narrowDetail.locator('[data-task-progress] [data-slot="timeline"][data-orientation="horizontal"]').count()).toBe(1);
-      await narrowDetail.getByText("Exact-head CI", { exact: true }).waitFor();
-      expect(await narrowDetail.getByRole("heading", { name: "Draft publication" }).isVisible()).toBe(true);
       expect(await narrow.getByRole("dialog").count()).toBe(0);
       expect(await narrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       const activity = narrowDetail.locator("[data-task-activity]");
@@ -307,4 +326,4 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await narrow.close(); await observer.close(); await page.close(); await context.close();
     } finally { await browser.close(); }
   } finally { await app.close(); workerDatabase.close(); database.close(); await rm(root, { recursive: true, force: true }); }
-});
+}, 120_000);

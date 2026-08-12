@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { TaskEvent } from "../../tasks.js";
 import type { TaskService } from "../../tasks.js";
 import type { ProjectRole } from "../../projects.js";
-import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, ExpectedRevisionNoteBodySchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
+import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, ExpectedRevisionNoteBodySchema, RequiredRevisionNoteBodySchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { ContinueWorkResponseSchema, TaskBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions {
@@ -26,6 +26,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   const taskResponse = { response: { 200: TaskResponseSchema } };
   const revisionSchema = { body: ExpectedRevisionBodySchema, response: { 200: TaskResponseSchema } };
   const noteSchema = { body: ExpectedRevisionNoteBodySchema, response: { 200: TaskResponseSchema } };
+  const requiredNoteSchema = { body: RequiredRevisionNoteBodySchema, response: { 200: TaskResponseSchema } };
 
   typed.get("/api/tasks", { schema: { response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id) }));
   typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId) }));
@@ -63,8 +64,9 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   typed.post("/api/tasks/:taskId/repair-ci", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.repairCI(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/final-review", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.finalReview(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/accept-delivery", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.acceptDelivery(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
-  typed.post("/api/tasks/:taskId/request-delivery-changes", { schema: { params: TaskIdParamsSchema, ...noteSchema } }, async (request, reply) => reply.send(await tasks.requestDeliveryChanges(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.note)));
-  typed.post("/api/tasks/:taskId/cancel", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.cancelIssue(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
+  typed.post("/api/tasks/:taskId/request-delivery-changes", { schema: { params: TaskIdParamsSchema, ...requiredNoteSchema } }, async (request, reply) => reply.send(await tasks.requestDeliveryChanges(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.note)));
+  typed.post("/api/tasks/:taskId/cancel", { schema: { params: TaskIdParamsSchema, ...noteSchema } }, async (request, reply) => reply.send(await tasks.cancelIssue(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.note)));
+  typed.post("/api/tasks/:taskId/reconcile-acceptance", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.reconcileAcceptance(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/reconcile-merge", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.reconcileMerge(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
 
   typed.get("/api/tasks/:taskId/images/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {

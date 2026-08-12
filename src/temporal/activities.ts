@@ -18,12 +18,12 @@ import { parseAcceptedProjectRevision, type AcceptedProjectRevision } from "../p
 import { runPinnedVerification } from "../verification.js";
 import { createGitCommandGuard } from "../worktrees.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { ArtifactReferenceSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, SafeSummarySchema, type AcceptDeliveryActivityInput, type DurableArtifactReference, type IssueActivities, type IssueProjectionEvent, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput, type ReconcileTargetBaseActivityInput, type ReconcileTargetBaseActivityResult, type TargetBaseBlockerCode, type WorkflowCiRepairActivityInput, type WorkflowDeliveryReviewActivityInput, type WorkflowDeveloperRepairActivityInput, type WorkflowFinalReviewActivityInput, type WorkflowMergeConflictPlanActivityInput, type WorkflowMergeConflictResolutionActivityInput } from "./issue-contracts.js";
+import { ArtifactReferenceSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, SafeSummarySchema, type AcceptDeliveryActivityInput, type DurableArtifactReference, type IssueActivities, type IssueProjectionEvent, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileAcceptanceActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput, type ReconcileTargetBaseActivityInput, type ReconcileTargetBaseActivityResult, type TargetBaseBlockerCode, type WorkflowCiRepairActivityInput, type WorkflowDeliveryReviewActivityInput, type WorkflowDeveloperRepairActivityInput, type WorkflowFinalReviewActivityInput, type WorkflowMergeConflictPlanActivityInput, type WorkflowMergeConflictResolutionActivityInput } from "./issue-contracts.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
 import { CapacityManager } from "../capacity.js";
 
 export interface ActivityOptions {
-  agent?: Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "planMergeConflict" | "planCiRepair">>;
+  agent?: Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "planDeliveryRepair" | "planMergeConflict" | "planCiRepair">>;
   developer?: Partial<Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">>;
   githubRelease?: GithubReleaseAdapter;
   ciProvider?: CiProvider;
@@ -113,7 +113,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
   const artifacts = new ArtifactStore(config.artifactRoot);
   const release = new ReleaseService(database, artifacts, githubRelease);
   const ci = new CiService(database, options.ciProvider ?? createGithubCiProvider(), artifacts);
-  const acceptance = new AcceptanceService(database, githubRelease);
+  const acceptance = new AcceptanceService(database, githubRelease, { artifacts });
   const legacyForwardMerge = new ForwardMergeService(database);
   const capacity = new CapacityManager(database, config);
   const activityWorktrees = new Map<string, string>();
@@ -190,6 +190,9 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, result.opinionArtifactId, "delivery-review");
       return { reviewId: result.reviewId, leadExecutionId: result.leadExecutionId, leadSessionRef: result.leadSessionRef, opinionArtifactId: result.opinionArtifactId, evidenceArtifactId: result.evidenceArtifactId, reviewArtifact, outcome: result.outcome, summary: SafeSummarySchema.parse(result.summary), targetBaseSha: result.targetBaseSha, subjectCommit: result.subjectCommit, subjectTree: result.subjectTree };
     },
+    async planDeliveryRepair(input) {
+      return withCapacity(input, "lead", () => (agent?.planDeliveryRepair ?? defaultAgent.planDeliveryRepair.bind(defaultAgent))(input));
+    },
     async publishRelease(input: PublishReleaseActivityInput) {
       let identity = { repository: "", branchName: input.branchName, headSha: input.subjectCommit, headTree: input.subjectTree };
       try {
@@ -219,11 +222,11 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
             const evidence = await artifacts.put(input.companyId, "merge-conflict-evidence", { filename: `${input.taskId}-${merged.forwardMergeId ?? "forward-merge"}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, priorHead: merged.priorHead, targetBaseSha: currentBaseSha, conflictFiles: merged.conflictFiles, combinedDiff: merged.conflictDiff ?? "" }), "utf8") });
             database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt));
             const reference = await durableArtifactReference(database, artifacts, input.companyId, evidence.id, "merge-conflict-evidence");
-            return PublishReleaseActivityResultSchema.parse({ outcome: "base-drift-conflict", releaseId: null, repository: pinned.repository, branchName: context.branchName, headSha: context.subjectCommit, headTree: context.subjectTree, pullRequestNumber: null, pullRequestUrl: null, isDraft: false, reused: false, attempt: 1, baseDriftConflict: true, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), priorHead: merged.priorHead, mergeConflictEvidence: reference, targetBaseSha: currentBaseSha });
+            return PublishReleaseActivityResultSchema.parse({ outcome: "base-drift-conflict", releaseId: null, repository: pinned.repository, branchName: context.branchName, baseBranch: pinned.baseBranch, headSha: context.subjectCommit, headTree: context.subjectTree, pullRequestNumber: null, pullRequestUrl: null, isDraft: false, reused: false, attempt: 1, baseDriftConflict: true, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), priorHead: merged.priorHead, mergeConflictEvidence: reference, targetBaseSha: currentBaseSha });
           }
             const headSha = merged.mergeCommit ?? context.subjectCommit;
             const headTree = merged.tree ?? context.subjectTree;
-            return PublishReleaseActivityResultSchema.parse({ outcome: "base-drift-merged", releaseId: null, repository: pinned.repository, branchName: context.branchName, headSha, headTree, pullRequestNumber: null, pullRequestUrl: null, isDraft: false, reused: false, attempt: 1, baseDriftMerged: true, targetBaseSha: currentBaseSha, priorHead: merged.priorHead, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), ...(merged.mergeCommit ? { mergeCommit: merged.mergeCommit } : {}), ...(merged.tree ? { tree: merged.tree } : {}) });
+            return PublishReleaseActivityResultSchema.parse({ outcome: "base-drift-merged", releaseId: null, repository: pinned.repository, branchName: context.branchName, baseBranch: pinned.baseBranch, headSha, headTree, pullRequestNumber: null, pullRequestUrl: null, isDraft: false, reused: false, attempt: 1, baseDriftMerged: true, targetBaseSha: currentBaseSha, priorHead: merged.priorHead, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), ...(merged.mergeCommit ? { mergeCommit: merged.mergeCommit } : {}), ...(merged.tree ? { tree: merged.tree } : {}) });
           }
         }
         let parsed: z.infer<typeof DeveloperDeliverySchema>;
@@ -231,7 +234,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "Completed delivery artifact is unavailable"); }
         const delivery = { filesChanged: parsed.steps.flatMap((step) => step.filesChanged ?? []), commandsRun: parsed.steps.flatMap((step) => step.commandsRun ?? []), testResults: parsed.steps.flatMap((step) => step.testResults ?? []) };
         const result = await release.publish({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, ...(input.releaseId ? { releaseId: input.releaseId } : {}), coordinates: { projectRevisionId: context.projectRevisionId, repositoryPath: pinned.repositoryPath, worktreePath: context.worktreePath, repository: pinned.repository, owner: pinned.repository.split("/")[0]!, headBranch: context.branchName, baseBranch: pinned.baseBranch, expectedBaseSha: context.targetBaseSha }, reviewedRevision: { reviewId: context.reviewId, developerExecutionId: context.developerExecutionId, commitSha: context.subjectCommit, treeSha: context.subjectTree }, taskTitle: context.title, delivery });
-        return PublishReleaseActivityResultSchema.parse({ outcome: "completed", releaseId: result.releaseId, repository: result.repository, branchName: result.branchName, headSha: result.headSha, headTree: result.headTree, pullRequestNumber: result.pullRequest.number, pullRequestUrl: result.pullRequest.url, isDraft: result.pullRequest.isDraft, reused: result.reused, attempt: result.attempt, targetBaseSha: context.targetBaseSha });
+        return PublishReleaseActivityResultSchema.parse({ outcome: "completed", releaseId: result.releaseId, repository: result.repository, branchName: result.branchName, baseBranch: result.baseBranch, headSha: result.headSha, headTree: result.headTree, pullRequestNumber: result.pullRequest.number, pullRequestUrl: result.pullRequest.url, isDraft: result.pullRequest.isDraft, reused: result.reused, attempt: result.attempt, targetBaseSha: context.targetBaseSha });
       } catch (error) {
         const failure = error instanceof GithubReleaseFailure ? error : new GithubReleaseFailure("provider-unavailable", "Release context or provider state is unavailable");
         const operation = database.authQuery((db) => db.prepare("SELECT MAX(COALESCE(attempt, 0)) AS attempt FROM forge_provider_operations WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND kind IN ('push', 'create-draft-pr')").get(input.taskId, input.companyId, input.workflowId) as { attempt: number | null });
@@ -339,26 +342,35 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       if (!context || !pinned || context.supersededAt || context.pullRequestNumber === null) throw new Error("Final review release is unavailable");
       const currentPullRequest = await githubRelease.getPullRequest({ repository: context.repository, number: context.pullRequestNumber });
       if (currentPullRequest.state !== "open" || !currentPullRequest.isDraft || currentPullRequest.repository.toLowerCase() !== context.repository.toLowerCase() || currentPullRequest.number !== context.pullRequestNumber || currentPullRequest.url.replace(/\/$/, "").toLowerCase() !== context.pullRequestUrl?.replace(/\/$/, "").toLowerCase() || currentPullRequest.baseBranch !== context.baseBranch || currentPullRequest.baseSha.toLowerCase() !== context.baseSha.toLowerCase() || currentPullRequest.headBranch !== context.headBranch || currentPullRequest.headSha.toLowerCase() !== context.headSha.toLowerCase() || currentPullRequest.headSha.toLowerCase() !== input.subjectCommit.toLowerCase()) throw new Error("Pull request head changed before final review");
+      {
+        const currentBaseSha = await githubRelease.getBranchHead({ repository: pinned.repository, branch: pinned.baseBranch });
+        if (currentBaseSha === null) throw new Error("Target base branch is unavailable");
+        if (currentBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new Error("Target base has drifted since CI completed; a fresh forward merge and review are required");
+      }
+      if (pinned) {
+        if (!input.pullRequestNumber || input.repository !== pinned.repository || input.baseBranch !== pinned.baseBranch || !githubRelease.getPullRequest) throw new Error("Final review requires the exact live pull request identity");
+        const pullRequest = await githubRelease.getPullRequest({ repository: pinned.repository, number: input.pullRequestNumber });
+        if (pullRequest.repository.toLowerCase() !== pinned.repository.toLowerCase() || pullRequest.number !== input.pullRequestNumber || pullRequest.baseBranch !== pinned.baseBranch || pullRequest.baseSha.toLowerCase() !== input.targetBaseSha.toLowerCase() || pullRequest.headSha.toLowerCase() !== input.subjectCommit.toLowerCase() || pullRequest.state !== "open") throw new Error("The live pull request no longer matches the exact final-review identity");
+      }
       const review = await withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))({ ...input, worktreePath, reviewKind: "final" }));
       const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, review.opinionArtifactId, "delivery-review");
-      return { finalReviewId: review.reviewId, leadExecutionId: review.leadExecutionId, leadSessionRef: review.leadSessionRef, opinionArtifactId: review.opinionArtifactId, evidenceArtifactId: review.evidenceArtifactId, reviewArtifact, outcome: review.outcome, summary: SafeSummarySchema.parse(review.summary) };
+      return { finalReviewId: review.reviewId, leadExecutionId: review.leadExecutionId, leadSessionRef: review.leadSessionRef, opinionArtifactId: review.opinionArtifactId, evidenceArtifactId: review.evidenceArtifactId, reviewArtifact, outcome: review.outcome, summary: SafeSummarySchema.parse(review.summary), findings: review.findings, repairPlan: review.repairPlan, repairPlanArtifactId: review.repairPlanArtifactId ?? null, repairPlanSha256: review.repairPlanSha256 ?? null };
     },
     async acceptDelivery(input: AcceptDeliveryActivityInput & { decision?: "accept" | "request_changes" | "cancel" }) {
-      const context = database.authQuery((db) => db.prepare(`SELECT pr.normalized_json AS normalizedJson, r.id AS reviewId, r.subject_commit AS subjectCommit, r.subject_tree AS subjectTree, rel.pr_number AS pullRequestNumber
-        FROM forge_tasks t JOIN forge_project_revisions pr ON pr.id = t.project_revision_id AND pr.state = 'accepted' JOIN forge_delivery_reviews r ON r.task_id = t.id AND r.company_id = t.company_id AND r.workflow_id = t.workflow_id AND r.outcome = 'approved'
-        JOIN forge_releases rel ON rel.id = ? AND rel.task_id = t.id AND rel.company_id = t.company_id
-        WHERE t.id = ? AND t.company_id = ? ORDER BY r.created_at DESC LIMIT 1`).get(input.releaseId, input.taskId, input.companyId) as { normalizedJson: string; reviewId: string; subjectCommit: string; subjectTree: string; pullRequestNumber: number | null } | undefined);
-      if (!context || context.pullRequestNumber === null) throw new Error("Acceptance context is unavailable");
+      const context = database.authQuery((db) => db.prepare("SELECT pr.normalized_json AS normalizedJson FROM forge_tasks t JOIN forge_project_revisions pr ON pr.id = t.project_revision_id AND pr.id = ? AND pr.state = 'accepted' WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?").get(input.projectRevisionId, input.taskId, input.companyId, input.workflowId) as { normalizedJson: string } | undefined);
+      if (!context) throw new Error("Acceptance context is unavailable");
       const pinned = pinnedProjectRevision(context.normalizedJson);
-      const result = await acceptance.accept({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, reviewId: context.reviewId, finalReviewId: input.finalReviewId, ciRunId: input.ciRunId, repository: pinned.repository, baseBranch: pinned.baseBranch, headSha: input.expectedHeadSha || context.subjectCommit, headTree: input.expectedHeadTree || context.subjectTree, actorUserId: input.actorUserId, ...(input.decision ? { decision: input.decision } : {}) });
-      return { acceptanceId: result.acceptanceId, status: result.status, pullRequestNumber: result.pullRequest.number, pullRequestUrl: result.pullRequest.url };
+      if (pinned.repository !== input.repository || pinned.baseBranch !== input.baseBranch || pinned.baseSha.toLowerCase() !== input.baseSha.toLowerCase()) throw new Error("Acceptance configuration does not match the pinned project revision");
+      const result = await acceptance.accept({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, releaseId: input.releaseId, deliveryReviewId: input.deliveryReviewId, finalReviewId: input.finalReviewId, ciRunId: input.ciRunId, pullRequestNumber: input.pullRequestNumber, repository: input.repository, baseBranch: input.baseBranch, baseSha: input.baseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree, leadSessionRef: input.leadSessionRef, actorUserId: input.actorUserId, ...(input.decision ? { decision: input.decision } : {}), ...(input.note !== undefined ? { reason: input.note } : {}) });
+      return { acceptanceId: result.acceptanceId, status: result.status, ...(result.outcome ? { outcome: result.outcome } : {}), ...(result.retryAt !== undefined ? { retryAt: result.retryAt } : {}), ...(result.blocker ? { blockerCode: result.blocker.code, blockerSummary: result.blocker.summary, evidenceArtifactId: result.blocker.evidenceArtifactId } : {}), pullRequestNumber: result.pullRequest?.number ?? input.pullRequestNumber, pullRequestUrl: result.pullRequest?.url ?? "", ...(result.readyAt !== undefined ? { readyAt: result.readyAt } : {}), ...(result.acceptedAt !== undefined ? { acceptedAt: result.acceptedAt } : {}), ...(result.reasonArtifactId !== undefined ? { reasonArtifactId: result.reasonArtifactId } : {}) };
+    },
+    async reconcileAcceptance(input: ReconcileAcceptanceActivityInput) {
+      const result = await acceptance.reconcileReady({ acceptanceId: input.acceptanceId, taskId: input.taskId, companyId: input.companyId });
+      return { acceptanceId: result.acceptanceId, status: result.status, outcome: result.outcome, retryAt: result.retryAt, readyAt: result.readyAt, acceptedAt: result.acceptedAt, ...(result.blocker ? { blockerCode: result.blocker.code, blockerSummary: result.blocker.summary, evidenceArtifactId: result.blocker.evidenceArtifactId } : {}), pullRequestNumber: result.pullRequest?.number ?? 0, pullRequestUrl: result.pullRequest?.url ?? "" };
     },
     async reconcileMerge(input: ReconcileMergeActivityInput) {
-      const context = database.authQuery((db) => db.prepare("SELECT pr.normalized_json AS normalizedJson, r.pr_number AS pullRequestNumber FROM forge_tasks t JOIN forge_project_revisions pr ON pr.id = t.project_revision_id AND pr.state = 'accepted' JOIN forge_releases r ON r.id = ? AND r.task_id = t.id AND r.company_id = t.company_id WHERE t.id = ? AND t.company_id = ?").get(input.releaseId, input.taskId, input.companyId) as { normalizedJson: string; pullRequestNumber: number | null } | undefined);
-      if (!context || context.pullRequestNumber === null) throw new Error("Merge reconciliation context is unavailable");
-      const pinned = parseAcceptedProjectRevision(context.normalizedJson);
-      const result = await acceptance.reconcile({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, repository: pinned.repository, number: context.pullRequestNumber, expectedHeadSha: input.expectedHeadSha, expectedBaseBranch: pinned.baseBranch });
-      return { outcome: result.outcome, pullRequestNumber: result.pullRequest?.number ?? context.pullRequestNumber, pullRequestUrl: result.pullRequest?.url ?? "" };
+      const result = await acceptance.reconcileMerge(input);
+      return { outcome: result.outcome, pullRequestNumber: result.pullRequest?.number ?? 0, pullRequestUrl: result.pullRequest?.url ?? "", mergeObservationId: result.observationId, completionReceiptId: result.completionReceiptId, observedAt: result.observedAt, mergedAt: result.mergedAt, retryAt: result.retryAt ?? result.blocker?.retryAt ?? null, ...(result.blocker ? { blockerCode: result.blocker.code, blockerSummary: result.blocker.summary, evidenceArtifactId: result.blocker.evidenceArtifactId } : {}) };
     },
     async planMergeConflict(input: WorkflowMergeConflictPlanActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input);
@@ -385,10 +397,18 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       if (!execution) throw new Error("Developer execution context is unavailable");
       let blockingFindings = input.blockingFindings;
       let repairPlan = input.repairPlan;
+      let artifactRepairPlan: string | undefined;
+      if (input.repairPlanArtifactId) {
+        const reference = await durableArtifactReference(database, artifacts, input.companyId, input.repairPlanArtifactId, "delivery-repair-plan");
+        if (!input.repairPlanSha256 || reference.sha256 !== input.repairPlanSha256) throw new Error("Repair plan artifact hash mismatch");
+        artifactRepairPlan = (await verifiedArtifactBytes(database, artifacts, input.companyId, { ...reference, sha256: input.repairPlanSha256 }, "delivery-repair-plan")).toString("utf8");
+        repairPlan = artifactRepairPlan;
+      }
       if (input.reviewArtifact) {
         const review = DeliveryReviewSchema.parse(JSON.parse((await verifiedArtifactBytes(database, artifacts, input.companyId, input.reviewArtifact, "delivery-review")).toString("utf8")));
         if (typeof review.repairPlan !== "string") throw new Error("Delivery review artifact is not repairable");
         blockingFindings = review.findings;
+        if (artifactRepairPlan && artifactRepairPlan !== review.repairPlan) throw new Error("Repair plan artifact does not match the authoritative delivery review");
         repairPlan = review.repairPlan;
       }
       if (!blockingFindings || !repairPlan) throw new Error("Delivery review repair evidence is unavailable");

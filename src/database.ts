@@ -36,6 +36,26 @@ export interface WorkerHealth {
   heartbeatAgeMs: number;
 }
 
+export interface IssueProjectionRecord {
+  taskId: string;
+  companyId: string;
+  projectId: string;
+  workflowId: string;
+  projectRevisionId?: string;
+  revision: number;
+  phase: "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "merge_conflict_reviewing" | "merge_conflict_required" | "merge_conflict_resolving" | "ci_waiting" | "ci_repair_required" | "final_review" | "accepted" | "ready_reconciliation" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
+  owner: "human" | "lead";
+  allowedCommands: string[];
+  pendingAction: string | null;
+  lastEventId: string;
+  planRevision?: number | null;
+  planMaterial?: boolean | null;
+  materialCategories?: string[];
+  supplementalReviewUsed?: boolean;
+  supplementalReviewArtifactId?: string | null;
+  decisionId?: string | null;
+  state?: Record<string, unknown>;
+}
 export class ProjectionIntegrityFailure extends Error {
   readonly code: string;
   readonly taskId: string | undefined;

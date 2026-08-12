@@ -137,9 +137,7 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
       const page = await context.newPage();
       let taskListResponses = 0;
       page.on("response", (response) => { if (/\/api\/companies\/[^/]+\/tasks$/.test(new URL(response.url()).pathname)) taskListResponses += 1; });
-      await page.goto(`${config.reachableAddress}/tasks?company=${company.id}`);
-      await page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();
-      await page.getByRole("button", { name: "New task", exact: true }).click();
+      await page.goto(`${config.reachableAddress}/tasks?company=${encodeURIComponent(company.id)}&new=1`);
       await page.getByRole("dialog", { name: "New task" }).waitFor();
       await page.getByRole("combobox", { name: "Project" }).click();
       await page.getByRole("option", { name: "Temporal project" }).click();

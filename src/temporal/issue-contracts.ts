@@ -110,6 +110,7 @@ export const DurableArtifactKindSchema = z.enum([
   "lead-plan",
   "developer-delivery",
   "delivery-review",
+  "delivery-repair-plan",
   "developer-repair",
   "ci-evidence",
   "merge-conflict-evidence",
@@ -195,10 +196,11 @@ export const MergeConflictPlanSchema = z.object({
 
 export type MergeConflictPlan = z.infer<typeof MergeConflictPlanSchema>;
 
-export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"]);
+export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"]);
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
-export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "record_progress", "start_development", "retry_development", "cancel_development", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "cancel_issue", "reconcile_merge", "continue_work"]);
+export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "record_progress", "start_development", "retry_development", "cancel_development", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "reconcile_acceptance", "cancel_issue", "reconcile_merge", "continue_work"]);
 export const IssuePlanDecisionSchema = z.enum(["approve", "reject"]);
+export const RepairAuthoritySchema = z.enum(["delivery_review", "final_review", "ci_failure", "member_requested_changes"]);
 export const IssueContinuationStateSchema = z.object({
   phase: IssuePhaseSchema,
   revision: z.number().int().nonnegative(),
@@ -243,6 +245,9 @@ export const IssueContinuationStateSchema = z.object({
   deliveryReviewSummary: SafeSummarySchema.nullable().optional(),
   deliveryBlockingFindings: z.array(DeliveryFindingSchema).max(64).optional(),
   deliveryRepairPlan: z.string().max(12_000).nullable().optional(),
+  deliveryRepairPlanArtifactId: durableId.nullable().optional(),
+  deliveryRepairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
+  deliveryRepairAuthority: RepairAuthoritySchema.nullable().optional(),
   repairCycle: z.number().int().nonnegative().optional(),
   deliveryDecisionArtifactId: durableId.nullable().optional(),
   forwardMergeId: durableId.nullable().optional(),
@@ -268,6 +273,8 @@ export const IssueContinuationStateSchema = z.object({
   mergeResolutionDeveloperExecutionId: durableId.nullable().optional(),
   mergeResolutionDeveloperSessionRef: durableId.nullable().optional(),
   releaseId: durableId.nullable().optional(),
+  releaseRepository: z.string().max(256).nullable().optional(),
+  baseBranch: z.string().max(256).nullable().optional(),
   pullRequestNumber: z.number().int().positive().nullable().optional(),
   pullRequestUrl: z.string().url().max(2_000).nullable().optional(),
   expectedHeadSha: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
@@ -294,9 +301,30 @@ export const IssueContinuationStateSchema = z.object({
   ciNextPollAt: z.string().datetime().nullable().optional(),
   finalReviewId: durableId.nullable().optional(),
   finalReviewOutcome: z.enum(["approved", "blocking"]).nullable().optional(),
+  finalReviewSummary: z.string().max(2_000).nullable().optional(),
+  finalReviewOpinionArtifactId: durableId.nullable().optional(),
+  finalReviewEvidenceArtifactId: durableId.nullable().optional(),
+  finalReviewFailureCode: z.literal("final_review_unavailable").nullable().optional(),
+  finalReviewFindings: z.array(DeliveryFindingSchema).max(64).optional(),
+  finalReviewRepairPlanArtifactId: durableId.nullable().optional(),
+  finalReviewRepairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
   acceptanceId: durableId.nullable().optional(),
+  acceptanceStatus: z.enum(["pending_ready", "accepted", "requested_changes", "cancelled", "blocked"]).nullable().optional(),
+  acceptanceAttempt: z.number().int().nonnegative().optional(),
+  acceptanceRetryAt: z.string().datetime().nullable().optional(),
+  acceptanceBlockerCode: durableId.nullable().optional(),
+  acceptanceBlockerEvidenceArtifactId: durableId.nullable().optional(),
+  acceptanceReasonArtifactId: durableId.nullable().optional(),
+  acceptedAt: z.string().datetime().nullable().optional(),
+  readyAt: z.string().datetime().nullable().optional(),
   acceptedHeadSha: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
-  mergeOutcome: z.enum(["open", "merged", "closed_without_merge", "changed", "provider_unavailable"]).nullable().optional(),
+  mergeAttempt: z.number().int().nonnegative().optional(),
+  mergeRetryAt: z.string().datetime().nullable().optional(),
+  mergeObservationId: durableId.nullable().optional(),
+  mergeBlockerCode: durableId.nullable().optional(),
+  mergeBlockerEvidenceArtifactId: durableId.nullable().optional(),
+  completionReceiptId: durableId.nullable().optional(),
+  mergeOutcome: z.enum(["open", "merged", "closed_without_merge", "changed_head", "changed_base", "provider_unavailable"]).nullable().optional(),
   predecessorTaskId: durableId.nullable().optional(),
   successorTaskId: durableId.nullable().optional(),
   releaseStatus: z.enum(["reconciling", "draft", "blocked"]).nullable().optional(),
@@ -378,6 +406,9 @@ export const IssueWorkflowStateSchema = z.object({
   deliveryReviewSummary: SafeSummarySchema.nullable().optional(),
   deliveryBlockingFindings: z.array(DeliveryFindingSchema).max(64).optional(),
   deliveryRepairPlan: z.string().max(12_000).nullable().optional(),
+  deliveryRepairPlanArtifactId: durableId.nullable().optional(),
+  deliveryRepairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
+  deliveryRepairAuthority: RepairAuthoritySchema.nullable().optional(),
   repairCycle: z.number().int().nonnegative().optional(),
   deliveryDecisionArtifactId: durableId.nullable().optional(),
   forwardMergeId: durableId.nullable().optional(),
@@ -403,6 +434,8 @@ export const IssueWorkflowStateSchema = z.object({
   mergeResolutionDeveloperExecutionId: durableId.nullable().optional(),
   mergeResolutionDeveloperSessionRef: durableId.nullable().optional(),
   releaseId: durableId.nullable().optional(),
+  releaseRepository: z.string().max(256).nullable().optional(),
+  baseBranch: z.string().max(256).nullable().optional(),
   pullRequestNumber: z.number().int().positive().nullable().optional(),
   pullRequestUrl: z.string().url().max(2_000).nullable().optional(),
   expectedHeadSha: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
@@ -429,9 +462,30 @@ export const IssueWorkflowStateSchema = z.object({
   ciNextPollAt: z.string().datetime().nullable().optional(),
   finalReviewId: durableId.nullable().optional(),
   finalReviewOutcome: z.enum(["approved", "blocking"]).nullable().optional(),
+  finalReviewSummary: z.string().max(2_000).nullable().optional(),
+  finalReviewOpinionArtifactId: durableId.nullable().optional(),
+  finalReviewEvidenceArtifactId: durableId.nullable().optional(),
+  finalReviewFailureCode: z.literal("final_review_unavailable").nullable().optional(),
+  finalReviewFindings: z.array(DeliveryFindingSchema).max(64).optional(),
+  finalReviewRepairPlanArtifactId: durableId.nullable().optional(),
+  finalReviewRepairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
   acceptanceId: durableId.nullable().optional(),
+  acceptanceStatus: z.enum(["pending_ready", "accepted", "requested_changes", "cancelled", "blocked"]).nullable().optional(),
+  acceptanceAttempt: z.number().int().nonnegative().optional(),
+  acceptanceRetryAt: z.string().datetime().nullable().optional(),
+  acceptanceBlockerCode: durableId.nullable().optional(),
+  acceptanceBlockerEvidenceArtifactId: durableId.nullable().optional(),
+  acceptanceReasonArtifactId: durableId.nullable().optional(),
+  acceptedAt: z.string().datetime().nullable().optional(),
+  readyAt: z.string().datetime().nullable().optional(),
   acceptedHeadSha: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
-  mergeOutcome: z.enum(["open", "merged", "closed_without_merge", "changed", "provider_unavailable"]).nullable().optional(),
+  mergeAttempt: z.number().int().nonnegative().optional(),
+  mergeRetryAt: z.string().datetime().nullable().optional(),
+  mergeObservationId: durableId.nullable().optional(),
+  mergeBlockerCode: durableId.nullable().optional(),
+  mergeBlockerEvidenceArtifactId: durableId.nullable().optional(),
+  completionReceiptId: durableId.nullable().optional(),
+  mergeOutcome: z.enum(["open", "merged", "closed_without_merge", "changed_head", "changed_base", "provider_unavailable"]).nullable().optional(),
   predecessorTaskId: durableId.nullable().optional(),
   successorTaskId: durableId.nullable().optional(),
   releaseStatus: z.enum(["reconciling", "draft", "blocked"]).nullable().optional(),
@@ -523,6 +577,9 @@ export const DeliveryReviewActivityInputSchema = z.object({
   reviewKind: z.enum(["delivery", "final"]).optional(),
   releaseId: durableId.optional(),
   ciRunId: durableId.optional(),
+  deliveryReviewId: durableId.optional(),
+}).superRefine((value, context) => {
+  if (value.reviewKind === "final" && !value.deliveryReviewId) context.addIssue({ code: "custom", path: ["deliveryReviewId"], message: "Final review requires the exact delivery review" });
 });
 
 export const DeveloperRepairActivityInputSchema = z.object({
@@ -537,6 +594,7 @@ export const DeveloperRepairActivityInputSchema = z.object({
   developerSessionRef: durableId,
   developerExecutionId: durableId,
   reviewId: durableId,
+  repairAuthority: RepairAuthoritySchema,
   reviewArtifact: DurableArtifactReferenceSchema.optional(),
   cycle: z.number().int().positive(),
   repairCycleLimit: z.number().int().min(0).max(5),
@@ -546,7 +604,12 @@ export const DeveloperRepairActivityInputSchema = z.object({
   subjectCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
   subjectTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
   blockingFindings: z.array(DeliveryFindingSchema).max(64),
-  repairPlan: z.string().min(1).max(12_000),
+  repairPlan: z.string().min(1).max(12_000).optional(),
+  repairPlanArtifactId: durableId.optional(),
+  repairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+}).superRefine((value, context) => {
+  if (!value.repairPlan && !value.repairPlanArtifactId) context.addIssue({ code: "custom", path: ["repairPlanArtifactId"], message: "A verified repair-plan artifact is required" });
+  if (value.repairPlanArtifactId && !value.repairPlanSha256) context.addIssue({ code: "custom", path: ["repairPlanSha256"], message: "The repair-plan artifact hash is required" });
 });
 
 export const DeliveryDecisionActivityInputSchema = z.object({
@@ -704,11 +767,51 @@ export interface DeliveryReviewResult {
   outcome: "approved" | "blocking";
   summary: string;
   repairPlan: string | null;
+  repairPlanArtifactId?: string | null;
+  repairPlanSha256?: string | null;
   findings: DeliveryFinding[];
   targetBaseSha: string;
   subjectCommit: string;
   subjectTree: string;
 }
+
+export const DeliveryRepairPlanInputSchema = z.object({
+  taskId: durableId,
+  companyId: durableId,
+  workflowId: durableId,
+  projectId: durableId,
+  projectRevisionId: durableId,
+  source: z.enum(["ci_failure", "final_review_blocking", "member_requested_changes"]),
+  leadSessionRef: durableId,
+  planRevision: z.number().int().nonnegative(),
+  releaseId: durableId.nullable().optional(),
+  deliveryReviewId: durableId.nullable().optional(),
+  finalReviewId: durableId.nullable().optional(),
+  ciRunId: durableId.nullable().optional(),
+  acceptanceId: durableId.nullable().optional(),
+  reasonArtifactId: durableId.nullable().optional(),
+  evidenceArtifactIds: z.array(durableId).max(32),
+  branchName: z.string().min(1).max(256),
+  worktreePath: z.string().min(1).max(1_000),
+  targetBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  subjectCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  subjectTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  findings: z.array(DeliveryFindingSchema).min(1).max(64),
+});
+
+export type DeliveryRepairPlanActivityInput = z.infer<typeof DeliveryRepairPlanInputSchema>;
+
+export const DeliveryRepairPlanResultSchema = z.object({
+  planId: durableId,
+  planArtifactId: durableId,
+  planSha256: z.string().regex(/^[a-f0-9]{64}$/i),
+  evidenceArtifactId: durableId,
+  leadSessionRef: durableId,
+  summary: z.string().min(1).max(2_000),
+  findings: z.array(DeliveryFindingSchema).max(64),
+});
+
+export type DeliveryRepairPlanResult = z.infer<typeof DeliveryRepairPlanResultSchema>;
 
 export interface DeveloperRepairActivityInput {
   taskId: string;
@@ -722,6 +825,7 @@ export interface DeveloperRepairActivityInput {
   developerSessionRef: string;
   developerExecutionId: string;
   reviewId: string;
+  repairAuthority: z.infer<typeof RepairAuthoritySchema>;
   reviewArtifact?: DurableArtifactReference;
   cycle: number;
   repairCycleLimit: number;
@@ -731,7 +835,9 @@ export interface DeveloperRepairActivityInput {
   subjectCommit: string;
   subjectTree: string;
   blockingFindings: DeliveryFinding[];
-  repairPlan: string;
+  repairPlan?: string;
+  repairPlanArtifactId?: string;
+  repairPlanSha256?: string;
 }
 
 export interface DeveloperRepairResult {
@@ -793,7 +899,7 @@ const PublishReleaseIdentitySchema = z.object({
   attempt: z.number().int().nonnegative(),
 });
 export const PublishReleaseActivityResultSchema = z.discriminatedUnion("outcome", [
-  PublishReleaseIdentitySchema.extend({ outcome: z.literal("completed"), releaseId: durableId, pullRequestNumber: z.number().int().positive(), pullRequestUrl: z.string().url().max(2_000), isDraft: z.literal(true), targetBaseSha: sha.optional() }),
+  PublishReleaseIdentitySchema.extend({ outcome: z.literal("completed"), releaseId: durableId, baseBranch: z.string().min(1).max(256), pullRequestNumber: z.number().int().positive(), pullRequestUrl: z.string().url().max(2_000), isDraft: z.literal(true), targetBaseSha: sha.optional() }),
   PublishReleaseIdentitySchema.extend({ outcome: z.literal("blocked"), releaseId: durableId.nullable(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.boolean(), code: ReleaseFailureCodeSchema, summary: z.string().max(500), retryAt: z.string().datetime().nullable(), evidenceArtifactId: durableId.nullable() }),
   PublishReleaseIdentitySchema.extend({ outcome: z.literal("base-drift-merged"), releaseId: z.null(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.literal(false), baseDriftMerged: z.literal(true), targetBaseSha: sha, priorHead: sha, forwardMergeId: durableId.optional(), mergeCommit: sha.optional(), tree: sha.optional() }),
   PublishReleaseIdentitySchema.extend({ outcome: z.literal("base-drift-conflict"), releaseId: z.null(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.literal(false), baseDriftConflict: z.literal(true), targetBaseSha: sha, priorHead: sha, forwardMergeId: durableId.optional(), mergeConflictEvidence: DurableArtifactReferenceSchema.optional(), conflictFiles: z.array(z.string().max(1_000)).max(128).optional(), conflictDiff: z.string().max(80_000).optional() }),
@@ -981,7 +1087,11 @@ export interface FinalReviewActivityInput {
   briefArtifactId: string;
   roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
   releaseId: string;
+  deliveryReviewId: string;
   ciRunId: string;
+  pullRequestNumber?: number;
+  repository?: string;
+  baseBranch?: string;
   planRevision: number;
   leadSessionRef: string;
   leadOutputArtifactId: string;
@@ -1010,22 +1120,64 @@ export interface FinalReviewActivityResult {
   reviewArtifact: DurableArtifactReference;
   outcome: "approved" | "blocking";
   summary: string;
+  findings: DeliveryFinding[];
+  repairPlan: string | null;
+  repairPlanArtifactId: string | null;
+  repairPlanSha256: string | null;
 }
 
 export interface AcceptDeliveryActivityInput {
   taskId: string;
   companyId: string;
+  workflowId: string;
+  projectRevisionId: string;
   releaseId: string;
+  deliveryReviewId: string;
   finalReviewId: string;
   ciRunId: string;
   actorUserId: string;
+  pullRequestNumber: number;
+  repository: string;
+  baseBranch: string;
+  baseSha: string;
+  leadSessionRef: string;
   expectedHeadSha: string;
   expectedHeadTree: string;
+  note?: string;
 }
 
 export interface AcceptDeliveryActivityResult {
+  acceptanceId: string | null;
+  status: "pending_ready" | "accepted" | "requested_changes" | "cancelled" | "blocked";
+  outcome?: "pending_ready" | "ready" | "changed" | "closed" | "merged_early" | "provider_unavailable";
+  retryAt?: string | null;
+  readyAt?: string | null;
+  acceptedAt?: string | null;
+  blockerCode?: string;
+  blockerSummary?: string;
+  evidenceArtifactId?: string | null;
+  pullRequestNumber: number;
+  pullRequestUrl: string;
+  reasonArtifactId?: string | null;
+}
+
+export interface ReconcileAcceptanceActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
   acceptanceId: string;
-  status: "accepted" | "requested_changes" | "cancelled";
+}
+
+export interface ReconcileAcceptanceActivityResult {
+  acceptanceId: string;
+  status: "pending_ready" | "accepted" | "blocked";
+  outcome: "pending_ready" | "ready" | "changed" | "closed" | "merged_early" | "provider_unavailable";
+  retryAt: string | null;
+  readyAt: string | null;
+  acceptedAt: string;
+  blockerCode?: string;
+  blockerSummary?: string;
+  evidenceArtifactId?: string | null;
   pullRequestNumber: number;
   pullRequestUrl: string;
 }
@@ -1033,14 +1185,22 @@ export interface AcceptDeliveryActivityResult {
 export interface ReconcileMergeActivityInput {
   taskId: string;
   companyId: string;
-  releaseId: string;
-  expectedHeadSha: string;
+  workflowId: string;
+  acceptanceId: string;
 }
 
 export interface ReconcileMergeActivityResult {
-  outcome: "open" | "merged" | "closed_without_merge" | "changed" | "provider_unavailable";
+  outcome: "open" | "merged" | "closed_without_merge" | "changed_head" | "changed_base" | "provider_unavailable";
   pullRequestNumber: number;
   pullRequestUrl: string;
+  mergeObservationId: string | null;
+  completionReceiptId: string | null;
+  observedAt: string;
+  mergedAt: string | null;
+  retryAt: string | null;
+  blockerCode?: string;
+  blockerSummary?: string;
+  evidenceArtifactId?: string | null;
 }
 
 export interface IssueActivities {
@@ -1048,6 +1208,7 @@ export interface IssueActivities {
   runLeadPlanning(input: LeadPlanningActivityInput): Promise<LeadPlanningResult>;
   runSupplementalReview(input: SupplementalReviewActivityInput): Promise<SupplementalReviewResult>;
   consolidateLeadPlan(input: ConsolidateLeadPlanActivityInput): Promise<LeadPlanningResult>;
+  planDeliveryRepair(input: DeliveryRepairPlanActivityInput): Promise<DeliveryRepairPlanResult>;
   recordPlanDecision(input: PlanDecisionActivityInput): Promise<{ decisionId: string }>;
   runDeveloperExecution(input: DeveloperExecutionActivityInput): Promise<WorkflowDeveloperExecutionResult>;
   reviewDelivery(input: WorkflowDeliveryReviewActivityInput): Promise<WorkflowDeliveryReviewResult>;
@@ -1061,6 +1222,7 @@ export interface IssueActivities {
   runCiRepair(input: WorkflowCiRepairActivityInput): Promise<WorkflowCiRepairActivityResult>;
   finalReview(input: WorkflowFinalReviewActivityInput): Promise<FinalReviewActivityResult>;
   acceptDelivery(input: AcceptDeliveryActivityInput & { decision?: "accept" | "request_changes" | "cancel" }): Promise<AcceptDeliveryActivityResult>;
+  reconcileAcceptance(input: ReconcileAcceptanceActivityInput): Promise<ReconcileAcceptanceActivityResult>;
   reconcileMerge(input: ReconcileMergeActivityInput): Promise<ReconcileMergeActivityResult>;
   planMergeConflict(input: WorkflowMergeConflictPlanActivityInput): Promise<MergeConflictPlanActivityResult>;
   resolveMergeConflict(input: WorkflowMergeConflictResolutionActivityInput): Promise<MergeConflictResolutionActivityResult>;

@@ -53,6 +53,8 @@ function continuation(checkpoint: TargetBaseCheckpoint): NonNullable<IssueWorkfl
     deliveryReviewId: "review_original",
     deliveryReviewOutcome: "approved",
     releaseId: checkpoint === "pre_release" ? null : "release_original",
+    releaseRepository: checkpoint === "pre_release" ? null : "acme/forge",
+    baseBranch: checkpoint === "pre_release" ? null : "main",
     pullRequestNumber: checkpoint === "pre_release" ? null : 42,
     pullRequestUrl: checkpoint === "pre_release" ? null : "https://github.com/acme/forge/pull/42",
     expectedHeadSha: checkpoint === "pre_release" ? null : head,
@@ -116,9 +118,9 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
       if (configured === "conflict") return resultFor(activityInput, "revalidated");
       return resultFor(activityInput, configured === "verification_then_pass" ? "revalidated" : configured);
     },
-    publishRelease: async () => ({ outcome: "completed", releaseId: "release_new", repository: "acme/forge", branchName: "forge/issue/target_base_test", headSha: head, headTree: tree, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", isDraft: true, reused: false, attempt: 1 }),
+    publishRelease: async () => ({ outcome: "completed", releaseId: "release_new", repository: "acme/forge", branchName: "forge/issue/target_base_test", baseBranch: "main", headSha: head, headTree: tree, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", isDraft: true, reused: false, attempt: 1 }),
     reconcileCi: async (activityInput) => ({ runId: "ci_new", attemptId: "ci_attempt_new", attemptNumber: activityInput.attemptNumber, expectedHeadSha: activityInput.expectedHeadSha, observedHeadSha: activityInput.expectedHeadSha, evidenceArtifactId: null, outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Required CI is still running", retryAt: null, nextPollAt: null, policyHash: artifactSha, propagationDeadline: null, overallDeadline: null }),
-    finalReview: async () => ({ finalReviewId: "final_new", leadExecutionId: "lead_final", leadSessionRef: "lead_session", opinionArtifactId: "opinion_final", evidenceArtifactId: "evidence_final", reviewArtifact: { artifactId: "review_final", companyId: "company_test", kind: "delivery-review", sha256: artifactSha, byteSize: 1, mimeType: "application/json" }, outcome: "approved", summary: "Exact head approved" }),
+    finalReview: async () => ({ finalReviewId: "final_new", leadExecutionId: "lead_final", leadSessionRef: "lead_session", opinionArtifactId: "opinion_final", evidenceArtifactId: "evidence_final", reviewArtifact: { artifactId: "review_final", companyId: "company_test", kind: "delivery-review", sha256: artifactSha, byteSize: 1, mimeType: "application/json" }, outcome: "approved", summary: "Exact head approved", findings: [], repairPlan: null, repairPlanArtifactId: null, repairPlanSha256: null }),
     acceptDelivery: async () => ({ acceptanceId: "acceptance_new", status: "accepted", pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42" }),
     planMergeConflict: async () => ({ planId: "conflict_plan", planArtifactId: "conflict_plan_artifact", evidenceArtifactId: "conflict_plan_evidence", leadExecutionId: "lead_conflict", leadSessionRef: "lead_session", summary: "Preserve both branch invariants" }),
     resolveMergeConflict: async () => ({ outcome: "verification_blocked", developerExecutionId: "developer_conflict_resolution", developerSessionRef: "developer_session", resultCommit: mergedHead, resultTree: mergedTree, evidenceArtifactId: "conflict_resolution_evidence", verificationArtifact: { id: "verification_failed", sha256: artifactSha, kind: "forward-merge-verification" }, code: "verification_failed", summary: "Pinned verification failed after conflict resolution" }),

@@ -37,6 +37,39 @@ const DeveloperDeliveryStepSchema = z.object({
   testResults: z.array(z.string().max(2_000)).max(64),
   notes: z.string().max(4_000),
 });
+const RepairAuthorityEnvelopeSchema = z.object({
+  source: z.enum(["ci_failure", "final_review_blocking", "member_requested_changes"]),
+  planRevision: z.number().int().nonnegative(),
+  exactContext: z.object({
+    taskId: z.string(),
+    companyId: z.string(),
+    workflowId: z.string(),
+    projectId: z.string(),
+    projectRevisionId: z.string(),
+    releaseId: z.string().nullable(),
+    deliveryReviewId: z.string().nullable(),
+    finalReviewId: z.string().nullable(),
+    ciRunId: z.string().nullable(),
+    acceptanceId: z.string().nullable(),
+    reasonArtifactId: z.string().nullable(),
+    branchName: z.string(),
+    targetBaseSha: z.string(),
+    subjectCommit: z.string(),
+    subjectTree: z.string(),
+    leadSessionRef: z.string(),
+  }),
+  findingIds: z.array(z.string()),
+});
+
+function parseRepairAuthorityEnvelope(plan: string): z.infer<typeof RepairAuthorityEnvelopeSchema> {
+  const match = /^<!-- forge-repair-authority (\{.*\}) -->/.exec(plan);
+  if (!match?.[1]) throw new AgentFailure("repair-authority-mismatch", "The Lead repair-plan artifact is missing its source-bound authority envelope");
+  try {
+    return RepairAuthorityEnvelopeSchema.parse(JSON.parse(match[1]));
+  } catch {
+    throw new AgentFailure("repair-authority-mismatch", "The Lead repair-plan authority envelope is invalid");
+  }
+}
 export const DeveloperDeliveryReportSchema = z.object({
   kind: z.literal("delivery"),
   summary: z.string().min(1).max(2_000),
@@ -410,13 +443,22 @@ export class DeveloperService {
 
   async runRepair(rawInput: DeveloperRepairActivityInput): Promise<DeveloperRepairResult> {
     const input = DeveloperRepairActivityInputSchema.parse(rawInput);
+    let repairPlan = input.repairPlan;
+    if (input.repairPlanArtifactId) {
+      const plan = this.database.authQuery((db) => db.prepare("SELECT filename, storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'delivery-repair-plan'").get(input.repairPlanArtifactId, input.companyId) as { filename: string; storagePath: string; sha256: string } | undefined);
+      if (!plan || plan.sha256 !== input.repairPlanSha256) throw new AgentFailure("repair-plan-integrity", "The Lead repair-plan artifact is unavailable or has the wrong hash");
+      repairPlan = (await this.artifacts.read({ companyId: input.companyId, storagePath: plan.storagePath, sha256: plan.sha256 })).toString("utf8");
+    }
+    if (input.repairAuthority !== "delivery_review" && !input.repairPlanArtifactId) throw new AgentFailure("repair-authority-mismatch", "This repair authority requires a source-bound Lead repair-plan artifact");
+    if (!repairPlan) throw new AgentFailure("repair-plan-missing", "A verified Lead repair plan is required");
+    if (input.repairAuthority !== "delivery_review") this.validateRepairAuthority(input, parseRepairAuthorityEnvelope(repairPlan));
     if (input.cycle > input.repairCycleLimit) throw new AgentFailure("repair-cap-exhausted", "The configured Developer repair-cycle limit has been reached");
     const prior = this.database.authQuery((db) => db.prepare(`SELECT id, status, session_ref, branch_name, worktree_path, target_base_sha, result_commit, result_tree
       FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; status: string; session_ref: string | null; branch_name: string; worktree_path: string; target_base_sha: string; result_commit: string | null; result_tree: string | null } | undefined);
     const review = this.database.authQuery((db) => db.prepare(`SELECT id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, outcome
       FROM forge_delivery_reviews WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.reviewId, input.taskId, input.companyId, input.workflowId) as { id: string; task_id: string; company_id: string; workflow_id: string; plan_revision: number; base_sha: string; subject_commit: string; subject_tree: string; outcome: string } | undefined);
     if (input.blockingFindings.some((finding) => finding.severity !== "blocking" || finding.disposition !== "open")) throw new AgentFailure("repair-scope-violation", "Developer repair input must contain only open blocking findings");
-    if (!prior || !review || prior.status !== "completed" || prior.session_ref !== input.developerSessionRef || prior.branch_name !== input.branchName || prior.worktree_path !== input.worktreePath || prior.target_base_sha !== input.targetBaseSha || review.plan_revision !== input.planRevision || review.base_sha !== input.targetBaseSha || review.subject_commit !== input.subjectCommit || review.subject_tree !== input.subjectTree || review.outcome !== "blocking") {
+    if (!prior || !review || prior.status !== "completed" || prior.session_ref !== input.developerSessionRef || prior.branch_name !== input.branchName || prior.worktree_path !== input.worktreePath || prior.target_base_sha !== input.targetBaseSha || review.plan_revision !== input.planRevision || review.base_sha !== input.targetBaseSha || review.subject_commit !== input.subjectCommit || review.subject_tree !== input.subjectTree || (input.repairAuthority === "delivery_review" && review.outcome !== "blocking")) {
       throw new AgentFailure("repair-identity-mismatch", "Developer repair coordinates do not match the immutable review subject");
     }
     const previousRepairs = this.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_delivery_repairs WHERE workflow_id = ? AND review_id = ?").get(input.workflowId, input.reviewId) as { count: number }).count;
@@ -438,7 +480,7 @@ export class DeveloperService {
       db.prepare("UPDATE forge_delivery_reviews SET repair_cycle = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(input.cycle, input.reviewId, input.taskId, input.companyId, input.workflowId);
       repairRowCreated = true;
     });
-    const repairPrompt = this.repairPrompt(input.repairPlan, input.blockingFindings, { branchName: input.branchName, worktreePath, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree });
+    const repairPrompt = this.repairPrompt(repairPlan, input.blockingFindings, { branchName: input.branchName, worktreePath, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree });
     const evidenceLines = [JSON.stringify({ type: "forge.prompt", text: redact(repairPrompt) })];
     const outputLines: string[] = [];
     try {
@@ -494,6 +536,40 @@ export class DeveloperService {
       });
       throw failure;
     } finally { await guard.cleanup(); }
+  }
+
+  private validateRepairAuthority(input: z.infer<typeof DeveloperRepairActivityInputSchema>, authority: z.infer<typeof RepairAuthorityEnvelopeSchema>): void {
+    const expectedSource = input.repairAuthority === "final_review" ? "final_review_blocking" : input.repairAuthority;
+    const context = authority.exactContext;
+    const exactContextMatches = authority.source === expectedSource
+      && authority.planRevision === input.planRevision
+      && context.taskId === input.taskId
+      && context.companyId === input.companyId
+      && context.workflowId === input.workflowId
+      && context.projectId === input.projectId
+      && context.projectRevisionId === input.projectRevisionId
+      && context.deliveryReviewId === input.reviewId
+      && context.branchName === input.branchName
+      && context.targetBaseSha.toLowerCase() === input.targetBaseSha.toLowerCase()
+      && context.subjectCommit.toLowerCase() === input.subjectCommit.toLowerCase()
+      && context.subjectTree.toLowerCase() === input.subjectTree.toLowerCase()
+      && context.leadSessionRef === input.leadSessionRef
+      && JSON.stringify([...authority.findingIds].sort()) === JSON.stringify(input.blockingFindings.map((finding) => finding.findingId).sort());
+    if (!exactContextMatches) throw new AgentFailure("repair-authority-mismatch", "The Lead repair-plan authority does not match the exact repair subject");
+
+    let sourceExists = false;
+    if (authority.source === "final_review_blocking" && context.finalReviewId && context.releaseId && context.ciRunId) {
+      sourceExists = Boolean(this.database.authQuery((db) => db.prepare(`SELECT id FROM forge_final_reviews
+        WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND release_id = ? AND ci_run_id = ? AND delivery_review_id = ? AND developer_execution_id = ? AND plan_revision = ? AND base_sha = ? AND subject_commit = ? AND subject_tree = ? AND session_ref = ? AND outcome = 'blocking'`).get(context.finalReviewId, input.taskId, input.companyId, input.workflowId, context.releaseId, context.ciRunId, input.reviewId, input.developerExecutionId, input.planRevision, input.targetBaseSha, input.subjectCommit, input.subjectTree, input.leadSessionRef)));
+    } else if (authority.source === "member_requested_changes" && context.acceptanceId && context.releaseId && context.finalReviewId && context.ciRunId && context.reasonArtifactId) {
+      sourceExists = Boolean(this.database.authQuery((db) => db.prepare(`SELECT id FROM forge_acceptances
+        WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND project_revision_id = ? AND release_id = ? AND review_id = ? AND final_review_id = ? AND ci_run_id = ? AND reason_artifact_id = ? AND decision = 'request_changes' AND status = 'requested_changes'`).get(context.acceptanceId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId, context.releaseId, input.reviewId, context.finalReviewId, context.ciRunId, context.reasonArtifactId)));
+    } else if (authority.source === "ci_failure" && context.ciRunId && context.releaseId) {
+      sourceExists = Boolean(this.database.authQuery((db) => db.prepare(`SELECT c.id FROM forge_ci_runs c
+        JOIN forge_ci_attempts a ON a.run_id = c.id AND a.attempt_number = c.attempt AND a.outcome = 'failed' AND a.observed_head_sha = c.expected_head_sha
+        WHERE c.id = ? AND c.task_id = ? AND c.company_id = ? AND c.release_id = ? AND c.expected_head_sha = ? AND c.superseded_at IS NULL`).get(context.ciRunId, input.taskId, input.companyId, context.releaseId, input.subjectCommit)));
+    }
+    if (!sourceExists) throw new AgentFailure("repair-authority-mismatch", "The Lead repair plan is not bound to a durable authorized repair source");
   }
 
   async runCiRepair(rawInput: CiRepairActivityInput): Promise<CiRepairActivityResult> {

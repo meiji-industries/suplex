@@ -77,7 +77,7 @@ export async function captureWorkflowHistory(input: CaptureWorkflowHistoryInput)
       runId = metadata.nextRunId;
     }
     if (runId) throw new Error(`Continue-As-New chain exceeded maxRuns=${maxRuns}`);
-    if (!runs.length || runs.at(-1)?.metadata.currentPhase !== input.currentPhase) throw new Error("Captured history phase does not match --current-phase");
+    if (!runs.length || runs.at(-1)?.metadata.currentPhase !== input.currentPhase) throw new Error(`Captured history phase ${runs.at(-1)?.metadata.currentPhase ?? "missing"} does not match requested ${input.currentPhase} for ${input.scenario}`);
 
     await mkdir(outputDir, { recursive: true });
     const manifestPath = join(outputDir, "manifest.json");

@@ -12,7 +12,7 @@ import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import { PlanMaterialCategorySchema, classifyPlanMateriality, materialitySummary, type PlanMaterialCategory } from "./plan-governance.js";
-import { CiRepairPlanSchema, DeliveryReviewActivityInputSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./temporal/issue-contracts.js";
+import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./temporal/issue-contracts.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { parseAcceptedProjectRevision } from "./projects.js";
 
@@ -51,6 +51,14 @@ export const SupplementalReviewSchema = z.object({
   opinion: z.enum(["approve", "request_changes"]),
   concerns: z.array(z.string().max(4_000)).max(16),
   requiredChanges: z.array(z.string().max(4_000)).max(16),
+});
+
+const DeliveryRepairLeadOutputSchema = z.object({
+  kind: z.literal("delivery_repair_plan"),
+  summary: z.string().min(1).max(2_000),
+  steps: z.array(z.object({ number: z.number().int().positive(), instruction: z.string().min(1).max(4_000), verification: z.string().min(1).max(4_000) })).min(1).max(32),
+  verificationStrategy: z.string().min(1).max(12_000),
+  unresolvedTechnicalQuestions: z.array(z.string().max(2_000)).max(16).length(0),
 });
 
 export const LeadPlanningActivityInputSchema = z.object({
@@ -279,6 +287,23 @@ function parseDeliveryReview(lines: string[]): DeliveryReview {
   return result.data;
 }
 
+function parseDeliveryRepairPlan(lines: string[]): z.infer<typeof DeliveryRepairLeadOutputSchema> {
+  const messages = lines.flatMap((line) => {
+    try {
+      const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
+      return event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" ? [event.item.text] : [];
+    } catch { return [];
+    }
+  });
+  const text = messages.at(-1);
+  if (!text) throw new AgentFailure("missing-repair-plan-output", "Codex Lead did not return a delivery repair plan");
+  let parsed: unknown;
+  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-repair-plan-output", "Codex Lead returned malformed delivery repair plan JSON"); }
+  const result = DeliveryRepairLeadOutputSchema.safeParse(parsed);
+  if (!result.success) throw new AgentFailure("invalid-repair-plan-output", "Codex Lead returned a delivery repair plan outside the required schema");
+  return result.data;
+}
+
 function parseMergeConflictPlan(lines: string[]): import("./temporal/issue-contracts.js").MergeConflictPlan {
   const messages = lines.flatMap((line) => {
     try {
@@ -446,6 +471,77 @@ export class AgentService {
     this.processRunner = options.processRunner ?? defaultProcessRunner;
     this.sessionStore = options.sessionStore ?? new FileSessionStore(config.runtimeRoot);
     this.now = options.now ?? (() => new Date());
+  }
+
+  async planDeliveryRepair(rawInput: DeliveryRepairPlanActivityInput): Promise<DeliveryRepairPlanResult> {
+    const input = DeliveryRepairPlanInputSchema.parse(rawInput);
+    const scoped = this.database.authQuery((db) => db.prepare(`SELECT t.id
+      FROM forge_tasks t
+      JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ? AND t.project_revision_id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId, input.projectRevisionId) as { id: string } | undefined);
+    if (!scoped) throw new AgentFailure("scoped-input-missing", "Delivery repair planning evidence is unavailable");
+    const openFindings = input.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
+    if (!openFindings.length) throw new AgentFailure("repair-plan-invalid", "Delivery repair planning requires an open blocking finding");
+    const rawSessionId = await this.sessionStore.read(input.leadSessionRef);
+    const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
+    const executionId = `agent_${randomBytes(12).toString("hex")}`;
+    const evidenceLines: string[] = [];
+    const outputLines: string[] = [];
+    const startedAt = this.now().toISOString();
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.leadSessionRef, startedAt));
+    let output: z.infer<typeof DeliveryRepairLeadOutputSchema>;
+    try {
+      const result = await this.processRunner({ command: this.command, args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.deliveryRepairPlanPrompt(input, openFindings)], cwd: worktreePath, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.databaseHeartbeat(executionId, "running"); } });
+      if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines, "delivery-repair-plan");
+      output = parseDeliveryRepairPlan(outputLines);
+    } catch (error) {
+      const failure = error instanceof AgentFailure ? error : new AgentFailure("repair-plan-failed", "Codex Lead delivery repair planning failed");
+      const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
+      this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); });
+      throw failure;
+    }
+    const summary = output.summary;
+    const authorityEvidence = {
+      source: input.source,
+      planRevision: input.planRevision,
+      exactContext: {
+        taskId: input.taskId,
+        companyId: input.companyId,
+        workflowId: input.workflowId,
+        projectId: input.projectId,
+        projectRevisionId: input.projectRevisionId,
+        releaseId: input.releaseId ?? null,
+        deliveryReviewId: input.deliveryReviewId ?? null,
+        finalReviewId: input.finalReviewId ?? null,
+        ciRunId: input.ciRunId ?? null,
+        acceptanceId: input.acceptanceId ?? null,
+        reasonArtifactId: input.reasonArtifactId ?? null,
+        branchName: input.branchName,
+        targetBaseSha: input.targetBaseSha,
+        subjectCommit: input.subjectCommit,
+        subjectTree: input.subjectTree,
+        leadSessionRef: input.leadSessionRef,
+      },
+      findingIds: openFindings.map((finding) => finding.findingId),
+    };
+    const planText = [`<!-- forge-repair-authority ${JSON.stringify(authorityEvidence)} -->`, "", summary, "", ...output.steps.map((step) => `${step.number}. ${step.instruction}\n   Verify: ${step.verification}`), "", `Verification: ${output.verificationStrategy}`, "Unresolved technical questions: none."].join("\n");
+    const evidenceText = JSON.stringify({
+      ...authorityEvidence,
+      evidenceArtifactIds: input.evidenceArtifactIds,
+    }, null, 2);
+    const [planArtifact, evidenceArtifact] = await Promise.all([
+      this.artifacts.put(input.companyId, "delivery-repair-plan", { filename: `${input.source}-${input.planRevision}.md`, mimeType: "text/markdown", bytes: Buffer.from(planText, "utf8") }),
+      this.artifacts.put(input.companyId, "agent-evidence", { filename: `${input.source}-${input.planRevision}-repair.json`, mimeType: "application/json", bytes: Buffer.from(evidenceText, "utf8") }),
+    ]);
+    const planId = `repair_plan_${createHash("sha256").update(JSON.stringify({ workflowId: input.workflowId, source: input.source, planRevision: input.planRevision, leadSessionRef: input.leadSessionRef, findings: openFindings.map((finding) => finding.findingId), subjectCommit: input.subjectCommit, subjectTree: input.subjectTree })).digest("hex").slice(0, 32)}`;
+    this.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
+        planArtifact.id, planArtifact.companyId, planArtifact.kind, planArtifact.filename, planArtifact.mimeType, planArtifact.byteSize, planArtifact.sha256, planArtifact.storagePath, planArtifact.createdAt,
+        evidenceArtifact.id, evidenceArtifact.companyId, evidenceArtifact.kind, evidenceArtifact.filename, evidenceArtifact.mimeType, evidenceArtifact.byteSize, evidenceArtifact.sha256, evidenceArtifact.storagePath, evidenceArtifact.createdAt,
+      );
+    });
+    this.database.authTransaction((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidenceArtifact.id, executionId));
+    return DeliveryRepairPlanResultSchema.parse({ planId, planArtifactId: planArtifact.id, planSha256: planArtifact.sha256, evidenceArtifactId: evidenceArtifact.id, leadSessionRef: input.leadSessionRef, summary, findings: openFindings });
   }
 
   async runLeadPlanning(rawInput: LeadPlanningActivityInput): Promise<LeadPlanningResult> {
@@ -705,12 +801,20 @@ export class AgentService {
   async reviewDelivery(rawInput: DeliveryReviewActivityInput): Promise<DeliveryReviewResult> {
     const input = DeliveryReviewActivityInputSchema.parse(rawInput);
     const isFinalReview = input.reviewKind === "final";
-    if (isFinalReview && (!input.releaseId || !input.ciRunId)) throw new AgentFailure("scoped-input-missing", "Final review requires the exact release and CI run");
+    if (isFinalReview && (!input.releaseId || !input.ciRunId || !input.deliveryReviewId)) throw new AgentFailure("scoped-input-missing", "Final review requires the exact release, delivery review, and CI run");
     const finalContext = isFinalReview ? this.database.authQuery((db) => db.prepare("SELECT r.id, r.base_sha AS baseSha, r.head_sha AS headSha, r.head_tree AS headTree, c.status FROM forge_releases r JOIN forge_ci_runs c ON c.id = ? AND c.release_id = r.id WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ? AND r.superseded_at IS NULL AND c.superseded_at IS NULL AND c.project_revision_id = ? AND c.policy_hash IS NOT NULL AND EXISTS (SELECT 1 FROM forge_ci_attempts ca WHERE ca.run_id = c.id AND ca.attempt_number = (SELECT MAX(latest.attempt_number) FROM forge_ci_attempts latest WHERE latest.run_id = c.id) AND ca.outcome = 'passed' AND ca.observed_head_sha = r.head_sha)").get(input.ciRunId, input.releaseId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId) as { id: string; baseSha: string; headSha: string; headTree: string; status: string } | undefined) : undefined;
     if (isFinalReview && (!finalContext || finalContext.status !== "passed" || finalContext.headSha.toLowerCase() !== input.subjectCommit.toLowerCase() || finalContext.headTree.toLowerCase() !== input.subjectTree.toLowerCase() || finalContext.baseSha.toLowerCase() !== input.targetBaseSha.toLowerCase())) {
       throw new AgentFailure("ci-not-authoritative", "Final review requires passed CI for the exact reviewed release head");
     }
-    const existingFinal = isFinalReview ? this.database.authQuery((db) => db.prepare("SELECT id, lead_execution_id AS leadExecutionId, session_ref AS sessionRef, opinion_artifact_id AS opinionArtifactId, evidence_artifact_id AS evidenceArtifactId, outcome, summary FROM forge_final_reviews WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND release_id = ? AND ci_run_id = ? AND subject_commit = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.releaseId, input.ciRunId, input.subjectCommit) as { id: string; leadExecutionId: string; sessionRef: string; opinionArtifactId: string; evidenceArtifactId: string; outcome: "approved" | "blocking"; summary: string } | undefined) : undefined;
+    if (isFinalReview) {
+      const exactDelivery = this.database.authQuery((db) => db.prepare(`SELECT dr.id
+        FROM forge_delivery_reviews dr
+        JOIN forge_developer_executions de ON de.id = ? AND de.id = ? AND de.task_id = dr.task_id AND de.company_id = dr.company_id AND de.workflow_id = dr.workflow_id
+        WHERE dr.id = ? AND dr.task_id = ? AND dr.company_id = ? AND dr.workflow_id = ? AND dr.outcome = 'approved'
+          AND dr.plan_revision = ? AND lower(dr.base_sha) = lower(?) AND lower(dr.subject_commit) = lower(?) AND lower(dr.subject_tree) = lower(?) AND dr.session_ref = ?`).get(input.developerExecutionId, input.developerExecutionId, input.deliveryReviewId, input.taskId, input.companyId, input.workflowId, input.planRevision, input.targetBaseSha, input.subjectCommit, input.subjectTree, input.leadSessionRef) as { id: string } | undefined);
+      if (!exactDelivery) throw new AgentFailure("delivery-review-not-authoritative", "Final review requires the exact approved delivery review and Developer execution");
+    }
+    const existingFinal = isFinalReview ? this.database.authQuery((db) => db.prepare("SELECT id, lead_execution_id AS leadExecutionId, session_ref AS sessionRef, opinion_artifact_id AS opinionArtifactId, evidence_artifact_id AS evidenceArtifactId, outcome, summary FROM forge_final_reviews WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND release_id = ? AND ci_run_id = ? AND delivery_review_id = ? AND developer_execution_id = ? AND subject_commit = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.releaseId, input.ciRunId, input.deliveryReviewId, input.developerExecutionId, input.subjectCommit) as { id: string; leadExecutionId: string; sessionRef: string; opinionArtifactId: string; evidenceArtifactId: string; outcome: "approved" | "blocking"; summary: string } | undefined) : undefined;
     if (existingFinal) {
       const findings = this.database.authQuery((db) => db.prepare("SELECT id AS findingId, severity, rationale, evidence_ref AS evidenceRef, disposition, repair_instruction AS repairInstruction FROM forge_final_review_findings WHERE review_id = ? ORDER BY id").all(existingFinal.id) as DeliveryReview["findings"]);
       return { reviewId: existingFinal.id, leadExecutionId: existingFinal.leadExecutionId, leadSessionRef: existingFinal.sessionRef, opinionArtifactId: existingFinal.opinionArtifactId, evidenceArtifactId: existingFinal.evidenceArtifactId, outcome: existingFinal.outcome, summary: existingFinal.summary, repairPlan: null, findings, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree };
@@ -768,9 +872,10 @@ export class AgentService {
     const expectedRawSessionId = rawSessionId;
     const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
     try {
+      const reviewPrompt = this.deliveryReviewPrompt(context.title, brief, plan, delivery, developerEvidence, gitEvidence) + (isFinalReview ? `\n\nExact required CI context: ${JSON.stringify({ releaseId: input.releaseId, ciRunId: input.ciRunId, status: finalContext?.status, headSha: finalContext?.headSha, headTree: finalContext?.headTree })}` : "");
       const result = await this.processRunner({
         command: this.command,
-          args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.deliveryReviewPrompt(context.title, brief, plan, delivery, developerEvidence, gitEvidence) + (isFinalReview ? `\n\nExact required CI context: ${JSON.stringify({ releaseId: input.releaseId, ciRunId: input.ciRunId, status: finalContext?.status, headSha: finalContext?.headSha, headTree: finalContext?.headTree })}` : "")],
+          args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", reviewPrompt],
         cwd: worktreePath,
         onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
         onLine: async (line) => {
@@ -783,14 +888,24 @@ export class AgentService {
         },
       });
       if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines, leadProfile.model);
-      const review = DeliveryReviewSchema.parse(parseDeliveryReview(outputLines));
+      let review: DeliveryReview;
+      try {
+        review = DeliveryReviewSchema.parse(parseDeliveryReview(outputLines));
+      } catch (error) {
+        if (!isFinalReview) throw error;
+        const correction = await this.processRunner({ command: this.command, args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", `${reviewPrompt}\n\nYour previous response did not satisfy the delivery-review JSON schema. Continue this same session and return exactly one corrected JSON object; do not repeat discovery or include commentary.`], cwd: worktreePath, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { const sanitized = safeJsonLine(line); const event = eventValue(line); if (event.threadId && event.threadId !== expectedRawSessionId) throw new AgentFailure("session-identity-conflict", "Lead delivery review returned a different session identity"); evidenceLines.push(sanitized); outputLines.push(line); await this.databaseHeartbeat(executionId, "running"); } });
+        if (correction.exitCode !== 0) throw agentProcessFailure(correction, outputLines, leadProfile.model);
+        review = DeliveryReviewSchema.parse(parseDeliveryReview(outputLines));
+      }
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const opinion = await this.artifacts.put(input.companyId, "delivery-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
+      const repairPlanArtifact = review.repairPlan ? await this.artifacts.put(input.companyId, "delivery-repair-plan", { filename: `${executionId}-repair-plan.md`, mimeType: "text/markdown", bytes: Buffer.from(review.repairPlan, "utf8") }) : undefined;
       const reviewId = `delivery_review_${randomBytes(12).toString("hex")}`;
       this.database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, opinion.id, opinion.companyId, opinion.kind, opinion.filename, opinion.mimeType, opinion.byteSize, opinion.sha256, opinion.storagePath, opinion.createdAt);
+        if (repairPlanArtifact) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(repairPlanArtifact.id, repairPlanArtifact.companyId, repairPlanArtifact.kind, repairPlanArtifact.filename, repairPlanArtifact.mimeType, repairPlanArtifact.byteSize, repairPlanArtifact.sha256, repairPlanArtifact.storagePath, repairPlanArtifact.createdAt);
         if (isFinalReview) {
-          db.prepare("INSERT INTO forge_final_reviews (id, task_id, company_id, workflow_id, release_id, ci_run_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.releaseId, input.ciRunId, input.planRevision, input.targetBaseSha, input.subjectCommit, input.subjectTree, executionId, input.leadSessionRef, review.outcome, review.summary, opinion.id, evidence.id, this.now().toISOString());
+          db.prepare("INSERT INTO forge_final_reviews (id, task_id, company_id, workflow_id, release_id, ci_run_id, delivery_review_id, developer_execution_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.releaseId, input.ciRunId, input.deliveryReviewId, input.developerExecutionId, input.planRevision, input.targetBaseSha, input.subjectCommit, input.subjectTree, executionId, input.leadSessionRef, review.outcome, review.summary, opinion.id, evidence.id, this.now().toISOString());
           for (const finding of review.findings) db.prepare("INSERT INTO forge_final_review_findings (id, review_id, task_id, company_id, severity, rationale, evidence_ref, disposition, repair_instruction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(finding.findingId, reviewId, input.taskId, input.companyId, finding.severity, finding.rationale, finding.evidenceRef, finding.disposition, finding.repairInstruction);
         } else {
           db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.planRevision, input.targetBaseSha, input.subjectCommit, input.subjectTree, executionId, input.leadSessionRef, review.outcome, review.summary, opinion.id, evidence.id, this.now().toISOString());
@@ -798,7 +913,7 @@ export class AgentService {
         }
         db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidence.id, executionId);
       });
-      return { reviewId, leadExecutionId: executionId, leadSessionRef: input.leadSessionRef, opinionArtifactId: opinion.id, evidenceArtifactId: evidence.id, outcome: review.outcome, summary: review.summary, repairPlan: review.repairPlan, findings: review.findings, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree };
+      return { reviewId, leadExecutionId: executionId, leadSessionRef: input.leadSessionRef, opinionArtifactId: opinion.id, evidenceArtifactId: evidence.id, outcome: review.outcome, summary: review.summary, repairPlan: review.repairPlan, repairPlanArtifactId: repairPlanArtifact?.id ?? null, repairPlanSha256: repairPlanArtifact?.sha256 ?? null, findings: review.findings, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree };
     } catch (error) {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("delivery-review-failed", "Codex Lead delivery review failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
@@ -896,6 +1011,16 @@ export class AgentService {
       this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); });
       throw failure;
     } finally { clearInterval(heartbeat); }
+  }
+
+  private deliveryRepairPlanPrompt(input: DeliveryRepairPlanActivityInput, findings: DeliveryFinding[]): string {
+    return [
+      "Continue the existing Forge Lead session. Produce one bounded delivery repair plan only; do not modify files, run provider commands, or invent facts.",
+      'Return exactly one JSON object with no markdown fences: {"kind":"delivery_repair_plan","summary":"...","steps":[{"number":1,"instruction":"...","verification":"..."}],"verificationStrategy":"...","unresolvedTechnicalQuestions":[]}.',
+      "Unresolved technical questions must be empty. Address every open blocking finding exactly once and preserve the exact task, project revision, branch, target base, subject commit, and subject tree.",
+      `Exact context: ${JSON.stringify({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectId: input.projectId, projectRevisionId: input.projectRevisionId, source: input.source, leadSessionRef: input.leadSessionRef, releaseId: input.releaseId ?? null, deliveryReviewId: input.deliveryReviewId ?? null, finalReviewId: input.finalReviewId ?? null, ciRunId: input.ciRunId ?? null, acceptanceId: input.acceptanceId ?? null, branchName: input.branchName, worktreePath: input.worktreePath, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree })}`,
+      `Open blocking findings: ${JSON.stringify(findings)}`,
+    ].join("\n\n");
   }
 
   private mergeConflictPlanPrompt(title: string, brief: string, plan: string, input: MergeConflictPlanInput, conflict: ForwardMergeConflictArtifact, pinnedCommands: { setupCommand: string; verificationCommand: string }): string {

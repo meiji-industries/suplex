@@ -4,7 +4,7 @@ import type { NativeConnection } from "@temporalio/worker";
 import { Worker } from "@temporalio/worker";
 
 import type { DurableArtifactReference, IssueActivities, IssueWorkflowInput, IssueWorkflowState } from "../src/temporal/issue-contracts.js";
-import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, issueStateQuery, issueWorkflow, publishDraftUpdate, reconcileMergeUpdate, repairDeliveryUpdate, reviewDeliveryUpdate, startDevelopmentUpdate, startPlanningUpdate } from "../src/temporal/workflows.js";
+import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, issueStateQuery, issueWorkflow, publishDraftUpdate, reconcileAcceptanceUpdate, reconcileMergeUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, reviewDeliveryUpdate, startDevelopmentUpdate, startPlanningUpdate } from "../src/temporal/workflows.js";
 import { buildProductionWorkflowBundle, temporalDataConverter } from "../src/temporal/workflow-bundle.js";
 
 export const replayScenarios = [
@@ -16,6 +16,13 @@ export const replayScenarios = [
   "release_base_drift_merged",
   "release_base_drift_conflict",
   "ci_wait_retry",
+  "acceptance_ready_timeout",
+  "acceptance_requested_changes",
+  "acceptance_provider_outage",
+  "manual_merge_open",
+  "manual_merge_closed",
+  "manual_merge_changed",
+  "final_review_failure",
 ] as const;
 
 export type ReplayScenario = typeof replayScenarios[number];
@@ -78,6 +85,7 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
     },
     async runSupplementalReview() { throw new Error("Supplemental review is not used by replay scenarios"); },
     async consolidateLeadPlan() { throw new Error("Plan consolidation is not used by replay scenarios"); },
+    async planDeliveryRepair(activityInput) { return { planId: `repair-plan-${activityInput.workflowId}`, planArtifactId: `repair-plan-artifact-${activityInput.workflowId}`, planSha256: "a".repeat(64), evidenceArtifactId: `repair-plan-evidence-${activityInput.workflowId}`, leadSessionRef: activityInput.leadSessionRef, summary: "Controlled repair plan", findings: activityInput.findings }; },
     async recordPlanDecision(activityInput) { return { decisionId: `decision-${activityInput.workflowId}-${activityInput.planRevision}` }; },
     async runDeveloperExecution(activityInput) {
       const scenario = scenarioFor(activityInput.workflowId);
@@ -98,7 +106,7 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
     async cancelDeveloperExecution() { return { status: "cancelled" }; },
     async publishRelease(activityInput) {
       const scenario = scenarioFor(activityInput.workflowId);
-      const base = { outcome: "completed" as const, releaseId: `release-${scenario}`, repository: "example/forge", branchName: activityInput.branchName, headSha: activityInput.subjectCommit, headTree: activityInput.subjectTree, pullRequestNumber: 1, pullRequestUrl: "https://example.test/pull/1", isDraft: true as const, reused: false, attempt: 1, targetBaseSha: activityInput.targetBaseSha };
+      const base = { outcome: "completed" as const, releaseId: `release-${scenario}`, repository: "example/forge", branchName: activityInput.branchName, baseBranch: "main", headSha: activityInput.subjectCommit, headTree: activityInput.subjectTree, pullRequestNumber: 1, pullRequestUrl: "https://example.test/pull/1", isDraft: true as const, reused: false, attempt: 1, targetBaseSha: activityInput.targetBaseSha };
       if (scenario === "release_base_drift_merged") return { ...base, outcome: "base-drift-merged" as const, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, isDraft: false as const, baseDriftMerged: true as const, priorHead: activityInput.subjectCommit, targetBaseSha: "9".repeat(40), headSha: "8".repeat(40), headTree: "7".repeat(40) };
       if (scenario === "release_base_drift_conflict") return { ...base, outcome: "base-drift-conflict" as const, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, isDraft: false as const, baseDriftConflict: true as const, forwardMergeId: "forward-merge-conflict", priorHead: activityInput.subjectCommit, targetBaseSha: "9".repeat(40), mergeConflictEvidence: artifact("merge-conflict-evidence", "merge-conflict-evidence") };
       return base;
@@ -108,17 +116,37 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
       const attempt = (ciAttempts.get(activityInput.releaseId) ?? 0) + 1;
       ciAttempts.set(activityInput.releaseId, attempt);
       const common = { attemptId: `ci-attempt-${scenario}-${attempt}`, attemptNumber: activityInput.attemptNumber, expectedHeadSha: activityInput.expectedHeadSha, observedHeadSha: activityInput.expectedHeadSha, evidenceArtifactId: `ci-evidence-${scenario}-${attempt}`, policyHash: "f".repeat(64), propagationDeadline: "2099-01-01T00:05:00.000Z", overallDeadline: "2099-01-01T01:00:00.000Z" };
-      if (scenario === "ci_wait_retry" && attempt === 1) return { ...common, runId: "ci-waiting", outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Controlled CI wait", retryAt: null, nextPollAt: "2099-01-01T00:00:00.000Z" };
+      if (scenario === "ci_wait_retry" && attempt === 1) return { ...common, runId: "ci-waiting", outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Controlled CI wait", retryAt: "2026-08-11T00:00:00.000Z", nextPollAt: "2026-08-11T00:00:00.000Z" };
       return { ...common, runId: `ci-${scenario}`, outcome: "passed", reason: "checks_passed", owner: null, repairable: false, summary: "Controlled CI passed", retryAt: null, nextPollAt: null };
     },
     async planCiRepair() { throw new Error("CI repair planning is not used by replay scenarios"); },
     async runCiRepair() { throw new Error("CI repair execution is not used by replay scenarios"); },
     async finalReview(activityInput) {
       const scenario = scenarioFor(activityInput.workflowId);
-      return { finalReviewId: `final-review-${scenario}`, leadExecutionId: `final-review-execution-${scenario}`, leadSessionRef: `lead-session-${scenario}`, opinionArtifactId: `final-review-artifact-${scenario}`, evidenceArtifactId: `final-review-evidence-${scenario}`, reviewArtifact: artifact("delivery-review", `final-review-artifact-${scenario}`), outcome: "approved", summary: "Controlled final review approved" };
+      if (scenario === "final_review_failure") throw ApplicationFailure.nonRetryable("Final review provider unavailable", "final-review-unavailable");
+      return { finalReviewId: `final-review-${scenario}`, leadExecutionId: `final-review-execution-${scenario}`, leadSessionRef: `lead-session-${scenario}`, opinionArtifactId: `final-review-artifact-${scenario}`, evidenceArtifactId: `final-review-evidence-${scenario}`, reviewArtifact: artifact("delivery-review", `final-review-artifact-${scenario}`), outcome: "approved", summary: "Controlled final review approved", findings: [], repairPlan: null, repairPlanArtifactId: null, repairPlanSha256: null };
     },
-    async acceptDelivery(activityInput) { return { acceptanceId: `acceptance-${activityInput.releaseId}`, status: "accepted", pullRequestNumber: 1, pullRequestUrl: "https://example.test/pull/1" }; },
-    async reconcileMerge() { return { outcome: "merged", pullRequestNumber: 1, pullRequestUrl: "https://example.test/pull/1" }; },
+    async acceptDelivery(activityInput) {
+      const scenario = scenarioFor(activityInput.workflowId);
+      const common = { pullRequestNumber: 1, pullRequestUrl: "https://example.test/pull/1" };
+      if (scenario === "acceptance_ready_timeout") return { ...common, acceptanceId: `acceptance-${scenario}`, status: "pending_ready", outcome: "provider_unavailable", retryAt: null, blockerCode: "provider_unavailable", blockerSummary: "Controlled ready mutation timeout" };
+      if (scenario === "acceptance_requested_changes") return { ...common, acceptanceId: `acceptance-${scenario}`, status: "requested_changes", reasonArtifactId: `reason-${scenario}` };
+      if (scenario === "acceptance_provider_outage") return { ...common, acceptanceId: null, status: "blocked", outcome: "provider_unavailable", retryAt: null, blockerCode: "provider_unavailable", blockerSummary: "Controlled pre-intent provider outage" };
+      return { ...common, acceptanceId: `acceptance-${scenario}`, status: "accepted", acceptedAt: "2026-08-11T00:00:00.000Z", readyAt: "2026-08-11T00:00:00.000Z" };
+    },
+    async reconcileAcceptance(activityInput) {
+      const scenario = scenarioFor(activityInput.workflowId);
+      if (scenario === "acceptance_ready_timeout") return { acceptanceId: activityInput.acceptanceId, status: "pending_ready", outcome: "provider_unavailable", retryAt: null, readyAt: null, acceptedAt: "2026-08-11T00:00:00.000Z", blockerCode: "provider_unavailable", blockerSummary: "Controlled ready observation timeout", pullRequestNumber: 1, pullRequestUrl: "https://example.test/pull/1" };
+      return { acceptanceId: activityInput.acceptanceId, status: "accepted", outcome: "ready", retryAt: null, readyAt: "2026-08-11T00:00:00.000Z", acceptedAt: "2026-08-11T00:00:00.000Z", pullRequestNumber: 1, pullRequestUrl: "https://example.test/pull/1" };
+    },
+    async reconcileMerge(activityInput) {
+      const scenario = scenarioFor(activityInput.workflowId);
+      const common = { pullRequestNumber: 1, pullRequestUrl: "https://example.test/pull/1", mergeObservationId: `merge-observation-${scenario}`, completionReceiptId: null, observedAt: "2026-08-11T00:00:00.000Z", mergedAt: null, retryAt: null };
+      if (scenario === "manual_merge_open") return { ...common, outcome: "open" };
+      if (scenario === "manual_merge_closed") return { ...common, outcome: "closed_without_merge", blockerCode: "closed_without_merge", blockerSummary: "Controlled pull request closure" };
+      if (scenario === "manual_merge_changed") return { ...common, outcome: "changed_head", blockerCode: "changed_head", blockerSummary: "Controlled pull request head change" };
+      return { ...common, outcome: "merged", completionReceiptId: "completion-receipt", mergedAt: "2026-08-11T00:00:00.000Z" };
+    },
     async planMergeConflict(activityInput) { return { planId: "conflict-plan", planArtifactId: "conflict-plan-artifact", evidenceArtifactId: "conflict-plan-evidence", leadExecutionId: "conflict-plan-execution", leadSessionRef: activityInput.leadSessionRef, summary: "Controlled conflict plan" }; },
     async resolveMergeConflict() { throw new Error("Conflict resolution is not used by replay scenarios"); },
   };
@@ -162,11 +190,14 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
         state = await handle.executeUpdate(reviewDeliveryUpdate, { args: [command(state.revision, `${scenario}-review`)], updateId: `${scenario}-review` });
         if (scenario === "implementation_repair") state = await handle.executeUpdate(repairDeliveryUpdate, { args: [command(state.revision, `${scenario}-repair`)], updateId: `${scenario}-repair` });
         else state = await handle.executeUpdate(publishDraftUpdate, { args: [command(state.revision, `${scenario}-publish`)], updateId: `${scenario}-publish` });
-        if (scenario === "normal_success") {
+        if (["normal_success", "acceptance_ready_timeout", "acceptance_requested_changes", "acceptance_provider_outage", "manual_merge_open", "manual_merge_closed", "manual_merge_changed"].includes(scenario)) {
           state = await waitForState(handle, (candidate) => candidate.phase === "accepted");
-          state = await handle.executeUpdate(acceptDeliveryUpdate, { args: [{ ...command(state.revision, `${scenario}-accept`), decision: "accept" }], updateId: `${scenario}-accept` });
-          state = await handle.executeUpdate(reconcileMergeUpdate, { args: [command(state.revision, `${scenario}-merge`)], updateId: `${scenario}-merge` });
-        } else if (scenario === "ci_wait_retry") state = await waitForState(handle, (candidate) => candidate.phase === "ci_waiting" && candidate.ciRunId === "ci-waiting");
+          if (scenario === "acceptance_requested_changes") state = await handle.executeUpdate(requestDeliveryChangesUpdate, { args: [{ ...command(state.revision, `${scenario}-request-changes`), note: "Controlled member repair request" }], updateId: `${scenario}-request-changes` });
+          else state = await handle.executeUpdate(acceptDeliveryUpdate, { args: [{ ...command(state.revision, `${scenario}-accept`), decision: "accept" }], updateId: `${scenario}-accept` });
+          if (scenario === "acceptance_ready_timeout") state = await handle.executeUpdate(reconcileAcceptanceUpdate, { args: [command(state.revision, `${scenario}-reconcile-ready`)], updateId: `${scenario}-reconcile-ready` });
+          if (["normal_success", "manual_merge_open", "manual_merge_closed", "manual_merge_changed"].includes(scenario)) state = await handle.executeUpdate(reconcileMergeUpdate, { args: [command(state.revision, `${scenario}-merge`)], updateId: `${scenario}-merge` });
+        } else if (scenario === "ci_wait_retry") state = await waitForState(handle, (candidate) => candidate.phase === "accepted" && candidate.ciRunId === "ci-ci_wait_retry");
+        else if (scenario === "final_review_failure") state = await waitForState(handle, (candidate) => candidate.phase === "delivery_blocked" && candidate.finalReviewFailureCode === "final_review_unavailable");
       }
       executions.push({ scenario, workflowId, firstRunId: handle.firstExecutionRunId, currentPhase: state.phase, finalState: state, projections: projections.get(workflowId)! });
     }

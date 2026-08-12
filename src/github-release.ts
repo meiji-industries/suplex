@@ -377,6 +377,7 @@ export interface PublishReleaseResult {
   releaseId: string;
   repository: string;
   branchName: string;
+  baseBranch: string;
   headSha: string;
   headTree: string;
   pullRequest: GithubPullRequest;
@@ -482,7 +483,7 @@ export class ReleaseService {
       db.prepare("UPDATE forge_provider_operations SET status = 'completed', completed_at = ?, updated_at = ? WHERE operation_key = ?").run(now, now, operationKey);
       db.prepare("UPDATE forge_releases SET base_sha = ?, head_sha = ?, head_tree = ?, status = 'draft', title = ?, body_artifact_id = ?, reused = 1, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(coordinates.expectedBaseSha, reviewed.commitSha, reviewed.treeSha, projection.title, bodyArtifact.id, now, release.id, input.taskId, input.companyId, input.workflowId);
     });
-    return { releaseId: release.id, repository: coordinates.repository, branchName: coordinates.headBranch, headSha: reviewed.commitSha, headTree: reviewed.treeSha, pullRequest, reused: true, attempt: this.operationAttempt(release.releaseKey) };
+    return { releaseId: release.id, repository: coordinates.repository, branchName: coordinates.headBranch, baseBranch: coordinates.baseBranch, headSha: reviewed.commitSha, headTree: reviewed.treeSha, pullRequest, reused: true, attempt: this.operationAttempt(release.releaseKey) };
   }
 
   async publish(input: PublishReleaseInput): Promise<PublishReleaseResult> {
@@ -564,7 +565,7 @@ export class ReleaseService {
       this.database.authTransaction((db) => {
         db.prepare("UPDATE forge_releases SET status = 'draft', pr_number = ?, pr_url = ?, reused = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(pullRequest.number, pullRequest.url, reused ? 1 : 0, now, releaseId, input.taskId, input.companyId, input.workflowId);
       });
-      return { releaseId, repository: coordinates.repository, branchName: coordinates.headBranch, headSha: reviewed.commitSha, headTree: reviewed.treeSha, pullRequest, reused, attempt: this.operationAttempt(releaseKey) };
+      return { releaseId, repository: coordinates.repository, branchName: coordinates.headBranch, baseBranch: coordinates.baseBranch, headSha: reviewed.commitSha, headTree: reviewed.treeSha, pullRequest, reused, attempt: this.operationAttempt(releaseKey) };
     } catch (error) {
       return this.fail(input, error);
     }

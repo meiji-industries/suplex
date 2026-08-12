@@ -75,6 +75,9 @@ function itemId(companyId: string, taskId: string, category: AttentionCategory):
 
 function candidateFor(database: ForgeDatabase, row: ProjectionRow): AttentionCandidate | undefined {
   const commands = parseCommands(row.allowed_commands_json);
+  if (row.phase === "ready_reconciliation" && commands.includes("reconcile_acceptance")) {
+    return { taskId: row.task_id, category: "provider_ambiguity", summary: "Forge is reconciling the accepted pull request's ready-for-review state.", action: "Inspect the exact pull request state and retry ready reconciliation when the provider is available." };
+  }
   if (row.phase === "delivery_blocked" && commands.includes("record_delivery_decision")) {
     return { taskId: row.task_id, category: "member_decision", summary: "A member decision is required before this issue can continue.", action: "Review the exact delivery evidence and record a decision." };
   }
@@ -171,7 +174,7 @@ export class AttentionService {
       return this.database.authQuery((db) => {
         const rows = db.prepare(`SELECT ip.task_id, t.title AS task_title, ip.company_id, ip.phase, ip.allowed_commands_json, ip.updated_at
           FROM forge_issue_projections ip JOIN forge_tasks t ON t.id = ip.task_id WHERE ip.company_id = ? ORDER BY ip.updated_at, ip.task_id`).all(company.id) as ProjectionRow[];
-        const activePhases = new Set(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_required", "final_review", "accepted", "manual_merge"]);
+        const activePhases = new Set(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge"]);
         const phases: Record<string, number> = {};
         for (const row of rows) if (activePhases.has(row.phase)) phases[row.phase] = (phases[row.phase] ?? 0) + 1;
         const attentionRows = db.prepare(`SELECT ai.id, ai.company_id, ai.task_id, t.title AS task_title, ai.category, ai.summary, ai.action, ai.evidence_ref, ai.updated_at

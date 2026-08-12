@@ -2,8 +2,7 @@ import { expect, test } from "vitest";
 
 import { createTestConfig } from "../src/config.js";
 import type { OwnedProcess, ProcessController, ProcessInspection } from "../src/process-manager.js";
-import { healthProbeAddress, readinessProbePath, reconcileExistingRegistry, temporalContainerCompatibilityError, type RuntimeReconciliationController } from "../src/runtime.js";
-import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
+import { healthProbeAddress, readinessProbePath, reconcileExistingRegistry, type RuntimeReconciliationController } from "../src/runtime.js";
 
 function ownedProcess(name: "worker" | "server", pid: number): OwnedProcess {
   return {
@@ -64,34 +63,7 @@ test("probes the configured address for direct Tailscale HTTP", () => {
   expect(healthProbeAddress(config)).toBe("http://100.87.170.105:4111");
 });
 
-test("an incomplete registry with no worker or server is reconciled instead of reported as running", async () => {
-  const stopped: string[] = [];
-  let containerRunning = true;
-  const controller = reconciliationController({
-    async inspect() {
-      return undefined;
-    },
-    async inspectContainer() {
-      return { id: "temporal-1", name: "temporal-test-installation", image: "temporal@sha256:abc", owner: "runtime-test-installation", status: containerRunning ? "running" : "exited" };
-    },
-    async signal() {},
-    async stopContainer(id) {
-      stopped.push(id);
-      containerRunning = false;
-    },
-  });
-
-  const result = await reconcileExistingRegistry({
-    version: 1,
-    processes: [],
-    temporalContainer: { id: "temporal-1", name: "temporal-test-installation", owner: "runtime-test-installation", image: "temporal@sha256:abc" },
-  }, createTestConfig("/tmp/forge-runtime-test"), controller);
-
-  expect(result).toBe(false);
-  expect(stopped).toEqual(["temporal-1"]);
-});
-
-test("a registry without Temporal is reconciled even when both ready Forge children are live", async () => {
+test("a registry is current when both ready Forge children are live", async () => {
   const worker = ownedProcess("worker", 4101);
   const server = ownedProcess("server", 4102);
   const livePids = new Set([worker.pid, server.pid]);
@@ -101,18 +73,14 @@ test("a registry without Temporal is reconciled even when both ready Forge child
       if (!livePids.has(pid)) return undefined;
       return inspection(pid === worker.pid ? worker : server);
     },
-    async inspectContainer() {
-      return undefined;
-    },
     async signal(pid) {
       signalled.push(pid);
       livePids.delete(pid);
     },
-    async stopContainer() {},
   });
 
-  await expect(reconcileExistingRegistry({ version: 1, processes: [worker, server] }, createTestConfig("/tmp/forge-runtime-test"), controller)).resolves.toBe(false);
-  expect(signalled).toEqual([worker.pid, server.pid]);
+  await expect(reconcileExistingRegistry({ version: 1, processes: [worker, server] }, createTestConfig("/tmp/forge-runtime-test"), controller)).resolves.toBe(true);
+  expect(signalled).toEqual([]);
 });
 
 test("reconciliation blocks replacement startup when a matching recorded process remains live after SIGTERM", async () => {
@@ -121,11 +89,7 @@ test("reconciliation blocks replacement startup when a matching recorded process
     async inspect(pid) {
       return pid === worker.pid ? inspection(worker) : undefined;
     },
-    async inspectContainer() {
-      return undefined;
-    },
     async signal() {},
-    async stopContainer() {},
   });
 
   await expect(reconcileExistingRegistry({ version: 1, processes: [worker] }, createTestConfig("/tmp/forge-runtime-test"), controller))
@@ -139,13 +103,9 @@ test("reconciliation refuses a live legacy process record without exact ownershi
     async inspect(pid) {
       return pid === worker.pid ? inspection(worker) : undefined;
     },
-    async inspectContainer() {
-      return undefined;
-    },
     async signal() {
       throw new Error("an ownership-ambiguous process must not be signalled");
     },
-    async stopContainer() {},
   });
 
   await expect(reconcileExistingRegistry({ version: 1, processes: [legacyWorker] }, createTestConfig("/tmp/forge-runtime-test"), controller))
@@ -158,11 +118,7 @@ test("reconciliation blocks replacement startup when Tailscale Serve remains con
     async inspect() {
       return undefined;
     },
-    async inspectContainer() {
-      return undefined;
-    },
     async signal() {},
-    async stopContainer() {},
   }, {
     async serveIsConfigured() {
       return true;
@@ -180,23 +136,4 @@ test("reconciliation blocks replacement startup when Tailscale Serve remains con
   }, config, controller)).rejects.toThrow(/could not prove.*serve route stopped/i);
 
   expect(disableCalls).toBe(1);
-});
-
-test("only a compatible neutral Temporal container can be reused", () => {
-  const config = createTestConfig("/tmp/forge-runtime-test");
-  const identifiers = runtimeIdentifiers(config.installationId);
-  const compatible = {
-    id: "temporal-1",
-    owner: identifiers.ownerLabel,
-    status: "running",
-    namespace: config.temporalNamespace,
-    volumeNames: [identifiers.temporalVolumeName],
-    image: config.temporalImage,
-  };
-
-  expect(temporalContainerCompatibilityError(compatible, config)).toBeUndefined();
-  expect(temporalContainerCompatibilityError({ ...compatible, image: "temporalio/temporal:latest" }, config)).toMatch(/image/i);
-  expect(temporalContainerCompatibilityError({ ...compatible, namespace: "other" }, config)).toMatch(/namespace/i);
-  expect(temporalContainerCompatibilityError({ ...compatible, volumeNames: [] }, config)).toMatch(/volume/i);
-  expect(temporalContainerCompatibilityError({ ...compatible, status: "restarting" }, config)).toMatch(/status/i);
 });

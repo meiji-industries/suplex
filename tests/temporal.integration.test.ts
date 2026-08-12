@@ -1,9 +1,9 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { execFile } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { expect, test } from "vitest";
 import { fileURLToPath } from "node:url";
 
@@ -11,14 +11,13 @@ import { Connection } from "@temporalio/client";
 import proto from "@temporalio/proto";
 import { NativeConnection, Worker } from "@temporalio/worker";
 
-import { createTestConfig, loadConfig } from "../src/config.js";
+import { createTestConfig } from "../src/config.js";
 import { createForgeServer, type ForgeServer } from "../src/server.js";
 import { ForgeDatabase } from "../src/database.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 import { createActivities } from "../src/temporal/activities.js";
 import { approveIssuePlan, connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, rejectIssuePlan, repairIssueDelivery, reviewIssueDelivery, startIssueDevelopment, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
 
-const execFileAsync = promisify(execFile);
 const replayDurationKeys = new Set(["firstWorkflowTaskBackoff", "workflowTaskTimeout", "startToCloseTimeout", "scheduleToCloseTimeout", "scheduleToStartTimeout", "heartbeatTimeout", "initialInterval", "maximumInterval"]);
 
 function sanitizeReplayValue(value: unknown, key?: string): unknown {
@@ -35,53 +34,24 @@ function sanitizeReplayValue(value: unknown, key?: string): unknown {
   return Object.fromEntries(Object.entries(record).map(([entryKey, entryValue]) => [entryKey, sanitizeReplayValue(entryValue, entryKey)]));
 }
 
-async function containerId(name: string): Promise<string | undefined> {
-  try {
-    const result = await execFileAsync("docker", ["inspect", "--format", "{{.Id}}", name]);
-    return result.stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
+async function availablePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      if (!address || typeof address === "string") return reject(new Error("Could not allocate a Temporal test port"));
+      server.close((error) => error ? reject(error) : resolve(address.port));
+    });
+  });
 }
 
-async function publishedTemporalPort(name: string): Promise<number> {
-  const result = await execFileAsync("docker", ["port", name, "7233/tcp"]);
-  const match = /:(\d+)\s*$/.exec(result.stdout.trim());
-  if (!match) {
-    throw new Error(`Docker did not publish a host port for ${name}`);
-  }
-  return Number(match[1]);
-}
-
-async function containerStatus(name: string): Promise<string | undefined> {
-  try {
-    const result = await execFileAsync("docker", ["inspect", "--format", "{{.State.Status}}", name]);
-    return result.stdout.trim() || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-test("starts, persists, restarts, and queries a probe Workflow without touching the live Forge container", async () => {
+test("starts, persists, restarts, and queries a probe Workflow in isolated test infrastructure", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-temporal-test-"));
-  const containerName = `temporal-test-${process.pid}-${randomUUID().slice(0, 8)}`;
-  const liveForgeContainerId = await containerId("forge-temporal");
-  if (!liveForgeContainerId) {
-    await rm(root, { recursive: true, force: true });
-    throw new Error("The live Forge Temporal container is required for the non-disruptive integration proof");
-  }
-  expect(await containerStatus("forge-temporal")).toBe("running");
-  expect(await publishedTemporalPort("forge-temporal")).toBe(7233);
-  const liveConfig = loadConfig();
-  const liveNeutralContainerName = runtimeIdentifiers(liveConfig.installationId).temporalContainerName;
-  const liveNeutralContainerId = await containerId(liveNeutralContainerName);
-  if (!liveNeutralContainerId) {
-    await rm(root, { recursive: true, force: true });
-    throw new Error("The migrated neutral Forge Temporal container is required for the non-disruptive integration proof");
-  }
-  expect(await containerStatus(liveNeutralContainerName)).toBe("running");
-  expect(await publishedTemporalPort(liveNeutralContainerName)).toBeGreaterThan(0);
+  const temporalPort = await availablePort();
   let config = createTestConfig(root, { taskQueue: `tasks-test-${process.pid}-${randomUUID().slice(0, 8)}` });
+  let temporalProcess: ChildProcess | undefined;
+  let temporalError = "";
   let worker: Worker | undefined;
   let workerRun: Promise<void> | undefined;
   let workerConnection: NativeConnection | undefined;
@@ -90,14 +60,17 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
   let workflowId = "";
 
   try {
-    await execFileAsync("docker", [
-      "run", "--detach", "--name", containerName,
-      "--publish", "127.0.0.1::7233",
-      config.temporalImage, "server", "start-dev", "--ip", "0.0.0.0", "--namespace", config.temporalNamespace,
-    ]);
+    temporalProcess = spawn("temporal", [
+      "server", "start-dev", "--headless", "--ip", "127.0.0.1", "--port", String(temporalPort),
+      "--db-filename", join(root, "temporal.db"), "--namespace", config.temporalNamespace,
+      "--search-attribute", "CompanyId=Keyword", "--search-attribute", "ProjectId=Keyword", "--search-attribute", "IssueId=Keyword",
+    ], { stdio: ["ignore", "ignore", "pipe"] });
+    temporalProcess.stderr?.on("data", (chunk: Buffer) => {
+      temporalError += chunk.toString();
+    });
     config = createTestConfig(root, {
       taskQueue: config.taskQueue,
-      temporalAddress: `127.0.0.1:${await publishedTemporalPort(containerName)}`,
+      temporalAddress: `127.0.0.1:${temporalPort}`,
     });
     let temporalConnection: Connection | undefined;
     for (let attempt = 0; attempt < 60; attempt += 1) {
@@ -110,7 +83,7 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
     }
     expect(temporalConnection).toBeDefined();
     if (!temporalConnection) {
-      throw new Error("Temporal connection was not established");
+      throw new Error(`Temporal connection was not established: ${temporalError}`);
     }
     await ensureTemporalFoundation(temporalConnection, config);
     temporalConnection.close();
@@ -262,13 +235,10 @@ test("starts, persists, restarts, and queries a probe Workflow without touching 
       await api.app.close().catch(() => undefined);
       api.database.close();
     }
-    await execFileAsync("docker", ["rm", "--force", containerName]).catch(() => undefined);
-    expect(await containerId("forge-temporal")).toBe(liveForgeContainerId);
-    expect(await containerStatus("forge-temporal")).toBe("running");
-    expect(await publishedTemporalPort("forge-temporal")).toBe(7233);
-    expect(await containerId(liveNeutralContainerName)).toBe(liveNeutralContainerId);
-    expect(await containerStatus(liveNeutralContainerName)).toBe("running");
-    expect(await publishedTemporalPort(liveNeutralContainerName)).toBeGreaterThan(0);
+    temporalProcess?.kill("SIGTERM");
+    if (temporalProcess && temporalProcess.exitCode === null) {
+      await new Promise((resolve) => temporalProcess!.once("exit", resolve));
+    }
     await rm(root, { recursive: true, force: true });
   }
 });

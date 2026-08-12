@@ -45,7 +45,7 @@ A compact web view of Temporal, the database, artifact storage, workers, and pro
 _Avoid_: CLI-only diagnostics, hidden host readiness
 
 **Manual backup**:
-A web-triggered snapshot action with visible last-backup age. It includes Temporal state, the Forge database, artifacts, and non-secret configuration, while excluding provider and agent credentials. Automatic backup scheduling is deferred in the pilot.
+A web-triggered snapshot action with visible last-backup age. It includes the Forge database, artifacts, and non-secret Temporal Cloud connection configuration while Workflow history remains in Temporal Cloud; provider, agent, and Temporal credentials are excluded. Automatic backup scheduling is deferred in the pilot.
 _Avoid_: Unobservable backup age, MVP backup scheduler
 
 **Active project**:

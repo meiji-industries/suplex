@@ -3,9 +3,6 @@ import { z } from "zod";
 import { HEALTH_CHECK_IDS } from "./health-contract.js";
 
 const primitive = z.union([z.string(), z.number(), z.boolean()]);
-export const ImmutableTemporalImageSchema = z.string()
-  .regex(/^[^:@\s]+\/[^:@\s]+:[^:@\s]+@sha256:[a-f0-9]{64}$/)
-  .refine((image) => !image.includes(":latest@"), { message: "Temporal image tags must be explicit releases, not latest" });
 
 export const ForgeEnvironmentSchema = z.object({
   FORGE_ACCESS_MODE: z.literal("tailscale").optional(),
@@ -20,11 +17,10 @@ export const ForgeEnvironmentSchema = z.object({
   FORGE_REPOSITORY_ROOT: z.string().min(1).optional(),
   FORGE_WORKTREE_ROOT: z.string().min(1).optional(),
   FORGE_INSTALLATION_ID: z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/).optional(),
-  FORGE_LEGACY_RUNTIME: z.literal("1").optional(),
-  FORGE_TEMPORAL_MODE: z.enum(["managed", "external"]).optional(),
+  FORGE_TEMPORAL_TARGET: z.enum(["local", "cloud"]).optional(),
   FORGE_TEMPORAL_ADDRESS: z.string().regex(/^[^:\s]+:\d+$/).optional(),
-  FORGE_TEMPORAL_NAMESPACE: z.string().min(1).optional(),
-  FORGE_TEMPORAL_IMAGE: ImmutableTemporalImageSchema.optional(),
+  FORGE_TEMPORAL_NAMESPACE: z.string().regex(/^\S+$/).optional(),
+  FORGE_TEMPORAL_API_KEY: z.string().regex(/^\S+$/).optional(),
   FORGE_TASK_QUEUE: z.string().min(1).optional(),
   FORGE_DELIVERY_REPAIR_LIMIT: z.string().regex(/^\d+$/).optional(),
   FORGE_CODEX_CAPACITY: z.string().regex(/^\d+$/).optional(),
@@ -42,14 +38,21 @@ export const ForgeConfigSchema = z.object({
   runtimeRoot: z.string().min(1),
   repositoryRoot: z.string().min(1),
   worktreeRoot: z.string().min(1),
+  temporalTarget: z.enum(["local", "cloud"]),
   temporalAddress: z.string().regex(/^[^:\s]+:\d+$/),
-  temporalMode: z.enum(["managed", "external"]),
   temporalNamespace: z.string().min(1),
-  temporalImage: ImmutableTemporalImageSchema,
+  temporalApiKey: z.string().min(1).optional(),
   taskQueue: z.string().min(1),
   deliveryRepairCycleLimit: z.number().int().min(0).max(5),
   externalTurnCapacity: z.number().int().min(1).max(64),
   installationId: z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/),
+}).superRefine((config, context) => {
+  if (config.temporalTarget === "cloud" && !config.temporalApiKey) {
+    context.addIssue({ code: "custom", path: ["temporalApiKey"], message: "Temporal Cloud requires an API key" });
+  }
+  if (config.temporalTarget === "local" && config.temporalApiKey) {
+    context.addIssue({ code: "custom", path: ["temporalApiKey"], message: "Local Temporal must not use a Cloud API key" });
+  }
 });
 
 export const OwnedProcessSchema = z.object({
@@ -65,15 +68,6 @@ export const OwnedProcessSchema = z.object({
   ready: z.boolean().optional(),
 });
 
-export const TemporalContainerSchema = z.object({
-  id: z.string().min(1),
-  name: z.string().min(1),
-  owner: z.string().min(1).optional(),
-  legacy: z.boolean().optional(),
-  address: z.string().regex(/^[^:\s]+:\d+$/).optional(),
-  image: z.string().min(1).optional(),
-});
-
 export const TailscaleServeSchema = z.object({
   port: z.number().int().min(1).max(65535),
   backend: z.string().url(),
@@ -82,7 +76,6 @@ export const TailscaleServeSchema = z.object({
 export const ProcessRegistrySchema = z.object({
   version: z.literal(1),
   processes: z.array(OwnedProcessSchema),
-  temporalContainer: TemporalContainerSchema.optional(),
   tailscaleServe: TailscaleServeSchema.optional(),
 });
 
@@ -97,18 +90,6 @@ export const TailscaleServeStatusSchema = z.object({
       Handlers: z.record(z.string(), z.object({ Proxy: z.string().optional() })).optional(),
     }),
   ).optional(),
-});
-
-export const DockerContainerInspectionSchema = z.object({
-  Id: z.string().min(1),
-  Image: z.string().min(1).optional(),
-  Config: z.object({
-    Image: z.string().min(1).optional(),
-    Cmd: z.array(z.string()).optional(),
-    Labels: z.record(z.string(), z.string()).optional(),
-  }).optional(),
-  State: z.object({ Status: z.string().min(1) }),
-  Mounts: z.array(z.object({ Name: z.string().optional() })).optional(),
 });
 
 export const GhAuthStatusSchema = z.object({

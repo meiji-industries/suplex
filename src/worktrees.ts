@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { chmod, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, chmod, constants, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
@@ -21,6 +21,7 @@ export interface WorktreeInput {
   taskId: string;
   targetBaseSha: string;
   branchName?: string;
+  pathSegment?: string;
 }
 
 export interface WorktreeRecord {
@@ -45,6 +46,30 @@ export interface WorktreeDiff {
   headSha: string;
 }
 
+export interface PlanRevisionInspectionInput {
+  repositoryPath: string;
+  worktreeRoot: string;
+  worktreePath: string;
+  branchName: string;
+  baseSha: string;
+  resultCommit?: string | null;
+  resultTree?: string | null;
+}
+
+export interface PlanRevisionInspectionResult {
+  branchName: string;
+  baseSha: string;
+  headSha: string;
+  treeSha: string;
+  dirtyState: "clean";
+}
+
+export interface ExactBaseValidationInput {
+  repositoryPath: string;
+  candidateSha: string;
+  acceptedTargetSha: string;
+}
+
 interface GitAdapter {
   run(args: string[], cwd: string): Promise<string>;
 }
@@ -52,6 +77,7 @@ interface GitAdapter {
 const taskIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 const shaPattern = /^[a-f0-9]{40,64}$/i;
 const branchPattern = /^(?![./])(?!.*(?:\.\.|\.lock$|\/\/|\s|[~^:?*\[\\]))[A-Za-z0-9._/-]+$/;
+const pathSegmentPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 function withinRoot(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
@@ -107,7 +133,9 @@ export class WorktreeManager {
     if (withinRoot(repositoryPath, worktreeRoot) || withinRoot(worktreeRoot, repositoryPath)) throw new WorktreeFailure("worktree-separation", "Worktree root must be separate from the repository");
     const branchName = input.branchName ?? `forge/issue/${input.taskId}`;
     if (!branchPattern.test(branchName) || branchName.includes("..")) throw new WorktreeFailure("unsafe-branch", "Issue branch name is unsafe");
-    const worktreePath = resolve(worktreeRoot, input.taskId);
+    const pathSegment = input.pathSegment ?? input.taskId;
+    if (!pathSegmentPattern.test(pathSegment)) throw new WorktreeFailure("unsafe-worktree-segment", "Worktree path segment is unsafe");
+    const worktreePath = resolve(worktreeRoot, pathSegment);
     if (!withinRoot(worktreeRoot, worktreePath)) throw new WorktreeFailure("worktree-escape", "Worktree path escaped the configured root");
     try {
       await lstat(worktreePath);
@@ -172,12 +200,62 @@ export class WorktreeManager {
     }
   }
 
+  async inspectForPlanRevision(input: PlanRevisionInspectionInput): Promise<PlanRevisionInspectionResult> {
+    if (!shaPattern.test(input.baseSha) || (input.resultCommit && !shaPattern.test(input.resultCommit)) || (input.resultTree && !shaPattern.test(input.resultTree))) throw new WorktreeFailure("invalid-revision-coordinate", "Preserved Git coordinates are invalid");
+    const repositoryPath = await canonicalDirectory(input.repositoryPath, "repository-unavailable");
+    const worktreeRoot = await canonicalDirectory(input.worktreeRoot, "worktree-root-unavailable");
+    const expectedPath = resolve(input.worktreePath);
+    if (!withinRoot(worktreeRoot, expectedPath) || expectedPath === worktreeRoot) throw new WorktreeFailure("worktree-escape", "Preserved worktree is outside the configured root");
+    const canonicalWorktree = await canonicalDirectory(expectedPath, "worktree-unavailable");
+    if (canonicalWorktree !== expectedPath) throw new WorktreeFailure("worktree-symlink", "Preserved worktree path is not canonical");
+    try {
+      const [configuredGitDir, worktreeGitDir, actualRoot, actualBranch, headSha, treeSha] = await Promise.all([
+        this.git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"], repositoryPath),
+        this.git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"], canonicalWorktree),
+        this.git.run(["rev-parse", "--show-toplevel"], canonicalWorktree),
+        this.git.run(["symbolic-ref", "--short", "HEAD"], canonicalWorktree),
+        this.git.run(["rev-parse", "HEAD"], canonicalWorktree),
+        this.git.run(["rev-parse", "HEAD^{tree}"], canonicalWorktree),
+      ]);
+      if (configuredGitDir !== worktreeGitDir) throw new WorktreeFailure("worktree-ownership", "Preserved worktree is not owned by the configured repository");
+      if (actualRoot !== canonicalWorktree) throw new WorktreeFailure("worktree-ownership", "Preserved worktree belongs to a different repository");
+      if (actualBranch !== input.branchName) throw new WorktreeFailure("branch-mismatch", "Preserved worktree branch does not match the recorded branch");
+      if (input.resultCommit && headSha.toLowerCase() !== input.resultCommit.toLowerCase()) throw new WorktreeFailure("head-mismatch", "Preserved worktree head does not match the recorded result");
+      if (input.resultTree && treeSha.toLowerCase() !== input.resultTree.toLowerCase()) throw new WorktreeFailure("tree-mismatch", "Preserved worktree tree does not match the recorded result");
+      const status = await this.git.run(["status", "--porcelain=v1", "--untracked-files=all"], canonicalWorktree);
+      if (status) throw new WorktreeFailure("worktree-dirty", "Preserved worktree is not clean");
+      try { await this.git.run(["merge-base", "--is-ancestor", input.baseSha, headSha], canonicalWorktree); } catch { throw new WorktreeFailure("base-mismatch", "Recorded base is not an ancestor of the preserved worktree head"); }
+      for (const marker of ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG"]) {
+        let markerPath: string;
+        try { markerPath = await this.git.run(["rev-parse", "--git-path", marker], canonicalWorktree); } catch { throw new WorktreeFailure("git-operation-check-failed", "Git operation state could not be inspected"); }
+        try { await access(resolve(canonicalWorktree, markerPath), constants.F_OK); throw new WorktreeFailure("git-operation-in-progress", "Preserved worktree has an incomplete Git operation"); } catch (error) {
+          if (error instanceof WorktreeFailure) throw error;
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new WorktreeFailure("git-operation-check-failed", "Git operation state could not be inspected");
+        }
+      }
+      return { branchName: actualBranch, baseSha: input.baseSha, headSha, treeSha, dirtyState: "clean" };
+    } catch (error) {
+      if (error instanceof WorktreeFailure) throw error;
+      throw new WorktreeFailure("revision-inspection-failed", "Preserved worktree could not be safely inspected");
+    }
+  }
+
+  async validateExactBase(input: ExactBaseValidationInput): Promise<string> {
+    if (!shaPattern.test(input.candidateSha) || !shaPattern.test(input.acceptedTargetSha)) throw new WorktreeFailure("invalid-base-commit", "Exact base must be a canonical commit hash");
+    const repositoryPath = await canonicalDirectory(input.repositoryPath, "repository-unavailable");
+    let resolvedCandidate: string;
+    try { resolvedCandidate = await this.git.run(["rev-parse", "--verify", `${input.candidateSha}^{commit}`], repositoryPath); } catch { throw new WorktreeFailure("base-commit-mismatch", "Exact base does not resolve to a commit"); }
+    if (resolvedCandidate.toLowerCase() !== input.candidateSha.toLowerCase()) throw new WorktreeFailure("base-commit-mismatch", "Exact base does not resolve to the supplied commit");
+    try { await this.git.run(["merge-base", "--is-ancestor", resolvedCandidate, input.acceptedTargetSha], repositoryPath); } catch { throw new WorktreeFailure("base-not-allowed", "Exact base is not an ancestor of the accepted project target"); }
+    return resolvedCandidate;
+  }
+
   async reuse(input: WorktreeInput): Promise<WorktreeRecord> {
     if (!taskIdPattern.test(input.taskId) || !shaPattern.test(input.targetBaseSha)) throw new WorktreeFailure("invalid-reuse-coordinate", "Preserved worktree coordinates are invalid");
     await canonicalDirectory(input.repositoryPath, "repository-unavailable");
     const worktreeRoot = await canonicalDirectory(input.worktreeRoot, "worktree-root-unavailable");
     const branchName = input.branchName ?? `forge/issue/${input.taskId}`;
-    const worktreePath = resolve(worktreeRoot, input.taskId);
+    const worktreePath = resolve(worktreeRoot, input.pathSegment ?? input.taskId);
     if (!withinRoot(worktreeRoot, worktreePath)) throw new WorktreeFailure("worktree-escape", "Preserved worktree escaped the configured root");
     const canonicalWorktree = await canonicalDirectory(worktreePath, "worktree-unavailable");
     try {

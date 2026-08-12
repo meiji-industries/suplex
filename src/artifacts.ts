@@ -12,10 +12,13 @@ export interface ArtifactInput {
   bytes: Buffer;
 }
 
+export const ArtifactKinds = ["task-brief", "task-image", "agent-evidence", "lead-plan", "decision-blocker", "supplemental-review", "plan-decision", "plan-revision-reason", "continuation-reason", "developer-delivery", "delivery-review", "delivery-repair-plan", "developer-repair", "delivery-blocker", "delivery-decision", "ci-evidence", "ci-repair-plan", "ci-repair-evidence", "merge-conflict-evidence", "merge-conflict-plan", "merge-conflict-resolution", "release-public-body", "forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery"] as const;
+export type ArtifactKind = (typeof ArtifactKinds)[number];
+
 export interface StoredArtifact {
   id: string;
   companyId: string;
-  kind: "task-brief" | "task-image" | "agent-evidence" | "lead-plan" | "decision-blocker" | "supplemental-review" | "plan-decision" | "developer-delivery" | "delivery-review" | "delivery-repair-plan" | "developer-repair" | "delivery-blocker" | "delivery-decision" | "ci-evidence" | "ci-repair-plan" | "ci-repair-evidence" | "merge-conflict-evidence" | "merge-conflict-plan" | "merge-conflict-resolution" | "release-public-body" | "forward-merge-conflict" | "forward-merge-verification" | "forward-merge-delivery";
+  kind: ArtifactKind;
   filename: string;
   mimeType: string;
   byteSize: number;
@@ -26,7 +29,7 @@ export interface StoredArtifact {
 
 export const ArtifactManifestEntrySchema = z.object({
   id: z.string().min(1).max(256),
-  kind: z.enum(["task-brief", "task-image", "agent-evidence", "lead-plan", "decision-blocker", "supplemental-review", "plan-decision", "developer-delivery", "delivery-review", "delivery-repair-plan", "developer-repair", "delivery-blocker", "delivery-decision", "ci-evidence", "ci-repair-plan", "ci-repair-evidence", "merge-conflict-evidence", "merge-conflict-plan", "merge-conflict-resolution", "release-public-body", "forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery"]),
+  kind: z.enum(ArtifactKinds),
   filename: z.string().min(1).max(160),
   mimeType: z.string().min(1).max(120),
   byteSize: z.number().int().positive().max(8 * 1024 * 1024),
@@ -155,12 +158,13 @@ export class ArtifactStore {
     await this.options.fault?.(point, { companyId, storagePath, ...(stagingPath ? { stagingPath } : {}) });
   }
 
-  plan(companyId: string, intentId: string, kind: StoredArtifact["kind"], input: ArtifactInput): PlannedArtifact {
+  plan(companyId: string, intentId: string, kind: StoredArtifact["kind"], input: ArtifactInput, requestedId?: string): PlannedArtifact {
     const validatedCompanyId = CompanyIdSchema.parse(companyId);
     const filename = safeFilename(input.filename);
     if (!input.mimeType || input.mimeType.length > 120 || /[\r\n]/.test(input.mimeType)) throw new ArtifactFailure("invalid-mime-type", "Artifact type is invalid");
     if (input.bytes.length === 0 || input.bytes.length > 8 * 1024 * 1024) throw new ArtifactFailure("invalid-size", "Artifact size is invalid");
-    const id = `artifact_${randomUUID().replaceAll("-", "")}`;
+    const id = requestedId ?? `artifact_${randomUUID().replaceAll("-", "")}`;
+    if (!/^artifact_[A-Za-z0-9][A-Za-z0-9._:-]{1,255}$/.test(id)) throw new ArtifactFailure("invalid-id", "Artifact identity is invalid");
     const sha256 = createHash("sha256").update(input.bytes).digest("hex");
     const storagePath = join(validatedCompanyId, "objects", sha256.slice(0, 2), `${sha256}-${id}.bin`);
     const stagingPath = join(validatedCompanyId, ".staging", intentId, `${id}.tmp`);
@@ -253,6 +257,10 @@ export class ArtifactStore {
   async put(companyId: string, kind: StoredArtifact["kind"], input: ArtifactInput): Promise<StoredArtifact> {
     const planned = this.plan(companyId, `put_${randomUUID().replaceAll("-", "")}`, kind, input);
     return this.write(planned, input.bytes);
+  }
+
+  async putWithId(companyId: string, id: string, kind: StoredArtifact["kind"], input: ArtifactInput): Promise<StoredArtifact> {
+    return this.write(this.plan(companyId, `put_${id}`, kind, input, id), input.bytes);
   }
 
   async removePlanned(planned: Pick<PlannedArtifact, "storagePath" | "stagingPath">): Promise<void> {

@@ -274,26 +274,33 @@ export class DeveloperService {
       ? this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.supersedesExecutionId, input.taskId, input.companyId, input.workflowId) as PriorDeveloperExecution | undefined)
       : this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND plan_revision = ? AND status IN ('interrupted', 'cancelled', 'failed', 'blocked') ORDER BY attempt DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.planRevision) as PriorDeveloperExecution | undefined);
     if (input.supersedesExecutionId && (!prior || !["interrupted", "cancelled", "failed", "blocked"].includes(prior.status))) throw new AgentFailure("retry-not-available", "Only an interrupted, cancelled, failed, or blocked Developer attempt can be retried");
-    const targetBaseSha = prior?.target_base_sha ?? projectRevision.data.targetSha;
+    const revisionAuthorization = input.revisionRequestId ? this.database.authQuery((db) => db.prepare(`SELECT id, disposition, status, authorized_plan_revision AS authorizedPlanRevision, worktree_path AS worktreePath, branch_name AS branchName, base_sha AS baseSha, head_sha AS headSha, tree_sha AS treeSha, exact_base_sha AS exactBaseSha
+      FROM forge_plan_revision_requests WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { id: string; disposition: "reuse" | "new"; status: "accepted" | "authorized"; authorizedPlanRevision: number | null; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null } | undefined) : undefined;
+    if (input.revisionRequestId && (!revisionAuthorization || revisionAuthorization.status !== "authorized" || revisionAuthorization.authorizedPlanRevision !== input.planRevision)) throw new AgentFailure("revision-not-authorized", "Developer execution is not authorized for this plan revision");
+    const targetBaseSha = prior?.target_base_sha ?? (revisionAuthorization?.disposition === "new" ? revisionAuthorization.exactBaseSha : revisionAuthorization?.baseSha) ?? projectRevision.data.targetSha;
     if (!/^[a-f0-9]{40,64}$/i.test(targetBaseSha)) throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain an exact target SHA");
-    const branchName = `forge/issue/${input.taskId}`;
+    let branchName = `forge/issue/${input.taskId}`;
     const worktreeRoot = await scopedRepository(this.config.worktreeRoot, projectRevision.data.worktreeRoot);
     const attempt = Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
     const executionId = input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
     let worktree;
     try {
-      worktree = input.reuseWorktree || prior ? await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName }) : await this.worktrees.create({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName });
+      if (revisionAuthorization?.disposition === "reuse") {
+        if (!revisionAuthorization.worktreePath || !revisionAuthorization.branchName || !revisionAuthorization.baseSha || !revisionAuthorization.headSha || !revisionAuthorization.treeSha) throw new AgentFailure("revision-coordinates-missing", "Authorized preserved worktree coordinates are incomplete");
+        const inspected = await this.worktrees.inspectForPlanRevision({ repositoryPath, worktreeRoot, worktreePath: revisionAuthorization.worktreePath, branchName: revisionAuthorization.branchName, baseSha: revisionAuthorization.baseSha, resultCommit: revisionAuthorization.headSha, resultTree: revisionAuthorization.treeSha });
+        branchName = inspected.branchName;
+        worktree = { branchName: inspected.branchName, worktreePath: revisionAuthorization.worktreePath, targetBaseSha: inspected.baseSha };
+      } else if (revisionAuthorization?.disposition === "new") {
+        branchName = `forge/issue/${input.taskId}/revision-${input.planRevision}`;
+        worktree = await this.worktrees.create({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName, pathSegment: `${input.taskId}-revision-${input.planRevision}` });
+      } else {
+        worktree = input.reuseWorktree || prior ? await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName }) : await this.worktrees.create({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName });
+      }
     } catch (error) {
       if (error instanceof Error && "code" in error) throw new AgentFailure(String((error as { code: string }).code), error.message);
       throw error;
     }
-    let metadataDirectories: string[];
-    try {
-      metadataDirectories = await this.worktrees.metadataDirectories(repositoryPath, worktree.worktreePath);
-    } catch (error) {
-      if (error instanceof Error && "code" in error) throw new AgentFailure(String((error as { code: string }).code), error.message);
-      throw error;
-    }
+    const metadataDirectories = await this.worktrees.metadataDirectories(repositoryPath, worktree.worktreePath);
     const startedAt = this.now().toISOString();
     const wrapperId = `wrapper_${randomBytes(12).toString("hex")}`;
     let guard: Awaited<ReturnType<typeof createGitCommandGuard>> | undefined;
@@ -339,10 +346,13 @@ export class DeveloperService {
         const deliveryArtifact = await this.artifacts.put(input.companyId, "developer-delivery", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, branchName: worktree.branchName, worktreePath: worktree.worktreePath, targetBaseSha: worktree.targetBaseSha }, null, 2), "utf8") });
         const evidence = await this.persistEvidence(input.companyId, evidenceLines);
         const blocked = gitState.headSha === worktree.targetBaseSha || report.authorizedStepsNotCompleted.length > 0 || report.dirtyState !== "clean" || report.blocker !== null;
-        this.database.authTransaction((db) => {
+        const terminalStatus = this.database.authTransaction((db) => {
           db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, deliveryArtifact.id, deliveryArtifact.companyId, deliveryArtifact.kind, deliveryArtifact.filename, deliveryArtifact.mimeType, deliveryArtifact.byteSize, deliveryArtifact.sha256, deliveryArtifact.storagePath, deliveryArtifact.createdAt);
-          db.prepare("UPDATE forge_developer_executions SET status = ?, session_ref = ?, finished_at = ?, heartbeat_at = ?, current_step = ?, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(blocked ? "blocked" : "completed", sessionRef, this.now().toISOString(), this.now().toISOString(), report.steps.at(-1)?.number ?? null, gitState.headSha, gitState.treeSha, gitState.dirtyState, deliveryArtifact.id, evidence.id, executionId);
+          const updated = db.prepare("UPDATE forge_developer_executions SET status = ?, session_ref = ?, finished_at = ?, heartbeat_at = ?, current_step = ?, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ? AND status IN ('starting', 'running')").run(blocked ? "blocked" : "completed", sessionRef, this.now().toISOString(), this.now().toISOString(), report.steps.at(-1)?.number ?? null, gitState.headSha, gitState.treeSha, gitState.dirtyState, deliveryArtifact.id, evidence.id, executionId);
+          return updated.changes === 1 ? blocked ? "blocked" : "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
         });
+        if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "Developer execution was cancelled before completion");
+        if (terminalStatus !== (blocked ? "blocked" : "completed")) throw new AgentFailure("developer-superseded", "Developer execution was superseded before completion");
         return { developerExecutionId: executionId, developerSessionRef: sessionRef, worktreePath: worktree.worktreePath, branchName: worktree.branchName, targetBaseSha: worktree.targetBaseSha, currentStep: report.steps.at(-1)?.number ?? null, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, deliveryArtifactId: deliveryArtifact.id, evidenceArtifactId: evidence.id, deliverySummary: report.summary, outcome: blocked ? "blocked" : "completed" };
       } finally { clearInterval(heartbeat); }
     } catch (error) {
@@ -350,7 +360,8 @@ export class DeveloperService {
       const evidence = await this.persistEvidence(input.companyId, evidenceLines);
       this.database.authTransaction((db) => {
         db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
-        db.prepare("UPDATE forge_developer_executions SET status = 'failed', session_ref = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(sessionRef ?? null, this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId);
+        const finishedAt = this.now().toISOString();
+        db.prepare("UPDATE forge_developer_executions SET status = CASE WHEN status IN ('starting', 'running') THEN 'failed' ELSE status END, session_ref = COALESCE(session_ref, ?), finished_at = COALESCE(finished_at, ?), heartbeat_at = ?, failure_code = CASE WHEN status IN ('starting', 'running') THEN ? ELSE failure_code END, failure_summary = CASE WHEN status IN ('starting', 'running') THEN ? ELSE failure_summary END, evidence_artifact_id = COALESCE(evidence_artifact_id, ?) WHERE id = ?").run(sessionRef ?? null, finishedAt, finishedAt, failure.code, failure.message, evidence.id, executionId);
       });
       throw failure;
     } finally { await guard?.cleanup(); }

@@ -18,7 +18,7 @@ import { createActivities } from "../src/temporal/activities.js";
 import { replayIssueHistory, type ReplayHistory } from "../src/temporal/replay.js";
 import { AgentFailure } from "../src/codex-lead.js";
 import { ProjectionRebuildService } from "../src/projection-rebuild.js";
-import { approveIssuePlan, cancelIssue, cancelIssueDevelopment, connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, rejectIssuePlan, repairIssueDelivery, reviewIssueDelivery, startIssueDevelopment, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
+import { approveIssuePlan, cancelIssue, cancelIssueDevelopment, connectTemporal, continueIssueWork, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, rejectIssuePlan, repairIssueDelivery, reviseIssuePlan, reviewIssueDelivery, startIssueDevelopment, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
 import { activityPayloadInterceptors } from "../src/temporal/payload-boundary-interceptors.js";
 import { buildProductionWorkflowBundle, temporalDataConverter } from "../src/temporal/workflow-bundle.js";
 import type { DeliveryReviewServiceInput, DeveloperRepairActivityInput } from "../src/temporal/issue-contracts.js";
@@ -84,6 +84,10 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     let permanentPlanningFailure = false;
     let permanentPlanningCalls = 0;
     let developerFailure = false;
+    let planningMaterial = true;
+    let preservedWorktreeCompatibility: boolean | null = null;
+    let revisionDisposition: "reuse" | "new" = "new";
+    let revisionAuthorizationCalls = 0;
     let holdPlanning = false;
     let releasePlanning = (): void => {};
     let planningGate = Promise.resolve();
@@ -94,7 +98,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
           permanentPlanningCalls += 1;
           throw new AgentFailure("model-unavailable", "The configured model is unavailable for the active provider account. Select a supported model, then retry.", { nonRetryable: true });
         }
-        return { leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan" as const, leadSummary: "Integration plan", materialCategories: ["security_permissions" as const], material: true };
+        return { leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan" as const, leadSummary: "Integration plan", materialCategories: planningMaterial ? ["security_permissions" as const] : [], material: planningMaterial, preservedWorktreeCompatibility };
       },
       reviewDelivery: async (input: DeliveryReviewServiceInput) => {
         const review = { kind: "delivery_review", summary: "Integration delivery needs one bounded repair.", outcome: "blocking", repairPlan: "Apply the controlled repair.", findings: [{ findingId: "finding_integration", severity: "blocking", rationale: "Controlled fixture defect.", evidenceRef: "fixture", disposition: "open", repairInstruction: "Apply the controlled repair." }] };
@@ -123,6 +127,12 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
         if (!input.taskId.startsWith("ci-")) return baseActivities.reconcileTargetBase(input);
         return { outcome: "no_drift" as const, checkId: `target_base_${input.taskId}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: input.expectedBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree };
       },
+      async runDeveloperExecution(input: Parameters<typeof baseActivities.runDeveloperExecution>[0]) {
+        return input.taskId.startsWith("ci-") ? integrationDeveloper.run(input) : baseActivities.runDeveloperExecution(input);
+      },
+      async runLeadPlanning(input: Parameters<typeof baseActivities.runLeadPlanning>[0]) {
+        return input.taskId.startsWith("ci-") ? integrationAgent.runLeadPlanning() : baseActivities.runLeadPlanning(input);
+      },
       async reconcileCi(input: Parameters<typeof baseActivities.reconcileCi>[0]) {
         if (!input.taskId.startsWith("ci-")) return baseActivities.reconcileCi(input);
         const calls = (ciCalls.get(input.taskId) ?? 0) + 1;
@@ -144,6 +154,17 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       async finalReview(input: Parameters<typeof baseActivities.finalReview>[0]) {
         if (!input.taskId.startsWith("ci-")) return baseActivities.finalReview(input);
         return { finalReviewId: `final_review_${input.taskId}`, leadExecutionId: `agent_final_${input.taskId}`, leadSessionRef: input.leadSessionRef, opinionArtifactId: `artifact_final_opinion_${input.taskId}`, evidenceArtifactId: `artifact_final_evidence_${input.taskId}`, reviewArtifact: { artifactId: `artifact_final_review_${input.taskId}`, companyId: "issue-company", kind: "delivery-review" as const, sha256: "f".repeat(64), byteSize: 1, mimeType: "application/json" }, outcome: "approved" as const, summary: "Exact release approved" };
+      },
+      async findActiveDeveloperExecution() { return null; },
+      async preparePlanRevision(input: Parameters<typeof baseActivities.preparePlanRevision>[0]) {
+        const revisionRequestId = `revision_${input.workflowId}_${input.requestRevision}`;
+        return revisionDisposition === "reuse"
+          ? { status: "accepted" as const, revisionRequestId, coordinates: { disposition: "reuse" as const, revisionRequestId, developerExecutionId: "developer-preserved", branchName: "forge/issue/preserved", baseSha: "a".repeat(40), headSha: "b".repeat(40), treeSha: "c".repeat(40), dirtyState: "clean" as const } }
+          : { status: "accepted" as const, revisionRequestId, coordinates: { disposition: "new" as const, revisionRequestId, exactBaseSha: input.exactBaseSha ?? "a".repeat(40) } };
+      },
+      async authorizePlanRevision() { revisionAuthorizationCalls += 1; },
+      async createSuccessor(input: Parameters<typeof baseActivities.createSuccessor>[0]) {
+        return { successorTaskId: input.successorTaskId, successorWorkflowId: input.successorWorkflowId, predecessorTaskId: input.predecessorTaskId, projectRevisionId: "issue-revision", creationRevision: input.acceptedRevision };
       },
     };
     workerConnection = await NativeConnection.connect({ address: config.temporalAddress });
@@ -216,13 +237,17 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     const replannedIssue = await startIssuePlanning(config, startedIssue.workflowId, { expectedRevision: 3, actorUserId: "issue-admin" });
     expect(replannedIssue).toMatchObject({ phase: "approval", revision: 5, planRevision: 4, planMaterial: true });
     const approvedIssue = await approveIssuePlan(config, startedIssue.workflowId, { expectedRevision: 5, actorUserId: "issue-admin", note: "Approve revised plan" });
-    expect(approvedIssue).toMatchObject({ phase: "ready_for_development", revision: 6, allowedCommands: ["start_development", "cancel_issue"] });
+    expect(approvedIssue).toMatchObject({ phase: "ready_for_development", revision: 6, allowedCommands: ["start_development", "cancel_issue", "revise_plan"] });
     const deliveredIssue = await startIssueDevelopment(config, startedIssue.workflowId, { expectedRevision: 6, actorUserId: "issue-admin" });
-    expect(deliveredIssue).toMatchObject({ phase: "delivery_ready", revision: 8, allowedCommands: ["review_delivery", "cancel_issue"], developerExecutionId: expect.stringMatching(`^developer_${startedIssue.workflowId}_command_`), developerSessionRef: "session_developer_integration", branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40) });
+    expect(deliveredIssue).toMatchObject({ phase: "delivery_ready", revision: 8, allowedCommands: ["review_delivery", "cancel_issue", "revise_plan"], developerExecutionId: expect.stringMatching(`^developer_${startedIssue.workflowId}_command_`), developerSessionRef: "session_developer_integration", branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40) });
     const repairRequired = await reviewIssueDelivery(config, startedIssue.workflowId, { expectedRevision: 8, actorUserId: "issue-admin" });
-    expect(repairRequired).toMatchObject({ phase: "repair_required", revision: 10, allowedCommands: ["repair_delivery", "cancel_issue"], deliveryReviewId: "delivery_review_integration", deliveryReviewOutcome: "blocking", repairCycle: 0 });
+    expect(repairRequired).toMatchObject({ phase: "repair_required", revision: 10, allowedCommands: ["repair_delivery", "cancel_issue", "revise_plan"], deliveryReviewId: "delivery_review_integration", deliveryReviewOutcome: "blocking", repairCycle: 0 });
     const repairedIssue = await repairIssueDelivery(config, startedIssue.workflowId, { expectedRevision: 10, actorUserId: "issue-admin" });
-    expect(repairedIssue).toMatchObject({ phase: "delivery_ready", revision: 12, allowedCommands: ["review_delivery", "cancel_issue"], developerExecutionId: "developer_repair_integration", developerSessionRef: "session_developer_integration", resultCommit: "d".repeat(40), repairCycle: 1, deliveryReviewId: null, deliveryReviewOutcome: null });
+    expect(repairedIssue).toMatchObject({ phase: "delivery_ready", revision: 12, allowedCommands: ["review_delivery", "cancel_issue", "revise_plan"], developerExecutionId: "developer_repair_integration", developerSessionRef: "session_developer_integration", resultCommit: "d".repeat(40), repairCycle: 1, deliveryReviewId: null, deliveryReviewOutcome: null });
+    const revisedIssue = await reviseIssuePlan(config, startedIssue.workflowId, { expectedRevision: 12, actorUserId: "issue-admin", reason: "The accepted delivery needs a bounded follow-up plan.", worktreeDisposition: "new", exactBaseSha: "a".repeat(40) });
+    expect(revisedIssue).toMatchObject({ phase: "planning", revision: 13, revisionRequestId: `revision_${startedIssue.workflowId}_12`, revisedExecutionCoordinates: { disposition: "new", exactBaseSha: "a".repeat(40) } });
+    const replannedWithNewCoordinates = await startIssuePlanning(config, startedIssue.workflowId, { expectedRevision: 13, actorUserId: "issue-admin" });
+    expect(replannedWithNewCoordinates).toMatchObject({ phase: "approval", revisionRequestId: `revision_${startedIssue.workflowId}_12`, planRevision: 14 });
 
     const ciContinuation = (issueId: string, extra: Record<string, unknown> = {}) => ({ phase: "ci_waiting" as const, revision: 20, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Waiting for required CI", lastEventId: `${issueId}-20`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_ci_lead", leadExecutionId: "agent_ci_lead", leadOutputArtifactId: "artifact_ci_lead_output", deliveryReviewId: `delivery_${issueId}`, planRevision: 1, developerExecutionId: "developer_ci_original", developerSessionRef: "session_ci_developer", worktreePath: join(root, "worktrees", issueId), branchName: `forge/issue/${issueId}`, targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_ci_delivery", developerEvidenceArtifactId: "artifact_ci_developer_evidence", releaseId: `release_${issueId}`, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", expectedHeadSha: "b".repeat(40), expectedHeadTree: "c".repeat(40), ciAttempt: 0, ciOutcome: "waiting" as const, ciNextPollAt: null, ...extra });
     const startCiFixture = (issueId: string, extra: Record<string, unknown> = {}) => startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId, projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, continuationState: ciContinuation(issueId, extra) });
@@ -234,6 +259,22 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       }
       return fixtureState;
     };
+
+    planningMaterial = false;
+    const routine = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "ci-routine", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, continuationState: { ...ciContinuation("ci-routine"), phase: "ready_for_development", revision: 4, owner: "lead", allowedCommands: ["start_development", "cancel_issue", "revise_plan"], pendingAction: "Start development", lastEventId: "ci-routine-4", planMaterial: false, materialCategories: [], releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, developerExecutionId: null, developerSessionRef: null, resultCommit: null, resultTree: null, deliveryArtifactId: null, developerEvidenceArtifactId: null } });
+    expect(await startIssueDevelopment(config, routine.workflowId, { expectedRevision: 4, actorUserId: "issue-admin" })).toMatchObject({ phase: "delivery_ready", planMaterial: false });
+
+    planningMaterial = true;
+    preservedWorktreeCompatibility = false;
+    revisionDisposition = "reuse";
+    const incompatible = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "ci-incompatible", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, continuationState: { ...ciContinuation("ci-incompatible"), phase: "delivery_ready", revision: 8, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue", "revise_plan"], pendingAction: "Lead delivery review", lastEventId: "ci-incompatible-8" } });
+    const incompatibleRequested = await reviseIssuePlan(config, incompatible.workflowId, { expectedRevision: 8, actorUserId: "issue-admin", reason: "The preserved implementation conflicts with the revised plan.", worktreeDisposition: "reuse" });
+    const callsBeforeIncompatiblePlan = revisionAuthorizationCalls;
+    const incompatiblePlan = await startIssuePlanning(config, incompatible.workflowId, { expectedRevision: incompatibleRequested.revision, actorUserId: "issue-admin" });
+    expect(incompatiblePlan).toMatchObject({ phase: "delivery_blocked", owner: "human", blockerCode: "preserved-worktree-incompatible", allowedCommands: ["revise_plan", "cancel_issue"] });
+    expect(revisionAuthorizationCalls).toBe(callsBeforeIncompatiblePlan);
+    preservedWorktreeCompatibility = null;
+    revisionDisposition = "new";
 
     const ciPass = await startCiFixture("ci-pass");
     expect(await waitForPhase(ciPass.workflowId, "accepted")).toMatchObject({ phase: "accepted", ciOutcome: "passed", finalReviewId: "final_review_ci-pass", leadSessionRef: "session_ci_lead" });
@@ -250,7 +291,10 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
 
     const ciCancel = await startCiFixture("ci-cancel", { ciNextPollAt: new Date(Date.now() + 300).toISOString() });
     const waitingToCancel = await waitForPhase(ciCancel.workflowId, "ci_waiting");
-    expect(await cancelIssue(config, ciCancel.workflowId, { expectedRevision: waitingToCancel.revision, actorUserId: "issue-admin" })).toMatchObject({ phase: "cancelled" });
+    const cancelledIssue = await cancelIssue(config, ciCancel.workflowId, { expectedRevision: waitingToCancel.revision, actorUserId: "issue-admin" });
+    expect(cancelledIssue).toMatchObject({ phase: "cancelled", allowedCommands: ["continue_work"] });
+    const continuedIssue = await continueIssueWork(config, ciCancel.workflowId, { expectedRevision: cancelledIssue.revision, actorUserId: "issue-admin", reason: "Continue the bounded work after cancellation." });
+    expect(continuedIssue).toMatchObject({ phase: "cancelled", revision: cancelledIssue.revision + 1, allowedCommands: [], successorReference: { predecessorTaskId: "ci-cancel" }, successorTaskId: "ci-cancel-successor-" + cancelledIssue.revision });
     await new Promise((resolve) => setTimeout(resolve, 450));
     expect(ciCalls.get("ci-cancel") ?? 0).toBe(0);
     const ciReplayClient = await connectTemporal(config);
@@ -271,14 +315,14 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-developer-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, continuationState: { phase: "ready_for_development", revision: 3, owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${developerFailureWorkflowId}:3`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_integration", leadOutputArtifactId: "artifact_integration_output", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], supplementalReviewUsed: false, repairCycle: 0 } });
     developerFailure = true;
     const recoveredDeveloperFailure = await startIssueDevelopment(config, developerFailureWorkflowId, { expectedRevision: 3, actorUserId: "issue-admin" });
-    expect(recoveredDeveloperFailure).toMatchObject({ phase: "ready_for_development", revision: 5, owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Developer execution failed; retry is available" });
+    expect(recoveredDeveloperFailure).toMatchObject({ phase: "ready_for_development", revision: 5, owner: "lead", allowedCommands: ["start_development", "cancel_issue", "revise_plan"], pendingAction: "Developer execution failed; retry is available" });
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = 'issue-developer-failure'").get())).toEqual({ revision: 5, phase: "ready_for_development", pending_action: "Developer execution failed; retry is available" });
     developerFailure = false;
 
     permanentPlanningFailure = true;
     const startedPermanentFailure = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-permanent-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false });
     const failedIssue = await startIssuePlanning(config, startedPermanentFailure.workflowId, { expectedRevision: 0, actorUserId: "issue-admin" });
-    expect(failedIssue).toMatchObject({ phase: "failed", revision: 2, owner: "human", allowedCommands: ["start_planning", "cancel_issue"], pendingAction: "The configured model is unavailable for the active provider account. Select a supported model, then retry." });
+    expect(failedIssue).toMatchObject({ phase: "failed", revision: 2, owner: "human", allowedCommands: ["start_planning", "continue_work", "cancel_issue"], pendingAction: "The configured model is unavailable for the active provider account. Select a supported model, then retry." });
     expect(permanentPlanningCalls).toBe(1);
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = 'issue-permanent-failure'").get())).toEqual({ revision: 2, phase: "failed", pending_action: "The configured model is unavailable for the active provider account. Select a supported model, then retry." });
     permanentPlanningFailure = false;
@@ -292,6 +336,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       continuationState = await queryIssueWorkflow(config, startedContinuation.workflowId);
     }
     expect(continuationState).toMatchObject({ phase: "backlog", revision: 0, continuationCount: 0 });
+    await expect.poll(() => database!.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_issue_timeline WHERE task_id = 'issue-continuation' AND revision = 0").get())).toEqual({ count: 1 });
     await startIssuePlanning(config, startedContinuation.workflowId, { expectedRevision: 0, actorUserId: "issue-admin" });
     const progressState = await approveIssuePlan(config, startedContinuation.workflowId, { expectedRevision: 2, actorUserId: "issue-admin", note: "Approved for development" });
     expect(progressState).toMatchObject({ phase: "ready_for_development", revision: 3, continuationCount: 0 });
@@ -300,7 +345,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       if (continuationState.continuationCount === 1) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    expect(continuationState).toMatchObject({ workflowId: startedContinuation.workflowId, companyId: "issue-company", projectId: "issue-project", issueId: "issue-continuation", projectRevisionId: "issue-revision", phase: "ready_for_development", revision: 3, owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${startedContinuation.workflowId}:3`, continuationCount: 1, lastSummaryHash: null, leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan", leadSummary: "Integration plan", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], supplementalReviewUsed: false });
+    expect(continuationState).toMatchObject({ workflowId: startedContinuation.workflowId, companyId: "issue-company", projectId: "issue-project", issueId: "issue-continuation", projectRevisionId: "issue-revision", phase: "ready_for_development", revision: 3, owner: "lead", allowedCommands: ["start_development", "cancel_issue", "revise_plan"], pendingAction: "Start development", lastEventId: `${startedContinuation.workflowId}:3`, continuationCount: 1, lastSummaryHash: null, leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan", leadSummary: "Integration plan", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], supplementalReviewUsed: false });
     expect(continuationState.decisionId).toMatch(/^decision_/);
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-continuation'").get())).toEqual({ revision: 3, phase: "ready_for_development" });
     expect(database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = 'issue-continuation' ORDER BY revision").all())).toEqual([{ revision: 0 }, { revision: 1 }, { revision: 2 }, { revision: 3 }]);
@@ -309,7 +354,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     const scenarioClient = await connectTemporal(config);
     try {
       const executions = await runReplayScenarioCorpus({ client: scenarioClient.client.workflow, connection: workerConnection, namespace: config.temporalNamespace, taskQueue: `${config.taskQueue}-replay-scenarios` });
-      expect(executions.map(({ scenario }) => scenario)).toEqual(["normal_success", "implementation_repair", "active_cancellation", "blocked_authentication_resume", "continue_as_new", "release_base_drift_merged", "release_base_drift_conflict", "ci_wait_retry", "acceptance_ready_timeout", "acceptance_requested_changes", "acceptance_provider_outage", "manual_merge_open", "manual_merge_closed", "manual_merge_changed", "final_review_failure"]);
+      expect(executions.map(({ scenario }) => scenario)).toEqual(["normal_success", "implementation_repair", "active_cancellation", "blocked_authentication_resume", "continue_as_new", "release_base_drift_merged", "release_base_drift_conflict", "ci_wait_retry", "acceptance_ready_timeout", "acceptance_requested_changes", "acceptance_provider_outage", "manual_merge_open", "manual_merge_closed", "manual_merge_changed", "final_review_failure", "plan_revision", "successor_creation"]);
       expect(executions.find(({ scenario }) => scenario === "normal_success")?.currentPhase).toBe("done");
       expect(executions.find(({ scenario }) => scenario === "continue_as_new")?.finalState.continuationCount).toBe(2);
       for (const execution of executions) {
@@ -317,7 +362,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
         expect(new Set(revisions).size).toBe(revisions.length);
       }
       if (process.env.FORGE_REPLAY_CAPTURE_PATH) {
-        const replacementIds = { normal_success: "normal-success-v1", implementation_repair: "implementation-repair-v1", active_cancellation: "active-cancellation-v1", blocked_authentication_resume: "blocked-authentication-resume-v1", continue_as_new: "continue-as-new-run-0-v1", release_base_drift_merged: "release-base-drift-merged-v1", release_base_drift_conflict: "release-base-drift-conflict-v1", ci_wait_retry: "ci-wait-retry-v1", acceptance_ready_timeout: "acceptance-ready-timeout-v1", acceptance_requested_changes: "acceptance-requested-changes-v1", acceptance_provider_outage: "acceptance-provider-outage-v1", manual_merge_open: "manual-merge-open-v1", manual_merge_closed: "manual-merge-closed-v1", manual_merge_changed: "manual-merge-changed-v1", final_review_failure: "final-review-failure-v1" } as const;
+        const replacementIds: Partial<Record<(typeof executions)[number]["scenario"], string>> = { normal_success: "normal-success-v1", implementation_repair: "implementation-repair-v1", active_cancellation: "active-cancellation-v1", blocked_authentication_resume: "blocked-authentication-resume-v1", continue_as_new: "continue-as-new-run-0-v1", release_base_drift_merged: "release-base-drift-merged-v1", release_base_drift_conflict: "release-base-drift-conflict-v1", ci_wait_retry: "ci-wait-retry-v1", acceptance_ready_timeout: "acceptance-ready-timeout-v1", acceptance_requested_changes: "acceptance-requested-changes-v1", acceptance_provider_outage: "acceptance-provider-outage-v1", manual_merge_open: "manual-merge-open-v1", manual_merge_closed: "manual-merge-closed-v1", manual_merge_changed: "manual-merge-changed-v1", final_review_failure: "final-review-failure-v1" };
         for (const execution of executions) {
           const replace = replacementIds[execution.scenario];
           await captureWorkflowHistory({ address: config.temporalAddress, namespace: config.temporalNamespace, workflowId: execution.workflowId, firstRunId: execution.firstRunId, scenario: execution.scenario, currentPhase: execution.currentPhase, outputDir: process.env.FORGE_REPLAY_CAPTURE_PATH, ...(replace ? { replace } : {}) });

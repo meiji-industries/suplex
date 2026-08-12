@@ -5,12 +5,13 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { AuthService } from "../src/auth.js";
+import { ArtifactStore } from "../src/artifacts.js";
 import { createTestConfig, type ForgeConfig } from "../src/config.js";
 import { ForgeDatabase, projectionStateHash } from "../src/database.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
-import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueWorkflowInput, type IssueWorkflowState, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
 
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
 const github: GithubAdapter = { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } };
@@ -35,6 +36,7 @@ async function fixture(): Promise<{ root: string; config: ForgeConfig; database:
   const project = await projects.createProject("admin-1", company.id, { name: "Forge", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
   await projects.activateProject("admin-1", project.id);
   const stateByTask = new Map<string, IssueWorkflowState>();
+  let tasks!: TaskService;
   const workflow: IssueWorkflowPort = {
     async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) {
       const state = buildInitialIssueWorkflowState({ ...input, workflowId: input.workflowId! });
@@ -58,8 +60,26 @@ async function fixture(): Promise<{ root: string; config: ForgeConfig; database:
       projectState(database, next);
       return next;
     },
+    async continueWork(workflowId: string, input: ContinueWorkCommand) {
+      const current = [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
+      const projection = database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE workflow_id = ?").get(workflowId) as { revision: number; phase: IssueWorkflowState["phase"] });
+      if (input.expectedRevision !== projection.revision) throw new Error("Stale workflow revision");
+      const successor = await tasks.createTask("admin-1", company.id, { projectId: current.projectId, title: `Continue: ${current.issueId}`, description: `Continued from Forge issue ${current.issueId}: ${input.reason}`, idempotencyKey: `continue-${current.issueId}`, images: [] });
+      const successorState = stateByTask.get(successor.task.id)!;
+      const reasonArtifact = await new ArtifactStore(config.artifactRoot).put(company.id, "continuation-reason", { filename: "continuation-reason.md", mimeType: "text/markdown", bytes: Buffer.from(input.reason.trim(), "utf8") });
+      database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reasonArtifact.id, reasonArtifact.companyId, reasonArtifact.kind, reasonArtifact.filename, reasonArtifact.mimeType, reasonArtifact.byteSize, reasonArtifact.sha256, reasonArtifact.storagePath, reasonArtifact.createdAt);
+        db.prepare("UPDATE forge_tasks SET predecessor_task_id = ? WHERE id = ?").run(current.issueId, successor.task.id);
+        db.prepare("UPDATE forge_tasks SET successor_task_id = ? WHERE id = ?").run(successor.task.id, current.issueId);
+        db.prepare("INSERT INTO forge_successor_intents (id, predecessor_task_id, predecessor_workflow_id, accepted_revision, successor_task_id, successor_workflow_id, company_id, project_id, project_revision_id, actor_user_id, reason_artifact_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'linked', ?, ?)").run(`intent_${workflowId}_7`, current.issueId, workflowId, 7, successor.task.id, successor.task.workflowId, company.id, current.projectId, successor.task.projectRevisionId, "admin-1", reasonArtifact.id, new Date().toISOString(), new Date().toISOString());
+      });
+      const next = IssueWorkflowStateSchema.parse({ ...current, phase: projection.phase, revision: projection.revision + 1, allowedCommands: [], pendingAction: "Successor created", successorTaskId: successor.task.id, successorReference: { successorTaskId: successor.task.id, successorWorkflowId: successorState.workflowId, predecessorTaskId: current.issueId, projectRevisionId: successor.task.projectRevisionId, creationRevision: projection.revision }, lastEventId: `${workflowId}:${projection.revision + 1}` });
+      stateByTask.set(current.issueId, next);
+      database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run-1", eventId: next.lastEventId, state: next }));
+      return next;
+    },
   };
-  const tasks = new TaskService(database, auth, projects, config, { workflow });
+  tasks = new TaskService(database, auth, projects, config, { workflow });
   return { root, config, database, auth, projects, tasks, workflow, stateByTask, adminId: "admin-1", companyId: company.id, projectId: project.id, profileId: profile.id };
 }
 
@@ -300,12 +320,21 @@ test("continues terminal work as a new linked issue without rewriting the origin
     const initialSnapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(original.task.id) as { state_json: string });
     const terminalState = { ...JSON.parse(initialSnapshot.state_json), phase: "done", revision: 7, owner: "human", allowedCommands: [], pendingAction: null, lastEventId: `${original.task.workflowId}:7` } as IssueWorkflowState;
     value.database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: terminalState.lastEventId, state: terminalState }));
-    const continued = await value.tasks.continueWork(value.adminId, original.task.id);
+    const continued = await value.tasks.continueWork(value.adminId, original.task.id, 7, "Continue implementation after the completed issue.");
     expect(continued.original.phase).toBe("done");
     expect(continued.successor.predecessorTaskId).toBe(original.task.id);
+    expect(continued.original.successor).toMatchObject({ id: continued.successor.id, title: continued.successor.title, phase: "backlog" });
+    expect(continued.successor.predecessor).toMatchObject({ id: original.task.id, title: original.task.title, phase: "done" });
+    expect(continued.original.revisionHistory).toEqual([]);
     expect(continued.successor.id).not.toBe(original.task.id);
     expect(continued.successor.description).toContain(`Continued from Forge issue ${original.task.id}`);
-    expect(value.database.authQuery((db) => db.prepare("SELECT phase, revision FROM forge_issue_projections WHERE task_id = ?").get(original.task.id))).toEqual({ phase: "done", revision: 7 });
+    expect(value.database.authQuery((db) => db.prepare("SELECT phase, revision FROM forge_issue_projections WHERE task_id = ?").get(original.task.id))).toEqual({ phase: "done", revision: 8 });
+    const retried = await value.tasks.continueWork(value.adminId, original.task.id, 7, "Continue implementation after the completed issue.");
+    expect(retried.successor.id).toBe(continued.successor.id);
+    await expect(value.tasks.continueWork(value.adminId, original.task.id, 7, "A different continuation request.")).rejects.toMatchObject({ statusCode: 409, findings: [expect.objectContaining({ code: "stale-revision" })] });
+    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_successor_intents WHERE predecessor_task_id = ?").get(original.task.id))).toEqual({ count: 1 });
+    const reasonArtifactId = value.database.authQuery((db) => (db.prepare("SELECT reason_artifact_id FROM forge_successor_intents WHERE predecessor_task_id = ?").get(original.task.id) as { reason_artifact_id: string }).reason_artifact_id);
+    expect((await value.tasks.getTaskArtifact(value.adminId, original.task.id, reasonArtifactId)).bytes.toString("utf8")).toBe("Continue implementation after the completed issue.");
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }

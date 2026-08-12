@@ -128,6 +128,21 @@ const blockedResult = z.object({
 export const ReconcileTargetBaseActivityResultSchema = z.discriminatedUnion("outcome", [noDriftResult, revalidatedResult, conflictResult, blockedResult]);
 export type ReconcileTargetBaseActivityInput = z.infer<typeof ReconcileTargetBaseActivityInputSchema>;
 export type ReconcileTargetBaseActivityResult = z.infer<typeof ReconcileTargetBaseActivityResultSchema>;
+const exactSha = z.string().regex(/^[a-f0-9]{40,64}$/i);
+
+export const RevisedExecutionCoordinatesSchema = z.discriminatedUnion("disposition", [
+  z.object({ disposition: z.literal("reuse"), revisionRequestId: durableId, developerExecutionId: durableId, branchName: z.string().min(1).max(256), baseSha: exactSha, headSha: exactSha, treeSha: exactSha, dirtyState: z.literal("clean") }).strict(),
+  z.object({ disposition: z.literal("new"), revisionRequestId: durableId, exactBaseSha: exactSha }).strict(),
+]);
+export type RevisedExecutionCoordinates = z.infer<typeof RevisedExecutionCoordinatesSchema>;
+
+export const SuccessorReferenceSchema = z.object({
+  successorTaskId: durableId,
+  successorWorkflowId: durableId,
+  predecessorTaskId: durableId,
+  projectRevisionId: durableId,
+  creationRevision: z.number().int().nonnegative(),
+}).strict();
 
 export const DurableArtifactKindSchema = z.enum([
   "task-brief",
@@ -142,6 +157,8 @@ export const DurableArtifactKindSchema = z.enum([
   "merge-conflict-evidence",
   "merge-conflict-plan",
   "merge-conflict-resolution",
+  "plan-revision-reason",
+  "continuation-reason",
 ]);
 
 export const DurableArtifactReferenceSchema = z.object({
@@ -224,7 +241,8 @@ export type MergeConflictPlan = z.infer<typeof MergeConflictPlanSchema>;
 
 export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"]);
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
-export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "record_progress", "start_development", "retry_development", "cancel_development", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "reconcile_acceptance", "cancel_issue", "reconcile_merge", "continue_work"]);
+export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "revise_plan", "record_progress", "start_development", "retry_development", "cancel_development", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "reconcile_acceptance", "cancel_issue", "reconcile_merge", "continue_work"]);
+export type IssueCommand = z.infer<typeof IssueCommandSchema>;
 export const IssuePlanDecisionSchema = z.enum(["approve", "reject"]);
 export const RepairAuthoritySchema = z.enum(["delivery_review", "final_review", "ci_failure", "member_requested_changes"]);
 export const IssueContinuationStateSchema = z.object({
@@ -233,6 +251,7 @@ export const IssueContinuationStateSchema = z.object({
   owner: z.enum(["human", "lead"]),
   allowedCommands: z.array(IssueCommandSchema),
   pendingAction: z.string().max(200).nullable(),
+  blockerCode: z.string().max(128).nullable().optional(),
   lastEventId: durableId,
   continuationCount: z.number().int().nonnegative(),
   lastSummaryHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
@@ -246,6 +265,7 @@ export const IssueContinuationStateSchema = z.object({
   leadSummary: SafeSummarySchema.nullable().optional(),
   planRevision: z.number().int().nonnegative().nullable().optional(),
   planMaterial: z.boolean().nullable().optional(),
+  preservedWorktreeCompatibility: z.boolean().nullable().optional(),
   materialCategories: z.array(PlanMaterialCategorySchema).max(6).optional(),
   supplementalReviewUsed: z.boolean().optional(),
   supplementalReviewArtifactId: durableId.nullable().optional(),
@@ -367,6 +387,9 @@ export const IssueContinuationStateSchema = z.object({
   releaseFailureSummary: z.string().max(500).nullable().optional(),
   releaseRetryAt: z.string().datetime().nullable().optional(),
   releaseOperationAttempt: z.number().int().nonnegative().nullable().optional(),
+  revisionRequestId: durableId.nullable().optional(),
+  revisedExecutionCoordinates: RevisedExecutionCoordinatesSchema.nullable().optional(),
+  successorReference: SuccessorReferenceSchema.nullable().optional(),
 });
 
 export const IssueWorkflowInputWithContinuationSchema = z.object({
@@ -386,6 +409,7 @@ export const IssueWorkflowInputSchema = z.object({
   // A compact identity marker lets a start retry prove it refers to the same
   // creation request without putting task content in Temporal history.
   requestHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  predecessorTaskId: durableId.optional(),
   roleProfiles: z.object({ lead: durableId.optional(), developer: durableId.optional(), reviewer: durableId.optional() }),
   supplementalReview: z.boolean(),
   repairCycleLimit: z.number().int().min(0).max(5).default(2),
@@ -403,6 +427,7 @@ export const IssueWorkflowStateSchema = z.object({
   owner: z.enum(["human", "lead"]),
   allowedCommands: z.array(IssueCommandSchema),
   pendingAction: z.string().max(200).nullable(),
+  blockerCode: z.string().max(128).nullable().optional(),
   lastEventId: durableId,
   continuationCount: z.number().int().nonnegative(),
   lastSummaryHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
@@ -416,6 +441,7 @@ export const IssueWorkflowStateSchema = z.object({
   leadSummary: SafeSummarySchema.nullable().optional(),
   planRevision: z.number().int().nonnegative().nullable().optional(),
   planMaterial: z.boolean().nullable().optional(),
+  preservedWorktreeCompatibility: z.boolean().nullable().optional(),
   materialCategories: z.array(PlanMaterialCategorySchema).max(6).optional(),
   supplementalReviewUsed: z.boolean().optional(),
   supplementalReviewArtifactId: durableId.nullable().optional(),
@@ -537,6 +563,9 @@ export const IssueWorkflowStateSchema = z.object({
   releaseFailureSummary: z.string().max(500).nullable().optional(),
   releaseRetryAt: z.string().datetime().nullable().optional(),
   releaseOperationAttempt: z.number().int().nonnegative().nullable().optional(),
+  revisionRequestId: durableId.nullable().optional(),
+  revisedExecutionCoordinates: RevisedExecutionCoordinatesSchema.nullable().optional(),
+  successorReference: SuccessorReferenceSchema.nullable().optional(),
 });
 
 export function buildInitialIssueWorkflowState(input: IssueWorkflowInput): IssueWorkflowState {
@@ -547,6 +576,7 @@ export function buildInitialIssueWorkflowState(input: IssueWorkflowInput): Issue
     issueId: input.issueId,
     projectRevisionId: input.projectRevisionId,
     ...(input.requestHash ? { requestHash: input.requestHash } : {}),
+    ...(input.predecessorTaskId ? { predecessorTaskId: input.predecessorTaskId } : {}),
     phase: "backlog",
     revision: 0,
     owner: "human",
@@ -558,6 +588,8 @@ export function buildInitialIssueWorkflowState(input: IssueWorkflowInput): Issue
     repairCycle: 0,
   });
 }
+
+export const createInitialIssueWorkflowState = buildInitialIssueWorkflowState;
 
 export const IssueProjectionEventSchema = z.object({
   schemaVersion: z.literal(1),
@@ -593,11 +625,20 @@ export const PlanCommandInputSchema = z.object({
   decision: z.enum(["accept", "request_changes", "cancel"]).optional(),
 });
 
+const RevisionCommandBaseSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000) }).strict();
+export const PlanRevisionCommandSchema = z.discriminatedUnion("worktreeDisposition", [
+  RevisionCommandBaseSchema.extend({ worktreeDisposition: z.literal("reuse") }).strict(),
+  RevisionCommandBaseSchema.extend({ worktreeDisposition: z.literal("new"), exactBaseSha: exactSha }).strict(),
+]);
+export const ContinueWorkCommandSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000) }).strict();
+
 export type IssueWorkflowInput = z.input<typeof IssueWorkflowInputSchema>;
 export type IssueWorkflowState = z.infer<typeof IssueWorkflowStateSchema>;
 export type StartPlanningInput = z.input<typeof StartPlanningInputSchema>;
 export type RecordProgressInput = z.input<typeof RecordProgressInputSchema>;
 export type PlanCommandInput = z.input<typeof PlanCommandInputSchema>;
+export type PlanRevisionCommand = z.infer<typeof PlanRevisionCommandSchema>;
+export type ContinueWorkCommand = z.infer<typeof ContinueWorkCommandSchema>;
 
 const DeliveryReviewActivityInputCoreSchema = z.object({
   taskId: durableId,
@@ -750,6 +791,8 @@ export interface LeadPlanningActivityInput {
   imageArtifactIds: string[];
   roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
   revision: number;
+  revisionRequestId?: string;
+  resumeLeadSessionRef?: string;
 }
 
 export interface LeadPlanningResult {
@@ -761,6 +804,7 @@ export interface LeadPlanningResult {
   leadSummary: string;
   materialCategories: PlanMaterialCategory[];
   material: boolean;
+  preservedWorktreeCompatibility?: boolean | null;
 }
 
 export interface SupplementalReviewActivityInput {
@@ -809,7 +853,31 @@ export interface PlanDecisionActivityInput {
   actorUserId: string;
   decision: "approve" | "reject";
   note: string;
+  revisionRequestId?: string;
 }
+
+export const PreparePlanRevisionActivityInputSchema = z.object({
+  taskId: durableId, companyId: durableId, workflowId: durableId, projectId: durableId, projectRevisionId: durableId,
+  requestRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000),
+  worktreeDisposition: z.enum(["reuse", "new"]), exactBaseSha: exactSha.optional(), developerExecutionId: durableId.optional(),
+}).strict().superRefine((value, context) => {
+  if (value.worktreeDisposition === "new" && !value.exactBaseSha) context.addIssue({ code: "custom", path: ["exactBaseSha"], message: "New worktrees require an exact base SHA" });
+  if (value.worktreeDisposition === "reuse" && value.exactBaseSha) context.addIssue({ code: "custom", path: ["exactBaseSha"], message: "Reuse does not accept an exact base SHA" });
+});
+export type PreparePlanRevisionActivityInput = z.infer<typeof PreparePlanRevisionActivityInputSchema>;
+export const PreparePlanRevisionActivityResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("accepted"), revisionRequestId: durableId, coordinates: RevisedExecutionCoordinatesSchema }).strict(),
+  z.object({ status: z.literal("blocked"), revisionRequestId: durableId, blockerCode: z.string().min(1).max(128) }).strict(),
+]);
+export type PreparePlanRevisionActivityResult = z.infer<typeof PreparePlanRevisionActivityResultSchema>;
+export const CreateSuccessorActivityInputSchema = z.object({
+  predecessorTaskId: durableId, predecessorWorkflowId: durableId, acceptedRevision: z.number().int().nonnegative(), successorTaskId: durableId,
+  successorWorkflowId: durableId, companyId: durableId, projectId: durableId, actorUserId: durableId, reason: z.string().trim().min(1).max(4_000),
+  intentId: durableId,
+}).strict();
+export type CreateSuccessorActivityInput = z.infer<typeof CreateSuccessorActivityInputSchema>;
+export const CreateSuccessorActivityResultSchema = SuccessorReferenceSchema;
+export type CreateSuccessorActivityResult = z.infer<typeof CreateSuccessorActivityResultSchema>;
 
 export interface DeveloperExecutionActivityInput {
   taskId: string;
@@ -821,6 +889,7 @@ export interface DeveloperExecutionActivityInput {
   roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
   leadSessionRef: string;
   leadOutputArtifactId: string;
+  revisionRequestId?: string;
   executionId?: string;
   supersedesExecutionId?: string | undefined;
   reuseWorktree?: boolean | undefined;
@@ -1287,6 +1356,11 @@ export interface ReconcileMergeActivityResult {
 export interface IssueActivities {
   projectIssueState(event: IssueProjectionEvent): Promise<IssueWorkflowState>;
   runLeadPlanning(input: LeadPlanningActivityInput): Promise<LeadPlanningResult>;
+  findActiveDeveloperExecution(input: { taskId: string; companyId: string; workflowId: string }): Promise<{ executionId: string; sessionRef: string } | null>;
+  cancelDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<{ status: "cancelled" | "ownership_ambiguous"; reason?: string | undefined }>;
+  preparePlanRevision(input: PreparePlanRevisionActivityInput): Promise<PreparePlanRevisionActivityResult>;
+  authorizePlanRevision(input: { taskId: string; companyId: string; workflowId: string; revisionRequestId: string; planRevision: number }): Promise<void>;
+  createSuccessor(input: CreateSuccessorActivityInput): Promise<CreateSuccessorActivityResult>;
   runSupplementalReview(input: SupplementalReviewActivityInput): Promise<SupplementalReviewResult>;
   consolidateLeadPlan(input: ConsolidateLeadPlanActivityInput): Promise<LeadPlanningResult>;
   planDeliveryRepair(input: DeliveryRepairPlanActivityInput): Promise<DeliveryRepairPlanResult>;
@@ -1295,7 +1369,6 @@ export interface IssueActivities {
   reviewDelivery(input: WorkflowDeliveryReviewActivityInput): Promise<WorkflowDeliveryReviewResult>;
   runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput): Promise<WorkflowDeveloperRepairResult>;
   recordDeliveryDecision(input: DeliveryDecisionActivityInput): Promise<{ artifactId: string }>;
-  cancelDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<{ status: "cancelled" | "ownership_ambiguous"; reason?: string | undefined }>;
   publishRelease(input: PublishReleaseActivityInput): Promise<PublishReleaseActivityResult>;
   reconcileTargetBase(input: ReconcileTargetBaseActivityInput): Promise<ReconcileTargetBaseActivityResult>;
   reconcileCi(input: ReconcileCiActivityInput): Promise<ReconcileCiActivityResult>;

@@ -8,10 +8,11 @@ import { ArtifactFailure, ArtifactManifestEntrySchema, ArtifactStore, type Artif
 import { LeadOutputSchema, type LeadOutput } from "./codex-lead.js";
 import { ForgeDatabase } from "./database.js";
 import { canonicalJson } from "./canonical-json.js";
+import { redact } from "./logging.js";
 import { ProjectFailure, ProjectService, type ProjectRole } from "./projects.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
-import { acceptIssueDelivery, acceptIssuePlanning, approveIssuePlan, cancelIssue, cancelIssueDevelopment, finalReviewIssue, IssueWorkflowStartFailure, publishIssueDraft, recordIssueDeliveryDecision, reconcileIssueAcceptance, reconcileIssueCI, reconcileIssueMerge, rejectIssuePlan, repairIssueCI, repairIssueDelivery, requestIssueDeliveryChanges, requestIssueSupplementalReview, resolveIssueMergeConflict, retryIssueDevelopment, retryIssueForwardMergeVerification, retryIssueTargetBaseReconciliation, reviewIssueDelivery, startIssueDevelopment, startIssueWorkflow } from "./temporal/service.js";
-import { IssueWorkflowStateSchema, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type StartPlanningInput } from "./temporal/issue-contracts.js";
+import { acceptIssueDelivery, acceptIssuePlanning, approveIssuePlan, cancelIssue, cancelIssueDevelopment, continueIssueWork, finalReviewIssue, IssueWorkflowStartFailure, publishIssueDraft, recordIssueDeliveryDecision, reconcileIssueAcceptance, reconcileIssueCI, reconcileIssueMerge, rejectIssuePlan, repairIssueCI, repairIssueDelivery, requestIssueDeliveryChanges, requestIssueSupplementalReview, resolveIssueMergeConflict, reviseIssuePlan, retryIssueDevelopment, retryIssueForwardMergeVerification, retryIssueTargetBaseReconciliation, reviewIssueDelivery, startIssueDevelopment, startIssueWorkflow } from "./temporal/service.js";
+import { IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type StartPlanningInput } from "./temporal/issue-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 
 export type TaskPhase = "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "merge_conflict_reviewing" | "merge_conflict_required" | "merge_conflict_resolving" | "ci_waiting" | "ci_repair_planning" | "ci_repairing" | "ci_repair_required" | "final_review" | "accepted" | "ready_reconciliation" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
@@ -164,6 +165,80 @@ export interface ReviewLineage {
   repairAttempts: RepairAttemptDto[];
 }
 
+export interface TaskLinkSummary {
+  id: string;
+  title: string;
+  phase: TaskPhase;
+}
+
+export interface TaskPlanHistoryEntry {
+  revision: number;
+  kind: "plan" | "decision_blocker";
+  summary: string;
+  executionId: string;
+  outputArtifactId: string;
+  evidenceArtifactId: string;
+  createdAt: string;
+}
+
+export interface TaskPlanDecisionHistoryEntry {
+  id: string;
+  planRevision: number;
+  decision: string;
+  noteArtifactId: string;
+  createdAt: string;
+}
+
+export interface TaskRevisionHistoryEntry {
+  id: string;
+  requestRevision: number;
+  disposition: "reuse" | "new";
+  status: "accepted" | "blocked" | "authorized";
+  blockerCode: string | null;
+  developerExecutionId: string | null;
+  branchName: string | null;
+  baseSha: string | null;
+  headSha: string | null;
+  treeSha: string | null;
+  exactBaseSha: string | null;
+  authorizedPlanRevision: number | null;
+  reasonArtifactId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TaskDeveloperExecutionHistoryEntry {
+  id: string;
+  planRevision: number;
+  attempt: number;
+  status: string;
+  branchName: string;
+  targetBaseSha: string;
+  resultCommit: string | null;
+  resultTree: string | null;
+  dirtyState: string | null;
+  deliveryArtifactId: string | null;
+  evidenceArtifactId: string | null;
+  failureCode: string | null;
+  failureSummary: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+}
+
+export interface TaskDeliveryReviewHistoryEntry {
+  id: string;
+  planRevision: number;
+  outcome: "approved" | "blocking";
+  summary: string;
+  baseSha: string;
+  subjectCommit: string;
+  subjectTree: string;
+  opinionArtifactId: string;
+  evidenceArtifactId: string;
+  repairCycle: number;
+  createdAt: string;
+}
+
 export interface ForgeTask {
   id: string;
   companyId: string;
@@ -185,6 +260,11 @@ export interface ForgeTask {
   updatedAt: string;
   timeline: TaskTimelineEntry[];
   agentInvocations: TaskAgentInvocation[];
+  planHistory: TaskPlanHistoryEntry[];
+  planDecisionHistory: TaskPlanDecisionHistoryEntry[];
+  revisionHistory: TaskRevisionHistoryEntry[];
+  developerExecutionHistory: TaskDeveloperExecutionHistoryEntry[];
+  deliveryReviewHistory: TaskDeliveryReviewHistoryEntry[];
   projection: { authoritativeRevision: number; projectedRevision: number; projectedAt: string; status: "current" | "lagging" };
   planRevision?: number | null;
   planMaterial?: boolean | null;
@@ -202,6 +282,8 @@ export interface ForgeTask {
   deliveryRepairBlockerCode?: DeliveryWorkflowBlockCode | null;
   deliveryRepairBlockerSummary?: string | null;
   deliveryRepairBlockerEvidenceArtifactId?: string | null;
+  predecessor?: TaskLinkSummary;
+  successor?: TaskLinkSummary;
   ci?: TaskCiProjection;
   release?: TaskRelease | null;
   deliveryReview?: {
@@ -371,10 +453,11 @@ export interface IssueWorkflowPort {
   requestSupplementalReview?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   approvePlan?: (workflowId: string, input: StartPlanningInput & { note?: string }) => Promise<IssueWorkflowState>;
   rejectPlan?: (workflowId: string, input: StartPlanningInput & { note?: string }) => Promise<IssueWorkflowState>;
+  revisePlan?: (workflowId: string, input: PlanRevisionCommand) => Promise<IssueWorkflowState>;
   startDevelopment?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   retryDevelopment?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   cancelDevelopment?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  continueWork?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
+  continueWork?: (workflowId: string, input: ContinueWorkCommand) => Promise<IssueWorkflowState>;
   reviewDelivery?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   repairDelivery?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   recordDeliveryDecision?: (workflowId: string, input: StartPlanningInput & { note?: string }) => Promise<IssueWorkflowState>;
@@ -586,6 +669,7 @@ export class TaskService {
       requestSupplementalReview: (workflowId, input) => requestIssueSupplementalReview(config, workflowId, input),
       approvePlan: (workflowId, input) => approveIssuePlan(config, workflowId, input),
       rejectPlan: (workflowId, input) => rejectIssuePlan(config, workflowId, input),
+      revisePlan: (workflowId, input) => reviseIssuePlan(config, workflowId, input),
       startDevelopment: (workflowId, input) => startIssueDevelopment(config, workflowId, input),
       retryDevelopment: (workflowId, input) => retryIssueDevelopment(config, workflowId, input),
       cancelDevelopment: (workflowId, input) => cancelIssueDevelopment(config, workflowId, input),
@@ -604,6 +688,7 @@ export class TaskService {
       cancelIssue: (workflowId, input) => cancelIssue(config, workflowId, input),
       reconcileAcceptance: (workflowId, input) => reconcileIssueAcceptance(config, workflowId, input),
       reconcileMerge: (workflowId, input) => reconcileIssueMerge(config, workflowId, input),
+      continueWork: (workflowId, input) => continueIssueWork(config, workflowId, input),
     };
   }
 
@@ -1028,6 +1113,21 @@ export class TaskService {
     return this.planCommand(actorUserId, taskId, expectedRevision, authorization, (workflowId, input) => this.workflow.rejectPlan ? this.workflow.rejectPlan(workflowId, { ...input, ...(note !== undefined ? { note } : {}) }) : Promise.reject(new Error("Plan revision workflow is unavailable")));
   }
 
+  async revisePlan(actorUserId: string, taskId: string, input: PlanRevisionCommand): Promise<ForgeTask> {
+    const task = this.getTask(actorUserId, taskId);
+    if (input.actorUserId !== actorUserId) throw new TaskFailure("Plan revision is unavailable", [finding("actor-mismatch", "actorUserId", "Authenticated actor does not match the revision request")], 403, task);
+    if (input.expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before revising the plan")], 409, task);
+    if (!this.workflow.revisePlan) throw new TaskFailure("Plan revision workflow is unavailable", [finding("workflow-unavailable", "workflow", "The durable issue workflow is unavailable")], 503, task);
+    try {
+      const state = await this.workflow.revisePlan(task.workflowId, input);
+      this.projectState(state);
+      return this.getTask(actorUserId, taskId);
+    } catch (error) {
+      const stale = error instanceof Error && /stale workflow revision/i.test(error.message);
+      throw new TaskFailure(stale ? "Task changed before this action was accepted" : "Plan revision could not be accepted", [finding(stale ? "stale-revision" : "workflow-update-rejected", "expectedRevision", stale ? "Refresh the issue before revising the plan" : "The durable plan revision was not accepted")], 409, this.getTask(actorUserId, taskId));
+    }
+  }
+
   async publishDraft(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
     return this.planCommand(actorUserId, taskId, expectedRevision, "publish_draft", (workflowId, input) => this.workflow.publishDraft ? this.workflow.publishDraft(workflowId, input) : Promise.reject(new Error("Draft publication workflow is unavailable")));
   }
@@ -1076,18 +1176,36 @@ export class TaskService {
     return this.planCommand(actorUserId, taskId, expectedRevision, "reconcile_merge", (workflowId, input) => this.workflow.reconcileMerge ? this.workflow.reconcileMerge(workflowId, input) : Promise.reject(new Error("Merge reconciliation workflow is unavailable")));
   }
 
-  async continueWork(actorUserId: string, taskId: string): Promise<{ original: ForgeTask; successor: ForgeTask }> {
+  async continueWork(actorUserId: string, taskId: string, expectedRevision: number, reason: string): Promise<{ original: ForgeTask; successor: ForgeTask }> {
     const original = this.getTask(actorUserId, taskId);
-    if (!(["done", "cancelled", "failed"].includes(original.phase) && original.allowedCommands.includes("record_delivery_decision") === false)) throw new TaskFailure("Continue work is not available", [finding("terminal-state-required", "phase", "Continue work requires a terminal or cancelled issue")], 409);
-    const result = await this.createTask(actorUserId, original.companyId, { projectId: original.projectId, title: `Continue: ${original.title}`.slice(0, 160), description: `${original.description}\n\nContinued from Forge issue ${original.id}.`, idempotencyKey: `continue_${original.id}_${original.revision}_${Date.now()}`, images: [], roleProfiles: original.roleProfiles, supplementalReview: original.supplementalReview });
-    this.database.authTransaction((db) => {
-      const updatedAt = this.now().toISOString();
-      db.prepare("UPDATE forge_tasks SET predecessor_task_id = ?, updated_at = ? WHERE id = ? AND company_id = ?").run(original.id, updatedAt, result.task.id, original.companyId);
-      db.prepare("UPDATE forge_tasks SET successor_task_id = ?, updated_at = ? WHERE id = ? AND company_id = ?").run(result.task.id, updatedAt, original.id, original.companyId);
-      db.prepare("INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, 'successor_created', ?, ?)").run(`${original.workflowId}:successor:${result.task.id}`, original.id, original.companyId, original.workflowId, original.revision + 1, JSON.stringify({ successorTaskId: result.task.id }), updatedAt);
-      db.prepare("INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at) VALUES (?, ?, ?, ?, ?, 'successor_linked', ?, ?)").run(`${result.task.workflowId}:predecessor:${original.id}`, result.task.id, original.companyId, result.task.workflowId, 1, JSON.stringify({ predecessorTaskId: original.id }), updatedAt);
-    });
-    return { original: this.getTask(actorUserId, original.id), successor: this.getTask(actorUserId, result.task.id) };
+    const normalizedReason = (redact(reason.trim()) as string).trim();
+    if (!normalizedReason || normalizedReason.length > 4_000) throw new TaskFailure("Continue work reason is required", [finding("invalid-reason", "reason", "Enter a reason from 1 to 4,000 characters")], 422, original);
+    const reasonHash = createHash("sha256").update(normalizedReason).digest("hex");
+    const continuationIntent = (): { state: string; actorUserId: string; successorTaskId: string; reasonHash: string } | undefined => this.database.authQuery((db) => db.prepare("SELECT i.state, i.actor_user_id AS actorUserId, i.successor_task_id AS successorTaskId, a.sha256 AS reasonHash FROM forge_successor_intents i JOIN forge_artifacts a ON a.id = i.reason_artifact_id AND a.company_id = i.company_id WHERE i.predecessor_task_id = ? AND i.accepted_revision = ?").get(taskId, expectedRevision) as { state: string; actorUserId: string; successorTaskId: string; reasonHash: string } | undefined);
+    const isSameRequest = (intent: ReturnType<typeof continuationIntent>): intent is NonNullable<ReturnType<typeof continuationIntent>> => Boolean(intent && intent.actorUserId === actorUserId && intent.reasonHash === reasonHash);
+    if (!Number.isInteger(expectedRevision) || expectedRevision !== original.revision) {
+      const intent = continuationIntent();
+      if (isSameRequest(intent) && intent.state === "linked") return { original: this.getTask(actorUserId, taskId), successor: this.getTask(actorUserId, intent.successorTaskId) };
+      if (isSameRequest(intent)) throw new TaskFailure("Continue work is awaiting reconciliation", [finding("successor-reconciliation", "workflow", "The successor is being reconciled; retry this request")], 503, original);
+      throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before continuing work")], 409, original);
+    }
+    if (!this.workflow.continueWork) throw new TaskFailure("Continue work workflow is unavailable", [finding("workflow-unavailable", "workflow", "The durable issue workflow is unavailable")], 503, original);
+    try {
+      const state = await this.workflow.continueWork(original.workflowId, { expectedRevision, actorUserId, reason });
+      this.projectState(state);
+      const successorId = state.successorReference?.successorTaskId ?? state.successorTaskId;
+      if (!successorId) throw new TaskFailure("Continue work is awaiting reconciliation", [finding("successor-reconciliation", "workflow", "The successor is being reconciled; retry this request")], 503, original);
+      return { original: this.getTask(actorUserId, original.id), successor: this.getTask(actorUserId, successorId) };
+    } catch (error) {
+      if (error instanceof TaskFailure) throw error;
+      const stale = error instanceof Error && /stale workflow revision/i.test(error.message);
+      if (stale) {
+        const intent = continuationIntent();
+        if (isSameRequest(intent) && intent.state === "linked") return { original: this.getTask(actorUserId, taskId), successor: this.getTask(actorUserId, intent.successorTaskId) };
+        if (isSameRequest(intent)) throw new TaskFailure("Continue work is awaiting reconciliation", [finding("successor-reconciliation", "workflow", "The successor is being reconciled; retry this request")], 503, original);
+      }
+      throw new TaskFailure(stale ? "Task changed before this action was accepted" : "Continue work could not be accepted", [finding(stale ? "stale-revision" : "workflow-update-rejected", "expectedRevision", stale ? "Refresh the issue before continuing work" : "The durable successor was not accepted")], 409, this.getTask(actorUserId, taskId));
+    }
   }
 
   private async planCommand(actorUserId: string, taskId: string, expectedRevision: number, commandName: string, command: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>): Promise<ForgeTask> {
@@ -1100,6 +1218,10 @@ export class TaskService {
     }
     const updated = this.getTask(actorUserId, taskId);
     return updated;
+  }
+
+  private projectState(state: IssueWorkflowState): void {
+    this.database.projectIssueEvent({ schemaVersion: 1, runId: state.workflowId, eventId: state.lastEventId, state });
   }
 
   private async memberCommand(actorUserId: string, taskId: string, expectedRevision: number, commandName: string, command: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>): Promise<ForgeTask> {
@@ -1148,10 +1270,27 @@ export class TaskService {
     const linked = this.database.authQuery((db) => db.prepare(`SELECT a.reason_artifact_id AS artifactId FROM forge_acceptances a WHERE a.id = ? AND a.task_id = ? AND a.company_id = ? UNION ALL SELECT aa.evidence_artifact_id AS artifactId FROM forge_acceptance_attempts aa JOIN forge_acceptances a ON a.id = aa.acceptance_id WHERE a.id = ? AND a.task_id = ? AND a.company_id = ? UNION ALL SELECT cr.receipt_artifact_id AS artifactId FROM forge_completion_receipts cr WHERE cr.id = ? AND cr.task_id = ? AND cr.company_id = ? UNION ALL SELECT fr.opinion_artifact_id AS artifactId FROM forge_final_reviews fr WHERE fr.id = ? AND fr.task_id = ? AND fr.company_id = ? UNION ALL SELECT fr.evidence_artifact_id AS artifactId FROM forge_final_reviews fr WHERE fr.id = ? AND fr.task_id = ? AND fr.company_id = ? UNION ALL SELECT c.evidence_artifact_id AS artifactId FROM forge_ci_runs c WHERE c.id = ? AND c.task_id = ? AND c.company_id = ? UNION ALL SELECT mo.evidence_artifact_id AS artifactId FROM forge_merge_observations mo WHERE mo.id = ? AND mo.task_id = ? AND mo.company_id = ?`).all(state?.acceptanceId ?? "", taskId, task.companyId, state?.acceptanceId ?? "", taskId, task.companyId, state?.completionReceiptId ?? "", taskId, task.companyId, state?.finalReviewId ?? "", taskId, task.companyId, state?.finalReviewId ?? "", taskId, task.companyId, state?.ciRunId ?? "", taskId, task.companyId, state?.mergeObservationId ?? "", taskId, task.companyId) as Array<{ artifactId: string | null }>);
     for (const artifact of linked) if (artifact.artifactId) artifactIds.add(artifact.artifactId);
     for (const artifactId of [state?.deliveryRepairPlanArtifactId, state?.finalReviewRepairPlanArtifactId, state?.ciRepairPlanArtifactId, state?.ciRepairPlanEvidenceArtifactId]) if (artifactId) artifactIds.add(artifactId);
-    const referenced = artifactIds.has(artifactId) ? this.database.authQuery((db) => db.prepare("SELECT id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at FROM forge_artifacts WHERE company_id = ? AND id = ?").get(task.companyId, artifactId) as ArtifactRow | undefined) : undefined;
-    if (!referenced) throw new TaskFailure("Not found", [], 404);
-    const bytes = await this.artifacts.read({ companyId: task.companyId, storagePath: referenced.storage_path, sha256: referenced.sha256 });
-    return { artifact: { artifactId: referenced.id, kind: referenced.kind, filename: referenced.filename, mimeType: referenced.mime_type, byteSize: referenced.byte_size }, bytes };
+    const gateArtifact = artifactIds.has(artifactId) ? this.database.authQuery((db) => db.prepare("SELECT id, kind, filename, mime_type, byte_size, sha256, storage_path FROM forge_artifacts WHERE company_id = ? AND id = ?").get(task.companyId, artifactId) as { id: string; kind: string; filename: string; mime_type: string; byte_size: number; storage_path: string; sha256: string } | undefined) : undefined;
+    const artifact = gateArtifact ?? this.database.authQuery((db) => db.prepare(`SELECT a.id, a.kind, a.filename, a.mime_type, a.byte_size, a.storage_path, a.sha256
+      FROM forge_artifacts a
+      WHERE a.id = ? AND a.company_id = ? AND (
+        EXISTS (SELECT 1 FROM forge_issue_outputs o WHERE (o.output_artifact_id = a.id OR o.evidence_artifact_id = a.id) AND o.task_id = ? AND o.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_agent_executions e WHERE e.evidence_artifact_id = a.id AND e.task_id = ? AND e.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_plan_reviews r WHERE (r.opinion_artifact_id = a.id OR r.evidence_artifact_id = a.id) AND r.task_id = ? AND r.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_plan_decisions d WHERE d.note_artifact_id = a.id AND d.task_id = ? AND d.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_plan_revision_requests rr WHERE rr.reason_artifact_id = a.id AND rr.task_id = ? AND rr.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_developer_executions de WHERE (de.delivery_artifact_id = a.id OR de.evidence_artifact_id = a.id) AND de.task_id = ? AND de.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_delivery_reviews dr WHERE (dr.opinion_artifact_id = a.id OR dr.evidence_artifact_id = a.id) AND dr.task_id = ? AND dr.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_delivery_decisions dd WHERE dd.artifact_id = a.id AND dd.task_id = ? AND dd.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_successor_intents si WHERE si.reason_artifact_id = a.id AND si.predecessor_task_id = ? AND si.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_issue_governance g WHERE g.supplemental_review_artifact_id = a.id AND g.task_id = ? AND g.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_ci_attempts ca JOIN forge_ci_runs cr ON cr.id = ca.run_id WHERE ca.evidence_artifact_id = a.id AND cr.task_id = ? AND cr.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_ci_repair_plans cp WHERE (cp.plan_artifact_id = a.id OR cp.evidence_artifact_id = a.id) AND cp.task_id = ? AND cp.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_ci_repairs cx JOIN forge_ci_repair_plans cp ON cp.id = cx.repair_plan_id WHERE (cx.delivery_artifact_id = a.id OR cx.evidence_artifact_id = a.id) AND cp.task_id = ? AND cp.company_id = ?)
+      )`).get(artifactId, task.companyId, ...Array.from({ length: 13 }, () => [task.id, task.companyId]).flat()) as { id: string; kind: string; filename: string; mime_type: string; byte_size: number; storage_path: string; sha256: string } | undefined);
+    if (!artifact) throw new TaskFailure("Not found", [], 404);
+    const bytes = await this.artifacts.read({ companyId: task.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 });
+    return { artifact: { artifactId: artifact.id, kind: artifact.kind, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }, bytes };
   }
 
   async getTargetBaseArtifact(actorUserId: string, taskId: string, artifactId: string): Promise<{ artifact: { artifactId: string; filename: string; mimeType: string; byteSize: number }; bytes: Buffer }> {
@@ -1367,6 +1506,14 @@ export class TaskService {
     const decision = this.database.authQuery((db) => db.prepare("SELECT artifact_id FROM forge_delivery_decisions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { artifact_id: string } | undefined);
     const review = this.database.authQuery((db) => db.prepare("SELECT id, outcome, summary, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, opinion_artifact_id, evidence_artifact_id, repair_cycle FROM forge_delivery_reviews WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC, id DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { id: string; outcome: "approved" | "blocking"; summary: string; plan_revision: number; base_sha: string; subject_commit: string; subject_tree: string; lead_execution_id: string; opinion_artifact_id: string; evidence_artifact_id: string; repair_cycle: number } | undefined);
     const findings = review ? this.database.authQuery((db) => db.prepare("SELECT id, severity, rationale, evidence_ref, disposition, repair_instruction FROM forge_delivery_findings WHERE review_id = ? AND task_id = ? AND company_id = ? ORDER BY id").all(review.id, row.id, row.company_id) as Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidence_ref: string; disposition: string; repair_instruction: string | null }>) : [];
+    const planHistory = this.database.authQuery((db) => db.prepare("SELECT revision, kind, summary, execution_id AS executionId, output_artifact_id AS outputArtifactId, evidence_artifact_id AS evidenceArtifactId, created_at AS createdAt FROM forge_issue_outputs WHERE task_id = ? AND company_id = ? ORDER BY revision, created_at, id").all(row.id, row.company_id) as TaskPlanHistoryEntry[]);
+    const planDecisionHistory = this.database.authQuery((db) => db.prepare("SELECT id, plan_revision AS planRevision, decision, note_artifact_id AS noteArtifactId, created_at AS createdAt FROM forge_plan_decisions WHERE task_id = ? AND company_id = ? ORDER BY plan_revision, created_at, id").all(row.id, row.company_id) as TaskPlanDecisionHistoryEntry[]);
+    const revisionHistory = this.database.authQuery((db) => db.prepare("SELECT id, request_revision AS requestRevision, disposition, status, blocker_code AS blockerCode, developer_execution_id AS developerExecutionId, branch_name AS branchName, base_sha AS baseSha, head_sha AS headSha, tree_sha AS treeSha, exact_base_sha AS exactBaseSha, authorized_plan_revision AS authorizedPlanRevision, reason_artifact_id AS reasonArtifactId, created_at AS createdAt, updated_at AS updatedAt FROM forge_plan_revision_requests WHERE task_id = ? AND company_id = ? ORDER BY request_revision, created_at, id").all(row.id, row.company_id) as TaskRevisionHistoryEntry[]);
+    const developerExecutionHistory = this.database.authQuery((db) => db.prepare("SELECT id, plan_revision AS planRevision, attempt, status, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree, dirty_state AS dirtyState, delivery_artifact_id AS deliveryArtifactId, evidence_artifact_id AS evidenceArtifactId, failure_code AS failureCode, failure_summary AS failureSummary, started_at AS startedAt, finished_at AS finishedAt FROM forge_developer_executions WHERE task_id = ? AND company_id = ? ORDER BY plan_revision, attempt, started_at, id").all(row.id, row.company_id) as TaskDeveloperExecutionHistoryEntry[]);
+    const deliveryReviewHistory = this.database.authQuery((db) => db.prepare("SELECT id, plan_revision AS planRevision, outcome, summary, base_sha AS baseSha, subject_commit AS subjectCommit, subject_tree AS subjectTree, opinion_artifact_id AS opinionArtifactId, evidence_artifact_id AS evidenceArtifactId, repair_cycle AS repairCycle, created_at AS createdAt FROM forge_delivery_reviews WHERE task_id = ? AND company_id = ? ORDER BY created_at, id").all(row.id, row.company_id) as TaskDeliveryReviewHistoryEntry[]);
+    const linkedTask = (taskId: string | null): TaskLinkSummary | undefined => taskId ? this.database.authQuery((db) => db.prepare("SELECT t.id, t.title, p.phase FROM forge_tasks t JOIN forge_issue_projections p ON p.task_id = t.id AND p.company_id = t.company_id WHERE t.id = ? AND t.company_id = ?").get(taskId, row.company_id) as TaskLinkSummary | undefined) : undefined;
+    const predecessor = linkedTask(row.predecessor_task_id);
+    const successor = linkedTask(row.successor_task_id);
     const ci = this.ciProjection(row.id, row.company_id);
     const release = this.releaseForTask(row.id, row.company_id, row.workflow_id);
     const reconciliationState: Record<string, unknown> = workflowState;
@@ -1403,7 +1550,7 @@ export class TaskService {
       actions: json<string[]>(row.allowed_commands_json, []),
     };
     const deliveryGate = this.deliveryGate(row, workflowState);
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), timeline, agentInvocations, targetBaseReconciliation, reviewLineage, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(deliveryGate ? { deliveryGate } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), timeline, agentInvocations, targetBaseReconciliation, reviewLineage, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(deliveryGate ? { deliveryGate } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
   }
 
   private releaseForTask(taskId: string, companyId: string, workflowId: string): TaskRelease | null | undefined {

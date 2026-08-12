@@ -706,11 +706,21 @@ async function fileAsImage(file: File): Promise<{ filename: string; mimeType: st
 }
 
 type TaskPlanAction = "request-supplemental-review" | "approve-plan" | "reject-plan" | "start-development" | "retry-development" | "cancel-development" | "review-delivery" | "repair-delivery" | "record-delivery-decision" | "publish-draft" | "resolve-merge-conflict" | "retry-target-base-reconciliation" | "retry-forward-merge-verification" | "reconcile-ci" | "repair-ci" | "final-review" | "accept-delivery" | "request-delivery-changes" | "reconcile-acceptance" | "reconcile-merge" | "cancel";
+type PlanRevisionInput = { worktreeDisposition: "reuse" | "new"; reason: string; exactBaseSha?: string };
 
-function TaskActions({ task, busy, onStartPlanning, onPlanAction }: { task: ApiTask; busy: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void> }): ReactElement {
+function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork }: { task: ApiTask; busy: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void> }): ReactElement {
+  const [revisionOpen, setRevisionOpen] = useState(false);
+  const [revisionReason, setRevisionReason] = useState("");
+  const [worktreeDisposition, setWorktreeDisposition] = useState<"reuse" | "new">(task.developerExecution ? "reuse" : "new");
+  const [exactBaseSha, setExactBaseSha] = useState("");
+  const [continueOpen, setContinueOpen] = useState(false);
+  const [continueReason, setContinueReason] = useState("");
   const disabled = busy || task.projection.status === "lagging";
+  const canRevise = task.allowedCommands.includes("revise_plan");
+  const canContinue = task.allowedCommands.includes("continue_work");
   return (
-    <div data-task-actions className="flex flex-wrap justify-end gap-2">
+    <div data-task-actions className="space-y-3">
+      <div className="flex flex-wrap justify-end gap-2">
       {task.allowedCommands.includes("start_planning") ? <Button size="sm" onClick={() => void onStartPlanning()} disabled={disabled}>{busy ? "Planning…" : "Start planning"}</Button> : null}
       {task.allowedCommands.includes("request_supplemental_review") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("request-supplemental-review")} disabled={disabled}>Request review</Button> : null}
       {task.allowedCommands.includes("approve_plan") ? <Button size="sm" onClick={() => void onPlanAction("approve-plan", "Approved final plan")} disabled={disabled}>Approve plan</Button> : null}
@@ -734,6 +744,19 @@ function TaskActions({ task, busy, onStartPlanning, onPlanAction }: { task: ApiT
       {task.allowedCommands.includes("reconcile_acceptance") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reconcile-acceptance")} disabled={disabled}>{busy ? "Checking…" : "Reconcile ready state"}</Button> : null}
       {task.allowedCommands.includes("reconcile_merge") ? <Button size="sm" onClick={() => void onPlanAction("reconcile-merge")} disabled={disabled}>{busy ? "Checking…" : "Check merge"}</Button> : null}
       {task.allowedCommands.includes("cancel_issue") ? <Button size="sm" variant="ghost" onClick={() => void onPlanAction("cancel")} disabled={disabled}>Cancel</Button> : null}
+      {canRevise ? <Button size="sm" variant="outline" onClick={() => setRevisionOpen((open) => !open)} disabled={disabled}>{revisionOpen ? "Close revision" : "Revise plan"}</Button> : null}
+      {canContinue ? <Button size="sm" variant="outline" onClick={() => setContinueOpen((open) => !open)} disabled={disabled}>{continueOpen ? "Close continuation" : "Continue work"}</Button> : null}
+      </div>
+      {revisionOpen ? <form className="max-w-xl space-y-3 border-l-2 pl-3" onSubmit={(event) => { event.preventDefault(); void onRevisePlan({ worktreeDisposition, reason: revisionReason, ...(worktreeDisposition === "new" ? { exactBaseSha } : {}) }); }}>
+        <Field><FieldLabel htmlFor="revision-reason">Why revise this plan?</FieldLabel><Textarea id="revision-reason" required value={revisionReason} onChange={(event) => setRevisionReason(event.target.value)} placeholder="Describe the changed requirement or observed problem." /></Field>
+        <FieldSet><FieldLegend>Worktree</FieldLegend><FieldGroup>
+          <label className="flex items-center gap-2 text-xs"><input name="worktree-disposition" type="radio" checked={worktreeDisposition === "reuse"} onChange={() => setWorktreeDisposition("reuse")} disabled={!task.developerExecution} /> Reuse the verified clean worktree {task.developerExecution ? <span className="text-muted-foreground">({task.developerExecution.branchName})</span> : <span className="text-muted-foreground">(unavailable)</span>}</label>
+          <label className="flex items-center gap-2 text-xs"><input name="worktree-disposition" type="radio" checked={worktreeDisposition === "new"} onChange={() => setWorktreeDisposition("new")} /> Start from an exact base commit</label>
+          {worktreeDisposition === "new" ? <Field><FieldLabel htmlFor="revision-base-sha">Exact base SHA</FieldLabel><Input id="revision-base-sha" required value={exactBaseSha} onChange={(event) => setExactBaseSha(event.target.value)} placeholder="40–64 character commit SHA" /></Field> : null}
+        </FieldGroup></FieldSet>
+        <Button type="submit" size="sm" disabled={disabled || !revisionReason.trim() || (worktreeDisposition === "reuse" && !task.developerExecution) || (worktreeDisposition === "new" && !exactBaseSha.trim())}>{busy ? "Submitting…" : "Submit revision"}</Button>
+      </form> : null}
+      {continueOpen ? <form className="max-w-xl space-y-3 border-l-2 pl-3" onSubmit={(event) => { event.preventDefault(); void onContinueWork(continueReason); }}><Field><FieldLabel htmlFor="continue-reason">Why continue this work?</FieldLabel><Textarea id="continue-reason" required value={continueReason} onChange={(event) => setContinueReason(event.target.value)} placeholder="Describe the next bounded outcome." /></Field><Button type="submit" size="sm" disabled={disabled || !continueReason.trim()}>{busy ? "Creating successor…" : "Create successor"}</Button></form> : null}
     </div>
   );
 }
@@ -806,7 +829,7 @@ function TaskOptions(): ReactElement {
   );
 }
 
-function TaskDetailsPage({ task, project, busy, error, onStartPlanning, onPlanAction }: { task: ApiTask; project: ApiProject | undefined; busy: boolean; error: string; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void> }): ReactElement {
+function TaskDetailsPage({ task, project, companyId, busy, error, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void> }): ReactElement {
   return (
     <ApplicationFrame title={task.title} headerActions={<TaskOptions />}>
       <article data-task-detail className="min-w-0">
@@ -816,7 +839,7 @@ function TaskDetailsPage({ task, project, busy, error, onStartPlanning, onPlanAc
               <div data-task-header-content className="mx-auto max-w-4xl space-y-4">
                 <div className="flex min-w-0 flex-wrap items-center gap-2"><h2 className="text-xl font-semibold tracking-tight">{task.title}</h2><Badge variant="secondary" data-status={task.phase}>{taskPhaseLabel(task.phase)}</Badge></div>
                 <div aria-live="polite" className="text-[11px] text-muted-foreground">{task.projection.status === "lagging" ? `Projection lag: r${task.projection.projectedRevision} → r${task.projection.authoritativeRevision}` : `Projection current · r${task.projection.projectedRevision}`}</div>
-                <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} />
+                <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} />
                 {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
               </div>
             </header>
@@ -832,7 +855,7 @@ function TaskDetailsPage({ task, project, busy, error, onStartPlanning, onPlanAc
                 {task.release ? <ReleasePanel release={task.release} /> : null}
                 {task.targetBaseReconciliation.status ? <section className="space-y-2"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">Target-base reconciliation</h3><Badge variant={task.targetBaseReconciliation.status === "blocked" ? "destructive" : "secondary"}>{task.targetBaseReconciliation.status}</Badge></div><div className="text-[11px] text-muted-foreground">{task.targetBaseReconciliation.checkpoint ?? "checkpoint unavailable"}{task.targetBaseReconciliation.conflictFileCount !== null ? ` · ${task.targetBaseReconciliation.conflictFileCount} conflict files` : ""}</div><dl className="grid gap-1 text-[11px] sm:grid-cols-2"><div><dt className="text-muted-foreground">Expected base</dt><dd><code>{task.targetBaseReconciliation.expectedBaseSha?.slice(0, 12) ?? "—"}</code></dd></div><div><dt className="text-muted-foreground">Observed base</dt><dd><code>{task.targetBaseReconciliation.observedBaseSha?.slice(0, 12) ?? "—"}</code></dd></div><div><dt className="text-muted-foreground">Result</dt><dd><code>{task.targetBaseReconciliation.resultHead?.slice(0, 12) ?? "—"}</code></dd></div><div><dt className="text-muted-foreground">Verification</dt><dd>{task.targetBaseReconciliation.verificationArtifact ? <a className="underline" href={`/api/tasks/${task.id}/reconciliation-artifacts/${task.targetBaseReconciliation.verificationArtifact.id}`} target="_blank" rel="noreferrer">Evidence</a> : "—"}</dd></div></dl>{task.targetBaseReconciliation.releaseId && task.targetBaseReconciliation.pullRequestUrl ? <div className="text-[11px]"><a className="underline" href={task.targetBaseReconciliation.pullRequestUrl} target="_blank" rel="noreferrer">PR #{task.targetBaseReconciliation.pullRequestNumber}</a> · same PR continuity</div> : null}{task.targetBaseReconciliation.summary ? <div className="text-[12px] text-muted-foreground">{task.targetBaseReconciliation.summary}</div> : null}</section> : null}
                 <FinalGatePanel task={task} />
-                <TaskHistory activity={task.timeline} invocations={task.agentInvocations} />
+                <TaskHistory task={task} companyId={companyId} />
               </div>
             </div>
           </div>
@@ -1055,13 +1078,33 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to update the plan"); }
     finally { setBusy(false); }
   };
+  const revisePlan = async (input: PlanRevisionInput): Promise<void> => {
+    if (!selected) return;
+    setBusy(true); setError("");
+    try {
+      const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/revise-plan`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision, ...input }) });
+      selectedRef.current = updated; setSelected(updated); setTasks((current) => current.map((task) => task.id === updated.id ? updated : task)); await reload();
+    } catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to revise the plan"); }
+    finally { setBusy(false); }
+  };
+  const continueWork = async (reason: string): Promise<void> => {
+    if (!selected) return;
+    setBusy(true); setError("");
+    try {
+      const result = await readJson<{ original: ApiTask; successor: ApiTask }>(`/api/tasks/${selected.id}/continue-work`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision, reason }) });
+      const successorPath = `${routeBase}/${encodeURIComponent(result.successor.id)}`;
+      window.history.pushState({}, "", withCompany(successorPath, companyId));
+      selectedRef.current = result.successor; setSelected(result.successor); setTasks((current) => [...current.filter((task) => task.id !== result.successor.id), result.successor]); await reload();
+    } catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to continue work"); }
+    finally { setBusy(false); }
+  };
 
   if (routeTaskId && loading) return <TaskDetailsSkeleton />;
   if (routeTaskId && !companyId) return <TaskDetailsNotFound companyId="" returnTo={mode} />;
   if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
   if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
-  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} busy={busy} error={error} onStartPlanning={startPlanning} onPlanAction={planAction} />;
+  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} />;
 
   if (mode === "board") {
     return (

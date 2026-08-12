@@ -14,7 +14,7 @@ import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js"
 import type { GithubAdapter } from "../src/github.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
 import { TaskResponseSchema } from "../src/http/contracts/tasks.js";
-import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, type IssueWorkflowInput, type IssueWorkflowState, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, type IssueWorkflowInput, type IssueWorkflowState, type PlanRevisionCommand, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
 import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 
 function fakeWebAuthn(): WebAuthnAdapter {
@@ -83,7 +83,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(releaseBody.id, releaseBody.companyId, releaseBody.kind, releaseBody.filename, releaseBody.mimeType, releaseBody.byteSize, releaseBody.sha256, releaseBody.storagePath, releaseBody.createdAt);
       db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, body_artifact_id, reused, created_at, updated_at) VALUES ('release-browser', ?, ?, ?, 'release-browser-key', 'acme/forge', 'issue/browser-task', 'main', ?, ?, ?, 'draft', 21, 'https://github.com/acme/forge/pull/21', 'Browser task', ?, 1, ?, ?)").run(plannedState!.issueId, company.id, plannedState!.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), releaseBody.id, now, now);
     });
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for required CI", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue", "revise_plan"], pendingAction: "Waiting for required CI", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
   }, async startDevelopment(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
@@ -110,6 +110,11 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
     return plannedState;
   }, async rejectPlan(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    projectState(plannedState);
+    return plannedState;
+  }, async revisePlan(_workflowId: string, input: PlanRevisionCommand): Promise<IssueWorkflowState> {
+    if (input.worktreeDisposition !== "new") throw new Error("The browser fixture only supports a new exact-base worktree");
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: ["start_planning", "cancel_issue", "revise_plan"], pendingAction: "Run revised Lead planning", revisionRequestId: `revision_browser_${input.expectedRevision}`, revisedExecutionCoordinates: { disposition: "new", revisionRequestId: `revision_browser_${input.expectedRevision}`, exactBaseSha: input.exactBaseSha! }, lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
   } };
@@ -193,6 +198,9 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await taskDetail.getByText("evidence.png", { exact: true }).waitFor();
       await taskDetail.getByText("Lead plan", { exact: true }).waitFor();
       await taskDetail.getByText("Inspect repository", { exact: true }).waitFor();
+      await taskDetail.getByText("History", { exact: true }).waitFor();
+      await taskDetail.getByRole("button", { name: "Plans and decisions · 1", exact: true }).click();
+      expect(await taskDetail.getByRole("link", { name: "plan", exact: true }).isVisible()).toBe(true);
       const ciDetail = taskDetail.locator("[data-task-ci]");
       await ciDetail.getByText("Exact-head CI", { exact: true }).waitFor();
       expect(await ciDetail.getByText("required_check_failed:", { exact: false }).isVisible()).toBe(true);
@@ -303,6 +311,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       expect(await narrowDetail.getByRole("heading", { name: "Browser task", exact: true, level: 2 }).isVisible()).toBe(true);
       expect(await narrowDetail.getByText(/Image attached\./).isVisible()).toBe(true);
       expect(await narrowDetail.locator('[data-task-progress] [data-slot="timeline"][data-orientation="horizontal"]').count()).toBe(1);
+      await narrowDetail.getByText("History", { exact: true }).waitFor();
       expect(await narrow.getByRole("dialog").count()).toBe(0);
       expect(await narrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       const activity = narrowDetail.locator("[data-task-activity]");

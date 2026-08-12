@@ -4,9 +4,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { temporalConnectionOptions, type ForgeConfig } from "../config.js";
 import type { HealthCheck } from "../health.js";
 import { runtimeIdentifiers } from "../runtime-identifiers.js";
-import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, finalReviewUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, publishDraftUpdate, reconcileAcceptanceUpdate, reconcileCIUpdate, reconcileMergeUpdate, recordDeliveryDecisionUpdate, recordProgressUpdate, rejectPlanUpdate, repairCIUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, requestSupplementalReviewUpdate, resolveMergeConflictUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, retryForwardMergeVerificationUpdate, retryTargetBaseReconciliationUpdate, startDevelopmentUpdate, startPlanningUpdate } from "./workflows.js";
+import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, continueWorkUpdate, finalReviewUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, publishDraftUpdate, reconcileAcceptanceUpdate, reconcileCIUpdate, reconcileMergeUpdate, recordDeliveryDecisionUpdate, recordProgressUpdate, rejectPlanUpdate, repairCIUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, requestSupplementalReviewUpdate, resolveMergeConflictUpdate, revisePlanUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, retryForwardMergeVerificationUpdate, retryTargetBaseReconciliationUpdate, startDevelopmentUpdate, startPlanningUpdate } from "./workflows.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
+import { ContinueWorkCommandSchema, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, StartPlanningInputSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
 import { clientPayloadInterceptor } from "./payload-boundary-interceptors.js";
 import { temporalDataConverter } from "./workflow-bundle.js";
@@ -124,12 +124,12 @@ export async function queryProbeWorkflow(config: ForgeConfig, workflowId: string
 }
 
 function expectedCreationIdentity(input: IssueWorkflowInput): Record<string, string | undefined> {
-  return { companyId: input.companyId, projectId: input.projectId, issueId: input.issueId, projectRevisionId: input.projectRevisionId, requestHash: input.requestHash };
+  return { companyId: input.companyId, projectId: input.projectId, issueId: input.issueId, projectRevisionId: input.projectRevisionId, requestHash: input.requestHash, predecessorTaskId: input.predecessorTaskId };
 }
 
 function identityMatches(state: IssueWorkflowState, input: IssueWorkflowInput): boolean {
   const expected = expectedCreationIdentity(input);
-  return state.workflowId === input.workflowId && state.companyId === expected.companyId && state.projectId === expected.projectId && state.issueId === expected.issueId && state.projectRevisionId === expected.projectRevisionId && state.requestHash === expected.requestHash;
+  return state.workflowId === input.workflowId && state.companyId === expected.companyId && state.projectId === expected.projectId && state.issueId === expected.issueId && state.projectRevisionId === expected.projectRevisionId && state.requestHash === expected.requestHash && state.predecessorTaskId === expected.predecessorTaskId;
 }
 
 function memoMatches(memo: Record<string, unknown> | undefined, input: IssueWorkflowInput): boolean {
@@ -282,6 +282,30 @@ export function approveIssuePlan(config: ForgeConfig, workflowId: string, input:
 
 export function rejectIssuePlan(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
   return issuePlanUpdate(config, workflowId, { ...input, ...(input.note !== undefined ? { note: input.note } : {}) }, rejectPlanUpdate);
+}
+
+export async function reviseIssuePlan(config: ForgeConfig, workflowId: string, input: PlanRevisionCommand): Promise<IssueWorkflowState> {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
+  const validatedInput = PlanRevisionCommandSchema.parse(input);
+  assertPayloadWithinLimit("plan revision command", validatedInput);
+  const temporalClient = await connectTemporal(config);
+  try {
+    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(revisePlanUpdate, { args: [validatedInput] }));
+  } finally { temporalClient.connection.close(); }
+}
+
+export async function continueIssueWork(config: ForgeConfig, workflowId: string, input: ContinueWorkCommand): Promise<IssueWorkflowState> {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
+  const validatedInput = ContinueWorkCommandSchema.parse(input);
+  assertPayloadWithinLimit("continue work command", validatedInput);
+  const temporalClient = await connectTemporal(config);
+  try {
+    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(continueWorkUpdate, { args: [validatedInput] }));
+  } finally { temporalClient.connection.close(); }
 }
 
 export async function startIssueDevelopment(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {

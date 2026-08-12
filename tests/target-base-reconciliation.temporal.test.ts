@@ -158,7 +158,7 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
       const blocked = await handle.executeUpdate(publishDraftUpdate, { args: [{ expectedRevision: 10, actorUserId: "member_test" }] });
       expect(blocked).toMatchObject({ phase: "delivery_blocked", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], targetBaseBlockerCode: blocker === "provider" ? "provider_unavailable" : "base_advanced_again" });
       const cancelled = await handle.executeUpdate(cancelIssueUpdate, { args: [{ expectedRevision: blocked.revision, actorUserId: "member_test" }] });
-      expect(cancelled).toMatchObject({ phase: "cancelled", allowedCommands: [] });
+      expect(cancelled).toMatchObject({ phase: "cancelled", allowedCommands: ["continue_work"] });
       histories.push({ history: await handle.fetchHistory(), workflowId: workflowInput.workflowId });
     }
 

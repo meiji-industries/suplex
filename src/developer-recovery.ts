@@ -70,6 +70,7 @@ const defaultController: DeveloperProcessController = {
 };
 
 function now(): string { return new Date().toISOString(); }
+function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
 function activeRow(database: ForgeDatabase, executionId: string): DeveloperExecutionRow | undefined {
   return database.authQuery((db) => db.prepare("SELECT id, task_id, company_id, workflow_id, status, process_pid, process_group_id, process_start_identity, wrapper_id, wrapper_path, worktree_path, delivery_artifact_id, evidence_artifact_id, result_commit, result_tree FROM forge_developer_executions WHERE id = ?").get(executionId) as DeveloperExecutionRow | undefined);
@@ -165,9 +166,26 @@ export async function cancelDeveloperExecution(database: ForgeDatabase, executio
     return { status: "ownership_ambiguous", reason: inspection ? "identity-mismatch" : "process-missing" };
   }
   await controller.signalGroup(row.process_group_id, "SIGTERM");
-  database.authTransaction((db) => {
-    db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ?, heartbeat_at = ?, failure_code = NULL, failure_summary = NULL WHERE id = ? AND status IN ('starting', 'running')").run(now(), now(), row.id);
-    db.prepare("UPDATE forge_issue_projections SET phase = 'delivery_blocked', owner = 'human', allowed_commands_json = '[\"retry_development\"]', pending_action = 'Developer turn cancelled; retry or continue', updated_at = ? WHERE task_id = ? AND phase = 'development'").run(now(), row.task_id);
-  });
-  return { status: "cancelled" };
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await delay(50);
+    const remaining = await controller.inspect(row.process_pid);
+    if (!remaining) {
+      database.authTransaction((db) => db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ?, heartbeat_at = ?, failure_code = NULL, failure_summary = NULL WHERE id = ? AND status IN ('starting', 'running')").run(now(), now(), row.id));
+      return { status: "cancelled" };
+    }
+    if (!matchesOwnership(row, remaining)) {
+      markInterrupted(database, row, "ownership-ambiguous", "Forge could not prove ownership while waiting for Developer exit", "ownership_ambiguous");
+      return { status: "ownership_ambiguous", reason: "identity-mismatch" };
+    }
+  }
+  await controller.signalGroup(row.process_group_id, "SIGKILL");
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await delay(50);
+    if (!(await controller.inspect(row.process_pid))) {
+      database.authTransaction((db) => db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ?, heartbeat_at = ?, failure_code = NULL, failure_summary = NULL WHERE id = ? AND status IN ('starting', 'running')").run(now(), now(), row.id));
+      return { status: "cancelled" };
+    }
+  }
+  markInterrupted(database, row, "cancellation-timeout", "Developer process did not exit after termination", "ownership_ambiguous");
+  return { status: "ownership_ambiguous", reason: "cancellation-timeout" };
 }

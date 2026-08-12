@@ -7,6 +7,7 @@ import { createActivities } from "./temporal/activities.js";
 import { StructuredLogger } from "./logging.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { reconcileDeveloperExecutions } from "./developer-recovery.js";
+import { reconcileSuccessorIntents } from "./successor-recovery.js";
 import { activityPayloadInterceptors } from "./temporal/payload-boundary-interceptors.js";
 import { buildProductionWorkflowBundle, temporalDataConverter } from "./temporal/workflow-bundle.js";
 
@@ -41,6 +42,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   let shutdown: (() => void) | undefined;
   try {
     await reconcileDeveloperExecutions(database);
+    await reconcileSuccessorIntents(database, config);
     connection = await NativeConnection.connect(temporalConnectionOptions(config));
     worker = await Worker.create({
       connection,

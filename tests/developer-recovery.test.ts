@@ -28,7 +28,8 @@ function execution(database: ForgeDatabase, id: string, pid: number, status = "r
 }
 
 function controller(inspection: DeveloperProcessInspection | undefined, calls: Array<[number, "SIGTERM" | "SIGKILL"]>): DeveloperProcessController {
-  return { async inspect() { return inspection; }, async signalGroup(pid, signal) { calls.push([pid, signal]); } };
+  let signalled = false;
+  return { async inspect() { return signalled ? undefined : inspection; }, async signalGroup(pid, signal) { calls.push([pid, signal]); signalled = true; } };
 }
 
 test("reconciliation reattaches a matching live process without starting a duplicate", async () => {
@@ -66,7 +67,7 @@ test("PID reuse or command ownership mismatch blocks cancellation, while a verif
     expect(cancelled).toEqual({ status: "cancelled" });
     expect(calls).toEqual([[126, "SIGTERM"]]);
     expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions WHERE id = 'developer_owned'").get())).toEqual({ status: "cancelled" });
-    expect(value.database.authQuery((db) => db.prepare("SELECT phase, allowed_commands_json FROM forge_issue_projections WHERE task_id = 'task_1'").get())).toMatchObject({ phase: "delivery_blocked", allowed_commands_json: '["retry_development"]' });
+    expect(value.database.authQuery((db) => db.prepare("SELECT phase, allowed_commands_json FROM forge_issue_projections WHERE task_id = 'task_1'").get())).toMatchObject({ phase: "development", allowed_commands_json: "[]" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

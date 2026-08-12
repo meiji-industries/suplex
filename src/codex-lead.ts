@@ -33,6 +33,7 @@ export const LeadPlanSchema = z.object({
   verificationStrategy: z.string().min(1).max(20_000),
   unresolvedTechnicalQuestions: z.array(z.string().max(2_000)).max(32).length(0),
   materialCategories: z.array(PlanMaterialCategorySchema).max(6).default([]),
+  preservedWorktreeCompatibility: z.boolean().nullable().default(null),
 });
 
 export const DecisionBlockerSchema = z.object({
@@ -71,6 +72,8 @@ export const LeadPlanningActivityInputSchema = z.object({
   imageArtifactIds: z.array(durableId).max(32),
   roleProfiles: z.object({ lead: durableId.optional(), developer: durableId.optional(), reviewer: durableId.optional() }),
   revision: z.number().int().nonnegative(),
+  revisionRequestId: durableId.optional(),
+  resumeLeadSessionRef: durableId.optional(),
 });
 
 export type LeadPlan = z.infer<typeof LeadPlanSchema>;
@@ -88,6 +91,7 @@ export interface LeadPlanningResult {
   leadSummary: string;
   materialCategories: PlanMaterialCategory[];
   material: boolean;
+  preservedWorktreeCompatibility?: boolean | null;
 }
 
 export interface LeadInvocation {
@@ -601,6 +605,11 @@ export class AgentService {
     if (!input.roleProfiles.lead) throw new AgentFailure("profile-unavailable", "Lead planning requires a configured Lead profile");
     const leadProfile = profileSettings.find((profile) => profile.id === input.roleProfiles.lead);
     if (!leadProfile || leadProfile.provider !== "codex") throw new AgentFailure("profile-unavailable", "The configured Lead profile is unavailable");
+    const revisionRequest = input.revisionRequestId ? this.database.authQuery((db) => db.prepare(`SELECT r.disposition, r.worktree_path AS worktreePath, r.branch_name AS branchName, r.base_sha AS baseSha, r.head_sha AS headSha, r.tree_sha AS treeSha, r.exact_base_sha AS exactBaseSha, a.storage_path AS reasonPath, a.sha256 AS reasonSha
+      FROM forge_plan_revision_requests r JOIN forge_artifacts a ON a.id = r.reason_artifact_id AND a.company_id = r.company_id AND a.kind = 'plan-revision-reason'
+      WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { disposition: "reuse" | "new"; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null; reasonPath: string; reasonSha: string } | undefined) : undefined;
+    if (input.revisionRequestId && !revisionRequest) throw new AgentFailure("revision-request-missing", "The plan revision request is unavailable");
+    const revisionContext = revisionRequest ? { ...revisionRequest, reason: (await this.artifacts.read({ companyId: input.companyId, storagePath: revisionRequest.reasonPath, sha256: revisionRequest.reasonSha })).toString("utf8") } : undefined;
     const repositoryEvidence = await this.repositoryEvidence(repositoryPath);
     let executionId = `agent_${randomBytes(12).toString("hex")}`;
     let sessionRef: string | undefined;
@@ -615,6 +624,12 @@ export class AgentService {
         sessionRef = active.session_ref ?? undefined;
         rawSessionId = sessionRef ? await this.sessionStore.read(sessionRef) : undefined;
         this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'starting', attempt = ?, heartbeat_at = ?, finished_at = NULL, failure_code = NULL, failure_summary = NULL WHERE id = ?").run(active.attempt + 1, startedAt, executionId));
+      } else if (input.resumeLeadSessionRef) {
+        const prior = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND role = 'lead' AND session_ref = ? AND status = 'completed' ORDER BY finished_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.resumeLeadSessionRef) as { id: string } | undefined);
+        if (!prior) throw new AgentFailure("lead-session-ownership", "The prior Lead session cannot be resumed for this issue");
+        rawSessionId = await this.sessionStore.read(input.resumeLeadSessionRef);
+        sessionRef = input.resumeLeadSessionRef;
+        this.database.authTransaction((db) => db.prepare(`INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.resumeLeadSessionRef, startedAt));
       } else {
         this.database.authTransaction((db) => {
           db.prepare(`INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?)`).run(executionId, input.taskId, input.companyId, input.workflowId, startedAt);
@@ -631,7 +646,7 @@ export class AgentService {
     let lastFailure: AgentFailure | undefined;
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const prompt = attempt === 0 ? this.initialPrompt(row.title, brief, row.normalized_json, profileSettings, repositoryEvidence) : this.correctionPrompt();
+        const prompt = attempt === 0 ? this.initialPrompt(row.title, brief, row.normalized_json, profileSettings, repositoryEvidence, revisionContext) : this.correctionPrompt();
         const imagePaths = images.map((image) => resolve(this.config.artifactRoot, image.storage_path));
         const args = rawSessionId
           ? ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", ...imagePaths.flatMap((path) => ["--image", path]), prompt]
@@ -1235,8 +1250,8 @@ export class AgentService {
     return JSON.stringify({ status: redact(status.stdout), head: redact(head.stdout) });
   }
 
-  private initialPrompt(title: string, brief: string, revision: string, profiles: ProfileSettings[], repositoryEvidence: string): string {
-    return `You are Forge's Lead planner. Work read-only in the provided repository. Do not modify files, reveal credentials, or invent provider facts.\n\nReturn exactly one JSON object matching one of these shapes:\n{"kind":"plan","summary":"...","reproduction":null,"rootCauseAnalysis":null,"steps":[{"number":1,"instruction":"...","verification":"..."}],"compatibilityAnalysis":"...","operationalAnalysis":"...","verificationStrategy":"...","unresolvedTechnicalQuestions":[],"materialCategories":[]}\n{"kind":"decision_blocker","summary":"...","evidence":"...","owner":"human","question":"...","nextAction":"..."}\nUse decision_blocker only for one unresolved human/business choice. A plan must have numbered prescriptive steps, compatibility and operational analysis, a complete verification strategy, zero unresolved technical questions, and a materialCategories array containing only the categories directly implicated: architecture_dependencies, schema_data_migration, security_permissions, external_integration, production_operation, user_visible_behavior.\n\nTask: ${title}\nBrief:\n${brief}\n\nPinned Project revision:\n${revision}\n\nRole profile settings:\n${JSON.stringify(profiles)}\n\nRepository read evidence:\n${repositoryEvidence}`;
+  private initialPrompt(title: string, brief: string, revision: string, profiles: ProfileSettings[], repositoryEvidence: string, revisionContext?: Record<string, unknown>): string {
+    return `You are Forge's Lead planner. Work read-only in the provided repository. Do not modify files, reveal credentials, or invent provider facts.\n\nReturn exactly one JSON object matching one of these shapes:\n{"kind":"plan","summary":"...","reproduction":null,"rootCauseAnalysis":null,"steps":[{"number":1,"instruction":"...","verification":"..."}],"compatibilityAnalysis":"...","operationalAnalysis":"...","verificationStrategy":"...","unresolvedTechnicalQuestions":[],"materialCategories":[],"preservedWorktreeCompatibility":null}\n{"kind":"decision_blocker","summary":"...","evidence":"...","owner":"human","question":"...","nextAction":"..."}\nUse decision_blocker only for one unresolved human/business choice. A plan must have numbered prescriptive steps, compatibility and operational analysis, a complete verification strategy, zero unresolved technical questions, and a materialCategories array containing only the categories directly implicated: architecture_dependencies, schema_data_migration, security_permissions, external_integration, production_operation, user_visible_behavior. For a revised reuse request, set preservedWorktreeCompatibility to true only when the preserved coordinates remain safe for the plan; otherwise set it to false and explain why in compatibilityAnalysis. Ordinary and new-worktree plans set it to null.\n\nTask: ${title}\nBrief:\n${brief}\n\nPinned Project revision:\n${revision}\n\nRole profile settings:\n${JSON.stringify(profiles)}\n\nRepository read evidence:\n${repositoryEvidence}${revisionContext ? `\n\nRevision request:\n${JSON.stringify(revisionContext)}` : ""}`;
   }
 
   private correctionPrompt(): string {
@@ -1261,7 +1276,7 @@ export class AgentService {
       );
       db.prepare(`INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(`output_${randomBytes(12).toString("hex")}`, input.taskId, input.companyId, input.workflowId, executionId, input.revision, output.kind, outputArtifact.id, evidence.id, sessionRef, summary, this.now().toISOString());
     });
-    return { evidence, result: { leadSessionRef: sessionRef, leadExecutionId: executionId, leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: outputArtifact.id, leadOutputKind: output.kind, leadSummary: summary, materialCategories: categories, material: categories.length > 0 } };
+    return { evidence, result: { leadSessionRef: sessionRef, leadExecutionId: executionId, leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: outputArtifact.id, leadOutputKind: output.kind, leadSummary: summary, materialCategories: categories, material: categories.length > 0, preservedWorktreeCompatibility: output.kind === "plan" ? output.preservedWorktreeCompatibility : null } };
   }
 }
 

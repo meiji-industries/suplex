@@ -465,6 +465,67 @@ test("Developer execution safely resumes an owned worktree after its result was 
   }
 });
 
+test("a late Developer failure cannot overwrite a cancellation", async () => {
+  const value = await fixture();
+  const artifactStore = new ArtifactStore(value.config.artifactRoot);
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "cancel-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Cancellation plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Wait for cancellation.", verification: "The execution remains cancelled." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect execution state.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
+  const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "cancel-lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
+  value.database.authTransaction((db) => {
+    const now = new Date().toISOString();
+    for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_cancel_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
+    db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_cancel_plan', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_cancel_lead', 1, 'plan', ?, ?, 'session_lead', 'Cancellation plan', ?)").run(plan.id, leadEvidence.id, now);
+  });
+  const runner: LeadProcessRunner = async (invocation) => {
+    await invocation.onStart(4611, "2026-08-11T00:00:00.000Z");
+    const executionId = (value.database.authQuery((db) => db.prepare("SELECT id FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get() as { id: string })).id;
+    value.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ?, failure_code = NULL, failure_summary = NULL WHERE id = ?").run(new Date().toISOString(), executionId));
+    return { exitCode: 143, stderr: "terminated" };
+  };
+  try {
+    const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_developer"; }, async read() { return "raw-developer"; } } });
+    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id })).rejects.toBeInstanceOf(AgentFailure);
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, evidence_artifact_id FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get())).toMatchObject({ status: "cancelled", failure_code: null, evidence_artifact_id: expect.any(String) });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("a late Developer success cannot overwrite a cancellation", async () => {
+  const value = await fixture();
+  const artifactStore = new ArtifactStore(value.config.artifactRoot);
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "cancel-success-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Cancellation success race", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Create the marker.", verification: "The marker exists." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the marker.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
+  const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "cancel-success-lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
+  value.database.authTransaction((db) => {
+    const now = new Date().toISOString();
+    for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_cancel_success_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
+    db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_cancel_success_plan', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_cancel_success_lead', 1, 'plan', ?, ?, 'session_lead', 'Cancellation success race', ?)").run(plan.id, leadEvidence.id, now);
+  });
+  const runner: LeadProcessRunner = async (invocation) => {
+    await invocation.onStart(4612, "2026-08-11T00:00:00.000Z");
+    await writeFile(join(invocation.cwd, "CANCELLED_MARKER.md"), "cancelled delivery\n");
+    await execFileAsync("git", ["add", "CANCELLED_MARKER.md"], { cwd: invocation.cwd });
+    await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Create cancelled marker"], { cwd: invocation.cwd });
+    const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
+    const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
+    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-cancelled-developer" }));
+    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery", summary: "Late delivery", steps: [{ number: 1, status: "completed", filesChanged: ["CANCELLED_MARKER.md"], commandsRun: ["git commit"], testResults: ["Marker inspected"], notes: "Late success." }], authorizedStepsNotCompleted: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
+    const executionId = (value.database.authQuery((db) => db.prepare("SELECT id FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get() as { id: string })).id;
+    value.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ? WHERE id = ?").run(new Date().toISOString(), executionId));
+    return { exitCode: 0, stderr: "" };
+  };
+  try {
+    const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_developer"; }, async read() { return "raw-developer"; } } });
+    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id })).rejects.toMatchObject({ code: "developer-cancelled" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get())).toEqual({ status: "cancelled" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("Lead reviews the exact Developer delivery and the same Developer session performs bounded repair", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);

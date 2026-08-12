@@ -84,6 +84,20 @@ test("rejects dirty, reused, colliding, symlinked, and unsafe worktree coordinat
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("inspects preserved revision coordinates and validates exact bases without mutation", async () => {
+  const value = await fixture();
+  try {
+    const manager = new WorktreeManager();
+    const record = await manager.create({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_revision", targetBaseSha: value.baseSha });
+    await expect(manager.inspectForPlanRevision({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, worktreePath: record.worktreePath, branchName: record.branchName, baseSha: value.baseSha, resultCommit: value.baseSha })).resolves.toMatchObject({ branchName: record.branchName, baseSha: value.baseSha, headSha: value.baseSha, dirtyState: "clean" });
+    await writeFile(join(record.worktreePath, "tracked.txt"), "dirty\n");
+    await expect(manager.inspectForPlanRevision({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, worktreePath: record.worktreePath, branchName: record.branchName, baseSha: value.baseSha, resultCommit: value.baseSha })).rejects.toMatchObject({ code: "worktree-dirty" });
+    await rm(join(record.worktreePath, "tracked.txt"));
+    await expect(manager.validateExactBase({ repositoryPath: value.repositoryPath, candidateSha: value.baseSha, acceptedTargetSha: value.baseSha })).resolves.toBe(value.baseSha);
+    await expect(manager.validateExactBase({ repositoryPath: value.repositoryPath, candidateSha: "0".repeat(40), acceptedTargetSha: value.baseSha })).rejects.toMatchObject({ code: "base-commit-mismatch" });
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("rejects an invalid target-base commit before creating a branch", async () => {
   const value = await fixture();
   try {

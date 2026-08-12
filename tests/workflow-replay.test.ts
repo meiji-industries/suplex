@@ -52,7 +52,7 @@ async function mutationBundle(mode: "compatible" | "incompatible") {
 
 test("the versioned manifest consumes every sanitized fixture and batch replays the production bundle", async () => {
   const manifest = await readReplayManifest(manifestPath);
-  expect(manifest.fixtures).toHaveLength(18);
+  expect(manifest.fixtures).toHaveLength(21);
   expect(manifest.fixtures.map((fixture) => fixture.scenario)).toEqual(expect.arrayContaining([
     "backlog_planning",
     "normal_success",
@@ -70,6 +70,9 @@ test("the versioned manifest consumes every sanitized fixture and batch replays 
     "manual_merge_closed",
     "manual_merge_changed",
     "final_review_failure",
+    "revised_delivery",
+    "plan_revision",
+    "successor_creation",
   ]));
   const continueRuns = manifest.fixtures.filter((fixture) => fixture.scenario === "continue_as_new");
   expect(continueRuns.map((fixture) => fixture.runIndex)).toEqual([0, 1, 2]);

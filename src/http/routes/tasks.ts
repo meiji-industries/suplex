@@ -6,7 +6,7 @@ import type { TaskEvent } from "../../tasks.js";
 import type { TaskService } from "../../tasks.js";
 import type { ProjectRole } from "../../projects.js";
 import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, ExpectedRevisionNoteBodySchema, RequiredRevisionNoteBodySchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
-import { ContinueWorkResponseSchema, TaskBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { ContinueWorkBodySchema, ContinueWorkResponseSchema, PlanRevisionBodySchema, TaskBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;
@@ -48,7 +48,8 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   typed.post("/api/tasks/:taskId/request-supplemental-review", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.requestSupplementalReview(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/approve-plan", { schema: { params: TaskIdParamsSchema, ...noteSchema } }, async (request, reply) => reply.send(await tasks.approvePlan(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.note)));
   typed.post("/api/tasks/:taskId/reject-plan", { schema: { params: TaskIdParamsSchema, ...noteSchema } }, async (request, reply) => reply.send(await tasks.rejectPlan(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.note)));
-  typed.post("/api/tasks/:taskId/continue-work", { schema: { params: TaskIdParamsSchema, response: { 200: ContinueWorkResponseSchema } } }, async (request, reply) => reply.send(await tasks.continueWork(request.forgeUser.id, request.params.taskId)));
+  typed.post("/api/tasks/:taskId/revise-plan", { schema: { params: TaskIdParamsSchema, body: PlanRevisionBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.revisePlan(request.forgeUser.id, request.params.taskId, { ...request.body, actorUserId: request.forgeUser.id })));
+  typed.post("/api/tasks/:taskId/continue-work", { schema: { params: TaskIdParamsSchema, body: ContinueWorkBodySchema, response: { 200: ContinueWorkResponseSchema } } }, async (request, reply) => reply.send(await tasks.continueWork(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.reason)));
   typed.post("/api/tasks/:taskId/start-development", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.startDevelopment(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/review-delivery", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.reviewDelivery(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/repair-delivery", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.repairDelivery(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));

@@ -26,6 +26,11 @@ import { TaskProgress } from "./components/app/task-progress.js";
 import { DeliveryReviewPanel } from "./components/app/delivery-review-panel.js";
 import { DeveloperRecoveryStatus } from "./components/app/developer-recovery-status.js";
 import type { DeveloperRecoveryAction } from "./components/app/developer-recovery-actions.js";
+import { MaterialitySummary } from "./components/app/materiality-summary.js";
+import { PlanBlockerResponseForm } from "./components/app/plan-blocker-response-form.js";
+import { PlanDecisionForm } from "./components/app/plan-decision-form.js";
+import { PlanSubjectSummary } from "./components/app/plan-subject-summary.js";
+import { SupplementalReviewPanel } from "./components/app/supplemental-review-panel.js";
 import { companySettingsPath, isApiError, readJson, withCompany, type ApiUser, type CompanyStatus } from "./lib/api.js";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import type { HealthCheck, HealthSnapshot } from "../health.js";
@@ -97,7 +102,7 @@ type ApiRelease = NonNullable<ApiTask["release"]>;
 
 const DeveloperDiff = lazy(() => import("./components/app/developer-diff.js"));
 
-const taskPhases: TaskPhase[] = ["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"];
+const taskPhases: TaskPhase[] = ["backlog", "planning", "supplemental_review", "plan_consolidation", "approval", "blocked", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"];
 
 function taskPhaseLabel(phase: TaskPhase): string {
   const labels: Partial<Record<TaskPhase, string>> = {
@@ -717,10 +722,10 @@ async function fileAsImage(file: File): Promise<{ filename: string; mimeType: st
   });
 }
 
-type TaskPlanAction = "request-supplemental-review" | "approve-plan" | "reject-plan" | "start-development" | "retry-development" | "cancel-development" | "verify-developer-ownership" | "review-delivery" | "repair-delivery" | "record-delivery-decision" | "publish-draft" | "resolve-merge-conflict" | "retry-target-base-reconciliation" | "retry-forward-merge-verification" | "reconcile-ci" | "repair-ci" | "final-review" | "accept-delivery" | "request-delivery-changes" | "reconcile-acceptance" | "reconcile-merge" | "retry-capacity" | "cancel";
+type TaskPlanAction = "request-supplemental-review" | "approve-plan" | "request-plan-revision" | "respond-plan-blocker" | "reject-plan" | "start-development" | "retry-development" | "cancel-development" | "verify-developer-ownership" | "review-delivery" | "repair-delivery" | "record-delivery-decision" | "publish-draft" | "resolve-merge-conflict" | "retry-target-base-reconciliation" | "retry-forward-merge-verification" | "reconcile-ci" | "repair-ci" | "final-review" | "accept-delivery" | "request-delivery-changes" | "reconcile-acceptance" | "reconcile-merge" | "retry-capacity" | "cancel";
 type PlanRevisionInput = { worktreeDisposition: "reuse" | "new"; reason: string; exactBaseSha?: string };
 
-function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork }: { task: ApiTask; busy: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void> }): ReactElement {
+function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork }: { task: ApiTask; busy: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void> }): ReactElement {
   const [revisionOpen, setRevisionOpen] = useState(false);
   const [revisionReason, setRevisionReason] = useState("");
   const [worktreeDisposition, setWorktreeDisposition] = useState<"reuse" | "new">(task.developerExecution ? "reuse" : "new");
@@ -730,13 +735,13 @@ function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, 
   const disabled = busy || task.projection.status === "lagging";
   const canRevise = task.allowedCommands.includes("revise_plan");
   const canContinue = task.allowedCommands.includes("continue_work");
+  const supplementalCommand = task.commands.find((command) => command.name === "request_supplemental_review" && command.subject?.kind === "supplemental_review");
+  const supplementalSubject = supplementalCommand?.subject?.kind === "supplemental_review" ? supplementalCommand.subject.value : undefined;
   return (
     <div data-task-actions className="space-y-3">
       <div className="flex flex-wrap justify-end gap-2">
       {task.allowedCommands.includes("start_planning") ? <Button size="sm" onClick={() => void onStartPlanning()} disabled={disabled}>{busy ? "Planning…" : "Start planning"}</Button> : null}
-      {task.allowedCommands.includes("request_supplemental_review") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("request-supplemental-review")} disabled={disabled}>Request review</Button> : null}
-      {task.allowedCommands.includes("approve_plan") ? <Button size="sm" onClick={() => void onPlanAction("approve-plan", "Approved final plan")} disabled={disabled}>Approve plan</Button> : null}
-      {task.allowedCommands.includes("reject_plan") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reject-plan", "Please revise the plan")} disabled={disabled}>Request changes</Button> : null}
+      {supplementalCommand && supplementalSubject ? <Button size="sm" variant="outline" onClick={() => void onPlanAction(supplementalCommand.endpoint as TaskPlanAction, undefined, { subject: supplementalSubject, idempotencyKey: crypto.randomUUID() })} disabled={disabled}>Request review</Button> : null}
       {task.allowedCommands.includes("start_development") ? <Button size="sm" onClick={() => void onPlanAction("start-development")} disabled={disabled}>{busy ? "Executing…" : "Start development"}</Button> : null}
       {!task.developerRecovery && task.allowedCommands.includes("retry_development") ? <Button size="sm" onClick={() => void onPlanAction("retry-development")} disabled={disabled}>{busy ? "Retrying…" : "Retry development"}</Button> : null}
       {!task.developerRecovery && task.allowedCommands.includes("cancel_development") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("cancel-development")} disabled={disabled}>Cancel development</Button> : null}
@@ -842,7 +847,12 @@ function TaskOptions(): ReactElement {
   );
 }
 
-function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void> }): ReactElement {
+function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void> }): ReactElement {
+  const approveCommand = task.commands.find((command) => command.name === "approve_plan" && command.subject?.kind === "plan_decision");
+  const revisionCommand = task.commands.find((command) => command.name === "request_plan_revision" && command.subject?.kind === "plan_decision");
+  const blockerCommand = task.commands.find((command) => command.name === "respond_plan_blocker" && command.subject?.kind === "plan_blocker");
+  const [decisionName, setDecisionName] = useState<"approve_plan" | "request_plan_revision">("approve_plan");
+  const decisionCommand = decisionName === "request_plan_revision" ? revisionCommand ?? approveCommand : approveCommand ?? revisionCommand;
   return (
     <ApplicationFrame title={task.title} headerActions={<TaskOptions />}>
       <article data-task-detail className="min-w-0">
@@ -853,6 +863,8 @@ function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onSta
                 <div className="flex min-w-0 flex-wrap items-center gap-2"><h2 className="text-xl font-semibold tracking-tight">{task.title}</h2><Badge variant="secondary" data-status={task.phase}>{taskPhaseLabel(task.phase)}</Badge></div>
                 <div aria-live="polite" className="text-[11px] text-muted-foreground">{task.projection.status === "lagging" ? `Projection lag: r${task.projection.projectedRevision} → r${task.projection.authoritativeRevision}` : `Projection current · r${task.projection.projectedRevision}`}</div>
                 <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} />
+                {approveCommand && revisionCommand ? <Field><FieldLabel htmlFor="plan-decision-action">Decision</FieldLabel><Select value={decisionName} onValueChange={(value) => { if (value === "approve_plan" || value === "request_plan_revision") setDecisionName(value); }}><SelectTrigger id="plan-decision-action"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="approve_plan">Approve plan</SelectItem><SelectItem value="request_plan_revision">Request plan revision</SelectItem></SelectContent></Select></Field> : null}
+                {decisionCommand?.subject?.kind === "plan_decision" ? <PlanDecisionForm key={decisionCommand.name} command={{ endpoint: decisionCommand.endpoint, expectedRevision: decisionCommand.expectedRevision, subject: decisionCommand.subject.value }} actionLabel={decisionCommand.label} busy={busy} onSubmit={(payload) => onPlanAction(decisionCommand.endpoint as TaskPlanAction, payload.note, { subject: payload.subject, idempotencyKey: payload.idempotencyKey })} error={error} /> : blockerCommand?.subject?.kind === "plan_blocker" ? <PlanBlockerResponseForm subject={blockerCommand.subject.value} expectedRevision={blockerCommand.expectedRevision} busy={busy} onSubmit={(payload) => onPlanAction(blockerCommand.endpoint as TaskPlanAction, payload.answer, { subject: payload.subject, idempotencyKey: payload.idempotencyKey, expectedWorkflowRevision: payload.expectedWorkflowRevision })} error={error} /> : null}
                 <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action === "cancel-issue" ? "cancel" : action)} />
                 {task.capacity ? <div className="text-xs text-muted-foreground">{task.capacity.status === "queued" ? `Queued${task.capacity.position ? ` · position ${task.capacity.position}` : ""}` : task.capacity.status === "rate_limited" ? `Waiting for profile reset${task.capacity.retryAt ? ` · ${relativeTime(task.capacity.retryAt)}` : ""}` : task.capacity.status === "active" ? `Running · ${task.capacity.profileName}` : task.capacity.status === "exhausted" ? "Capacity exhausted" : "Ownership needs verification"}</div> : null}
                 {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
@@ -864,6 +876,13 @@ function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onSta
                 <TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} />
                 {task.images.length ? <section className="space-y-2"><h3 className="text-xs font-semibold">Attachments</h3><div className="flex flex-wrap gap-3">{task.images.map((image) => <a className="text-xs underline underline-offset-2" href={`/api/tasks/${task.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer" key={image.artifactId}>{image.filename}</a>)}</div></section> : null}
                 {task.leadOutput ? <TaskLeadPlan output={task.leadOutput} planRevision={task.planRevision} planMaterial={task.planMaterial} materialCategories={task.materialCategories ?? []} /> : null}
+                {task.governance.originalPlan ? <PlanSubjectSummary subject={task.governance.originalPlan.subject} current={task.governance.originalPlan.status === "current"} label="Original plan" createdAt={task.governance.originalPlan.createdAt} /> : null}
+                {task.governance.finalPlan && task.governance.finalPlan.subject.outputId !== task.governance.originalPlan?.subject.outputId ? <PlanSubjectSummary subject={task.governance.finalPlan.subject} current={task.governance.finalPlan.status === "current"} label={`Final plan v${task.governance.finalPlan.subject.finalVersion}`} createdAt={task.governance.finalPlan.createdAt} /> : null}
+                {task.governance.previousPlans?.map((plan) => <PlanSubjectSummary key={plan.subject.outputId} subject={plan.subject} current={false} createdAt={plan.createdAt} />) ?? null}
+                {task.governance.materiality ? <MaterialitySummary value={{ categories: task.governance.materiality.categories, artifactId: task.governance.materiality.evidenceArtifactId, artifactSha256: task.governance.materiality.evidenceArtifactSha256, evidence: task.governance.materiality.evidence.map((entry) => ({ category: entry.category, rationale: entry.rationale, evidenceRefs: entry.refs })) }} /> : null}
+                {task.governance.supplementalReview ? <SupplementalReviewPanel value={{ reviewerProfileId: task.governance.supplementalReview.reviewerProfile.name, opinion: task.governance.supplementalReview.opinion, concerns: task.governance.supplementalReview.concerns, requiredChanges: task.governance.supplementalReview.requiredChanges, leadResponse: task.governance.supplementalReview.leadResponse.text }} /> : null}
+                {task.governance.decision ? <section className="space-y-1" data-plan-decision><h3 className="text-xs font-semibold">Member decision</h3><div className="text-[13px]">{task.governance.decision.decision} · {task.governance.decision.actor.displayName}</div><p className="whitespace-pre-wrap text-[12px]">{task.governance.decision.note}</p></section> : null}
+                {task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">Decision blocker</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}
                 {task.developerExecution ? <section className="space-y-3"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">Developer delivery</h3><Badge variant="secondary">{task.developerExecution.status}</Badge></div><div className="text-[13px]">{task.developerExecution.deliverySummary ?? task.developerExecution.failureSummary ?? task.pendingAction}</div><div className="text-[11px] text-muted-foreground">{task.developerExecution.branchName} · {task.developerExecution.resultCommit ?? "no commit yet"}</div>{task.developerExecution.status === "completed" ? <Suspense fallback={<Skeleton className="h-40 w-full" />}><DeveloperDiff taskId={task.id} executionId={task.developerExecution.id} /></Suspense> : null}</section> : null}
                 <DeliveryReviewPanel task={task} />
                 {task.ci ? <CiPanel task={task} ci={task.ci} /> : null}
@@ -1086,14 +1105,14 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
     finally { setBusy(false); }
   };
-  const planAction = async (path: TaskPlanAction, note?: string): Promise<void> => {
+  const planAction = async (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>): Promise<void> => {
     if (!selected) return;
     setBusy(true); setError("");
-    try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/${path}`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision, ...(note ? { note } : {}) }) }); selectedRef.current = updated; setSelected(updated); await reload(); }
+    try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/${path}`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision, ...(note ? { note } : {}), ...payload }) }); selectedRef.current = updated; setSelected(updated); await reload(); }
     catch (reason) {
       if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
       const staleRevision = isApiError(reason, 409);
-      if (staleRevision) await reload();
+      if (staleRevision) { await reload(); throw reason; }
       setError(staleRevision ? "Issue changed; the latest state was loaded." : reason instanceof Error ? reason.message : "Unable to update the plan");
     }
     finally { setBusy(false); }

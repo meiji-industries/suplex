@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { ReleaseFailureCodeSchema } from "../release-failures.js";
 
-import { PlanMaterialCategorySchema, type PlanMaterialCategory } from "../plan-governance.js";
+import { DecisionIdempotencyKeySchema, MaterialityEvidenceSubjectSchema, PlanBlockerSubjectSchema, PlanDecisionSubjectSchema, PlanMaterialCategorySchema, PlanSubjectSchema, SupplementalReviewSubjectSchema, type MaterialityEvidenceSubject, type PlanBlockerSubject, type PlanDecisionSubject, type PlanMaterialCategory, type PlanSubject, type SupplementalReviewSubject } from "../plan-governance.js";
 import { CapacityBlockerSchema, WorkflowCapacityStateSchema } from "../capacity-contracts.js";
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
@@ -266,12 +266,12 @@ export const MergeConflictPlanSchema = z.object({
 
 export type MergeConflictPlan = z.infer<typeof MergeConflictPlanSchema>;
 
-export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"]);
+export const IssuePhaseSchema = z.enum(["backlog", "planning", "supplemental_review", "plan_consolidation", "approval", "blocked", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"]);
 export type IssuePhase = z.infer<typeof IssuePhaseSchema>;
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
-export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "revise_plan", "record_progress", "start_development", "retry_development", "cancel_development", "verify_developer_ownership", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "reconcile_acceptance", "cancel_issue", "reconcile_merge", "continue_work", "retry_capacity"]);
+export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "request_plan_revision", "reject_plan", "respond_plan_blocker", "revise_plan", "record_progress", "start_development", "retry_development", "cancel_development", "verify_developer_ownership", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "reconcile_acceptance", "cancel_issue", "reconcile_merge", "continue_work", "retry_capacity"]);
 export type IssueCommand = z.infer<typeof IssueCommandSchema>;
-export const IssuePlanDecisionSchema = z.enum(["approve", "reject"]);
+export const IssuePlanDecisionSchema = z.enum(["approve", "request_revision", "reject"]);
 export const AttentionCategorySchema = z.enum(["member_authorization", "member_decision", "agent_contradiction", "agent_exhausted", "unsafe_recovery", "provider_ambiguity", "provider_authentication", "provider_connectivity_exhausted", "verification_unrecoverable", "target_drift", "capacity_exhausted"]);
 export type AttentionCategory = z.infer<typeof AttentionCategorySchema>;
 export const IssueBlockerActionSchema = z.object({ command: IssueCommandSchema, label: z.string().min(1).max(120), requiresNote: z.boolean(), destructive: z.boolean() });
@@ -305,6 +305,16 @@ export const IssueContinuationStateSchema = z.object({
   leadOutputArtifactId: durableId.nullable().optional(),
   leadOutputKind: IssueLeadOutputKindSchema.nullable().optional(),
   leadSummary: SafeSummarySchema.nullable().optional(),
+  originalPlanSubject: PlanSubjectSchema.nullable().optional(),
+  finalPlanSubject: PlanSubjectSchema.nullable().optional(),
+  materialityEvidence: MaterialityEvidenceSubjectSchema.nullable().optional(),
+  supplementalReviewSubject: SupplementalReviewSubjectSchema.nullable().optional(),
+  supplementalReviewArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+  leadReviewResponseArtifactId: durableId.nullable().optional(),
+  leadReviewResponseArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+  planDecisionReceipt: z.object({ idempotencyKey: DecisionIdempotencyKeySchema, decisionId: durableId, decision: z.enum(["approve", "request_revision"]), subjectHash: z.string().regex(/^[a-f0-9]{64}$/) }).nullable().optional(),
+  planBlockerSubject: PlanBlockerSubjectSchema.nullable().optional(),
+  planBlockerResponseReceipt: z.object({ idempotencyKey: DecisionIdempotencyKeySchema, responseId: durableId, blockerSubjectHash: z.string().regex(/^[a-f0-9]{64}$/) }).nullable().optional(),
   planRevision: z.number().int().nonnegative().nullable().optional(),
   planMaterial: z.boolean().nullable().optional(),
   preservedWorktreeCompatibility: z.boolean().nullable().optional(),
@@ -486,6 +496,16 @@ export const IssueWorkflowStateSchema = z.object({
   leadOutputArtifactId: durableId.nullable().optional(),
   leadOutputKind: IssueLeadOutputKindSchema.nullable().optional(),
   leadSummary: SafeSummarySchema.nullable().optional(),
+  originalPlanSubject: PlanSubjectSchema.nullable().optional(),
+  finalPlanSubject: PlanSubjectSchema.nullable().optional(),
+  materialityEvidence: MaterialityEvidenceSubjectSchema.nullable().optional(),
+  supplementalReviewSubject: SupplementalReviewSubjectSchema.nullable().optional(),
+  supplementalReviewArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+  leadReviewResponseArtifactId: durableId.nullable().optional(),
+  leadReviewResponseArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+  planDecisionReceipt: z.object({ idempotencyKey: DecisionIdempotencyKeySchema, decisionId: durableId, decision: z.enum(["approve", "request_revision"]), subjectHash: z.string().regex(/^[a-f0-9]{64}$/) }).nullable().optional(),
+  planBlockerSubject: PlanBlockerSubjectSchema.nullable().optional(),
+  planBlockerResponseReceipt: z.object({ idempotencyKey: DecisionIdempotencyKeySchema, responseId: durableId, blockerSubjectHash: z.string().regex(/^[a-f0-9]{64}$/) }).nullable().optional(),
   planRevision: z.number().int().nonnegative().nullable().optional(),
   planMaterial: z.boolean().nullable().optional(),
   preservedWorktreeCompatibility: z.boolean().nullable().optional(),
@@ -644,6 +664,8 @@ export function buildInitialIssueWorkflowState(input: IssueWorkflowInput & { sta
     repairCycle: 0,
     blocker: null,
     stateChangedAt: input.stateChangedAt ?? new Date().toISOString(),
+    activeOperation: null,
+    processedCommandIds: [],
   });
 }
 
@@ -681,6 +703,14 @@ export const PlanCommandInputSchema = z.object({
   worktreeDecision: z.enum(["reuse", "new"]).optional(),
   exactBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i).optional(),
   decision: z.enum(["accept", "request_changes", "cancel"]).optional(),
+  subject: z.union([PlanDecisionSubjectSchema, SupplementalReviewSubjectSchema, PlanBlockerSubjectSchema]).optional(),
+  idempotencyKey: DecisionIdempotencyKeySchema.optional(),
+  noteStagingRef: durableId.optional(),
+  noteSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  blockerSubject: PlanBlockerSubjectSchema.optional(),
+  expectedWorkflowRevision: z.number().int().nonnegative().optional(),
+  answerStagingRef: durableId.optional(),
+  answerSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 
 const RevisionCommandBaseSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000) }).strict();
@@ -689,6 +719,23 @@ export const PlanRevisionCommandSchema = z.discriminatedUnion("worktreeDispositi
   RevisionCommandBaseSchema.extend({ worktreeDisposition: z.literal("new"), exactBaseSha: exactSha }).strict(),
 ]);
 export const ContinueWorkCommandSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000) }).strict();
+export const WorkflowPlanDecisionCommandSchema = z.object({
+  actorUserId: durableId,
+  decision: z.enum(["approve", "request_revision"]),
+  subject: PlanDecisionSubjectSchema,
+  noteStagingRef: durableId,
+  noteSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  idempotencyKey: DecisionIdempotencyKeySchema,
+}).strict();
+
+export const WorkflowPlanBlockerResponseCommandSchema = z.object({
+  actorUserId: durableId,
+  subject: PlanBlockerSubjectSchema,
+  expectedWorkflowRevision: z.number().int().nonnegative(),
+  answerStagingRef: durableId,
+  answerSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  idempotencyKey: DecisionIdempotencyKeySchema,
+}).strict();
 
 export type IssueWorkflowInput = z.input<typeof IssueWorkflowInputSchema>;
 export type IssueWorkflowState = z.infer<typeof IssueWorkflowStateSchema>;
@@ -697,6 +744,8 @@ export type RecordProgressInput = z.input<typeof RecordProgressInputSchema>;
 export type PlanCommandInput = z.input<typeof PlanCommandInputSchema>;
 export type PlanRevisionCommand = z.infer<typeof PlanRevisionCommandSchema>;
 export type ContinueWorkCommand = z.infer<typeof ContinueWorkCommandSchema>;
+export type WorkflowPlanDecisionCommand = z.infer<typeof WorkflowPlanDecisionCommandSchema>;
+export type WorkflowPlanBlockerResponseCommand = z.infer<typeof WorkflowPlanBlockerResponseCommandSchema>;
 
 const DeliveryReviewActivityInputCoreSchema = z.object({
   taskId: durableId,
@@ -854,6 +903,11 @@ export interface LeadPlanningActivityInput {
   revisionRequestId?: string;
   resumeLeadSessionRef?: string;
   capacityRequestId?: string;
+  leadSessionRef?: string;
+  revisionNoteArtifactId?: string;
+  revisionNoteSha256?: string;
+  memberResponseArtifactId?: string;
+  memberResponseSha256?: string;
 }
 
 export interface LeadPlanningResult {
@@ -868,6 +922,11 @@ export interface LeadPlanningResult {
   materialCategories: PlanMaterialCategory[];
   material: boolean;
   preservedWorktreeCompatibility?: boolean | null;
+  planSubject?: PlanSubject;
+  materialityEvidence?: MaterialityEvidenceSubject;
+  blockerSubject?: PlanBlockerSubject;
+  leadReviewResponseArtifactId?: string;
+  leadReviewResponseArtifactSha256?: string;
 }
 
 export interface SupplementalReviewActivityInput {
@@ -883,6 +942,10 @@ export interface SupplementalReviewActivityInput {
   leadOutputArtifactId: string;
   leadEvidenceArtifactId: string;
   capacityRequestId?: string;
+  evidenceManifestArtifactId?: string;
+  evidenceManifestSha256?: string;
+  primaryLeadSessionRef?: string;
+  originalPlanSubject?: PlanSubject;
 }
 
 export interface SupplementalReviewResult {
@@ -892,6 +955,10 @@ export interface SupplementalReviewResult {
   executionId: string;
   sessionRef: string;
   summary: string;
+  subject?: SupplementalReviewSubject;
+  reviewArtifactSha256?: string;
+  evidenceManifestArtifactId?: string;
+  evidenceManifestSha256?: string;
 }
 
 export interface ConsolidateLeadPlanActivityInput {
@@ -908,6 +975,9 @@ export interface ConsolidateLeadPlanActivityInput {
   leadOutputArtifactId: string;
   supplementalReviewArtifactId: string;
   capacityRequestId?: string;
+  evidenceManifestArtifactId?: string;
+  evidenceManifestSha256?: string;
+  originalPlanSubject?: PlanSubject;
 }
 
 export interface PlanDecisionActivityInput {
@@ -916,9 +986,25 @@ export interface PlanDecisionActivityInput {
   workflowId: string;
   planRevision: number;
   actorUserId: string;
-  decision: "approve" | "reject";
-  note: string;
+  decision: "approve" | "request_revision" | "reject";
+  note?: string;
   revisionRequestId?: string;
+  subject?: PlanDecisionSubject;
+  noteStagingRef?: string;
+  noteSha256?: string;
+  idempotencyKey?: string;
+}
+
+export interface PlanBlockerResponseActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  actorUserId: string;
+  blockerSubject: PlanBlockerSubject;
+  expectedWorkflowRevision: number;
+  answerStagingRef: string;
+  answerSha256: string;
+  idempotencyKey: string;
 }
 
 export const PreparePlanRevisionActivityInputSchema = z.object({
@@ -959,6 +1045,9 @@ export interface DeveloperExecutionActivityInput {
   developerExecutionId?: string;
   developerAttempt?: number;
   turnKind?: DeveloperTurnKind;
+  finalPlanSubject?: PlanSubject;
+  materialityEvidence?: MaterialityEvidenceSubject;
+  approvalDecisionId?: string;
   supersedesExecutionId?: string | undefined;
   reuseWorktree?: boolean | undefined;
   capacityRequestId?: string;
@@ -1486,12 +1575,13 @@ export interface IssueActivities {
   runSupplementalReview(input: SupplementalReviewActivityInput): Promise<SupplementalReviewResult>;
   consolidateLeadPlan(input: ConsolidateLeadPlanActivityInput): Promise<LeadPlanningResult>;
   planDeliveryRepair(input: DeliveryRepairPlanActivityInput): Promise<DeliveryRepairPlanResult>;
-  recordPlanDecision(input: PlanDecisionActivityInput): Promise<{ decisionId: string }>;
   runDeveloperExecution(input: DeveloperExecutionActivityInput): Promise<WorkflowDeveloperExecutionResult>;
   runDeveloperExecutionSupervised(input: SupervisedDeveloperExecutionActivityInput): Promise<DeveloperTurnActivityOutcome<WorkflowDeveloperExecutionResult>>;
   reviewDelivery(input: WorkflowDeliveryReviewActivityInput): Promise<WorkflowDeliveryReviewResult>;
   runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput): Promise<WorkflowDeveloperRepairResult>;
   runDeveloperRepairSupervised(input: SupervisedDeveloperRepairActivityInput): Promise<DeveloperTurnActivityOutcome<WorkflowDeveloperRepairResult>>;
+  recordPlanDecision(input: PlanDecisionActivityInput): Promise<{ decisionId: string; subjectHash?: string; duplicate?: boolean; noteArtifactId?: string; noteArtifactSha256?: string }>;
+  recordPlanBlockerResponse(input: PlanBlockerResponseActivityInput): Promise<{ responseId: string; subjectHash: string; duplicate?: boolean; answerArtifactId?: string; answerArtifactSha256?: string }>;
   recordDeliveryDecision(input: DeliveryDecisionActivityInput): Promise<{ artifactId: string }>;
   cancelCapacityExecution(input: { requestId: string }): Promise<{ status: "cancelled" | "ownership_ambiguous"; executionId?: string | undefined; reason?: string | undefined }>;
   publishRelease(input: PublishReleaseActivityInput): Promise<PublishReleaseActivityResult>;

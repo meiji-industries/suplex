@@ -77,6 +77,14 @@ run = "pnpm run test:temporal"
 description = "Build and run Playwright browser tests"
 run = "pnpm run test:browser"
 
+[tasks.test-governance-real]
+description = "Run the mandatory authenticated Ticket 07 governance seam"
+run = "pnpm run test:governance-real"
+
+[tasks.verify-ticket-07]
+description = "Verify Ticket 07 with the mandatory real Codex seam"
+run = "pnpm run verify-ticket-07"
+
 [tasks.test-all]
 description = "Run typecheck, unit, Temporal, and browser tests"
 run = "pnpm run test:all"

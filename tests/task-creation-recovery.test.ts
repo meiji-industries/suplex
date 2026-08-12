@@ -45,6 +45,8 @@ test("revision-zero state is one schema-parsed canonical value", () => {
     repairCycle: 0,
     blocker: null,
     stateChangedAt: input.stateChangedAt,
+    activeOperation: null,
+    processedCommandIds: [],
   });
 
   expect(canonicalJson(fromCreation)).toBe(canonicalJson(fromWorkflow));

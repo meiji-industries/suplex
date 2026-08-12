@@ -58,6 +58,7 @@ import {
   type MergeConflictPlanActivityInput,
   type MergeConflictResolutionActivityResult,
   type MergeConflictResolutionActivityInput,
+  type PlanBlockerResponseActivityInput,
   type PublishReleaseActivityInput,
   type ReconcileAcceptanceActivityInput,
   type ReconcileCiActivityInput,
@@ -76,6 +77,7 @@ import {
   type WorkflowMergeConflictPlanActivityInput,
   type WorkflowMergeConflictResolutionActivityInput,
 } from "./issue-contracts.js";
+import { PlanGovernanceConflict, PlanGovernanceRepository, hashPlanBlockerSubject, hashPlanDecisionSubject } from "../plan-governance-repository.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
 import { CapacityFailure, CapacityManager } from "../capacity.js";
 import { CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema, type CapacityRequestInput } from "../capacity-contracts.js";
@@ -97,9 +99,11 @@ class SupervisedDeveloperTerminalError extends Error {
 }
 
 export function asNonRetryableApplicationFailure(error: unknown): ApplicationFailure | undefined {
-  if (error instanceof AgentFailure && error.nonRetryable) return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
-  if (error instanceof ProjectionIntegrityFailure) return ApplicationFailure.nonRetryable(error.message, "projection_integrity_failure", { code: error.code, summary: error.message, taskId: error.taskId, revision: error.revision });
-  return undefined;
+  if (error instanceof ProjectionIntegrityFailure) {
+    return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message, taskId: error.taskId, revision: error.revision });
+  }
+  if (!(error instanceof AgentFailure) || !error.nonRetryable) return undefined;
+  return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
 }
 
 export function asRetryableAgentFailure(error: unknown): ApplicationFailure | undefined {
@@ -939,9 +943,32 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     async recordPlanDecision(input) {
       const actor = database.authQuery((db) => db.prepare("SELECT id, role, status FROM forge_users WHERE id = ?").get(input.actorUserId) as { id: string; role: string; status: string } | undefined);
       if (!actor || actor.status !== "active") throw new Error("Plan decision actor is unavailable");
-      const scoped = database.authQuery((db) => actor.role === "admin" ? db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(input.taskId, input.companyId, input.workflowId) : db.prepare("SELECT t.id FROM forge_tasks t JOIN forge_memberships m ON m.company_id = t.company_id WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND m.user_id = ?").get(input.taskId, input.companyId, input.workflowId, input.actorUserId)) as { id: string } | undefined;
+      const scoped = database.authQuery((db) => actor.role === "admin" ? db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(input.taskId, input.companyId, input.workflowId) : db.prepare("SELECT t.id FROM forge_tasks t JOIN forge_memberships m ON m.company_id = t.company_id WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND m.user_id = ? AND m.status = 'active'").get(input.taskId, input.companyId, input.workflowId, input.actorUserId)) as { id: string } | undefined;
       if (!scoped) throw new Error("Plan decision scope is unavailable");
-      const note = (redact(input.note.trim()) as string) || `${input.decision} plan`;
+      if (input.subject && input.idempotencyKey && input.noteStagingRef && input.noteSha256) {
+        const repository = new PlanGovernanceRepository(database);
+        const existing = repository.findDecisionByIdempotency(input.workflowId, input.idempotencyKey);
+        if (existing) {
+          const expectedDecision = input.decision === "approve" ? "approve" : "request_revision";
+          if (existing.decision !== expectedDecision || existing.subjectHash !== hashPlanDecisionSubject(input.subject) || existing.noteArtifactSha256 !== input.noteSha256) throw new PlanGovernanceConflict("The idempotency key was reused with a different decision");
+          await new ArtifactStore(config.artifactRoot).discardStaged({ companyId: input.companyId, storagePath: `${input.companyId}/staging/${input.noteStagingRef}.bin` });
+          return { decisionId: existing.decisionId, subjectHash: existing.subjectHash, duplicate: true, noteArtifactId: existing.noteArtifactId, noteArtifactSha256: existing.noteArtifactSha256 };
+        }
+        const note = await new ArtifactStore(config.artifactRoot).readStaged(input.companyId, input.noteStagingRef, input.noteSha256);
+        const noteArtifact = await new ArtifactStore(config.artifactRoot).put(input.companyId, "plan-decision", { filename: `${input.idempotencyKey}.md`, mimeType: "text/markdown", bytes: note });
+        let result;
+        try {
+          database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(noteArtifact.id, noteArtifact.companyId, noteArtifact.kind, noteArtifact.filename, noteArtifact.mimeType, noteArtifact.byteSize, noteArtifact.sha256, noteArtifact.storagePath, noteArtifact.createdAt));
+          result = repository.recordDecisionIdempotently({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, actorUserId: input.actorUserId, decision: input.decision === "approve" ? "approve" : "request_revision", subject: input.subject, noteArtifactId: noteArtifact.id, noteArtifactSha256: noteArtifact.sha256, idempotencyKey: input.idempotencyKey });
+        } catch (error) {
+          database.authTransaction((db) => db.prepare("DELETE FROM forge_artifacts WHERE id = ? AND company_id = ?").run(noteArtifact.id, input.companyId));
+          await new ArtifactStore(config.artifactRoot).remove(noteArtifact);
+          throw error;
+        }
+        await new ArtifactStore(config.artifactRoot).discardStaged({ companyId: input.companyId, storagePath: `${input.companyId}/staging/${input.noteStagingRef}.bin` });
+        return { decisionId: result.decisionId, subjectHash: result.subjectHash, duplicate: result.duplicate, noteArtifactId: result.noteArtifactId, noteArtifactSha256: result.noteArtifactSha256 };
+      }
+      const note = (redact(input.note?.trim() ?? "") as string) || `${input.decision} plan`;
       const artifact = await new ArtifactStore(config.artifactRoot).put(input.companyId, "plan-decision", { filename: `decision_${input.planRevision}.md`, mimeType: "text/markdown", bytes: Buffer.from(note, "utf8") });
       const decisionId = `decision_${randomBytes(12).toString("hex")}`;
       database.authTransaction((db) => {
@@ -949,6 +976,35 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         db.prepare("INSERT INTO forge_plan_decisions (id, task_id, company_id, workflow_id, plan_revision, decision, actor_user_id, note_artifact_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(decisionId, input.taskId, input.companyId, input.workflowId, input.planRevision, input.decision, input.actorUserId, artifact.id, artifact.createdAt);
       });
       return { decisionId };
+    },
+    async recordPlanBlockerResponse(input: PlanBlockerResponseActivityInput) {
+      const actor = database.authQuery((db) => db.prepare("SELECT id, role, status FROM forge_users WHERE id = ?").get(input.actorUserId) as { id: string; role: string; status: string } | undefined);
+      if (!actor || actor.status !== "active") throw new Error("Plan blocker response actor is unavailable");
+      const scoped = database.authQuery((db) => actor.role === "admin"
+        ? db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(input.taskId, input.companyId, input.workflowId)
+        : db.prepare("SELECT t.id FROM forge_tasks t JOIN forge_memberships m ON m.company_id = t.company_id WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND m.user_id = ? AND m.status = 'active'").get(input.taskId, input.companyId, input.workflowId, input.actorUserId)) as { id: string } | undefined;
+      if (!scoped) throw new Error("Plan blocker response scope is unavailable");
+      const repository = new PlanGovernanceRepository(database);
+      const expectedSubjectHash = hashPlanBlockerSubject(input.blockerSubject);
+      const existing = repository.findBlockerResponseByIdempotency(input.workflowId, input.idempotencyKey);
+      if (existing) {
+        if (existing.subjectHash !== expectedSubjectHash || existing.answerArtifactSha256 !== input.answerSha256) throw new PlanGovernanceConflict("The idempotency key was reused with a different blocker answer");
+        await new ArtifactStore(config.artifactRoot).discardStaged({ companyId: input.companyId, storagePath: `${input.companyId}/staging/${input.answerStagingRef}.bin` });
+        return { responseId: existing.responseId, duplicate: true, subjectHash: existing.subjectHash, answerArtifactId: existing.answerArtifactId, answerArtifactSha256: existing.answerArtifactSha256 };
+      }
+      const answer = await new ArtifactStore(config.artifactRoot).readStaged(input.companyId, input.answerStagingRef, input.answerSha256);
+      const answerArtifact = await new ArtifactStore(config.artifactRoot).put(input.companyId, "plan-blocker-response", { filename: `${input.idempotencyKey}.md`, mimeType: "text/markdown", bytes: answer });
+      let result;
+      try {
+        database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(answerArtifact.id, answerArtifact.companyId, answerArtifact.kind, answerArtifact.filename, answerArtifact.mimeType, answerArtifact.byteSize, answerArtifact.sha256, answerArtifact.storagePath, answerArtifact.createdAt));
+        result = repository.recordBlockerResponseIdempotently({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, blockerArtifactId: input.blockerSubject.artifactId, blockerArtifactSha256: input.blockerSubject.artifactSha256, answerArtifactId: answerArtifact.id, answerArtifactSha256: answerArtifact.sha256, actorUserId: input.actorUserId, expectedWorkflowRevision: input.expectedWorkflowRevision, idempotencyKey: input.idempotencyKey, subjectHash: expectedSubjectHash });
+      } catch (error) {
+        database.authTransaction((db) => db.prepare("DELETE FROM forge_artifacts WHERE id = ? AND company_id = ?").run(answerArtifact.id, input.companyId));
+        await new ArtifactStore(config.artifactRoot).remove(answerArtifact);
+        throw error;
+      }
+      await new ArtifactStore(config.artifactRoot).discardStaged({ companyId: input.companyId, storagePath: `${input.companyId}/staging/${input.answerStagingRef}.bin` });
+      return { responseId: result.responseId, subjectHash: result.subjectHash, duplicate: result.duplicate, answerArtifactId: result.answerArtifactId, answerArtifactSha256: result.answerArtifactSha256 };
     },
     async recordDeliveryDecision(rawInput) {
       const input = DeliveryDecisionActivityInputSchema.parse(rawInput);

@@ -17,6 +17,8 @@ const forbiddenKey = /^(?:prompt|source|log|rawDiff|conflictDiff|taskBody|descri
 const forbiddenValue = /-----BEGIN [^-]+-----|\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\b|(?:bearer|basic)\s+[a-z0-9+/=_-]{16,}/i;
 const absolutePath = /(?:^|[\s"'])\/(?:Users|private|tmp|var\/folders|home)\//i;
 const diffMarker = /^(?:diff --git|@@ |<{7}|={7}|>{7})/m;
+const forbiddenFixtureTerms = /\b(?:password|secret|credential|authorization|prompt|source|description|image)\b|Bearer\s+\S+|api[_-]?key/i;
+const forbiddenFixturePaths = /^(?:\/Users\/|\/private\/var\/folders\/|\/var\/folders\/)/;
 
 export const ReplayFixtureManifestEntrySchema = z.object({
   id: z.string().min(1),
@@ -62,7 +64,7 @@ function isPayload(value: unknown): value is Payload {
 
 function scanSafeValue(value: unknown, path: string): void {
   if (typeof value === "string") {
-    if (forbiddenValue.test(value) || absolutePath.test(value) || diffMarker.test(value)) throw new Error(`Replay fixture contains forbidden content at ${path}`);
+    if (forbiddenValue.test(value) || forbiddenFixtureTerms.test(value) || absolutePath.test(value) || forbiddenFixturePaths.test(value) || diffMarker.test(value)) throw new Error(`Replay fixture contains forbidden content at ${path}`);
     if (value.length > 16_384) throw new Error(`Replay fixture contains an unbounded string at ${path}`);
     return;
   }
@@ -143,9 +145,34 @@ function workflowType(history: ReplayHistory): string | undefined {
   return event?.workflowExecutionStartedEventAttributes?.workflowType?.name;
 }
 
+function assertSafeFixtureValue(value: unknown, path = "", seen = new Set<object>()): void {
+  if (typeof value === "string") {
+    if (forbiddenFixtureTerms.test(value) || forbiddenFixturePaths.test(value)) {
+      throw new Error(`Replay fixture contains forbidden history text or substantive content at ${path}`);
+    }
+    if (path.endsWith(".data")) {
+      try {
+        const decoded = JSON.parse(Buffer.from(value, "base64").toString("utf8")) as unknown;
+        assertSafeFixtureValue(decoded, `${path}#decoded`, seen);
+      } catch {
+        // Non-JSON payload bytes are opaque to this safety check.
+      }
+    }
+    return;
+  }
+  if (!value || typeof value !== "object" || seen.has(value)) return;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertSafeFixtureValue(item, `${path}[${index}]`, seen));
+    return;
+  }
+  Object.entries(value).forEach(([key, child]) => assertSafeFixtureValue(child, path ? `${path}.${key}` : key, seen));
+}
+
 export async function readReplayHistory(filename: string): Promise<ReplayHistory> {
   const history = JSON.parse(await readFile(filename, "utf8")) as ReplayHistory;
   if (!history || !Array.isArray(history.events)) throw new Error("Replay fixture must contain an events array");
+  assertSafeFixtureValue(history);
   assertHistoryEventCountWithinLimit(history.events.length);
   scanHistoryValue(history, "history");
   if (workflowType(history) !== "issueWorkflow") throw new Error("Replay fixture has the wrong Workflow type");

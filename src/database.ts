@@ -44,7 +44,7 @@ export interface IssueProjectionRecord {
   workflowId: string;
   projectRevisionId?: string;
   revision: number;
-  phase: "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "merge_conflict_reviewing" | "merge_conflict_required" | "merge_conflict_resolving" | "ci_waiting" | "ci_repair_required" | "final_review" | "accepted" | "ready_reconciliation" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
+  phase: IssueWorkflowState["phase"];
   owner: "human" | "lead";
   allowedCommands: string[];
   pendingAction: string | null;
@@ -485,6 +485,21 @@ export class ForgeDatabase {
     try { stored = JSON.parse(snapshot.state_json); } catch { return; }
     if (!stored || typeof stored !== "object") return;
     const legacy = stored as Record<string, unknown>;
+    const canonical = IssueWorkflowStateSchema.safeParse(legacy);
+    if (canonical.success) {
+      const normalizedStored = IssueWorkflowStateSchema.parse({ ...canonical.data, stateChangedAt: parsed.stateChangedAt });
+      if (projectionStateHash(normalizedStored) !== stateHash) return;
+      const storedHash = projectionStateHash(canonical.data);
+      const timeline = database.prepare("SELECT event_hash FROM forge_issue_timeline WHERE id = ? AND workflow_id = ? AND revision = 0").get(parsed.lastEventId, parsed.workflowId) as { event_hash: string } | undefined;
+      if (!timeline || timeline.event_hash !== storedHash) return;
+      const current = database.prepare("SELECT revision, event_hash, authoritative_event_hash FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string; authoritative_event_hash: string } | undefined;
+      if (current?.revision === 0 && current.event_hash !== storedHash && current.event_hash !== stateHash) return;
+      database.prepare("UPDATE forge_workflow_snapshots SET state_json = ? WHERE task_id = ? AND revision = 0 AND state_json = ?").run(JSON.stringify(parsed), parsed.issueId, snapshot.state_json);
+      database.prepare("UPDATE forge_issue_timeline SET event_hash = ?, metadata_json = ? WHERE id = ? AND workflow_id = ? AND revision = 0 AND event_hash = ?").run(stateHash, JSON.stringify({ revision: 0, phase: parsed.phase, stateHash }), parsed.lastEventId, parsed.workflowId, storedHash);
+      if (current?.revision === 0 && current.event_hash === storedHash) database.prepare("UPDATE forge_issue_projections SET event_hash = ?, authoritative_event_hash = CASE WHEN authoritative_event_hash = ? THEN ? ELSE authoritative_event_hash END WHERE task_id = ? AND revision = 0 AND event_hash = ?").run(stateHash, storedHash, stateHash, parsed.issueId, storedHash);
+      database.prepare("INSERT OR IGNORE INTO forge_projection_invalidations (id, company_id, task_id, revision, attention_changed, created_at) VALUES (?, ?, ?, 0, 0, ?)").run(`${parsed.workflowId}:0`, parsed.companyId, parsed.issueId, new Date().toISOString());
+      return;
+    }
     if (legacy.issueId !== undefined || legacy.taskId !== parsed.issueId || legacy.repairCycle !== undefined) return;
     const normalized = IssueWorkflowStateSchema.safeParse({ ...legacy, taskId: undefined, issueId: parsed.issueId, repairCycle: 0 });
     if (!normalized.success || projectionStateHash(normalized.data) !== stateHash) return;
@@ -539,6 +554,24 @@ export class ForgeDatabase {
       this.recordProjectionFinding((event ?? {}) as Partial<IssueProjectionEvent>, failure);
       throw failure;
     }
+  }
+
+  projectIssueState(state: IssueProjectionRecord): void {
+    const parsed = IssueWorkflowStateSchema.parse({
+      ...(state.state ?? {}),
+      issueId: state.taskId,
+      companyId: state.companyId,
+      projectId: state.projectId,
+      workflowId: state.workflowId,
+      revision: state.revision,
+      phase: state.phase,
+      owner: state.owner,
+      allowedCommands: state.allowedCommands,
+      pendingAction: state.pendingAction,
+      lastEventId: state.lastEventId,
+      ...(state.projectRevisionId ? { projectRevisionId: state.projectRevisionId } : {}),
+    });
+    this.db.transaction(() => this.applyIssueProjection(this.db, parsed, new Date().toISOString(), parsed.workflowId))();
   }
 
   replaceIssueProjectionFromEvents(taskId: string, events: IssueProjectionEvent[]): void {

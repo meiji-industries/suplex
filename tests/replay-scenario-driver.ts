@@ -99,6 +99,7 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
     async consolidateLeadPlan() { throw new Error("Plan consolidation is not used by replay scenarios"); },
     async planDeliveryRepair(activityInput) { return { planId: `repair-plan-${activityInput.workflowId}`, leadExecutionId: `repair-plan-execution-${activityInput.workflowId}`, planArtifactId: `repair-plan-artifact-${activityInput.workflowId}`, planSha256: "a".repeat(64), evidenceArtifactId: `repair-plan-evidence-${activityInput.workflowId}`, leadSessionRef: activityInput.leadSessionRef, summary: "Controlled repair plan", findings: activityInput.findings }; },
     async recordPlanDecision(activityInput) { return { decisionId: `decision-${activityInput.workflowId}-${activityInput.planRevision}` }; },
+    async recordPlanBlockerResponse() { throw new Error("Plan blocker response is not used by replay scenarios"); },
     async runDeveloperExecution(activityInput) {
       const scenario = scenarioFor(activityInput.workflowId);
       if (scenario === "active_cancellation" || scenario === "continue_as_new" || scenario === "successor_creation") await developerGates.get(activityInput.workflowId)!.promise;

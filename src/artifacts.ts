@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync } from "node:fs";
-import { mkdir, open, realpath, rename, rm, lstat, link, unlink, stat } from "node:fs/promises";
+import { link, lstat, mkdir, open, readdir, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { CompanyIdSchema } from "./schemas.js";
@@ -12,7 +12,7 @@ export interface ArtifactInput {
   bytes: Buffer;
 }
 
-export const ArtifactKinds = ["task-brief", "task-image", "agent-evidence", "attention-evidence", "lead-plan", "decision-blocker", "supplemental-review", "plan-decision", "plan-revision-reason", "continuation-reason", "developer-delivery", "delivery-review", "delivery-repair-plan", "developer-repair", "delivery-blocker", "delivery-decision", "ci-evidence", "ci-repair-plan", "ci-repair-evidence", "merge-conflict-evidence", "merge-conflict-plan", "merge-conflict-resolution", "release-public-body", "forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery"] as const;
+export const ArtifactKinds = ["task-brief", "task-image", "agent-evidence", "attention-evidence", "lead-plan", "decision-blocker", "supplemental-review", "plan-decision", "plan-blocker-response", "plan-revision-reason", "continuation-reason", "developer-delivery", "delivery-review", "delivery-repair-plan", "developer-repair", "delivery-blocker", "delivery-decision", "ci-evidence", "ci-repair-plan", "ci-repair-evidence", "merge-conflict-evidence", "merge-conflict-plan", "merge-conflict-resolution", "planning-evidence-manifest", "repository-evidence", "materiality-evidence", "lead-review-response", "release-public-body", "forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery"] as const;
 export type ArtifactKind = (typeof ArtifactKinds)[number];
 
 export interface StoredArtifact {
@@ -45,6 +45,18 @@ export const SAFE_ARTIFACT_KINDS_SQL = SAFE_ARTIFACT_KINDS.map((kind) => `'${kin
 export interface PlannedArtifact extends ArtifactManifestEntry {
   companyId: string;
   stagingPath: string;
+}
+
+export interface StagedArtifact {
+  ref: string;
+  companyId: string;
+  kind: StoredArtifact["kind"];
+  filename: string;
+  mimeType: string;
+  byteSize: number;
+  sha256: string;
+  storagePath: string;
+  createdAt: string;
 }
 
 export class ArtifactFailure extends Error {
@@ -324,6 +336,57 @@ export class ArtifactStore {
     await rejectSymlinkComponents(this.root, finalPath);
     await rm(stagingPath, { force: true });
     await rm(finalPath, { force: true });
+  }
+
+  async stage(companyId: string, kind: StoredArtifact["kind"], input: ArtifactInput): Promise<StagedArtifact> {
+    const validatedCompanyId = CompanyIdSchema.parse(companyId);
+    const filename = safeFilename(input.filename);
+    if (!input.mimeType || input.mimeType.length > 120 || /[\r\n]/.test(input.mimeType)) throw new ArtifactFailure("invalid-mime-type", "Artifact type is invalid");
+    if (input.bytes.length === 0 || input.bytes.length > 8 * 1024 * 1024) throw new ArtifactFailure("invalid-size", "Artifact size is invalid");
+    const ref = `staging_${randomUUID().replaceAll("-", "")}`;
+    const sha256 = createHash("sha256").update(input.bytes).digest("hex");
+    const storagePath = join(validatedCompanyId, "staging", `${ref}.bin`);
+    const absolutePath = safeStoragePath(this.root, storagePath);
+    await mkdir(resolve(this.root, validatedCompanyId, "staging"), { recursive: true, mode: 0o700 });
+    await rejectSymlinkComponents(this.root, resolve(this.root, validatedCompanyId, "staging"));
+    await writeFile(absolutePath, input.bytes, { flag: "wx", mode: 0o600 });
+    return { ref, companyId: validatedCompanyId, kind, filename, mimeType: input.mimeType, byteSize: input.bytes.length, sha256, storagePath, createdAt: new Date().toISOString() };
+  }
+
+  async finalizeStaged(staged: StagedArtifact, expectedSha256 = staged.sha256): Promise<StoredArtifact> {
+    const bytes = await this.read({ companyId: staged.companyId, storagePath: staged.storagePath, sha256: expectedSha256 });
+    const artifact = await this.put(staged.companyId, staged.kind, { filename: staged.filename, mimeType: staged.mimeType, bytes });
+    await this.discardStaged(staged);
+    return artifact;
+  }
+
+  async readStaged(companyId: string, ref: string, sha256: string): Promise<Buffer> {
+    const validatedCompanyId = CompanyIdSchema.parse(companyId);
+    if (!/^staging_[a-f0-9]{32}$/.test(ref)) throw new ArtifactFailure("invalid-staging-ref", "Staged artifact reference is invalid");
+    return this.read({ companyId: validatedCompanyId, storagePath: join(validatedCompanyId, "staging", `${ref}.bin`), sha256 });
+  }
+
+  async discardStaged(staged: Pick<StagedArtifact, "companyId" | "storagePath">): Promise<void> {
+    const companyId = CompanyIdSchema.parse(staged.companyId);
+    const absolutePath = safeStoragePath(this.root, staged.storagePath);
+    if (!absolutePath.includes(`${sep}${companyId}${sep}staging${sep}`)) throw new ArtifactFailure("artifact-company-scope", "Staged artifact is outside the company staging area");
+    await rejectSymlinkComponents(this.root, absolutePath);
+    await rm(absolutePath, { force: true });
+  }
+
+  async cleanupExpiredStaging(companyId: string, olderThan: Date): Promise<number> {
+    const validatedCompanyId = CompanyIdSchema.parse(companyId);
+    const stagingRoot = resolve(this.root, validatedCompanyId, "staging");
+    let entries;
+    try { entries = await readdir(stagingRoot, { withFileTypes: true }); } catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0; throw error; }
+    let removed = 0;
+    for (const entry of entries) {
+      if (!entry.isFile() || !/^staging_[a-f0-9]{32}\.bin$/.test(entry.name)) continue;
+      const path = join(stagingRoot, entry.name);
+      const stat = await lstat(path);
+      if (stat.mtimeMs < olderThan.getTime()) { await rm(path, { force: true }); removed += 1; }
+    }
+    return removed;
   }
 
   async read(artifact: Pick<StoredArtifact, "companyId" | "storagePath" | "sha256">): Promise<Buffer> {

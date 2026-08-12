@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { temporalConnectionOptions, type ForgeConfig } from "../config.js";
 import type { HealthCheck } from "../health.js";
 import { runtimeIdentifiers } from "../runtime-identifiers.js";
-import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, continueWorkUpdate, finalReviewUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, publishDraftUpdate, reconcileAcceptanceUpdate, reconcileCIUpdate, reconcileMergeUpdate, recordDeliveryDecisionUpdate, recordProgressUpdate, rejectPlanUpdate, repairCIUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, requestSupplementalReviewUpdate, resolveMergeConflictUpdate, revisePlanUpdate, retryCapacityUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, retryForwardMergeVerificationUpdate, retryTargetBaseReconciliationUpdate, startDevelopmentUpdate, startPlanningUpdate, verifyDeveloperOwnershipUpdate } from "./workflows.js";
+import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, continueWorkUpdate, finalReviewUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, publishDraftUpdate, reconcileAcceptanceUpdate, reconcileCIUpdate, reconcileMergeUpdate, recordDeliveryDecisionUpdate, recordProgressUpdate, rejectPlanUpdate, repairCIUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, requestPlanRevisionUpdate, requestSupplementalReviewUpdate, respondPlanBlockerUpdate, resolveMergeConflictUpdate, revisePlanUpdate, retryCapacityUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, retryForwardMergeVerificationUpdate, retryTargetBaseReconciliationUpdate, startDevelopmentUpdate, startPlanningUpdate, verifyDeveloperOwnershipUpdate } from "./workflows.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { ContinueWorkCommandSchema, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, StartPlanningInputSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
@@ -260,7 +260,7 @@ export async function acceptIssuePlanning(config: ForgeConfig, workflowId: strin
   }
 }
 
-async function issuePlanUpdate(config: ForgeConfig, workflowId: string, input: PlanCommandInput, update: typeof requestSupplementalReviewUpdate | typeof approvePlanUpdate | typeof rejectPlanUpdate | typeof recordDeliveryDecisionUpdate | typeof cancelIssueUpdate, label = "plan command"): Promise<IssueWorkflowState> {
+async function issuePlanUpdate(config: ForgeConfig, workflowId: string, input: PlanCommandInput, update: typeof requestSupplementalReviewUpdate | typeof approvePlanUpdate | typeof requestPlanRevisionUpdate | typeof respondPlanBlockerUpdate | typeof rejectPlanUpdate | typeof recordDeliveryDecisionUpdate | typeof cancelIssueUpdate, label = "plan command"): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
   if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
   const validatedInput = PlanCommandInputSchema.parse(durableCommand(workflowId, update.name, input));
@@ -280,8 +280,16 @@ export function approveIssuePlan(config: ForgeConfig, workflowId: string, input:
   return issuePlanUpdate(config, workflowId, { ...input, ...(input.note !== undefined ? { note: input.note } : {}) }, approvePlanUpdate);
 }
 
+export function requestIssuePlanRevision(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
+  return issuePlanUpdate(config, workflowId, input, requestPlanRevisionUpdate);
+}
+
 export function rejectIssuePlan(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
-  return issuePlanUpdate(config, workflowId, { ...input, ...(input.note !== undefined ? { note: input.note } : {}) }, rejectPlanUpdate);
+  return issuePlanUpdate(config, workflowId, input, rejectPlanUpdate);
+}
+
+export function respondIssuePlanBlocker(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
+  return issuePlanUpdate(config, workflowId, input, respondPlanBlockerUpdate);
 }
 
 export async function reviseIssuePlan(config: ForgeConfig, workflowId: string, input: PlanRevisionCommand): Promise<IssueWorkflowState> {

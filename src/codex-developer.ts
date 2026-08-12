@@ -19,6 +19,8 @@ import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact }
 import { runPinnedVerification } from "./verification.js";
 import { parseAcceptedProjectRevision } from "./projects.js";
 import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
+import { PlanDecisionSubjectSchema, PlanSubjectSchema, samePlanSubject } from "./plan-governance.js";
+import { hashPlanDecisionSubject } from "./plan-governance-repository.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -282,12 +284,29 @@ export class DeveloperService {
 
   async run(rawInput: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<DeveloperExecutionResult> {
     const input = rawInput;
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256, io.id AS outputId, io.original_plan_revision AS originalPlanRevision, io.revision AS outputRevision, io.final_version AS finalVersion, io.output_artifact_id AS artifactId, io.artifact_sha256 AS artifactSha256, io.session_ref AS leadSessionRef, io.execution_id AS leadExecutionId, io.evidence_manifest_artifact_id AS evidenceManifestArtifactId, io.evidence_manifest_sha256 AS evidenceManifestSha256, io.legacy_unverified AS legacyUnverified
       FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_issue_outputs io ON io.output_artifact_id = ? AND io.task_id = t.id AND io.workflow_id = t.workflow_id
       JOIN forge_artifacts pa ON pa.id = io.output_artifact_id JOIN forge_artifacts ea ON ea.id = io.evidence_artifact_id
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId) as DeveloperContext | undefined);
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId) as DeveloperContext & { outputId?: string; originalPlanRevision?: number; outputRevision?: number; finalVersion?: number; artifactId?: string; artifactSha256?: string; leadSessionRef?: string; leadExecutionId?: string; evidenceManifestArtifactId?: string; evidenceManifestSha256?: string; legacyUnverified?: number } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Authorized Lead delivery evidence is unavailable");
+    if (!input.finalPlanSubject) throw new AgentFailure("plan-authority-missing", "Developer execution requires the exact verified final Lead plan subject");
+    if (input.finalPlanSubject) {
+      const persisted = PlanSubjectSchema.safeParse({ companyId: input.companyId, issueId: input.taskId, workflowId: input.workflowId, originalPlanRevision: context.originalPlanRevision, outputRevision: context.outputRevision, finalVersion: context.finalVersion, outputId: context.outputId, artifactId: context.artifactId, artifactSha256: context.artifactSha256, leadSessionRef: context.leadSessionRef, leadExecutionId: context.leadExecutionId, evidenceManifestArtifactId: context.evidenceManifestArtifactId, evidenceManifestSha256: context.evidenceManifestSha256 });
+      if (context.legacyUnverified !== 0 || !persisted.success || !samePlanSubject(persisted.data, input.finalPlanSubject)) throw new AgentFailure("plan-authority-conflict", "Developer execution requires the exact verified final Lead plan");
+      if (input.materialityEvidence?.categories.length) {
+        if (!input.approvalDecisionId) throw new AgentFailure("plan-approval-missing", "Material Developer execution requires an exact verified approval");
+        const finalPlanSubject = input.finalPlanSubject;
+        const materialityEvidence = input.materialityEvidence;
+        const approval = this.database.authQuery((db) => db.prepare(`SELECT expected_workflow_revision AS expectedWorkflowRevision, subject_hash AS subjectHash
+          FROM forge_plan_decisions
+          WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND decision = 'approve' AND legacy_unverified = 0
+            AND plan_output_id = ? AND plan_artifact_id = ? AND plan_artifact_sha256 = ?
+            AND materiality_evidence_artifact_id = ? AND materiality_evidence_sha256 = ?`).get(input.approvalDecisionId, input.taskId, input.companyId, input.workflowId, finalPlanSubject.outputId, finalPlanSubject.artifactId, finalPlanSubject.artifactSha256, materialityEvidence.artifactId, materialityEvidence.artifactSha256) as { expectedWorkflowRevision: number; subjectHash: string } | undefined);
+        const decisionSubject = approval && PlanDecisionSubjectSchema.safeParse({ plan: finalPlanSubject, materiality: materialityEvidence, expectedWorkflowRevision: approval.expectedWorkflowRevision });
+        if (!approval || !decisionSubject || !decisionSubject.success || hashPlanDecisionSubject(decisionSubject.data) !== approval.subjectHash) throw new AgentFailure("plan-approval-conflict", "Developer execution requires approval for the exact final plan and materiality evidence");
+      }
+    }
     const projectRevision = ProjectRevisionSchema.safeParse(JSON.parse(context.normalizedJson));
     if (!projectRevision.success) throw new AgentFailure("scoped-input-missing", "Pinned project execution configuration is unavailable");
     const repositoryPath = await scopedRepository(this.config.repositoryRoot, projectRevision.data.repositoryPath);

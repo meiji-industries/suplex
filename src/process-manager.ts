@@ -70,8 +70,8 @@ export interface StopReport {
 
 const shutdownVerificationAttempts = 10;
 const shutdownVerificationDelayMs = 100;
-const processInspectionAttempts = 3;
-const processInspectionRetryDelayMs = 10;
+const processInspectionAttempts = 60;
+const processInspectionRetryDelayMs = 50;
 
 function normalizeArgv(command: string): string[] {
   return command.split(/\s+/).filter(Boolean);

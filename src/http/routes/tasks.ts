@@ -7,7 +7,7 @@ import type { TaskService } from "../../tasks.js";
 import type { ProjectRole } from "../../projects.js";
 import type { PlanCommandInput } from "../../temporal/issue-contracts.js";
 import type { PlanBlockerSubject } from "../../plan-governance.js";
-import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, ExpectedRevisionNoteBodySchema, HttpPlanBlockerResponseBodySchema, HttpPlanDecisionBodySchema, HttpSupplementalReviewBodySchema, RequiredRevisionNoteBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
+import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, ExpectedRevisionNoteBodySchema, HttpPlanBlockerResponseBodySchema, HttpPlanDecisionBodySchema, HttpSupplementalReviewBodySchema, RequiredRevisionNoteBodySchema, ResolveDecisionBlockerBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, PlanRevisionBodySchema, TaskBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions {
@@ -47,6 +47,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
     return reply.header("Cache-Control", "private, no-store").send(await tasks.getDeveloperDiff(request.forgeUser.id, request.params.taskId));
   });
   typed.post("/api/tasks/:taskId/start-planning", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.startPlanning(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
+  typed.post("/api/tasks/:taskId/resolve-decision-blocker", { schema: { params: TaskIdParamsSchema, body: ResolveDecisionBlockerBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.resolveDecisionBlocker(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.answer)));
   typed.post("/api/tasks/:taskId/request-supplemental-review", { schema: { params: TaskIdParamsSchema, body: HttpSupplementalReviewBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => {
     const body = request.body;
     return reply.send(await tasks.requestSupplementalReview(request.forgeUser.id, request.params.taskId, { expectedRevision: body.expectedRevision, actorUserId: request.forgeUser.id, subject: body.subject as PlanCommandInput["subject"], idempotencyKey: body.idempotencyKey }));

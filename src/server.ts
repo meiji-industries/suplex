@@ -25,7 +25,7 @@ export interface ForgeServer {
   database: ForgeDatabase;
 }
 
-export async function createForgeServer(config: ForgeConfig = loadConfig()): Promise<ForgeServer> {
+export async function createForgeServer(config: ForgeConfig = loadConfig(), options: { logSink?: (line: string) => void } = {}): Promise<ForgeServer> {
   await mkdir(config.artifactRoot, { recursive: true });
   await mkdir(config.worktreeRoot, { recursive: true });
   const database = new ForgeDatabase(config.databasePath);
@@ -53,7 +53,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig()): Pro
     ci,
     acceptance,
     rebuild,
-    logger: createFastifyLogger(),
+    logger: createFastifyLogger(options.logSink),
     capacity,
   } satisfies Parameters<typeof createApp>[0];
   let app: FastifyInstance;

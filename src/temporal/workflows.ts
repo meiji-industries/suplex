@@ -1,5 +1,5 @@
 import { ActivityCancellationType } from "@temporalio/common";
-import { ActivityFailure, allHandlersFinished, ApplicationFailure, condition, continueAsNew, defineQuery, defineUpdate, patched, proxyActivities, setHandler, sleep, workflowInfo } from "@temporalio/workflow";
+import { ActivityFailure, allHandlersFinished, ApplicationFailure, CancellationScope, condition, continueAsNew, defineQuery, defineUpdate, patched, proxyActivities, setHandler, sleep, workflowInfo } from "@temporalio/workflow";
 
 import { ProbeWorkflowInputSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import {
@@ -40,6 +40,7 @@ import {
   type PublishReleaseActivityResult,
   type RecordProgressInput,
   type ReconcileTargetBaseActivityResult,
+  type ResolveDecisionBlockerInput,
   type StartPlanningInput,
   type SupplementalReviewResult,
   type TargetBaseCheckpoint,
@@ -80,11 +81,13 @@ const EXTERNAL_AGENT_RETRY_POLICY = {
 const { runLeadPlanning } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
   heartbeatTimeout: "15 seconds",
+  cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { runSupplementalReview, consolidateLeadPlan } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
   heartbeatTimeout: "15 seconds",
+  cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { runDeveloperExecution } = proxyActivities<IssueActivities>({
@@ -125,9 +128,13 @@ const { createSuccessor } = proxyActivities<IssueActivities>({ startToCloseTimeo
 const { recordPlanBlockerResponse } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
 });
+const { recordDecisionBlockerResolution } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "1 minute",
+});
 const { reviewDelivery } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
   heartbeatTimeout: "15 seconds",
+  cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { recordDeliveryBlocker } = proxyActivities<DeliveryBlockerActivities>({
@@ -154,6 +161,7 @@ const { reconcileTargetBase } = proxyActivities<IssueActivities>({
 const { planMergeConflict } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
   heartbeatTimeout: "15 seconds",
+  cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { resolveMergeConflict } = proxyActivities<IssueActivities>({
@@ -176,6 +184,7 @@ const { runCiRepair } = proxyActivities<IssueActivities>({
 const { finalReview } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
   heartbeatTimeout: "15 seconds",
+  cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { planDeliveryRepair } = proxyActivities<IssueActivities>({
@@ -240,6 +249,7 @@ export async function probeWorkflow(input: ProbeWorkflowInput): Promise<ProbeWor
 
 export const issueStateQuery = defineQuery<IssueWorkflowState>("issueState");
 export const startPlanningUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("startPlanning");
+export const resolveDecisionBlockerUpdate = defineUpdate<IssueWorkflowState, [ResolveDecisionBlockerInput]>("resolveDecisionBlocker");
 export const recordProgressUpdate = defineUpdate<IssueWorkflowState, [RecordProgressInput]>("recordProgress");
 export const requestSupplementalReviewUpdate = defineUpdate<IssueWorkflowState, [PlanCommandInput]>("requestSupplementalReview");
 export const approvePlanUpdate = defineUpdate<IssueWorkflowState, [PlanCommandInput]>("approvePlan");
@@ -269,6 +279,7 @@ export const reconcileAcceptanceUpdate = defineUpdate<IssueWorkflowState, [Start
 export const reconcileMergeUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("reconcileMerge");
 export const retryCapacityUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("retryCapacity");
 const leadPlanningPatch = "forge-lead-planning-v1";
+const leadResultRoutingPatch = "forge-lead-result-routing-v2";
 const planGovernancePatch = "forge-plan-governance-v1";
 const planningProjectionIntegrityPatch = "forge-planning-projection-integrity-v1";
 const distinctPlanningStatesPatch = "forge-distinct-planning-states-v1";
@@ -285,6 +296,7 @@ const developerSupervisorPatch = "forge-developer-supervisor-v1";
 const exactPlanAuthorityPatch = "forge-exact-plan-authority-v2";
 const isolatedDeveloperExecutionPatch = "forge-isolated-developer-execution-v1";
 const initialProjectionBarrierPatch = "forge-initial-projection-barrier-v1";
+const planApprovalBlockerPatch = "forge-plan-approval-blocker-v1";
 
 function compactStateForContinuation(state: IssueWorkflowState): IssueWorkflowState {
   const compact = { ...state, activeOperation: null } as Record<string, unknown>;
@@ -292,6 +304,73 @@ function compactStateForContinuation(state: IssueWorkflowState): IssueWorkflowSt
   return IssueWorkflowStateSchema.parse(compact);
 }
 const durableCapacityPatch = "durable-capacity-v1";
+const decisionResolutionProjectionPatch = "forge-decision-resolution-projection-v1";
+
+function leadResultKind(result: LeadPlanningResult): "plan" | "decision_blocker" {
+  return "kind" in result ? result.kind : result.leadOutputKind;
+}
+
+function leadResultMaterial(result: LeadPlanningResult): boolean {
+  return leadResultKind(result) === "plan" && "material" in result ? result.material : false;
+}
+
+function leadResultCategories(result: LeadPlanningResult) {
+  return leadResultKind(result) === "plan" && "materialCategories" in result ? result.materialCategories : [];
+}
+
+function applyLeadResult(state: IssueWorkflowState, result: LeadPlanningResult): IssueWorkflowState {
+  const kind = leadResultKind(result);
+  const common = {
+    leadSessionRef: result.leadSessionRef,
+    leadExecutionId: result.leadExecutionId,
+    leadEvidenceArtifactId: result.leadEvidenceArtifactId,
+    leadOutputArtifactId: result.leadOutputArtifactId,
+    leadOutputKind: kind,
+    leadSummary: result.leadSummary,
+    ...(("leadEvidenceSha256" in result && result.leadEvidenceSha256) ? { leadEvidenceSha256: result.leadEvidenceSha256 } : {}),
+    ...(("leadOutputSha256" in result && result.leadOutputSha256) ? { leadOutputSha256: result.leadOutputSha256 } : {}),
+    ...(("leadInputManifestArtifactId" in result && result.leadInputManifestArtifactId) ? { leadInputManifestArtifactId: result.leadInputManifestArtifactId } : {}),
+    ...(("leadInputManifestSha256" in result && result.leadInputManifestSha256) ? { leadInputManifestSha256: result.leadInputManifestSha256 } : {}),
+  };
+  if (kind === "decision_blocker") {
+    return IssueWorkflowStateSchema.parse({
+      ...state,
+      ...common,
+      phase: "blocked",
+      owner: "human",
+      allowedCommands: ["resolve_decision_blocker", "cancel_issue"],
+      pendingAction: "Human decision required by Lead",
+      blockedCategory: "human_decision",
+      blockedResumePhase: "planning",
+      blockerArtifactId: result.leadOutputArtifactId,
+      blockerArtifactSha256: "leadOutputSha256" in result ? result.leadOutputSha256 : null,
+      planRevision: null,
+      planMaterial: null,
+      materialCategories: [],
+    });
+  }
+  return IssueWorkflowStateSchema.parse({
+    ...state,
+    ...common,
+    planRevision: state.revision,
+    planMaterial: leadResultMaterial(result),
+    materialCategories: leadResultCategories(result),
+    blockedCategory: null,
+    blockedResumePhase: null,
+    blockerArtifactId: null,
+    blockerArtifactSha256: null,
+  });
+}
+
+function applyLegacyLeadResult(state: IssueWorkflowState, result: LeadPlanningResult): IssueWorkflowState {
+  return IssueWorkflowStateSchema.parse({
+    ...state,
+    ...result,
+    planRevision: state.revision,
+    planMaterial: leadResultMaterial(result),
+    materialCategories: leadResultCategories(result),
+  });
+}
 
 function permanentActivityFailure(error: unknown): { code: string; summary: string; category?: IssueBlocker["category"]; evidenceArtifactId?: string; evidenceSha256?: string } | undefined {
   if (error instanceof ApplicationFailure && error.nonRetryable) {
@@ -465,6 +544,14 @@ function rateLimitFailure(error: unknown): { retryAt?: string } | undefined {
   return typeof retryAt === "string" ? { retryAt } : {};
 }
 
+function failureBlockCategory(code: string): "authentication" | "configuration" | "capacity" | "execution_ownership" | undefined {
+  if (["login-expired", "unauthenticated"].includes(code)) return "authentication";
+  if (["model-unavailable", "profile-unavailable", "scope_configuration", "version_incompatible"].includes(code)) return "configuration";
+  if (["capacity_unavailable", "capacity-exhausted", "rate-limited"].includes(code)) return "capacity";
+  if (["ownership_ambiguous", "session_identity_conflict"].includes(code)) return "execution_ownership";
+  return undefined;
+}
+
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);
@@ -482,10 +569,26 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const exactPlanAuthorityEnabled = patched(exactPlanAuthorityPatch);
   const isolatedDeveloperExecutionEnabled = patched(isolatedDeveloperExecutionPatch);
   const initialProjectionBarrierEnabled = patched(initialProjectionBarrierPatch);
+  const planApprovalBlockerEnabled = patched(planApprovalBlockerPatch);
+  const approvalCommands = (exactSubject: boolean, supplementalReview: boolean): IssueCommand[] => {
+    const commands: IssueCommand[] = exactSubject ? ["approve_plan", "request_plan_revision", "cancel_issue"] : ["approve_plan", "reject_plan", "cancel_issue"];
+    return supplementalReview ? [...commands, "request_supplemental_review"] : commands;
+  };
+  const approvalBlocker = (result: LeadPlanningResult, exactSubject: boolean, supplementalReview: boolean): IssueBlocker | null => {
+    if (!planApprovalBlockerEnabled) return null;
+    const actions: IssueBlockerAction[] = exactSubject
+      ? [{ command: "approve_plan", label: "Approve plan", requiresNote: true, destructive: false }, { command: "request_plan_revision", label: "Request plan revision", requiresNote: true, destructive: false }]
+      : [{ command: "approve_plan", label: "Approve plan", requiresNote: false, destructive: false }, { command: "reject_plan", label: "Request plan revision", requiresNote: true, destructive: false }];
+    if (supplementalReview) actions.push({ command: "request_supplemental_review", label: "Request supplemental review", requiresNote: false, destructive: false });
+    return humanBlocker("member_authorization", "Member approval is required for this material plan.", actions, evidencePointer(result.leadOutputArtifactId, result.leadOutputSha256 ?? result.leadOutputArtifactSha256, "lead-plan"));
+  };
   const initialProjection = continuation || !exactPlanAuthorityEnabled ? Promise.resolve(state) : projectIssueState(state);
   let continuationRequested = false;
   let initialProjectionComplete = Boolean(continuation);
   let decisionInFlight = false;
+  const currentState = (): IssueWorkflowState => state;
+  let planningScope: CancellationScope | undefined;
+  let planningPromise: Promise<LeadPlanningResult> | undefined;
   const shouldContinueAsNew = (revision: number): boolean => {
     return workflowInfo().continueAsNewSuggested || (continueAfter > 0 && revision >= continueAfter) || workflowInfo().historyLength >= WORKFLOW_HISTORY_EVENT_LIMIT;
   };
@@ -595,8 +698,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await projectIssueState(state);
     return projectedRevision;
   };
-  const acquireExternalTurn = async <T>(spec: { operation: CapacityOperation; role: CapacityRole; profileId?: string | undefined; sessionRef?: string | null | undefined; worktreePath?: string | null | undefined }, run: (capacityRequestId?: string) => Promise<T>, executionId: (result: T) => string | undefined): Promise<T> => {
-    if (!patched(durableCapacityPatch)) return run(undefined);
+  const acquireExternalTurn = async <T>(spec: { operation: CapacityOperation; role: CapacityRole; profileId?: string | undefined; sessionRef?: string | null | undefined; worktreePath?: string | null | undefined }, run: (capacityRequestId?: string) => Promise<T>, executionId: (result: T) => string | undefined, durableCapacityEnabled = patched(durableCapacityPatch)): Promise<T> => {
+    if (!durableCapacityEnabled) return run(undefined);
     if (!spec.profileId) throw ApplicationFailure.nonRetryable("profile_unavailable", "profile_unavailable", { operation: spec.operation, role: spec.role });
     const turnRevision = state.revision;
     const expectedPhase = state.phase;
@@ -720,10 +823,12 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     assertPayloadWithinLimit("Issue Workflow result", next);
     const distinctPlanningStates = patched(distinctPlanningStatesPatch);
     if (distinctPlanningStates || !patched(planningProjectionIntegrityPatch)) await projectIssueState(next);
+    if (state.phase !== "planning" || state.revision !== next.revision) return state;
     if (patched(leadPlanningPatch)) {
       let leadResult;
+      const durablePlanningCapacity = patched(durableCapacityPatch);
       try {
-        leadResult = await acquireExternalTurn<LeadPlanningResult>(
+        const runPlanningTurn = () => acquireExternalTurn<LeadPlanningResult>(
           { operation: "lead_planning", role: "lead", profileId: validatedInput.roleProfiles.lead },
           (capacityRequestId) => runLeadPlanning({
             taskId: validatedInput.issueId,
@@ -740,13 +845,27 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
             ...(capacityRequestId ? { capacityRequestId } : {}),
           }),
           (result) => result.leadExecutionId,
+          durablePlanningCapacity,
         );
+        if (exactPlanAuthorityEnabled || durablePlanningCapacity) {
+          leadResult = await runPlanningTurn();
+        } else {
+          const scope = new CancellationScope();
+          planningScope = scope;
+          planningPromise = scope.run(runPlanningTurn);
+          try {
+            leadResult = await planningPromise;
+          } finally {
+            planningPromise = undefined;
+            planningScope = undefined;
+          }
+        }
       } catch (error) {
-        if (state.phase === "cancelled") return state;
+        if (currentState().phase === "cancelled") return currentState();
         if (state.capacityBlocker) return state;
         const failure = permanentActivityFailure(error);
         if (!failure) throw error;
-        const failureBase = patched(durableCapacityPatch) ? state : next;
+        const failureBase = durablePlanningCapacity ? state : next;
         const failureRevision = failureBase.revision + 1;
         state = IssueWorkflowStateSchema.parse({
           ...failureBase,
@@ -764,8 +883,13 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         await projectIssueState(state);
         return state;
       }
-      const planningBase = patched(durableCapacityPatch) ? state : next;
-      state = IssueWorkflowStateSchema.parse({ ...planningBase, ...leadResult, ...(distinctPlanningStates ? { revision: planningBase.revision + 1, lastEventId: `${planningBase.workflowId}:${planningBase.revision + 1}` } : {}), planRevision: next.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, preservedWorktreeCompatibility: leadResult.preservedWorktreeCompatibility ?? null, supplementalReviewUsed: false, blocker: null, stateChangedAt: new Date().toISOString(), originalPlanSubject: leadResult.planSubject ?? null, finalPlanSubject: leadResult.planSubject ?? null, materialityEvidence: leadResult.materialityEvidence ?? null, planBlockerSubject: leadResult.blockerSubject ?? null });
+      const planningBase = durablePlanningCapacity ? state : next;
+      if (exactPlanAuthorityEnabled) {
+        state = IssueWorkflowStateSchema.parse({ ...planningBase, ...leadResult, ...(distinctPlanningStates ? { revision: planningBase.revision + 1, lastEventId: `${planningBase.workflowId}:${planningBase.revision + 1}` } : {}), planRevision: next.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, preservedWorktreeCompatibility: leadResult.preservedWorktreeCompatibility ?? null, supplementalReviewUsed: false, blocker: null, stateChangedAt: new Date().toISOString(), originalPlanSubject: leadResult.planSubject ?? null, finalPlanSubject: leadResult.planSubject ?? null, materialityEvidence: leadResult.materialityEvidence ?? null, planBlockerSubject: leadResult.blockerSubject ?? null });
+      } else {
+        const routedLeadResult = patched(leadResultRoutingPatch) ? applyLeadResult(next, leadResult) : applyLegacyLeadResult(next, leadResult);
+        state = IssueWorkflowStateSchema.parse({ ...routedLeadResult, ...(distinctPlanningStates ? { revision: next.revision + 1, lastEventId: `${next.workflowId}:${next.revision + 1}` } : {}), ...(leadResultKind(leadResult) === "plan" ? { planRevision: next.revision } : {}), supplementalReviewUsed: false });
+      }
       if (state.revisionRequestId && state.revisedExecutionCoordinates?.disposition === "reuse" && state.preservedWorktreeCompatibility !== true) {
         state = IssueWorkflowStateSchema.parse({ ...state, phase: "delivery_blocked", owner: "human", allowedCommands: ["revise_plan", "cancel_issue"], pendingAction: "Choose a new exact-base worktree for the incompatible revised plan", blockerCode: "preserved-worktree-incompatible" });
         await projectIssueState(state);
@@ -774,7 +898,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       if (state.revisionRequestId) await authorizePlanRevision({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, revisionRequestId: state.revisionRequestId, planRevision: state.planRevision ?? state.revision });
       if (patched(planGovernancePatch)) {
         const route = routeLeadResult({ kind: leadResult.leadOutputKind, material: leadResult.material });
-        state = IssueWorkflowStateSchema.parse({ ...state, phase: route.phase, owner: route.owner, allowedCommands: route.phase === "approval" && validatedInput.supplementalReview ? [...route.allowedCommands, "request_supplemental_review"] : route.allowedCommands, pendingAction: route.pendingAction, blocker: null, stateChangedAt: new Date().toISOString() });
+        const exactSubject = Boolean(state.finalPlanSubject);
+        state = IssueWorkflowStateSchema.parse({ ...state, phase: route.phase, owner: route.owner, allowedCommands: route.phase === "approval" ? approvalCommands(exactSubject, validatedInput.supplementalReview) : route.phase === "ready_for_development" && !exactSubject ? addRevisionCommand(route.allowedCommands as IssueCommand[]) : route.allowedCommands, pendingAction: route.pendingAction, blocker: route.phase === "approval" ? approvalBlocker(leadResult, exactSubject, validatedInput.supplementalReview) : null, stateChangedAt: new Date().toISOString() });
         if (isolatedDeveloperExecutionEnabled && route.phase === "ready_for_development" && state.finalPlanSubject) {
           const authorization = await authorizeFinalPlan({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, workflowId: validatedInput.workflowId, planRevision: state.finalPlanSubject.outputRevision, planArtifactId: state.finalPlanSubject.artifactId, authorizationKind: "routine_auto" });
           state = IssueWorkflowStateSchema.parse({ ...state, planRevision: authorization.planRevision, planAuthorizationId: authorization.authorizationId, planArtifactSha256: authorization.planArtifactSha256, planAuthorizationKind: authorization.authorizationKind, planAuthorizedAt: authorization.authorizedAt });
@@ -788,9 +913,53 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     validator(rawInput) {
       const command = StartPlanningInputSchema.parse(rawInput);
       if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
-      if (state.phase !== "backlog" && state.phase !== "planning" && state.phase !== "failed") throw new Error("Planning can only start from Backlog, Planning, or Failed");
+      if (state.phase !== "backlog" && state.phase !== "planning" && state.phase !== "failed" && !(state.phase === "blocked" && state.blockedCategory !== "human_decision")) throw new Error("Planning can only start from Backlog, Planning, Failed, or an operator-correctable blocked state");
     },
   });
+  setHandler(resolveDecisionBlockerUpdate, async (rawInput) => {
+    assertPayloadWithinLimit("decision blocker resolution command", rawInput);
+    const command = rawInput;
+    const blockedRevision = state.revision;
+    const resolution = await recordDecisionBlockerResolution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, actorUserId: command.actorUserId, blockerOutputArtifactId: state.blockerArtifactId!, blockerOutputSha256: state.blockerArtifactSha256!, answerArtifactId: command.answerArtifactId, answerSha256: command.answerSha256 });
+    if (state.phase !== "blocked" || state.revision !== blockedRevision) return state;
+    const next = IssueWorkflowStateSchema.parse({ ...state, revision: blockedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead decision resolution", lastEventId: `${state.workflowId}:${blockedRevision + 1}`, blockerResolutionId: resolution.resolutionId, leadResumeInstructionArtifactId: command.answerArtifactId, leadResumeInstructionSha256: command.answerSha256 });
+    state = next;
+    if (!patched(decisionResolutionProjectionPatch)) await projectIssueState(state);
+    if (state.phase !== "planning" || state.revision !== next.revision) return state;
+    let leadResult: LeadPlanningResult;
+    try {
+      const scope = new CancellationScope();
+      planningScope = scope;
+      planningPromise = scope.run(() => runLeadPlanning({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, imageArtifactIds: validatedInput.imageArtifactIds, roleProfiles: validatedInput.roleProfiles, revision: next.revision, resume: { leadSessionRef: next.leadSessionRef!, reason: "decision_resolution", instructionArtifactId: command.answerArtifactId, instructionSha256: command.answerSha256 } }));
+      leadResult = await planningPromise;
+      planningPromise = undefined;
+      planningScope = undefined;
+    } catch (error) {
+      planningPromise = undefined;
+      planningScope = undefined;
+      const failure = permanentActivityFailure(error);
+      if (!failure) throw error;
+      if (currentState().phase === "cancelled") return currentState();
+      const blockedCategory = failureBlockCategory(failure.code);
+      state = IssueWorkflowStateSchema.parse({ ...next, phase: blockedCategory ? "blocked" : "failed", revision: next.revision + 1, owner: "human", allowedCommands: blockedCategory ? ["start_planning", "cancel_issue"] : ["resolve_decision_blocker", "cancel_issue"], pendingAction: failure.summary, lastEventId: `${state.workflowId}:${next.revision + 1}`, ...(blockedCategory ? { blockedCategory, blockedResumePhase: "planning" as const } : {}) });
+      await projectIssueState(state);
+      return state;
+    }
+    if (state.revision !== next.revision || state.phase !== "planning") return state;
+    state = patched(leadResultRoutingPatch) ? applyLeadResult(next, leadResult) : applyLegacyLeadResult(next, leadResult);
+    if (state.phase !== "blocked") {
+      state = state.planMaterial
+        ? IssueWorkflowStateSchema.parse({ ...state, phase: "approval", owner: "human", allowedCommands: ["approve_plan", "reject_plan", "cancel_issue", ...(validatedInput.supplementalReview ? ["request_supplemental_review" as const] : [])], pendingAction: "Approve final plan" })
+        : IssueWorkflowStateSchema.parse({ ...state, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development" });
+    }
+    await projectIssueState(state);
+    return state;
+  }, { validator(rawInput) {
+    const command = rawInput;
+    if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
+    if (state.phase !== "blocked" || state.blockedCategory !== "human_decision" || !state.allowedCommands.includes("resolve_decision_blocker")) throw new Error("Decision blocker resolution is not available in the current phase");
+    if (!state.leadSessionRef || !state.blockerArtifactId || !state.blockerArtifactSha256) throw new Error("The Lead blocker evidence is unavailable");
+  }});
   const validatePlanCommand = (rawInput: PlanCommandInput): PlanCommandInput => {
     const command = PlanCommandInputSchema.parse(rawInput);
     if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
@@ -805,7 +974,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const leadResult = await runLeadPlanning({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, imageArtifactIds: validatedInput.imageArtifactIds, roleProfiles: validatedInput.roleProfiles, revision: state.revision, ...(leadSessionRef ? { leadSessionRef } : {}), ...(revisionNote ? { revisionNoteArtifactId: revisionNote.artifactId, revisionNoteSha256: revisionNote.sha256 } : {}), ...(memberResponse ? { memberResponseArtifactId: memberResponse.artifactId, memberResponseSha256: memberResponse.sha256 } : {}) });
     const acceptedRevision = state.revision + 1;
     const route = routeLeadResult({ kind: leadResult.leadOutputKind, material: leadResult.material });
-    state = IssueWorkflowStateSchema.parse({ ...state, ...leadResult, revision: acceptedRevision, phase: route.phase, owner: route.owner, allowedCommands: route.phase === "approval" && validatedInput.supplementalReview ? [...route.allowedCommands, "request_supplemental_review"] : route.allowedCommands, pendingAction: route.pendingAction, lastEventId: `${state.workflowId}:${acceptedRevision}`, planRevision: state.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, supplementalReviewUsed: false, originalPlanSubject: leadResult.planSubject ?? null, finalPlanSubject: leadResult.planSubject ?? null, materialityEvidence: leadResult.materialityEvidence ?? null, planBlockerSubject: leadResult.blockerSubject ?? null });
+    const exactSubject = Boolean(leadResult.planSubject);
+    state = IssueWorkflowStateSchema.parse({ ...state, ...leadResult, revision: acceptedRevision, phase: route.phase, owner: route.owner, allowedCommands: route.phase === "approval" ? approvalCommands(exactSubject, validatedInput.supplementalReview) : route.phase === "ready_for_development" && !exactSubject ? addRevisionCommand(route.allowedCommands as IssueCommand[]) : route.allowedCommands, pendingAction: route.pendingAction, blocker: route.phase === "approval" ? approvalBlocker(leadResult, exactSubject, validatedInput.supplementalReview) : null, lastEventId: `${state.workflowId}:${acceptedRevision}`, planRevision: state.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, supplementalReviewUsed: false, originalPlanSubject: leadResult.planSubject ?? null, finalPlanSubject: leadResult.planSubject ?? null, materialityEvidence: leadResult.materialityEvidence ?? null, planBlockerSubject: leadResult.blockerSubject ?? null });
     if (isolatedDeveloperExecutionEnabled && route.phase === "ready_for_development" && state.finalPlanSubject) {
       const authorization = await authorizeFinalPlan({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, workflowId: validatedInput.workflowId, planRevision: state.finalPlanSubject.outputRevision, planArtifactId: state.finalPlanSubject.artifactId, authorizationKind: "routine_auto" });
       state = IssueWorkflowStateSchema.parse({ ...state, planRevision: authorization.planRevision, planAuthorizationId: authorization.authorizationId, planArtifactSha256: authorization.planArtifactSha256, planAuthorizationKind: authorization.authorizationKind, planAuthorizedAt: authorization.authorizedAt });
@@ -832,7 +1002,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       (result) => result.leadExecutionId,
     );
     const route = routeLeadResult({ kind: consolidated.leadOutputKind, material: consolidated.material });
-    state = IssueWorkflowStateSchema.parse({ ...state, ...consolidated, revision: state.revision + 1, phase: route.phase, owner: route.owner, allowedCommands: route.phase === "approval" ? ["approve_plan", "request_plan_revision", "cancel_issue"] : route.allowedCommands, pendingAction: route.pendingAction, lastEventId: `${state.workflowId}:${state.revision + 1}`, finalPlanSubject: consolidated.planSubject ?? null, originalPlanSubject: state.originalPlanSubject, materialityEvidence: consolidated.materialityEvidence ?? null, planBlockerSubject: consolidated.blockerSubject ?? null, planMaterial: consolidated.material, materialCategories: consolidated.materialCategories, planRevision: state.planRevision ?? state.revision });
+    const exactSubject = Boolean(consolidated.planSubject);
+    state = IssueWorkflowStateSchema.parse({ ...state, ...consolidated, revision: state.revision + 1, phase: route.phase, owner: route.owner, allowedCommands: route.phase === "approval" ? approvalCommands(exactSubject, false) : route.phase === "ready_for_development" && !exactSubject ? addRevisionCommand(route.allowedCommands as IssueCommand[]) : route.allowedCommands, pendingAction: route.pendingAction, blocker: route.phase === "approval" ? approvalBlocker(consolidated, exactSubject, false) : null, lastEventId: `${state.workflowId}:${state.revision + 1}`, finalPlanSubject: consolidated.planSubject ?? null, originalPlanSubject: state.originalPlanSubject, materialityEvidence: consolidated.materialityEvidence ?? null, planBlockerSubject: consolidated.blockerSubject ?? null, planMaterial: consolidated.material, materialCategories: consolidated.materialCategories, planRevision: state.planRevision ?? state.revision });
     if (isolatedDeveloperExecutionEnabled && route.phase === "ready_for_development" && state.finalPlanSubject) {
       const authorization = await authorizeFinalPlan({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, workflowId: validatedInput.workflowId, planRevision: state.finalPlanSubject.outputRevision, planArtifactId: state.finalPlanSubject.artifactId, authorizationKind: "routine_auto" });
       state = IssueWorkflowStateSchema.parse({ ...state, planRevision: authorization.planRevision, planAuthorizationId: authorization.authorizationId, planArtifactSha256: authorization.planArtifactSha256, planAuthorizationKind: authorization.authorizationKind, planAuthorizedAt: authorization.authorizedAt });
@@ -849,7 +1020,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(approvePlanUpdate, async (rawInput) => {
     assertPayloadWithinLimit("plan approval command", rawInput);
     const command = validatePlanCommand(rawInput);
-    if (exactPlanAuthorityEnabled && state.planMaterial && (!state.finalPlanSubject || !state.materialityEvidence || !command.subject || !("plan" in command.subject) || !samePlanSubject(command.subject.plan, state.finalPlanSubject) || JSON.stringify(command.subject.materiality) !== JSON.stringify(state.materialityEvidence) || command.subject.expectedWorkflowRevision !== command.expectedRevision)) throw new Error("The exact final plan subject and materiality evidence are required");
+    if (exactPlanAuthorityEnabled && state.planMaterial && (state.finalPlanSubject || state.materialityEvidence) && (!state.finalPlanSubject || !state.materialityEvidence || !command.subject || !("plan" in command.subject) || !samePlanSubject(command.subject.plan, state.finalPlanSubject) || JSON.stringify(command.subject.materiality) !== JSON.stringify(state.materialityEvidence) || command.subject.expectedWorkflowRevision !== command.expectedRevision)) throw new Error("The exact final plan subject and materiality evidence are required");
     const decisionSubject = command.subject && "plan" in command.subject ? command.subject : undefined;
     if (decisionInFlight) throw new Error("A plan decision is already being processed");
     decisionInFlight = true;
@@ -967,7 +1138,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (state.planMaterial === null || state.planMaterial === undefined || !state.leadOutputArtifactId || !state.leadSessionRef) throw new Error("A validated Lead plan is required before development");
     if (isolatedDeveloperExecutionEnabled && state.finalPlanSubject && (!state.planAuthorizationId || !state.planArtifactSha256 || !state.planAuthorizationKind || !state.planAuthorizedAt)) throw new Error("An exact authorized final plan is required before development");
     if (isolatedDeveloperExecutionEnabled && state.finalPlanSubject && (command.planAuthorizationId !== state.planAuthorizationId || command.planArtifactSha256 !== state.planArtifactSha256)) throw new Error("The start command does not match the authorized final plan");
-    if (exactPlanAuthorityEnabled && state.planMaterial && (!state.finalPlanSubject || !state.materialityEvidence || !state.planDecisionReceipt || state.planDecisionReceipt.decision !== "approve")) throw new Error("An approved exact final Lead plan is required before development");
+    if (exactPlanAuthorityEnabled && state.planMaterial && (state.finalPlanSubject || state.materialityEvidence) && (!state.finalPlanSubject || !state.materialityEvidence || !state.planDecisionReceipt || state.planDecisionReceipt.decision !== "approve")) throw new Error("An approved exact final Lead plan is required before development");
   } });
   setHandler(retryDevelopmentUpdate, async (rawInput) => {
     assertPayloadWithinLimit("retry development command", rawInput);
@@ -1369,7 +1540,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         const plan = await acquireExternalTurn<MergeConflictPlanActivityResult>(
           { operation: "merge_conflict_plan", role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: state.leadSessionRef, worktreePath: state.worktreePath },
           (capacityRequestId) => {
-            const legacyPlanInput = { taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, branchName: state.branchName!, priorHead: state.forwardMergePriorHead!, targetBaseSha: state.forwardMergeTargetBaseSha!, ...(state.mergeConflictEvidence ? { conflictEvidence: state.mergeConflictEvidence } : { conflictFiles: state.forwardMergeConflictFiles ?? [], conflictDiff: state.forwardMergeConflictDiff ?? "" }), ...(state.forwardMergeId ? { forwardMergeId: state.forwardMergeId } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) } as unknown as Parameters<typeof planMergeConflict>[0];
+            const legacyPlanInput = { taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, branchName: state.branchName!, priorHead: state.forwardMergePriorHead!, targetBaseSha: state.forwardMergeTargetBaseSha!, ...(state.mergeConflictEvidence ? { conflictEvidence: state.mergeConflictEvidence } : { conflictFiles: state.forwardMergeConflictFiles ?? [], conflictDiff: state.forwardMergeConflictDiff ?? "" }), ...(state.forwardMergeId ? { forwardMergeId: state.forwardMergeId } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) } as unknown as Parameters<typeof planMergeConflict>[0];
             return planMergeConflict(legacyPlanInput);
           },
           (result) => result.leadExecutionId,
@@ -1644,6 +1815,12 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (initialProjectionBarrierEnabled) await initialProjection;
     const command = PlanCommandInputSchema.parse(rawInput);
     if (command.expectedRevision !== state.revision || ["done", "cancelled"].includes(state.phase)) throw new Error("Issue cancellation is not available in the current phase");
+    if (state.phase === "planning" && planningScope) {
+      planningScope.cancel();
+      await planningPromise?.catch(() => undefined);
+      planningPromise = undefined;
+      planningScope = undefined;
+    }
     let ownershipAmbiguous = false;
     if (state.developerExecutionId && ["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling", "ownership_ambiguous"].includes(state.developerRecoveryStatus ?? "")) {
       const cancellation = await cancelDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, executionId: state.developerExecutionId });
@@ -1763,9 +1940,15 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: addRevisionCommand(cancelled || interrupted ? ["retry_development", "cancel_issue"] : ambiguous ? ["verify_developer_ownership", "cancel_issue"] : ["retry_development", "cancel_issue"]), pendingAction: cancelled ? "Developer turn cancelled; preserved work is available for retry" : interrupted ? result.summary : ambiguous ? result.summary : "Developer completed before cancellation; retry is disabled until the result is reconciled", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerOutcome: null, ...recoveryFields(cancelled ? "cancelled" : interrupted ? "interrupted" : ambiguous ? "ownership_ambiguous" : "result_pending_claim", "reasonCode" in result ? result.reasonCode : null, cancelled ? "Developer termination was confirmed; the worktree was preserved." : "summary" in result ? result.summary : "The Developer result won the cancellation race.", state.developerLastHeartbeatAt ?? null), activeOperation: null });
       if (shouldContinueAsNew(state.revision)) continuationRequested = true;
     });
-    if (["cancelled", "cancelled_confirmed", "interrupted"].includes(result.status) && state.capacity) await settleCancelledCapacity(executionId);
-    if ((result.status === "ownership_ambiguous" || result.status === "termination_failed") && state.capacity) await preserveAmbiguousCapacity();
-    await projectIssueState(state);
+    let capacityStateProjected = false;
+    if (["cancelled", "cancelled_confirmed", "interrupted"].includes(result.status) && state.capacity) {
+      capacityStateProjected = (await settleCancelledCapacity(executionId)) !== "none";
+    }
+    if ((result.status === "ownership_ambiguous" || result.status === "termination_failed") && state.capacity) {
+      await preserveAmbiguousCapacity();
+      capacityStateProjected = true;
+    }
+    if (!capacityStateProjected) await projectIssueState(state);
     void command;
     return state;
   }, { validator(rawInput) {
@@ -1866,7 +2049,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
     state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "planning", owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${state.workflowId}:${state.revision + 1}`, planRevision: null, planMaterial: null, materialCategories: [], supplementalReviewUsed: false, supplementalReviewArtifactId: null, decisionId: null, blocker: null, stateChangedAt: new Date().toISOString() });
     const decision = await recordPlanDecision({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, planRevision: state.revision - 1, actorUserId: command.actorUserId, decision: "reject", note: `${command.note ?? "Member requested an explicit plan revision"}; worktree=${command.worktreeDecision ?? "new"}; exactBase=${command.exactBaseSha ?? "recorded-current-base"}` });
-    state = IssueWorkflowStateSchema.parse({ ...state, decisionId: decision.decisionId, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null });
+    state = IssueWorkflowStateSchema.parse({ ...state, decisionId: decision.decisionId, leadResumeInstructionArtifactId: decision.noteArtifactId ?? null, leadResumeInstructionSha256: decision.noteArtifactSha256 ?? null, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null });
     await projectIssueState(state);
     return state;
   }, { validator(rawInput) {

@@ -7,7 +7,7 @@ type LeadPlanContent = {
   summary: string;
   reproduction: string | null;
   rootCauseAnalysis: string | null;
-  steps: Array<{ number: number; instruction: string; verification: string }>;
+  steps: Array<{ number: number; instruction: string; entryPoint?: string | null; completionCriterion?: string; verification: string }>;
   compatibilityAnalysis: string;
   operationalAnalysis: string;
   verificationStrategy: string;
@@ -89,6 +89,8 @@ export function TaskLeadPlan({
             </AccordionTrigger>
             <AccordionContent>
               <div className="grid gap-1 pl-1 text-[13px] sm:grid-cols-[76px_minmax(0,1fr)]">
+                {step.entryPoint ? <><span className="font-medium text-muted-foreground">Entry</span><p className="whitespace-pre-wrap">{step.entryPoint}</p></> : null}
+                {step.completionCriterion ? <><span className="font-medium text-muted-foreground">Complete</span><p className="whitespace-pre-wrap">{step.completionCriterion}</p></> : null}
                 <span className="font-medium text-muted-foreground">Verify</span>
                 <p className="whitespace-pre-wrap">{step.verification}</p>
               </div>

@@ -1,7 +1,7 @@
 import { execFile, spawn } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { accessSync, constants, realpathSync } from "node:fs";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { basename, delimiter, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
@@ -9,61 +9,29 @@ import { z } from "zod";
 
 import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
+import { AgentFailure } from "./codex-lead-errors.js";
+import { LeadOutputSchema, LeadPlanningActivityInputSchema, type LeadOutput, type LeadPlanningActivityInput, type LeadPlanningResult } from "./codex-lead-contracts.js";
+import { CodexLeadOutputJsonSchema } from "./codex-lead-contracts.js";
+import { FileSessionStore, type SessionStore } from "./codex-session-store.js";
+import { CodexTurnSupervisor, sanitizeCodexLine } from "./codex-turn-supervisor.js";
+import { prepareCodexTurnWrapper, type CodexTurnWrapperRequest, type PreparedCodexTurnWrapper } from "./codex-turn-wrapper.js";
+import { catalogSupportsCodexTurn } from "./codex-turn.js";
 import { ForgeDatabase } from "./database.js";
 import { CapacityManager } from "./capacity.js";
 import { redact } from "./logging.js";
 import { cleanupAgentWrapper, createAgentWrapperManifest, inspectAgentWrapper, launchAgentWrapper, readAgentWrapperManifest } from "./agent-wrapper.js";
-import { PlanMaterialCategorySchema, canonicalMaterialCategories, classifyPlanMateriality, materialitySummary, validateAffectedPaths, validateMaterialityEvidence, type PlanMaterialCategory } from "./plan-governance.js";
+import { classifyPlanMateriality, materialitySummary } from "./plan-governance.js";
 import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./temporal/issue-contracts.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { parseAcceptedProjectRevision } from "./projects.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
-import { DeveloperContextSchema, PlanStepVerificationSchema } from "./developer-contracts.js";
+import { defaultProcessController, type ProcessController, type ProcessInspection } from "./process-manager.js";
 
 const execFileAsync = promisify(execFile);
 
 type MergeConflictPlanInput = MergeConflictPlanActivityInput;
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
-
-export const LeadPlanSchema = z.object({
-  kind: z.literal("plan"),
-  summary: z.string().min(1).max(2_000),
-  reproduction: z.string().max(20_000).nullable(),
-  rootCauseAnalysis: z.string().max(20_000).nullable(),
-  steps: z.array(z.object({ number: z.number().int().positive(), instruction: z.string().min(1).max(4_000), verification: z.string().min(1).max(4_000), verificationCommands: z.array(PlanStepVerificationSchema.shape.commands.element).max(32).default([]) }).strict()).min(1).max(64),
-  compatibilityAnalysis: z.string().min(1).max(20_000),
-  operationalAnalysis: z.string().min(1).max(20_000),
-  verificationStrategy: z.string().min(1).max(20_000),
-  unresolvedTechnicalQuestions: z.array(z.string().max(2_000)).max(32).length(0),
-  materialCategories: z.array(PlanMaterialCategorySchema).max(6),
-  preservedWorktreeCompatibility: z.boolean().nullable().default(null),
-  affectedPaths: z.array(z.string().min(1).max(1_000)).min(1).max(128),
-  materiality: z.array(z.object({ category: PlanMaterialCategorySchema, rationale: z.string().min(1).max(500), evidenceRefs: z.array(z.string().min(1).max(1_000)).min(1).max(8) }).strict()).max(6),
-  developerContext: DeveloperContextSchema.default({ includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: {} }),
-}).strict().superRefine((value, context) => {
-  const numbers = value.steps.map((step) => step.number);
-  if (new Set(numbers).size !== numbers.length || numbers.some((number, index) => number !== index + 1)) context.addIssue({ code: "custom", path: ["steps"], message: "Plan steps must be contiguous and start at 1" });
-  try {
-    const paths = validateAffectedPaths(value.affectedPaths);
-    const declared = value.materiality.length ? value.materiality : value.materialCategories.map((category) => ({ category, rationale: "Lead-declared material category", evidenceRefs: ["step:1"] }));
-    validateMaterialityEvidence({ affectedPaths: paths, categories: declared, stepNumbers: numbers });
-  } catch (error) {
-    context.addIssue({ code: "custom", path: ["materiality"], message: error instanceof Error ? error.message : "Materiality evidence is invalid" });
-  }
-  if (JSON.stringify(canonicalMaterialCategories(value.materialCategories)) !== JSON.stringify(value.materialCategories)) context.addIssue({ code: "custom", path: ["materialCategories"], message: "Material categories must use canonical order" });
-});
-
-export const DecisionBlockerSchema = z.object({
-  kind: z.literal("decision_blocker"),
-  summary: z.string().min(1).max(2_000),
-  evidence: z.string().min(1).max(10_000),
-  owner: z.literal("human"),
-  question: z.string().min(1).max(4_000),
-  nextAction: z.string().min(1).max(4_000),
-});
-
-export const LeadOutputSchema = z.discriminatedUnion("kind", [LeadPlanSchema, DecisionBlockerSchema]);
 const LeadReviewResponseSchema = z.object({
   version: z.literal(1),
   originalPlanRevision: z.number().int().nonnegative(),
@@ -71,6 +39,8 @@ const LeadReviewResponseSchema = z.object({
   reviewResponse: z.string().min(1).max(20_000),
   result: LeadOutputSchema,
 }).strict();
+export { DecisionBlockerSchema, LeadOutputSchema, LeadPlanSchema, LeadPlanningActivityInputSchema } from "./codex-lead-contracts.js";
+export type { DecisionBlocker, LeadOutput, LeadPlan, LeadPlanningActivityInput, LeadPlanningResult, LegacyLeadPlanningResult } from "./codex-lead-contracts.js";
 export const SupplementalReviewSchema = z.object({
   kind: z.literal("review"),
   summary: z.string().min(1).max(2_000),
@@ -86,49 +56,7 @@ const DeliveryRepairLeadOutputSchema = z.object({
   verificationStrategy: z.string().min(1).max(12_000),
   unresolvedTechnicalQuestions: z.array(z.string().max(2_000)).max(16).length(0),
 });
-
-export const LeadPlanningActivityInputSchema = z.object({
-  taskId: durableId,
-  companyId: durableId,
-  workflowId: durableId,
-  projectId: durableId,
-  projectRevisionId: durableId,
-  briefArtifactId: durableId,
-  imageArtifactIds: z.array(durableId).max(32),
-  roleProfiles: z.object({ lead: durableId.optional(), developer: durableId.optional(), reviewer: durableId.optional() }),
-  revision: z.number().int().nonnegative(),
-  revisionRequestId: durableId.optional(),
-  resumeLeadSessionRef: durableId.optional(),
-  capacityRequestId: durableId.optional(),
-  leadSessionRef: durableId.optional(),
-  revisionNoteArtifactId: durableId.optional(),
-  revisionNoteSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  memberResponseArtifactId: durableId.optional(),
-  memberResponseSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-});
-
-export type LeadPlan = z.infer<typeof LeadPlanSchema>;
-export type DecisionBlocker = z.infer<typeof DecisionBlockerSchema>;
-export type LeadOutput = z.infer<typeof LeadOutputSchema>;
 export type SupplementalReview = z.infer<typeof SupplementalReviewSchema>;
-export type LeadPlanningActivityInput = z.infer<typeof LeadPlanningActivityInputSchema>;
-
-export interface LeadPlanningResult {
-  leadSessionRef: string;
-  leadExecutionId: string;
-  leadEvidenceArtifactId: string;
-  leadOutputArtifactId: string;
-  leadOutputKind: "plan" | "decision_blocker";
-  leadSummary: string;
-  materialCategories: PlanMaterialCategory[];
-  material: boolean;
-  preservedWorktreeCompatibility?: boolean | null;
-  planSubject?: import("./plan-governance.js").PlanSubject;
-  materialityEvidence?: import("./plan-governance.js").MaterialityEvidenceSubject;
-  blockerSubject?: import("./plan-governance.js").PlanBlockerSubject;
-  leadReviewResponseArtifactId?: string;
-  leadReviewResponseArtifactSha256?: string;
-}
 
 export interface LeadInvocation {
   command: string;
@@ -137,7 +65,8 @@ export interface LeadInvocation {
   env?: NodeJS.ProcessEnv;
   detached?: boolean;
   durable?: { runtimeRoot: string; executionId: string; pathOverride?: string };
-  onStart: (pid: number, startedAt: string) => Promise<void>;
+  signal?: AbortSignal;
+  onStart: (pid: number, startedAt: string, inspection?: ProcessInspection) => Promise<void>;
   onLine: (line: string) => Promise<void>;
 }
 
@@ -161,45 +90,9 @@ export function resolveAgentCommand(command: string, executablePath = process.en
   }
   return fallback ?? command;
 }
-
-export class AgentFailure extends Error {
-  readonly code: string;
-  readonly nonRetryable: boolean;
-  readonly retryAt: string | undefined;
-  readonly retryAfterMs: number | undefined;
-
-  constructor(code: string, message: string, options: { nonRetryable?: boolean; retryAt?: string; retryAfterMs?: number } = {}) {
-    super(message);
-    this.name = "AgentFailure";
-    this.code = code;
-    this.nonRetryable = options.nonRetryable ?? false;
-    this.retryAt = options.retryAt;
-    this.retryAfterMs = options.retryAfterMs;
-  }
-}
-
-export interface SessionStore {
-  create(rawSessionId: string): Promise<string>;
-  read(sessionRef: string): Promise<string>;
-}
-
-export class FileSessionStore implements SessionStore {
-  constructor(private readonly root: string) {}
-
-  async create(rawSessionId: string): Promise<string> {
-    const sessionRef = `session_${randomBytes(12).toString("hex")}`;
-    await mkdir(join(this.root, "sessions"), { recursive: true, mode: 0o700 });
-    await writeFile(join(this.root, "sessions", `${sessionRef}.json`), JSON.stringify({ sessionId: rawSessionId }), { encoding: "utf8", mode: 0o600, flag: "wx" });
-    return sessionRef;
-  }
-
-  async read(sessionRef: string): Promise<string> {
-    if (!/^session_[a-f0-9]{24}$/.test(sessionRef)) throw new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
-    const parsed = JSON.parse(await readFile(join(this.root, "sessions", `${sessionRef}.json`), "utf8")) as { sessionId?: unknown };
-    if (typeof parsed.sessionId !== "string" || !parsed.sessionId) throw new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
-    return parsed.sessionId;
-  }
-}
+export { AgentFailure } from "./codex-lead-errors.js";
+export { FileSessionStore } from "./codex-session-store.js";
+export type { SessionStore } from "./codex-session-store.js";
 
 function forgeWrapperLauncher(): { command: string; args: string[] } {
   const entry = process.argv[1] ?? "";
@@ -271,6 +164,7 @@ async function runDurableProcess(invocation: LeadInvocation & { durable: NonNull
 
 function defaultProcessRunner(invocation: LeadInvocation): Promise<LeadProcessResult> {
   if (invocation.durable) return runDurableProcess(invocation as LeadInvocation & { durable: NonNullable<LeadInvocation["durable"]> });
+  const turnSupervisor = new CodexTurnSupervisor();
   return new Promise((resolve, reject) => {
     const child = spawn(invocation.command, invocation.args, { cwd: invocation.cwd, env: invocation.env, detached: invocation.detached, stdio: ["ignore", "pipe", "pipe"] });
     const startedAt = new Date().toISOString();
@@ -296,7 +190,33 @@ function defaultProcessRunner(invocation: LeadInvocation): Promise<LeadProcessRe
       reject(new AgentFailure("process-start-failed", "Codex process could not be started"));
       return;
     }
-    hookChain = hookChain.then(() => invocation.onStart(child.pid!, startedAt));
+    let inspection: ProcessInspection | undefined;
+    hookChain = hookChain.then(async () => {
+      inspection = await defaultProcessController.inspect(child.pid!);
+      await invocation.onStart(child.pid!, startedAt, inspection);
+    });
+    if (invocation.signal) {
+      const cancel = async (): Promise<void> => {
+        await hookChain.catch(() => undefined);
+        if (settled) return;
+        const owned = inspection ? {
+          name: "codex-wrapper",
+          pid: child.pid!,
+          command: inspection.command,
+          startedAt,
+          processGroup: inspection.processGroup,
+          startTime: inspection.startTime,
+          executable: inspection.executable,
+          argv: inspection.argv,
+        } : undefined;
+        if (!owned || !await turnSupervisor.cancelOwnedProcess(owned, inspection)) {
+          reject(new AgentFailure("ownership_ambiguous", "Codex wrapper ownership could not be verified"));
+          return;
+        }
+      };
+      if (invocation.signal.aborted) void cancel();
+      else invocation.signal.addEventListener("abort", () => void cancel(), { once: true });
+    }
     child.stdout.on("data", (chunk: Buffer) => {
       buffer += chunk.toString();
       const lines = buffer.split(/\r?\n/);
@@ -321,28 +241,25 @@ function defaultProcessRunner(invocation: LeadInvocation): Promise<LeadProcessRe
 export const runCodexProcess: LeadProcessRunner = defaultProcessRunner;
 
 function safeJsonLine(line: string): string {
-  try {
-    return JSON.stringify(redact(JSON.parse(line))) ?? JSON.stringify({ type: "empty" });
-  } catch {
-    return JSON.stringify({ type: "text", text: redact(line) });
-  }
+  return sanitizeCodexLine(line);
 }
 
-function eventValue(line: string): { type: string | undefined; threadId: string | undefined; itemText: string | undefined } {
+function eventValue(line: string): { type: string | undefined; threadId: string | undefined; sessionRef: string | undefined; itemText: string | undefined } {
   try {
     const event = JSON.parse(line) as Record<string, unknown>;
     const item = event.item as Record<string, unknown> | undefined;
     return {
       type: typeof event.type === "string" ? event.type : undefined,
       threadId: typeof event.thread_id === "string" ? event.thread_id : typeof event.threadId === "string" ? event.threadId : undefined,
+      sessionRef: typeof event.session_ref === "string" ? event.session_ref : typeof event.sessionRef === "string" ? event.sessionRef : undefined,
       itemText: item && item.type === "agent_message" && typeof item.text === "string" ? item.text : undefined,
     };
   } catch {
-    return { type: undefined, threadId: undefined, itemText: undefined };
+    return { type: undefined, threadId: undefined, sessionRef: undefined, itemText: undefined };
   }
 }
 
-function parseLeadOutput(lines: string[]): LeadOutput {
+export function parseLeadOutput(lines: string[]): LeadOutput {
   const messages = lines.flatMap((line) => {
     try {
       const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
@@ -360,7 +277,18 @@ function parseLeadOutput(lines: string[]): LeadOutput {
   } catch {
     throw new AgentFailure("malformed-output", "Codex returned malformed Lead JSON");
   }
-  const result = LeadOutputSchema.safeParse(parsed);
+  const providerObject = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+  // The provider-compatible closed schema requires inactive discriminated
+  // fields to be explicit nulls. Remove only those declared placeholders;
+  // canonical Zod validation still rejects every omitted or malformed active
+  // field and every unknown key.
+  const inactiveKeys = providerObject?.kind === "plan"
+    ? new Set(["category", "evidence", "owner", "question", "nextAction", "resumePhase"])
+    : providerObject?.kind === "decision_blocker"
+      ? new Set(["reproduction", "rootCauseAnalysis", "steps", "compatibilityAnalysis", "operationalAnalysis", "verificationStrategy", "unresolvedTechnicalQuestions", "materialCategories"])
+      : undefined;
+  const canonicalInput = providerObject ? Object.fromEntries(Object.entries(providerObject).filter(([key, value]) => value !== null || !inactiveKeys?.has(key))) : parsed;
+  const result = LeadOutputSchema.safeParse(canonicalInput);
   if (!result.success) throw new AgentFailure("invalid-output-schema", "Codex returned a Lead result that does not satisfy the required schema");
   return result.data;
 }
@@ -603,6 +531,16 @@ async function taskScopedPath(root: string, candidate: string): Promise<string> 
   return absoluteCandidate;
 }
 
+async function processStartIdentity(pid: number, fallback: string): Promise<string> {
+  try {
+    const result = await execFileAsync("ps", ["-p", String(pid), "-o", "lstart="], { maxBuffer: 4 * 1024 });
+    const value = result.stdout.trim();
+    return value ? `${pid}:${value}` : `${pid}:${fallback}`;
+  } catch {
+    return `${pid}:${fallback}`;
+  }
+}
+
 function pinnedRepositoryPath(normalizedJson: string): string {
   try {
     const parsed = JSON.parse(normalizedJson) as { repositoryPath?: unknown };
@@ -620,6 +558,24 @@ interface PlanningRow {
   brief_sha256: string;
 }
 
+interface ActiveLeadExecution {
+  id: string;
+  status: string;
+  attempt: number;
+  session_ref: string | null;
+  heartbeat_at: string | null;
+  wrapper_pid: number | null;
+  wrapper_process_group: number | null;
+  wrapper_start_identity: string | null;
+  process_pid: number | null;
+  process_start_identity: string | null;
+  spool_relative_path: string | null;
+  status_relative_path: string | null;
+  resolved_model: string | null;
+  resolved_reasoning_level: string | null;
+  resolved_service_priority: string | null;
+}
+
 interface ProfileSettings {
   id: string;
   name: string;
@@ -635,6 +591,7 @@ interface ImageRow {
   storage_path: string;
   sha256: string;
   filename: string;
+  mime_type: string;
 }
 
 interface DeliveryReviewContext {
@@ -655,6 +612,7 @@ export interface AgentServiceOptions {
   command?: string;
   processRunner?: LeadProcessRunner;
   sessionStore?: SessionStore;
+  processController?: ProcessController;
   now?: () => Date;
 }
 
@@ -663,6 +621,7 @@ export class AgentService {
   private readonly command: string;
   private readonly processRunner: LeadProcessRunner;
   private readonly sessionStore: SessionStore;
+  private readonly processController: ProcessController;
   private readonly now: () => Date;
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: AgentServiceOptions = {}) {
@@ -670,6 +629,7 @@ export class AgentService {
     this.command = resolveAgentCommand(options.command ?? process.env.FORGE_CODEX_COMMAND ?? "codex");
     this.processRunner = options.processRunner ?? defaultProcessRunner;
     this.sessionStore = options.sessionStore ?? new FileSessionStore(config.runtimeRoot);
+    this.processController = options.processController ?? defaultProcessController;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -782,13 +742,17 @@ export class AgentService {
     if (terminal) await cleanupAgentWrapper(this.config.runtimeRoot, executionId).catch(() => undefined);
   }
 
-  async runLeadPlanning(rawInput: LeadPlanningActivityInput): Promise<LeadPlanningResult> {
+  async runLeadPlanning(rawInput: LeadPlanningActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<LeadPlanningResult> {
     const input = LeadPlanningActivityInputSchema.parse(rawInput);
     const row = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256
       FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId, input.projectRevisionId, input.briefArtifactId) as PlanningRow | undefined);
     if (!row) throw new AgentFailure("scoped-input-missing", "Lead planning evidence is unavailable");
+    const completed = await this.completedPlanningResult(input);
+    if (completed) return completed;
+    const active = this.database.authQuery((db) => db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at, wrapper_pid, wrapper_process_group, wrapper_start_identity, process_pid, process_start_identity, spool_relative_path, status_relative_path, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND role = 'lead' AND turn_key = ? AND status IN ('starting', 'running', 'cancelling') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`) as (ActiveLeadExecution & { profile_id: string | null }) | undefined);
+    const turnSupervisor = new CodexTurnSupervisor(this.processController);
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
     const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
     const revisionNote = input.revisionNoteArtifactId && input.revisionNoteSha256
@@ -804,7 +768,7 @@ export class AgentService {
     const images = this.database.authQuery((db) => {
       if (!input.imageArtifactIds.length) return [] as ImageRow[];
       const placeholders = input.imageArtifactIds.map(() => "?").join(",");
-      const rows = db.prepare(`SELECT id, storage_path, sha256, filename FROM forge_artifacts WHERE company_id = ? AND kind = 'task-image' AND id IN (${placeholders})`).all(input.companyId, ...input.imageArtifactIds) as Array<ImageRow & { id: string }>;
+      const rows = db.prepare(`SELECT id, storage_path, sha256, filename, mime_type FROM forge_artifacts WHERE company_id = ? AND kind = 'task-image' AND id IN (${placeholders})`).all(input.companyId, ...input.imageArtifactIds) as Array<ImageRow & { id: string }>;
       const byId = new Map(rows.map((row) => [row.id, row]));
       return input.imageArtifactIds.flatMap((imageId) => { const row = byId.get(imageId); return row ? [row] : []; });
     });
@@ -823,16 +787,25 @@ export class AgentService {
       if (existing) profileSettings[index] = { ...existing, model: pinnedLead.model, provider: pinnedLead.provider, reasoningLevel: pinnedLead.reasoningLevel, servicePriority: pinnedLead.servicePriority, capacity: pinnedLead.capacity };
     }
     if (!input.roleProfiles.lead) throw new AgentFailure("profile-unavailable", "Lead planning requires a configured Lead profile");
-    const leadProfile = profileSettings.find((profile) => profile.id === input.roleProfiles.lead);
+    const resumeSessionRef = input.resume?.leadSessionRef ?? input.leadSessionRef ?? input.resumeLeadSessionRef;
+    const pinned = resumeSessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND company_id = ? AND role = 'lead' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(resumeSessionRef, input.companyId) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
+    const persisted = pinned ?? (active?.resolved_model && active.resolved_reasoning_level && active.resolved_service_priority ? { profileId: active.profile_id, model: active.resolved_model, reasoningLevel: active.resolved_reasoning_level, servicePriority: active.resolved_service_priority } : undefined);
+    let leadProfile = persisted
+      ? { id: persisted.profileId ?? input.roleProfiles.lead ?? "pinned-lead", name: "Pinned Lead", provider: "codex", model: persisted.model, reasoningLevel: persisted.reasoningLevel, servicePriority: persisted.servicePriority, capacity: 0 }
+      : profileSettings.find((profile) => profile.id === input.roleProfiles.lead);
     if (!leadProfile || leadProfile.provider !== "codex") throw new AgentFailure("profile-unavailable", "The configured Lead profile is unavailable");
     const revisionRequest = input.revisionRequestId ? this.database.authQuery((db) => db.prepare(`SELECT r.disposition, r.worktree_path AS worktreePath, r.branch_name AS branchName, r.base_sha AS baseSha, r.head_sha AS headSha, r.tree_sha AS treeSha, r.exact_base_sha AS exactBaseSha, a.storage_path AS reasonPath, a.sha256 AS reasonSha
       FROM forge_plan_revision_requests r JOIN forge_artifacts a ON a.id = r.reason_artifact_id AND a.company_id = r.company_id AND a.kind = 'plan-revision-reason'
       WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { disposition: "reuse" | "new"; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null; reasonPath: string; reasonSha: string } | undefined) : undefined;
     if (input.revisionRequestId && !revisionRequest) throw new AgentFailure("revision-request-missing", "The plan revision request is unavailable");
     const revisionContext = revisionRequest ? { ...revisionRequest, reason: (await this.artifacts.read({ companyId: input.companyId, storagePath: revisionRequest.reasonPath, sha256: revisionRequest.reasonSha })).toString("utf8") } : undefined;
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(leadProfile.model) || !["low", "medium", "high"].includes(leadProfile.reasoningLevel) || !["standard", "priority"].includes(leadProfile.servicePriority)) {
+      throw new AgentFailure("scope_configuration", "The configured Lead profile has invalid turn settings", { nonRetryable: true });
+    }
+    await this.assertCodexTurnCompatibility(leadProfile);
     const repositoryEvidence = await this.repositoryEvidence(repositoryPath);
     const repositoryEvidenceArtifact = await this.artifacts.put(input.companyId, "repository-evidence", { filename: `${input.taskId}-${input.revision}.json`, mimeType: "application/json", bytes: Buffer.from(repositoryEvidence, "utf8") });
-    const manifest = {
+    const planningManifest = {
       version: 1,
       companyId: input.companyId,
       issueId: input.taskId,
@@ -844,36 +817,52 @@ export class AgentService {
       profiles: { lead: leadProfile, reviewer: input.roleProfiles.reviewer ? profileSettings.find((profile) => profile.id === input.roleProfiles.reviewer) ?? null : null },
       repositoryEvidence: { artifactId: repositoryEvidenceArtifact.id, sha256: repositoryEvidenceArtifact.sha256 },
     };
-    const manifestArtifact = await this.artifacts.put(input.companyId, "planning-evidence-manifest", { filename: `${input.taskId}-${input.revision}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(manifest), "utf8") });
+    const manifestArtifact = await this.artifacts.put(input.companyId, "planning-evidence-manifest", { filename: `${input.taskId}-${input.revision}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(planningManifest), "utf8") });
     this.database.authTransaction((db) => {
       for (const artifact of [repositoryEvidenceArtifact, manifestArtifact]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
     });
     let executionId = `agent_${randomBytes(12).toString("hex")}`;
-    let sessionRef: string | undefined = input.leadSessionRef;
-    let rawSessionId: string | undefined = input.leadSessionRef ? await this.sessionStore.read(input.leadSessionRef) : undefined;
+    let sessionRef: string | undefined = resumeSessionRef;
+    let rawSessionId: string | undefined = resumeSessionRef ? await this.sessionStore.read(resumeSessionRef) : undefined;
+    let resumeInstruction = "";
+    if (input.resume) {
+      const instruction = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND sha256 = ?").get(input.resume!.instructionArtifactId, input.companyId, input.resume!.instructionSha256) as { storage_path: string; sha256: string } | undefined);
+      if (!instruction) throw new AgentFailure("scoped-input-missing", "The Lead resume instruction is unavailable");
+      resumeInstruction = (await this.artifacts.read({ companyId: input.companyId, storagePath: instruction.storage_path, sha256: instruction.sha256 })).toString("utf8");
+    }
     const startedAt = this.now().toISOString();
+    if (!sessionRef && !rawSessionId && this.sessionStore.reserve) sessionRef = await this.sessionStore.reserve();
     try {
-      const active = this.database.authQuery((db) => input.capacityRequestId
-        ? db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at, capacity_request_id FROM forge_agent_executions WHERE capacity_request_id = ? AND role = 'lead' AND status IN ('starting', 'running') ORDER BY started_at DESC LIMIT 1").get(input.capacityRequestId) as { id: string; status: string; attempt: number; session_ref: string | null; heartbeat_at: string | null; capacity_request_id: string } | undefined
-        : db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at, capacity_request_id FROM forge_agent_executions WHERE task_id = ? AND role = 'lead' AND status IN ('starting', 'running') ORDER BY started_at DESC LIMIT 1").get(input.taskId) as { id: string; status: string; attempt: number; session_ref: string | null; heartbeat_at: string | null; capacity_request_id: string | null } | undefined);
       if (active) {
-        const heartbeatAge = active.heartbeat_at ? Date.now() - Date.parse(active.heartbeat_at) : Number.POSITIVE_INFINITY;
-        if (!input.capacityRequestId || active.capacity_request_id !== input.capacityRequestId) {
-          if (heartbeatAge < 30_000) throw new AgentFailure("active-lease", "A Lead execution is already active for this issue");
+        try {
+          const storedStatus = JSON.parse(await readFile(this.runtimePath(active.status_relative_path), "utf8")) as { state?: string };
+          if (storedStatus.state === "completed") return this.attachPlanningResult(input, active, runtime.signal);
+        } catch (error) {
+          if (error instanceof AgentFailure) throw error;
         }
+        const wrapper = active.wrapper_pid && active.wrapper_process_group && active.wrapper_start_identity ? await this.processController.inspect(active.wrapper_pid) : undefined;
+        const wrapperAlive = Boolean(wrapper && wrapper.processGroup === active.wrapper_process_group && `${active.wrapper_pid}:${wrapper.startTime}` === active.wrapper_start_identity);
+        const child = active.process_pid ? await this.processController.inspect(active.process_pid) : undefined;
+        const childAlive = Boolean(child && active.process_start_identity && `${active.process_pid}:${child.startTime}` === active.process_start_identity && child.processGroup === active.wrapper_process_group);
+        const groupAlive = active.wrapper_process_group ? await this.processController.isProcessGroupAlive?.(active.wrapper_process_group) : false;
+        if (wrapperAlive) return this.attachPlanningResult(input, active, runtime.signal, wrapper);
+        if (childAlive && child) {
+          const childOwnership = { name: "codex-child", pid: child.pid, command: child.command, startedAt, processGroup: child.processGroup, startTime: child.startTime, executable: child.executable, argv: child.argv };
+          if (!await turnSupervisor.cancelOwnedProcess(childOwnership, child)) throw new AgentFailure("ownership_ambiguous", "The stale Lead child process could not be safely terminated");
+        } else if (groupAlive) {
+          throw new AgentFailure("ownership_ambiguous", "The stale Lead process group could not be safely identified");
+        }
+        if (!active.wrapper_pid || !active.wrapper_process_group || !active.wrapper_start_identity || !active.resolved_model || !active.resolved_reasoning_level || !active.resolved_service_priority) throw new AgentFailure("ownership_ambiguous", "The stale Lead execution has incomplete process ownership or pinned settings");
         executionId = active.id;
         sessionRef = active.session_ref ?? undefined;
         rawSessionId = sessionRef ? await this.sessionStore.read(sessionRef) : undefined;
-        if (!input.capacityRequestId || active.capacity_request_id !== input.capacityRequestId) this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'starting', attempt = ?, heartbeat_at = ?, finished_at = NULL, failure_code = NULL, failure_summary = NULL WHERE id = ?").run(active.attempt + 1, startedAt, executionId));
-      } else if (input.resumeLeadSessionRef) {
-        const prior = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND role = 'lead' AND session_ref = ? AND status = 'completed' ORDER BY finished_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.resumeLeadSessionRef) as { id: string } | undefined);
-        if (!prior) throw new AgentFailure("lead-session-ownership", "The prior Lead session cannot be resumed for this issue");
-        rawSessionId = await this.sessionStore.read(input.resumeLeadSessionRef);
-        sessionRef = input.resumeLeadSessionRef;
-        this.database.authTransaction((db) => db.prepare(`INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.resumeLeadSessionRef, startedAt));
+        leadProfile.model = active.resolved_model;
+        leadProfile.reasoningLevel = active.resolved_reasoning_level;
+        leadProfile.servicePriority = active.resolved_service_priority;
+        this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'starting', attempt = ?, heartbeat_at = ?, finished_at = NULL, failure_code = NULL, failure_summary = NULL, cancellation_requested_at = NULL, cancelled_at = NULL WHERE id = ?").run(active.attempt + 1, startedAt, executionId));
       } else {
         this.database.authTransaction((db) => {
-          db.prepare(`INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?)`).run(executionId, input.taskId, input.companyId, input.workflowId, startedAt);
+          db.prepare(`INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?, 'planning', ?, ?, ?, ?, ?, ?, 0)`).run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`, input.revision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, sessionRef ?? null, startedAt);
           this.bindCapacityInTransaction(db, input, executionId, sessionRef);
         });
       }
@@ -890,39 +879,61 @@ export class AgentService {
     const evidenceLines: string[] = [];
     let evidenceBytes = 0;
     let lastFailure: AgentFailure | undefined;
+    const schemaRoot = join(this.config.runtimeRoot, "agent-turns", executionId);
+    const schemaPath = join(schemaRoot, "lead-output.schema.json");
+    await mkdir(schemaRoot, { recursive: true, mode: 0o700 });
+    await writeFile(schemaPath, JSON.stringify(CodexLeadOutputJsonSchema), { encoding: "utf8", mode: 0o600 });
+    await chmod(schemaPath, 0o600);
+    const executionRepositoryEvidenceArtifact = await this.artifacts.put(input.companyId, "agent-evidence", { filename: `${executionId}-repository.json`, mimeType: "application/json", bytes: Buffer.from(repositoryEvidence, "utf8") });
+    const revisionIdentity = JSON.parse(row.normalized_json) as Record<string, unknown>;
+    const inputManifestArtifact = await this.artifacts.put(input.companyId, "lead-input-manifest", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ companyId: input.companyId, taskId: input.taskId, projectId: input.projectId, workflowId: input.workflowId, briefArtifactId: input.briefArtifactId, briefSha256: row.brief_sha256, imageArtifacts: input.imageArtifactIds.map((id) => { const image = images.find((candidate) => candidate.id === id); return image ? { artifactId: id, sha256: image.sha256, mimeType: image.mime_type, filename: image.filename } : { artifactId: id }; }), projectRevisionId: input.projectRevisionId, normalizedRevisionSha256: createHash("sha256").update(row.normalized_json).digest("hex"), repositoryEvidenceArtifactId: executionRepositoryEvidenceArtifact.id, repositoryEvidenceSha256: executionRepositoryEvidenceArtifact.sha256, repository: { repository: revisionIdentity.repository, baseBranch: revisionIdentity.baseBranch, targetBranch: revisionIdentity.targetBranch, baseSha: revisionIdentity.baseSha, targetSha: revisionIdentity.targetSha }, leadProfile: { id: leadProfile.id, provider: leadProfile.provider, model: leadProfile.model, reasoningLevel: leadProfile.reasoningLevel, servicePriority: leadProfile.servicePriority }, ...(sessionRef ? { leadSessionRef: sessionRef } : {}), ...(input.resume ? { instructionArtifactId: input.resume.instructionArtifactId, instructionSha256: input.resume.instructionSha256, resumeReason: input.resume.reason } : {}) }, null, 2), "utf8") });
+    this.database.authTransaction((db) => {
+      for (const artifact of [executionRepositoryEvidenceArtifact, inputManifestArtifact]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+      db.prepare("UPDATE forge_agent_executions SET session_ref = ? WHERE id = ?").run(sessionRef ?? null, executionId);
+    });
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const prompt = attempt === 0 ? revisionNoteText ? this.revisionPrompt(revisionNoteText) : memberResponseText ? this.revisionPrompt(`Human blocker answer:\n${memberResponseText}`) : this.initialPrompt(row.title, brief, row.normalized_json, profileSettings, repositoryEvidence, revisionContext) : this.correctionPrompt();
+        const prompt = attempt === 0
+          ? `${revisionNoteText ? this.revisionPrompt(revisionNoteText) : memberResponseText ? this.revisionPrompt(`Human blocker answer:\n${memberResponseText}`) : this.initialPrompt(row.title, brief, row.normalized_json, profileSettings, repositoryEvidence, revisionContext)}${resumeInstruction ? `\n\nMember instruction for this ${input.resume?.reason ?? "revision"}:\n${resumeInstruction}` : ""}`
+          : this.correctionPrompt();
         const imagePaths = images.map((image) => resolve(this.config.artifactRoot, image.storage_path));
-        const args = rawSessionId
-          ? ["exec", "resume", ...this.profileArgs(leadProfile), rawSessionId, "--json", "--skip-git-repo-check", ...imagePaths.flatMap((path) => ["--image", path]), prompt]
-          : ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", ...this.profileArgs(leadProfile), ...imagePaths.flatMap((path) => ["--image", path]), prompt];
+        const wrapper = await this.prepareTurnWrapper(executionId, { model: leadProfile.model, reasoningLevel: leadProfile.reasoningLevel as "low" | "medium" | "high", servicePriority: leadProfile.servicePriority as "standard" | "priority" }, repositoryPath, schemaPath, prompt, { ...(rawSessionId && sessionRef ? { resumeSessionRef: sessionRef } : {}), ...(sessionRef ? { sessionRef } : {}), ...(!rawSessionId && imagePaths.length ? { imagePaths } : {}) });
         const lines: string[] = [];
         await this.databaseHeartbeat(executionId, "running");
-        const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
+        const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
+        const stopCancellationTracking = this.trackCancellation(executionId, runtime.signal);
         const result = await this.processRunner({
-          command: this.command,
-          args,
+          command: wrapper.command,
+          args: wrapper.args,
           cwd: repositoryPath,
-          durable: { runtimeRoot: this.config.runtimeRoot, executionId },
-          onStart: async (pid, processStartedAt) => {
-            await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId));
+          detached: true,
+          ...(runtime.signal ? { signal: runtime.signal } : {}),
+          onStart: async (pid, processStartedAt, inspection) => {
+            await this.recordLeadProcessStart(executionId, pid, processStartedAt, inspection);
           },
           onLine: async (line) => {
-            const sanitized = safeJsonLine(line);
-            evidenceBytes += Buffer.byteLength(sanitized, "utf8") + 1;
+            await this.recordLeadChildStart(executionId, line);
+            const sanitized = turnSupervisor.sanitizeLine(line);
+            evidenceBytes += Buffer.byteLength(line, "utf8") + 1;
             if (evidenceBytes > 6 * 1024 * 1024) throw new AgentFailure("evidence-too-large", "Codex evidence exceeded the local artifact limit");
             evidenceLines.push(sanitized);
             lines.push(line);
             const event = eventValue(line);
-            if (event.threadId && !sessionRef) {
+            if (event.sessionRef) {
+              try { turnSupervisor.assertSessionIdentity(sessionRef, event.sessionRef); } catch { throw new AgentFailure("session_identity_conflict", "Lead session identity changed"); }
+              sessionRef = event.sessionRef;
+              rawSessionId ??= await this.sessionStore.read(sessionRef);
+              await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET session_ref = ?, heartbeat_at = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), executionId));
+            } else if (event.threadId) {
+              try { turnSupervisor.assertSessionIdentity(rawSessionId, event.threadId); } catch { throw new AgentFailure("session_identity_conflict", "Lead session identity changed"); }
               rawSessionId = event.threadId;
-              sessionRef = await this.sessionStore.create(rawSessionId);
+              if (!sessionRef) sessionRef = await this.sessionStore.create(rawSessionId);
+              else if (this.sessionStore.bind) await this.sessionStore.bind(sessionRef, rawSessionId);
               await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET session_ref = ?, heartbeat_at = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), executionId));
             }
-            await this.databaseHeartbeat(executionId, "running");
+            await this.databaseHeartbeat(executionId, "running", evidenceLines.length);
           },
-        }).finally(() => clearInterval(heartbeat));
+        }).finally(() => { clearInterval(heartbeat); stopCancellationTracking(); });
         if (result.exitCode !== 0) {
           lastFailure = agentProcessFailure(result, lines, leadProfile.model);
           break;
@@ -932,27 +943,36 @@ export class AgentService {
           if (!sessionRef || !rawSessionId) throw new AgentFailure("missing-session", "Codex did not return a Lead session reference");
           const artifacts = await this.persistOutput(input, executionId, sessionRef, evidenceLines, output, { id: manifestArtifact.id, sha256: manifestArtifact.sha256 });
           await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), artifacts.evidence.id, executionId));
+          Object.assign(artifacts.result, { leadInputManifestArtifactId: inputManifestArtifact.id, leadInputManifestSha256: inputManifestArtifact.sha256 });
           return artifacts.result;
         } catch (error) {
           lastFailure = error instanceof AgentFailure ? error : new AgentFailure("invalid-output", "Codex Lead output was invalid");
           if (!rawSessionId || attempt === 1) break;
-          // The first Codex child is terminal before correction. Remove only
-          // that durable result so the same ledger execution can launch the
-          // bounded resume turn without overlapping the prior process.
-          await cleanupAgentWrapper(this.config.runtimeRoot, executionId);
+          // The first child is terminal before the bounded correction turn.
         }
       }
       throw lastFailure ?? new AgentFailure("lead-failed", "Codex Lead execution failed");
     } catch (error) {
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("lead-failed", "Codex Lead execution failed");
+      const cancelled = runtime.signal?.aborted === true && !(error instanceof AgentFailure && error.code === "ownership_ambiguous");
+      const failure = cancelled ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("lead-failed", "Codex Lead execution failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       this.database.authQuery((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt));
-      await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId));
+      await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, cancelled_at = ?, evidence_artifact_id = ? WHERE id = ?").run(cancelled ? "cancelled" : "failed", this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, cancelled ? this.now().toISOString() : null, evidence.id, executionId));
       throw failure;
-    } finally { await this.cleanupTerminalWrapper(executionId); }
+    } finally {
+      // Keep the sanitized spool/status pair available for retry
+      // reconciliation and operational evidence. Remove only the prompt,
+      // request, and schema inputs that are no longer needed.
+      await Promise.all([
+        rm(schemaPath, { force: true }),
+        rm(join(schemaRoot, "prompt.txt"), { force: true }),
+        rm(join(schemaRoot, "request.json"), { force: true }),
+      ]);
+      await this.cleanupTerminalWrapper(executionId);
+    }
   }
 
-  async planMergeConflict(rawInput: MergeConflictPlanInput): Promise<MergeConflictPlanActivityResult> {
+  async planMergeConflict(rawInput: MergeConflictPlanActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<MergeConflictPlanActivityResult> {
     const input = rawInput;
     const profile = this.executionProfile(input, undefined);
     if (profile && profile.provider !== "codex") throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for merge-conflict planning");
@@ -980,34 +1000,45 @@ export class AgentService {
     } catch {
       throw new AgentFailure("scoped-input-missing", "The accepted project revision has no valid pinned verification commands");
     }
+    const planId = `merge_plan_${createHash("sha256").update(`${input.workflowId}:${input.priorHead}:${input.targetBaseSha}`).digest("hex").slice(0, 32)}`;
+    const existingPlan = this.database.authQuery((db) => db.prepare("SELECT r.plan_artifact_id AS planArtifactId, r.plan_evidence_artifact_id AS evidenceArtifactId, r.lead_execution_id AS leadExecutionId, r.lead_session_ref AS leadSessionRef, p.storage_path AS planStoragePath, p.sha256 AS planSha256 FROM forge_merge_conflict_resolutions r JOIN forge_artifacts p ON p.id = r.plan_artifact_id WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ? AND r.status = 'planned'").get(planId, input.taskId, input.companyId, input.workflowId) as { planArtifactId: string; evidenceArtifactId: string; leadExecutionId: string; leadSessionRef: string; planStoragePath: string; planSha256: string } | undefined);
+    if (existingPlan) {
+      const output = MergeConflictPlanSchema.parse(JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: existingPlan.planStoragePath, sha256: existingPlan.planSha256 })).toString("utf8")));
+      return { planId, planArtifactId: existingPlan.planArtifactId, evidenceArtifactId: existingPlan.evidenceArtifactId, leadExecutionId: existingPlan.leadExecutionId, leadSessionRef: existingPlan.leadSessionRef, summary: output.summary };
+    }
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
     const [brief, plan] = await Promise.all([
       this.artifacts.read({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
       this.artifacts.read({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
     ]);
     const rawSessionId = await this.sessionStore.read(input.leadSessionRef);
+    const leadProfile = await this.resolveTurnProfile(input.roleProfiles?.lead, input.leadSessionRef, "Lead");
+    const schemaPath = await this.ensureLeadSchema();
     const active = this.activeCapacityExecution(input, "lead");
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     if (!active) this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?, 'merge-conflict-planning', ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:merge-conflict:${input.priorHead}:${input.targetBaseSha}`, input.planRevision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, input.leadSessionRef, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, input.leadSessionRef, worktreePath);
     });
     const evidenceLines: string[] = [];
-    const expectedRawSessionId = rawSessionId;
-    const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
+    const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
+    const stopCancellationTracking = this.trackCancellation(executionId, runtime.signal);
     try {
+      const wrapper = await this.prepareTurnWrapper(executionId, leadProfile, worktreePath, schemaPath, this.mergeConflictPlanPrompt(context.title, brief, plan, input, conflict, pinnedCommands), { ...(rawSessionId ? { resumeSessionRef: input.leadSessionRef } : {}), sessionRef: input.leadSessionRef });
       const result = await this.processRunner({
-        command: this.command,
-        args: ["exec", "resume", ...(profile ? this.profileArgs(profile) : []), rawSessionId, "--json", "--skip-git-repo-check", this.mergeConflictPlanPrompt(context.title, brief, plan, input, conflict, pinnedCommands)],
+        command: wrapper.command,
+        args: wrapper.args,
         cwd: worktreePath,
-        durable: { runtimeRoot: this.config.runtimeRoot, executionId },
-        onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
+        detached: true,
+        ...(runtime.signal ? { signal: runtime.signal } : {}),
+        onStart: async (pid, processStartedAt, inspection) => { await this.recordLeadProcessStart(executionId, pid, processStartedAt, inspection); },
         onLine: async (line) => {
+          await this.recordLeadChildStart(executionId, line);
           const event = eventValue(line);
-          if (event.threadId && event.threadId !== expectedRawSessionId) throw new AgentFailure("session-identity-conflict", "Merge-conflict planning returned a different Lead session identity");
+          if (event.sessionRef && event.sessionRef !== input.leadSessionRef) throw new AgentFailure("session-identity-conflict", "Merge-conflict planning returned a different Lead session identity");
           evidenceLines.push(safeJsonLine(line));
-          await this.databaseHeartbeat(executionId, "running");
+          await this.databaseHeartbeat(executionId, "running", evidenceLines.length);
         },
       });
       if (result.exitCode !== 0) throw agentProcessFailure(result, evidenceLines);
@@ -1019,7 +1050,6 @@ export class AgentService {
       if (missingFiles.length || extraFiles.length || plannedFiles.size !== output.resolutions.length) throw new AgentFailure("incomplete-merge-conflict-plan", "The Lead plan must cover each conflict file exactly once");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const planArtifact = await this.artifacts.put(input.companyId, "merge-conflict-plan", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(output, null, 2), "utf8") });
-      const planId = `merge_plan_${createHash("sha256").update(`${input.workflowId}:${input.priorHead}:${input.targetBaseSha}`).digest("hex").slice(0, 32)}`;
       const now = this.now().toISOString();
       this.database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, planArtifact.id, planArtifact.companyId, planArtifact.kind, planArtifact.filename, planArtifact.mimeType, planArtifact.byteSize, planArtifact.sha256, planArtifact.storagePath, planArtifact.createdAt);
@@ -1028,14 +1058,15 @@ export class AgentService {
       });
       return { planId, planArtifactId: planArtifact.id, evidenceArtifactId: evidence.id, leadExecutionId: executionId, leadSessionRef: input.leadSessionRef, summary: output.summary };
     } catch (error) {
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("merge-conflict-plan-failed", "Codex Lead merge-conflict planning failed");
+      const failure = runtime.signal?.aborted && !(error instanceof AgentFailure && error.code === "ownership_ambiguous") ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("merge-conflict-plan-failed", "Codex Lead merge-conflict planning failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
+      const finalStatus = failure.code === "cancelled" ? "cancelled" : "failed";
       this.database.authTransaction((db) => {
         db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
-        db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId);
+        db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, cancelled_at = ?, evidence_artifact_id = ? WHERE id = ?").run(finalStatus, this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, finalStatus === "cancelled" ? this.now().toISOString() : null, evidence.id, executionId);
       });
       throw failure;
-    } finally { clearInterval(heartbeat); await this.cleanupTerminalWrapper(executionId); }
+    } finally { clearInterval(heartbeat); stopCancellationTracking(); await this.cleanupTerminalWrapper(executionId); }
   }
 
   private async blockedDeliveryReviewPreflight(input: DeliveryReviewActivityInput, failure: AgentFailure): Promise<DeliveryReviewActivityResult> {
@@ -1126,8 +1157,7 @@ export class AgentService {
     }
   }
 
-  async reviewDelivery(rawInput: DeliveryReviewActivityInput): Promise<DeliveryReviewActivityResult>;
-  async reviewDelivery(rawInput: DeliveryReviewActivityInput): Promise<DeliveryReviewActivityResult> {
+  async reviewDelivery(rawInput: DeliveryReviewActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<DeliveryReviewActivityResult> {
     const input = DeliveryReviewActivityInputSchema.parse(rawInput);
     const subject = input.subject;
     const targetBaseSha = subject.targetBaseSha;
@@ -1247,32 +1277,25 @@ export class AgentService {
         throw failure;
       }
     }
-    const leadProfile = this.executionProfile(input, input.roleProfiles.lead);
-    if (!leadProfile || leadProfile.provider !== "codex") {
-      const failure = new AgentFailure("profile-unavailable", "Lead review requires the configured Codex Lead profile");
-      if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
-      throw failure;
-    }
+    let leadProfile: Awaited<ReturnType<AgentService["resolveTurnProfile"]>>;
     let rawSessionId: string;
     try {
+      leadProfile = await this.resolveTurnProfile(input.roleProfiles.lead, leadSessionRef, "Lead review");
       rawSessionId = await this.sessionStore.read(leadSessionRef);
+      if (!rawSessionId) throw new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
     } catch (error) {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
       throw failure;
     }
-    if (!rawSessionId) {
-      const failure = new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
-      if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
-      throw failure;
-    }
+    const schemaPath = await this.ensureLeadSchema();
     const active = this.activeCapacityExecution(input, "lead");
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     const activeAttempt = active && !isFinalReview ? this.database.authQuery((db) => db.prepare("SELECT id FROM forge_delivery_review_attempts WHERE lead_execution_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(executionId, input.taskId, input.companyId, input.workflowId) as { id: string } | undefined) : undefined;
     const attemptId = activeAttempt?.id ?? `review_attempt_${randomBytes(12).toString("hex")}`;
     if (!active) this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:delivery-review:${subjectCommit}:${attemptId}`, input.planRevision, isFinalReview ? "final-delivery-review" : "delivery-review", leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, leadSessionRef, startedAt);
       if (!isFinalReview) db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id, lead_execution_id, lead_session_ref, developer_session_ref, status, correction_attempts, supersedes_review_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 0, ?, ?)").run(attemptId, input.taskId, input.companyId, input.workflowId, subject.planRevision, targetBaseSha, subjectCommit, subjectTree, subject.developerExecutionId, subject.deliveryArtifactId, subject.developerEvidenceArtifactId, executionId, leadSessionRef, context.developerSessionRef, input.supersedesReviewId, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, leadSessionRef, input.worktreePath);
     });
@@ -1280,27 +1303,31 @@ export class AgentService {
     const outputLines: string[] = [];
     let correctionAttempts = 0;
     let evidenceBytes = 0;
-    const expectedRawSessionId = rawSessionId;
-    const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
+    const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
+    const stopCancellationTracking = this.trackCancellation(executionId, runtime.signal);
     try {
       const initialPrompt = this.deliveryReviewPrompt(context.title, brief, plan, delivery, developerEvidence, gitEvidence) + (isFinalReview ? `\n\nExact required CI context: ${JSON.stringify({ releaseId: input.releaseId, ciRunId: input.ciRunId, status: finalContext?.status, headSha: finalContext?.headSha, headTree: finalContext?.headTree })}` : "");
       const runTurn = async (turn: number, prompt: string): Promise<void> => {
         evidenceLines.push(JSON.stringify({ type: "forge.review-turn-start", turn }));
+        const wrapper = await this.prepareTurnWrapper(executionId, leadProfile, worktreePath, schemaPath, prompt, { resumeSessionRef: leadSessionRef, sessionRef: leadSessionRef });
         const result = await this.processRunner({
-          command: this.command,
-          args: ["exec", "resume", ...this.profileArgs(leadProfile), rawSessionId, "--json", "--skip-git-repo-check", prompt],
+          command: wrapper.command,
+          args: wrapper.args,
           cwd: worktreePath,
-          durable: { runtimeRoot: this.config.runtimeRoot, executionId },
-          onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
+          detached: true,
+          ...(runtime.signal ? { signal: runtime.signal } : {}),
+          onStart: async (pid, processStartedAt, inspection) => { await this.recordLeadProcessStart(executionId, pid, processStartedAt, inspection); },
           onLine: async (line) => {
+            await this.recordLeadChildStart(executionId, line);
             const sanitized = safeJsonLine(line);
-            evidenceBytes += Buffer.byteLength(sanitized, "utf8") + 1;
+            evidenceBytes += Buffer.byteLength(line, "utf8") + 1;
             if (evidenceBytes > 6 * 1024 * 1024) throw new AgentFailure("evidence-too-large", "Codex evidence exceeded the local artifact limit");
             const event = eventValue(line);
-            if (event.threadId && event.threadId !== expectedRawSessionId) throw new AgentFailure("session-identity-conflict", "Lead delivery review returned a different session identity");
+            if (event.sessionRef && event.sessionRef !== leadSessionRef) throw new AgentFailure("session-identity-conflict", "Lead delivery review returned a different session identity");
+            if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Lead delivery review returned a different session identity");
             evidenceLines.push(sanitized);
             outputLines.push(line);
-            await this.databaseHeartbeat(executionId, "running");
+            await this.databaseHeartbeat(executionId, "running", evidenceLines.length);
           },
         });
         if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines, leadProfile.model);
@@ -1342,25 +1369,27 @@ export class AgentService {
       const completed = DeliveryReviewActivityResultSchema.parse({ outcome: "completed", attemptId, correctionAttempts, subject: { ...subject, developerSessionRef: context.developerSessionRef }, review: { reviewId, leadExecutionId: executionId, leadSessionRef, opinionArtifactId: opinion.id, evidenceArtifactId: evidence.id, opinion: review.outcome, summary: review.summary, repairPlan: review.repairPlan, repairPlanArtifactId: repairPlanArtifact?.id ?? null, repairPlanSha256: repairPlanArtifact?.sha256 ?? null, findings: review.findings, supersedesReviewId: input.supersedesReviewId } });
       return completed;
     } catch (error) {
-      const expectedFailure = error instanceof AgentFailure;
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("delivery-review-failed", "Codex Lead delivery review failed");
+      const cancelled = runtime.signal?.aborted && !(error instanceof AgentFailure && error.code === "ownership_ambiguous");
+      const expectedFailure = error instanceof AgentFailure && !cancelled;
+      const failure = cancelled ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("delivery-review-failed", "Codex Lead delivery review failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
-      const code = failure.code === "correction-exhausted" ? "correction-exhausted" : deliveryBlockCode(failure);
-      const summary = safeBlockSummary(code, code === "correction-exhausted");
+      const code = failure.code === "cancelled" ? "cancelled" : failure.code === "correction-exhausted" ? "correction-exhausted" : deliveryBlockCode(failure);
+      const summary = code === "cancelled" ? failure.message : safeBlockSummary(code, code === "correction-exhausted");
+      const finalStatus = failure.code === "cancelled" ? "cancelled" : isFinalReview || !expectedFailure ? "failed" : "blocked";
       this.database.authTransaction((db) => {
         db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
-        db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(isFinalReview || !expectedFailure ? "failed" : "blocked", this.now().toISOString(), this.now().toISOString(), code, summary, evidence.id, executionId);
-        if (!isFinalReview) db.prepare("UPDATE forge_delivery_review_attempts SET status = ?, correction_attempts = ?, evidence_artifact_id = ?, failure_code = ?, failure_summary = ?, finished_at = ? WHERE id = ?").run(expectedFailure ? "blocked" : "failed", correctionAttempts, evidence.id, code, summary, this.now().toISOString(), attemptId);
+        db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, cancelled_at = ?, evidence_artifact_id = ? WHERE id = ?").run(finalStatus, this.now().toISOString(), this.now().toISOString(), code, summary, finalStatus === "cancelled" ? this.now().toISOString() : null, evidence.id, executionId);
+        if (!isFinalReview) db.prepare("UPDATE forge_delivery_review_attempts SET status = ?, correction_attempts = ?, evidence_artifact_id = ?, failure_code = ?, failure_summary = ?, finished_at = ? WHERE id = ?").run(finalStatus === "cancelled" ? "failed" : expectedFailure ? "blocked" : "failed", correctionAttempts, evidence.id, code, summary, this.now().toISOString(), attemptId);
       });
-      if (!expectedFailure || isFinalReview) throw error;
+      if (!expectedFailure || isFinalReview) throw failure;
+      if (code === "cancelled") throw failure;
       return DeliveryReviewActivityResultSchema.parse({ outcome: "blocked", attemptId, code, summary, evidenceArtifactId: evidence.id, executionId, sessionRef: leadSessionRef, correctionAttempts, subject: { ...subject, developerSessionRef: context.developerSessionRef } });
-    } finally { clearInterval(heartbeat); await this.cleanupTerminalWrapper(executionId); }
+    } finally { clearInterval(heartbeat); stopCancellationTracking(); await this.cleanupTerminalWrapper(executionId); }
   }
 
-  async runSupplementalReview(rawInput: SupplementalReviewActivityInput): Promise<SupplementalReviewResult> {
+  async runSupplementalReview(rawInput: SupplementalReviewActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<SupplementalReviewResult> {
     const input = rawInput;
-    const profile = this.executionProfile(input, input.roleProfiles.reviewer);
-    if (!profile || profile.provider !== "codex") throw new AgentFailure("reviewer-profile-unavailable", "Supplemental review requires an allowed profile");
+    const profile = await this.resolveTurnProfile(input.roleProfiles.reviewer, undefined, "Supplemental reviewer");
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256, oa.storage_path AS output_storage_path, oa.sha256 AS output_sha256, e.storage_path AS evidence_storage_path, e.sha256 AS evidence_sha256
       FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_issue_outputs io ON io.task_id = t.id AND io.output_artifact_id = ?
@@ -1379,7 +1408,7 @@ export class AgentService {
         const manifest = JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: pinnedManifest.storagePath, sha256: pinnedManifest.sha256 })).toString("utf8")) as { profiles?: { reviewer?: ProfileSettings | null } };
         const pinnedReviewer = manifest.profiles?.reviewer;
         if (!pinnedReviewer || pinnedReviewer.id !== profile.id || pinnedReviewer.provider !== "codex" || !pinnedReviewer.model) throw new AgentFailure("reviewer-profile-unavailable", "The reviewer settings are not present in the pinned manifest");
-        reviewerProfile = pinnedReviewer;
+        reviewerProfile = { id: pinnedReviewer.id, model: pinnedReviewer.model, reasoningLevel: pinnedReviewer.reasoningLevel as "low" | "medium" | "high", servicePriority: pinnedReviewer.servicePriority as "standard" | "priority" };
       } catch (error) {
         if (error instanceof AgentFailure) throw error;
         throw new AgentFailure("scoped-input-missing", "The pinned supplemental review manifest is invalid");
@@ -1397,36 +1426,50 @@ export class AgentService {
     const images = this.database.authQuery((db) => {
       if (!input.imageArtifactIds.length) return [] as ImageRow[];
       const placeholders = input.imageArtifactIds.map(() => "?").join(",");
-      const rows = db.prepare(`SELECT id, storage_path, sha256, filename FROM forge_artifacts WHERE company_id = ? AND kind = 'task-image' AND id IN (${placeholders})`).all(input.companyId, ...input.imageArtifactIds) as ImageRow[];
+      const rows = db.prepare(`SELECT id, storage_path, sha256, filename, mime_type FROM forge_artifacts WHERE company_id = ? AND kind = 'task-image' AND id IN (${placeholders})`).all(input.companyId, ...input.imageArtifactIds) as ImageRow[];
       const byId = new Map(rows.map((row) => [row.id, row]));
       return input.imageArtifactIds.flatMap((imageId) => { const row = byId.get(imageId); return row ? [row] : []; });
     });
     if (images.length !== input.imageArtifactIds.length) throw new AgentFailure("scoped-input-missing", "Supplemental review image evidence is unavailable");
     for (const image of images) await this.artifacts.read({ companyId: input.companyId, storagePath: image.storage_path, sha256: image.sha256 });
+    const schemaPath = await this.ensureLeadSchema();
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     if (!active) this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES (?, ?, ?, ?, 'reviewer', 'starting', 1, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, started_at, event_offset) VALUES (?, ?, ?, ?, 'reviewer', 'starting', 1, ?, ?, 'supplemental-review', ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:supplemental-review:${input.revision}`, input.revision, reviewerProfile.id, reviewerProfile.model, reviewerProfile.reasoningLevel, reviewerProfile.servicePriority, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, undefined, repositoryPath);
     });
     const lines: string[] = [];
     let sessionRef: string | undefined = active?.sessionRef ?? undefined;
     let rawSessionId: string | undefined;
-    const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
+    const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
+    const stopCancellationTracking = this.trackCancellation(executionId, runtime.signal);
     try {
       const reviewEvidence = input.originalPlanSubject ? manifestText : (await this.artifacts.read({ companyId: input.companyId, storagePath: context.evidence_storage_path, sha256: context.evidence_sha256 })).toString("utf8");
+      const wrapper = await this.prepareTurnWrapper(executionId, reviewerProfile, repositoryPath, schemaPath, this.reviewPrompt(context.title, brief, context.normalized_json, draft, reviewEvidence), { ...(images.length ? { imagePaths: images.map((image) => resolve(this.config.artifactRoot, image.storage_path)) } : {}) });
       const result = await this.processRunner({
-        command: this.command,
-        args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", ...this.profileArgs(reviewerProfile), ...images.map((image) => resolve(this.config.artifactRoot, image.storage_path)).flatMap((path) => ["--image", path]), this.reviewPrompt(context.title, brief, context.normalized_json, draft, reviewEvidence)],
+        command: wrapper.command,
+        args: wrapper.args,
         cwd: repositoryPath,
-        durable: { runtimeRoot: this.config.runtimeRoot, executionId },
-        onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
+        detached: true,
+        ...(runtime.signal ? { signal: runtime.signal } : {}),
+        onStart: async (pid, processStartedAt, inspection) => { await this.recordLeadProcessStart(executionId, pid, processStartedAt, inspection); },
         onLine: async (line) => {
+          await this.recordLeadChildStart(executionId, line);
           const sanitized = safeJsonLine(line);
           lines.push(sanitized);
           const event = eventValue(line);
-          if (event.threadId && !sessionRef) { rawSessionId = event.threadId; sessionRef = await this.sessionStore.create(rawSessionId); await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET session_ref = ?, heartbeat_at = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), executionId)); }
-          await this.databaseHeartbeat(executionId, "running");
+          if (event.sessionRef) {
+            if (sessionRef && sessionRef !== event.sessionRef) throw new AgentFailure("session-identity-conflict", "Supplemental review returned a different Lead session identity");
+            sessionRef = event.sessionRef;
+            rawSessionId ??= await this.sessionStore.read(sessionRef);
+            await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET session_ref = ?, heartbeat_at = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), executionId));
+          } else if (event.threadId && !sessionRef) {
+            rawSessionId = event.threadId;
+            sessionRef = await this.sessionStore.create(rawSessionId);
+            await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET session_ref = ?, heartbeat_at = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), executionId));
+          }
+          await this.databaseHeartbeat(executionId, "running", lines.length);
         },
       });
       if (result.exitCode !== 0) throw agentProcessFailure(result, lines, reviewerProfile.model);
@@ -1450,40 +1493,43 @@ export class AgentService {
       }
       return { reviewId, reviewArtifactId: reviewArtifact.id, evidenceArtifactId: evidence.id, executionId, sessionRef, summary: review.summary, ...(reviewSubject ? { subject: reviewSubject, reviewArtifactSha256: reviewArtifact.sha256, evidenceManifestArtifactId: reviewSubject.evidenceManifestArtifactId, evidenceManifestSha256: reviewSubject.evidenceManifestSha256 } : {}) };
     } catch (error) {
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("review-failed", "Supplemental review failed");
+      const failure = runtime.signal?.aborted && !(error instanceof AgentFailure && error.code === "ownership_ambiguous") ? new AgentFailure("cancelled", "The Codex supplemental review was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("review-failed", "Supplemental review failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, lines);
+      const finalStatus = failure.code === "cancelled" ? "cancelled" : "failed";
       this.database.authTransaction((db) => {
         db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
-        db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId);
+        db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, cancelled_at = ?, evidence_artifact_id = ? WHERE id = ?").run(finalStatus, this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, finalStatus === "cancelled" ? this.now().toISOString() : null, evidence.id, executionId);
       });
       throw failure;
-    } finally { clearInterval(heartbeat); await this.cleanupTerminalWrapper(executionId); }
+    } finally { clearInterval(heartbeat); stopCancellationTracking(); await this.cleanupTerminalWrapper(executionId); }
   }
 
-  async consolidateLeadPlan(rawInput: ConsolidateLeadPlanActivityInput): Promise<LeadPlanningResult> {
-    const rawSessionId = await this.sessionStore.read(rawInput.leadSessionRef);
-    const lead = this.executionProfile(rawInput, rawInput.roleProfiles.lead);
-    if (!lead || lead.provider !== "codex") throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for consolidation");
+  async consolidateLeadPlan(rawInput: ConsolidateLeadPlanActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<LeadPlanningResult> {
+    const lead = await this.resolveTurnProfile(rawInput.roleProfiles.lead, rawInput.leadSessionRef, "Lead consolidation");
+    await this.sessionStore.read(rawInput.leadSessionRef);
     const draft = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.leadOutputArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
     const review = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.supplementalReviewArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
     if (!draft || !review) throw new AgentFailure("scoped-input-missing", "Consolidation evidence is unavailable");
     const repositoryPath = await this.consolidationRepositoryPath(rawInput);
     const draftText = (await this.artifacts.read({ ...draft, companyId: rawInput.companyId })).toString("utf8");
     const reviewText = (await this.artifacts.read({ ...review, companyId: rawInput.companyId })).toString("utf8");
+    const schemaPath = await this.ensureLeadSchema();
     const active = this.activeCapacityExecution(rawInput, "lead");
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     if (!active) this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, rawInput.taskId, rawInput.companyId, rawInput.workflowId, rawInput.leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?, 'lead-consolidation', ?, ?, ?, ?, ?, ?, 0)").run(executionId, rawInput.taskId, rawInput.companyId, rawInput.workflowId, `${rawInput.workflowId}:lead-consolidation:${rawInput.revision}`, rawInput.revision, lead.id, lead.model, lead.reasoningLevel, lead.servicePriority, rawInput.leadSessionRef, startedAt);
       this.bindCapacityInTransaction(db, rawInput, executionId, rawInput.leadSessionRef, repositoryPath);
     });
     const lines: string[] = [];
-    const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
+    const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
+    const stopCancellationTracking = this.trackCancellation(executionId, runtime.signal);
     try {
       let response: z.infer<typeof LeadReviewResponseSchema> | undefined;
       let lastFailure: AgentFailure | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const result = await this.processRunner({ command: this.command, args: ["exec", "resume", ...this.profileArgs(lead), rawSessionId, "--json", "--skip-git-repo-check", this.consolidationPrompt(draftText, reviewText, attempt > 0)], cwd: repositoryPath, durable: { runtimeRoot: this.config.runtimeRoot, executionId }, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { lines.push(safeJsonLine(line)); await this.databaseHeartbeat(executionId, "running"); } });
+        const wrapper = await this.prepareTurnWrapper(executionId, lead, repositoryPath, schemaPath, this.consolidationPrompt(draftText, reviewText, attempt > 0), { resumeSessionRef: rawInput.leadSessionRef, sessionRef: rawInput.leadSessionRef });
+        const result = await this.processRunner({ command: wrapper.command, args: wrapper.args, cwd: repositoryPath, detached: true, ...(runtime.signal ? { signal: runtime.signal } : {}), onStart: async (pid, processStartedAt, inspection) => { await this.recordLeadProcessStart(executionId, pid, processStartedAt, inspection); }, onLine: async (line) => { await this.recordLeadChildStart(executionId, line); lines.push(safeJsonLine(line)); await this.databaseHeartbeat(executionId, "running", lines.length); } });
         if (result.exitCode !== 0) throw agentProcessFailure(result, lines, lead.model);
         try {
           const parsed = parseLeadReviewResponse(lines);
@@ -1509,11 +1555,12 @@ export class AgentService {
       await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), persisted.evidence.id, executionId));
       return { ...persisted.result, leadReviewResponseArtifactId: responseArtifact.id, leadReviewResponseArtifactSha256: responseArtifact.sha256 };
     } catch (error) {
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("consolidation-failed", "Lead consolidation failed");
+      const failure = runtime.signal?.aborted && !(error instanceof AgentFailure && error.code === "ownership_ambiguous") ? new AgentFailure("cancelled", "The Codex Lead consolidation was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("consolidation-failed", "Lead consolidation failed");
       const evidence = await this.persistEvidence(rawInput.companyId, executionId, lines);
-      this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); });
+      const finalStatus = failure.code === "cancelled" ? "cancelled" : "failed";
+      this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, cancelled_at = ?, evidence_artifact_id = ? WHERE id = ?").run(finalStatus, this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, finalStatus === "cancelled" ? this.now().toISOString() : null, evidence.id, executionId); });
       throw failure;
-    } finally { clearInterval(heartbeat); await this.cleanupTerminalWrapper(executionId); }
+    } finally { clearInterval(heartbeat); stopCancellationTracking(); await this.cleanupTerminalWrapper(executionId); }
   }
 
   private deliveryRepairPlanPrompt(input: DeliveryRepairPlanActivityInput, findings: DeliveryFinding[]): string {
@@ -1575,8 +1622,95 @@ export class AgentService {
     return taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
   }
 
-  private async databaseHeartbeat(executionId: string, status: "running"): Promise<void> {
-    this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = ?, heartbeat_at = ? WHERE id = ?").run(status, this.now().toISOString(), executionId));
+  private async databaseHeartbeat(executionId: string, status: "running", eventOffset?: number): Promise<void> {
+    this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = CASE WHEN status = 'cancelling' THEN status ELSE ? END, heartbeat_at = ?, event_offset = COALESCE(?, event_offset) WHERE id = ?").run(status, this.now().toISOString(), eventOffset ?? null, executionId));
+  }
+
+  private trackCancellation(executionId: string, signal?: AbortSignal): () => void {
+    if (!signal) return () => undefined;
+    const mark = (): void => {
+      this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'cancelling', cancellation_requested_at = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(this.now().toISOString(), executionId));
+    };
+    if (signal.aborted) mark();
+    else signal.addEventListener("abort", mark, { once: true });
+    return () => signal.removeEventListener("abort", mark);
+  }
+
+  private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string): Promise<{ id: string; model: string; reasoningLevel: "low" | "medium" | "high"; servicePriority: "standard" | "priority" }> {
+    const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND role = 'lead' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(sessionRef) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
+    const profile = pinned ? undefined : this.database.authQuery((db) => (profileId
+      ? db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId)
+      : db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE provider = 'codex' ORDER BY id LIMIT 1").get()) as { id: string; provider: string; model: string; reasoningLevel: string; servicePriority: string } | undefined);
+    if (!pinned && (!profile || profile.provider !== "codex")) throw new AgentFailure("profile-unavailable", `${label} profile is unavailable`);
+    const model = pinned?.model ?? profile!.model;
+    const reasoningLevel = pinned?.reasoningLevel ?? profile!.reasoningLevel;
+    const servicePriority = pinned?.servicePriority ?? profile!.servicePriority;
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(model) || !["low", "medium", "high"].includes(reasoningLevel) || !["standard", "priority"].includes(servicePriority)) {
+      throw new AgentFailure("scope_configuration", `${label} profile has invalid pinned turn settings`, { nonRetryable: true });
+    }
+    const settings = { id: pinned?.profileId ?? profile!.id, model, reasoningLevel: reasoningLevel as "low" | "medium" | "high", servicePriority: servicePriority as "standard" | "priority" };
+    await this.assertCodexTurnCompatibility(settings);
+    return settings;
+  }
+
+  private async assertCodexTurnCompatibility(settings: Pick<ProfileSettings, "model" | "reasoningLevel" | "servicePriority">): Promise<void> {
+    if (this.processRunner !== defaultProcessRunner) return;
+    try {
+      const result = await execFileAsync(this.command, ["debug", "models", "--bundled"], { timeout: 8_000, maxBuffer: 2 * 1024 * 1024 });
+      if (!catalogSupportsCodexTurn(JSON.parse(result.stdout), settings)) {
+        throw new AgentFailure("scope_configuration", "The configured Codex model, reasoning level, or service tier is unavailable", { nonRetryable: true });
+      }
+    } catch (error) {
+      if (error instanceof AgentFailure) throw error;
+      throw new AgentFailure("version_incompatible", "The installed Codex CLI model catalog could not validate the pinned Lead settings", { nonRetryable: true });
+    }
+  }
+
+  private async prepareTurnWrapper(executionId: string, settings: { model: string; reasoningLevel: "low" | "medium" | "high"; servicePriority: "standard" | "priority" }, repositoryPath: string, outputSchemaPath: string, prompt: string, options: { imagePaths?: string[]; resumeSessionRef?: string; sessionRef?: string } = {}): Promise<PreparedCodexTurnWrapper> {
+    const executionRoot = join(this.config.runtimeRoot, "agent-turns", executionId);
+    const promptPath = join(executionRoot, "prompt.txt");
+    const spoolPath = join(executionRoot, "spool.ndjson");
+    const statusPath = join(executionRoot, "status.json");
+    await mkdir(executionRoot, { recursive: true, mode: 0o700 });
+    await writeFile(promptPath, prompt, { encoding: "utf8", mode: 0o600 });
+    const request: CodexTurnWrapperRequest = { command: this.command, cwd: repositoryPath, outputSchemaPath, promptPath, repositoryPath, sessionStoreRoot: this.config.runtimeRoot, spoolPath, statusPath, ...settings, ...(options.imagePaths ? { imagePaths: options.imagePaths } : {}), ...(options.resumeSessionRef ? { resumeSessionRef: options.resumeSessionRef } : {}), ...(options.sessionRef ? { sessionRef: options.sessionRef } : {}) };
+    const prepared = await prepareCodexTurnWrapper(request, executionRoot);
+    await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET spool_relative_path = ?, status_relative_path = ? WHERE id = ?").run(relative(this.config.runtimeRoot, prepared.spoolPath), relative(this.config.runtimeRoot, prepared.statusPath), executionId));
+    return prepared;
+  }
+
+  private async recordLeadProcessStart(executionId: string, pid: number, fallback: string, inspection?: ProcessInspection): Promise<void> {
+    if (this.processRunner === defaultProcessRunner && !inspection) throw new AgentFailure("ownership_ambiguous", "Codex wrapper identity could not be inspected at launch");
+    const identity = inspection ? `${pid}:${inspection.startTime}` : await processStartIdentity(pid, fallback);
+    const processGroup = inspection?.processGroup ?? pid;
+    await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', wrapper_pid = ?, wrapper_process_group = ?, wrapper_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, processGroup, identity, this.now().toISOString(), executionId));
+    if (this.processRunner !== defaultProcessRunner) {
+      await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET process_start_identity = ? WHERE id = ?").run(identity, executionId));
+    }
+  }
+
+  private async recordLeadChildStart(executionId: string, line: string): Promise<void> {
+    let event: { type?: string; childPid?: number; childProcessGroup?: number; childStartIdentity?: string; child?: { pid?: number; processGroup?: number; startIdentity?: string } };
+    try { event = JSON.parse(line) as typeof event; } catch { return; }
+    const childPid = event.child?.pid ?? event.childPid;
+    const childProcessGroup = event.child?.processGroup ?? event.childProcessGroup;
+    const childStartIdentity = event.child?.startIdentity ?? event.childStartIdentity;
+    if (event.type !== "forge.wrapper_started" || !childPid || !childProcessGroup || !childStartIdentity) return;
+    const recorded = this.database.authQuery((db) => db.prepare("SELECT wrapper_process_group FROM forge_agent_executions WHERE id = ?").get(executionId) as { wrapper_process_group: number | null } | undefined);
+    const inspection = await defaultProcessController.inspect(childPid);
+    if (!inspection || inspection.processGroup !== childProcessGroup || (recorded?.wrapper_process_group !== null && recorded?.wrapper_process_group !== undefined && inspection.processGroup !== recorded.wrapper_process_group) || `${childPid}:${inspection.startTime}` !== childStartIdentity) {
+      throw new AgentFailure("ownership_ambiguous", "Codex child ownership could not be verified");
+    }
+    await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(childPid, childStartIdentity, this.now().toISOString(), executionId));
+  }
+
+  private async ensureLeadSchema(): Promise<string> {
+    const directory = join(this.config.runtimeRoot, "schemas");
+    const filename = join(directory, "lead-output.schema.json");
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(filename, JSON.stringify(CodexLeadOutputJsonSchema), { encoding: "utf8", mode: 0o600 });
+    await chmod(filename, 0o600);
+    return filename;
   }
 
   private async repositoryEvidence(repositoryPath: string): Promise<string> {
@@ -1588,11 +1722,11 @@ export class AgentService {
   }
 
   private initialPrompt(title: string, brief: string, revision: string, profiles: ProfileSettings[], repositoryEvidence: string, revisionContext?: Record<string, unknown>): string {
-    return `You are Forge's Lead planner. Work read-only in the provided repository. Do not modify files, reveal credentials, or invent provider facts.\n\nReturn exactly one JSON object matching one of these shapes:\n{"kind":"plan","summary":"...","reproduction":null,"rootCauseAnalysis":null,"steps":[{"number":1,"instruction":"...","verification":"...","verificationCommands":["exact command"]}],"compatibilityAnalysis":"...","operationalAnalysis":"...","verificationStrategy":"...","unresolvedTechnicalQuestions":[],"materialCategories":[],"affectedPaths":["path/to/affected/file"],"materiality":[{"category":"user_visible_behavior","rationale":"...","evidenceRefs":["step:1"]}],"preservedWorktreeCompatibility":null,"developerContext":{"includeTaskBrief":false,"evidenceArtifactIds":[],"imageArtifactIds":[],"repositoryInstructionPaths":[],"artifactStepNumbers":{}}}\n{"kind":"decision_blocker","summary":"...","evidence":"...","owner":"human","question":"...","nextAction":"..."}\nUse decision_blocker only for one unresolved human/business choice. A plan must have numbered prescriptive steps with exact verificationCommands, compatibility and operational analysis, a complete verification strategy, zero unresolved technical questions, a non-empty affectedPaths list naming repository-relative paths, materiality evidence whose categories and references are grounded in those paths or numbered steps, and developerContext as the complete Developer evidence allowlist. materialCategories must contain only categories directly implicated: architecture_dependencies, schema_data_migration, security_permissions, external_integration, production_operation, user_visible_behavior. For a revised reuse request, set preservedWorktreeCompatibility to true only when the preserved coordinates remain safe for the plan; otherwise set it to false and explain why in compatibilityAnalysis. Ordinary and new-worktree plans set it to null.\n\nTask: ${title}\nBrief:\n${brief}\n\nPinned Project revision:\n${revision}\n\nRole profile settings:\n${JSON.stringify(profiles)}\n\nRepository read evidence:\n${repositoryEvidence}${revisionContext ? `\n\nRevision request:\n${JSON.stringify(revisionContext)}` : ""}`;
+    return `You are Forge's Lead planner. Work read-only in the provided repository. Do not modify files, reveal credentials, or invent provider facts.\n\nReturn exactly one JSON object matching one of these shapes:\n{"kind":"plan","summary":"...","reproduction":null,"rootCauseAnalysis":null,"steps":[{"number":1,"instruction":"...","entryPoint":null,"completionCriterion":"...","verification":"...","verificationCommands":["exact command"]}],"compatibilityAnalysis":"...","operationalAnalysis":"...","verificationStrategy":"...","unresolvedTechnicalQuestions":[],"materialCategories":[],"affectedPaths":["path/to/affected/file"],"materiality":[{"category":"user_visible_behavior","rationale":"...","evidenceRefs":["step:1"]}],"preservedWorktreeCompatibility":null,"developerContext":{"includeTaskBrief":false,"evidenceArtifactIds":[],"imageArtifactIds":[],"repositoryInstructionPaths":[],"artifactStepNumbers":{}}}\n{"kind":"decision_blocker","category":"human_decision","summary":"...","evidence":"...","owner":"human","question":"...","nextAction":"...","resumePhase":"planning"}\nUse decision_blocker only for one unresolved human/business choice. A plan must have numbered prescriptive steps with exact verificationCommands, compatibility and operational analysis, a complete verification strategy, zero unresolved technical questions, a non-empty affectedPaths list naming repository-relative paths, materiality evidence whose categories and references are grounded in those paths or numbered steps, and developerContext as the complete Developer evidence allowlist. materialCategories must contain only categories directly implicated: architecture_dependencies, schema_data_migration, security_permissions, external_integration, production_operation, user_visible_behavior. For a revised reuse request, set preservedWorktreeCompatibility to true only when the preserved coordinates remain safe for the plan; otherwise set it to false and explain why in compatibilityAnalysis. Ordinary and new-worktree plans set it to null.\n\nTask: ${title}\nBrief:\n${brief}\n\nPinned Project revision:\n${revision}\n\nRole profile settings:\n${JSON.stringify(profiles)}\n\nRepository read evidence:\n${repositoryEvidence}${revisionContext ? `\n\nRevision request:\n${JSON.stringify(revisionContext)}` : ""}`;
   }
 
   private correctionPrompt(): string {
-    return "Your previous Lead response did not satisfy the required JSON schema. Continue the same session, do not redo discovery, and return exactly one corrected JSON object matching the plan or decision_blocker shape. Do not include markdown fences or commentary.";
+    return "Your previous Lead response did not satisfy the supplied output schema. Continue the same session, do not redo discovery, and return exactly one corrected JSON object matching that schema. Do not include markdown fences or commentary.";
   }
 
   private revisionPrompt(note: string): string {
@@ -1602,6 +1736,88 @@ export class AgentService {
   private async persistEvidence(companyId: string, executionId: string, lines: string[]): Promise<StoredArtifact> {
     const content = Buffer.from(`${lines.join("\n")}\n`, "utf8");
     return this.artifacts.put(companyId, "agent-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: content.length ? content : Buffer.from("{\"type\":\"empty\"}\n") });
+  }
+
+  private async completedPlanningResult(input: LeadPlanningActivityInput): Promise<LeadPlanningResult | undefined> {
+    const persisted = this.database.authQuery((db) => db.prepare(`SELECT e.id AS executionId, e.session_ref AS sessionRef, o.output_artifact_id AS outputArtifactId, o.evidence_artifact_id AS evidenceArtifactId, o.summary,
+        output.storage_path AS outputStoragePath, output.sha256 AS outputSha256, evidence.storage_path AS evidenceStoragePath, evidence.sha256 AS evidenceSha256
+      FROM forge_agent_executions e
+      JOIN forge_issue_outputs o ON o.execution_id = e.id AND o.task_id = e.task_id AND o.company_id = e.company_id AND o.workflow_id = e.workflow_id AND o.revision = e.workflow_revision
+      JOIN forge_artifacts output ON output.id = o.output_artifact_id AND output.company_id = e.company_id
+      JOIN forge_artifacts evidence ON evidence.id = o.evidence_artifact_id AND evidence.company_id = e.company_id
+      WHERE e.id IS NOT NULL AND e.task_id = ? AND e.company_id = ? AND e.workflow_id = ? AND e.workflow_revision = ? AND e.turn_key = ? AND e.role = 'lead' AND e.status = 'completed'
+      ORDER BY e.finished_at DESC LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.revision, `${input.workflowId}:lead-planning:${input.revision}`) as {
+        executionId: string;
+        sessionRef: string;
+        outputArtifactId: string;
+        evidenceArtifactId: string;
+        summary: string;
+        outputStoragePath: string;
+        outputSha256: string;
+        evidenceStoragePath: string;
+        evidenceSha256: string;
+      } | undefined);
+    if (!persisted) return undefined;
+    if (!/^session_[A-Za-z0-9._:-]{1,128}$/.test(persisted.sessionRef)) throw new AgentFailure("internal_persistence", "The completed Lead session reference is invalid", { nonRetryable: true });
+    await this.sessionStore.read(persisted.sessionRef);
+    const output = LeadOutputSchema.parse(JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: persisted.outputStoragePath, sha256: persisted.outputSha256 })).toString("utf8")));
+    await this.artifacts.read({ companyId: input.companyId, storagePath: persisted.evidenceStoragePath, sha256: persisted.evidenceSha256 });
+    const manifest = this.database.authQuery((db) => db.prepare("SELECT id, sha256, storage_path FROM forge_artifacts WHERE company_id = ? AND kind = 'lead-input-manifest' AND filename = ?").get(input.companyId, `${persisted.executionId}.json`) as { id: string; sha256: string; storage_path: string } | undefined);
+    if (!manifest) throw new AgentFailure("internal_persistence", "The completed Lead input manifest is unavailable", { nonRetryable: true });
+    await this.artifacts.read({ companyId: input.companyId, storagePath: manifest.storage_path, sha256: manifest.sha256 });
+    const categories = output.kind === "plan" ? classifyPlanMateriality(`${output.summary}\n${output.steps.map((step) => step.instruction).join("\n")}`, output.materialCategories) : [];
+    const result: LeadPlanningResult = output.kind === "plan"
+      ? { kind: "plan", leadOutputKind: "plan", leadSessionRef: persisted.sessionRef, leadExecutionId: persisted.executionId, leadEvidenceArtifactId: persisted.evidenceArtifactId, leadEvidenceSha256: persisted.evidenceSha256, leadOutputArtifactId: persisted.outputArtifactId, leadOutputSha256: persisted.outputSha256, leadInputManifestArtifactId: manifest.id, leadInputManifestSha256: manifest.sha256, leadSummary: persisted.summary, materialCategories: categories, material: categories.length > 0 }
+      : { kind: "decision_blocker", leadOutputKind: "decision_blocker", leadSessionRef: persisted.sessionRef, leadExecutionId: persisted.executionId, leadEvidenceArtifactId: persisted.evidenceArtifactId, leadEvidenceSha256: persisted.evidenceSha256, leadOutputArtifactId: persisted.outputArtifactId, leadOutputSha256: persisted.outputSha256, leadInputManifestArtifactId: manifest.id, leadInputManifestSha256: manifest.sha256, leadSummary: persisted.summary, materialCategories: [], material: false, blockedCategory: "human_decision", unblockOwner: "human", resumePhase: "planning" };
+    return result;
+  }
+
+  private runtimePath(relativePath: string | null): string {
+    if (!relativePath || relativePath.startsWith("/") || relativePath.includes("\\")) throw new AgentFailure("ownership_ambiguous", "The active Lead runtime paths are unavailable");
+    const root = resolve(this.config.runtimeRoot);
+    const target = resolve(root, relativePath);
+    const withinRoot = relative(root, target);
+    if (withinRoot.startsWith(`..${sep}`) || withinRoot === "..") throw new AgentFailure("ownership_ambiguous", "The active Lead runtime paths are unsafe");
+    return target;
+  }
+
+  private async attachPlanningResult(input: LeadPlanningActivityInput, active: ActiveLeadExecution, signal?: AbortSignal, wrapper?: ProcessInspection): Promise<LeadPlanningResult> {
+    const spoolPath = this.runtimePath(active.spool_relative_path);
+    const statusPath = this.runtimePath(active.status_relative_path);
+    const deadline = Date.now() + 20 * 60_000;
+    while (Date.now() < deadline) {
+      try {
+        const status = JSON.parse(await readFile(statusPath, "utf8")) as { state?: string; code?: string; error?: string };
+        if (status.state === "completed") {
+          const persisted = await this.completedPlanningResult(input);
+          if (persisted) return persisted;
+          const lines = (await readFile(spoolPath, "utf8")).split(/\r?\n/).filter(Boolean);
+          const output = parseLeadOutput(lines);
+          const sessionRef = active.session_ref ?? lines.map((line) => eventValue(line).sessionRef).find((value): value is string => Boolean(value));
+          if (!sessionRef) throw new AgentFailure("missing-session", "The active Lead turn completed without a session reference");
+          await this.sessionStore.read(sessionRef);
+          const artifacts = await this.persistOutput(input, active.id, sessionRef, lines, output);
+          await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), artifacts.evidence.id, active.id));
+          const manifest = this.database.authQuery((db) => db.prepare("SELECT id, sha256 FROM forge_artifacts WHERE company_id = ? AND kind = 'lead-input-manifest' AND filename = ?").get(input.companyId, `${active.id}.json`) as { id: string; sha256: string } | undefined);
+          if (!manifest) throw new AgentFailure("internal_persistence", "The completed Lead input manifest is unavailable", { nonRetryable: true });
+          Object.assign(artifacts.result, { leadInputManifestArtifactId: manifest.id, leadInputManifestSha256: manifest.sha256 });
+          return artifacts.result;
+        }
+        if (status.state === "failed" || status.state === "cancelled") throw new AgentFailure(status.code ?? "process_exit", status.error ?? "The active Lead turn did not complete");
+      } catch (error) {
+        if (error instanceof AgentFailure) throw error;
+      }
+      if (signal?.aborted) {
+        if (!wrapper) throw new AgentFailure("ownership_ambiguous", "The active Lead wrapper could not be safely cancelled");
+        const owned = { name: "codex-wrapper", pid: wrapper.pid, command: wrapper.command, startedAt: active.heartbeat_at ?? wrapper.startTime, processGroup: wrapper.processGroup, startTime: wrapper.startTime, executable: wrapper.executable, argv: wrapper.argv };
+        if (!await new CodexTurnSupervisor(this.processController).cancelOwnedProcess(owned, wrapper)) throw new AgentFailure("ownership_ambiguous", "The active Lead wrapper could not be safely cancelled");
+        const cancelledAt = this.now().toISOString();
+        this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'cancelled', finished_at = ?, heartbeat_at = ?, failure_code = 'cancelled', failure_summary = ?, cancelled_at = ? WHERE id = ?").run(cancelledAt, cancelledAt, "The Codex Lead turn was cancelled.", cancelledAt, active.id));
+        throw new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true });
+      }
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+    }
+    throw new AgentFailure("active-lease", "A Lead execution is already active for this issue");
   }
 
   private async persistOutput(input: LeadPlanningActivityInput, executionId: string, sessionRef: string, lines: string[], output: LeadOutput, manifest?: { id: string; sha256: string }, options: { finalVersion?: number; originalPlanRevision?: number; supersedesOutputId?: string } = {}): Promise<{ evidence: StoredArtifact; result: LeadPlanningResult }> {
@@ -1628,7 +1844,10 @@ export class AgentService {
     } else {
       this.database.authTransaction((db) => db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(outputId, input.taskId, input.companyId, input.workflowId, executionId, input.revision, output.kind, outputArtifact.id, evidence.id, sessionRef, summary, this.now().toISOString()));
     }
-    return { evidence, result: { leadSessionRef: sessionRef, leadExecutionId: executionId, leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: outputArtifact.id, leadOutputKind: output.kind, leadSummary: summary, materialCategories: categories, material: categories.length > 0, preservedWorktreeCompatibility: output.kind === "plan" ? output.preservedWorktreeCompatibility : null, ...(planSubject ? { planSubject } : {}), ...(materialityEvidence ? { materialityEvidence } : {}), ...(blockerSubject ? { blockerSubject } : {}) } };
+    const result: LeadPlanningResult = output.kind === "plan"
+      ? { kind: "plan", leadSessionRef: sessionRef, leadExecutionId: executionId, leadEvidenceArtifactId: evidence.id, leadEvidenceArtifactSha256: evidence.sha256, leadEvidenceSha256: evidence.sha256, leadOutputArtifactId: outputArtifact.id, leadOutputArtifactSha256: outputArtifact.sha256, leadOutputSha256: outputArtifact.sha256, leadOutputKind: "plan", leadSummary: summary, materialCategories: categories, material: categories.length > 0, preservedWorktreeCompatibility: output.preservedWorktreeCompatibility, ...(planSubject ? { planSubject } : {}), ...(materialityEvidence ? { materialityEvidence } : {}) }
+      : { kind: "decision_blocker", leadSessionRef: sessionRef, leadExecutionId: executionId, leadEvidenceArtifactId: evidence.id, leadEvidenceArtifactSha256: evidence.sha256, leadEvidenceSha256: evidence.sha256, leadOutputArtifactId: outputArtifact.id, leadOutputArtifactSha256: outputArtifact.sha256, leadOutputSha256: outputArtifact.sha256, leadOutputKind: "decision_blocker", leadSummary: summary, materialCategories: categories, material: false, blockedCategory: "human_decision", unblockOwner: "human", resumePhase: "planning", ...(blockerSubject ? { blockerSubject } : {}) };
+    return { evidence, result };
   }
 }
 

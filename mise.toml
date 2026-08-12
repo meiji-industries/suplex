@@ -88,3 +88,7 @@ run = "pnpm run verify-ticket-07"
 [tasks.test-all]
 description = "Run typecheck, unit, Temporal, and browser tests"
 run = "pnpm run test:all"
+
+[tasks.test-release-lead]
+description = "Run the mandatory authenticated real-Codex Lead/browser release gate"
+run = "pnpm run test:release:lead"

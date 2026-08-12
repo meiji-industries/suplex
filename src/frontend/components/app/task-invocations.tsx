@@ -9,6 +9,7 @@ export type TaskInvocation = {
   role: "lead" | "reviewer" | "developer";
   status: string;
   attempt: number;
+  sessionRef?: string | null;
   startedAt: string;
   finishedAt: string | null;
   failureCode: string | null;
@@ -72,6 +73,7 @@ export function TaskInvocations({ invocations }: { invocations: TaskInvocation[]
                 <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                   {invocation.failureCode ? <code>{invocation.failureCode}</code> : null}
                   {invocation.evidenceArtifactId ? <code className="break-all">{invocation.evidenceArtifactId}</code> : null}
+                  {invocation.sessionRef ? <code className="break-all">{invocation.sessionRef}</code> : null}
                   {duration ? <span>{duration}</span> : null}
                 </div>
                 <TimelineDate className="mt-1 mb-0" dateTime={invocation.startedAt}>{invocationDate(invocation.startedAt)}</TimelineDate>

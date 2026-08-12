@@ -1,9 +1,13 @@
 import { z } from "zod";
 import { ReleaseFailureCodeSchema } from "../release-failures.js";
 
-import { DecisionIdempotencyKeySchema, MaterialityEvidenceSubjectSchema, PlanBlockerSubjectSchema, PlanDecisionSubjectSchema, PlanMaterialCategorySchema, PlanSubjectSchema, SupplementalReviewSubjectSchema, type MaterialityEvidenceSubject, type PlanBlockerSubject, type PlanDecisionSubject, type PlanMaterialCategory, type PlanSubject, type SupplementalReviewSubject } from "../plan-governance.js";
+import { DecisionIdempotencyKeySchema, MaterialityEvidenceSubjectSchema, PlanBlockerSubjectSchema, PlanDecisionSubjectSchema, PlanMaterialCategorySchema, PlanSubjectSchema, SupplementalReviewSubjectSchema, type MaterialityEvidenceSubject, type PlanBlockerSubject, type PlanDecisionSubject, type PlanSubject, type SupplementalReviewSubject } from "../plan-governance.js";
 import { CapacityBlockerSchema, WorkflowCapacityStateSchema } from "../capacity-contracts.js";
 import type { AuthorizedPlanSubject } from "../developer-contracts.js";
+import { ISSUE_PHASES } from "../issue-phases.js";
+export { LeadResumeDescriptorSchema } from "../codex-lead-contracts.js";
+export type { LeadPlanningActivityInput, LeadPlanningResult } from "../codex-lead-contracts.js";
+import type { LeadPlanningActivityInput, LeadPlanningResult } from "../codex-lead-contracts.js";
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const sha = z.string().regex(/^[a-f0-9]{40,64}$/i);
@@ -193,6 +197,20 @@ export const SafeSummarySchema = z.string().min(1).superRefine((value, context) 
   if (new TextEncoder().encode(value).byteLength > 240) context.addIssue({ code: "custom", message: "Safe summaries are limited to 240 UTF-8 bytes" });
 });
 
+export function toSafeSummary(value: string): string {
+  const normalized = value.replace(/\s+/gu, " ").trim();
+  const encoder = new TextEncoder();
+  if (encoder.encode(normalized).byteLength <= 240) return SafeSummarySchema.parse(normalized);
+  const suffix = "…";
+  const budget = 240 - encoder.encode(suffix).byteLength;
+  let bounded = "";
+  for (const character of normalized) {
+    if (encoder.encode(bounded + character).byteLength > budget) break;
+    bounded += character;
+  }
+  return SafeSummarySchema.parse(`${bounded.trimEnd()}${suffix}`);
+}
+
 export const ActiveOperationSchema = z.object({
   commandId: durableId,
   kind: z.enum(["lead_planning", "development", "delivery_review", "repair", "release", "conflict_plan", "ci", "final_review"]),
@@ -267,10 +285,10 @@ export const MergeConflictPlanSchema = z.object({
 
 export type MergeConflictPlan = z.infer<typeof MergeConflictPlanSchema>;
 
-export const IssuePhaseSchema = z.enum(["backlog", "planning", "supplemental_review", "plan_consolidation", "approval", "blocked", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"]);
+export const IssuePhaseSchema = z.enum(ISSUE_PHASES);
 export type IssuePhase = z.infer<typeof IssuePhaseSchema>;
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
-export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "request_plan_revision", "reject_plan", "respond_plan_blocker", "revise_plan", "record_progress", "start_development", "retry_development", "cancel_development", "verify_developer_ownership", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "reconcile_acceptance", "cancel_issue", "reconcile_merge", "continue_work", "retry_capacity"]);
+export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "request_plan_revision", "reject_plan", "respond_plan_blocker", "revise_plan", "record_progress", "start_development", "retry_development", "cancel_development", "verify_developer_ownership", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "reconcile_acceptance", "resolve_decision_blocker", "cancel_issue", "reconcile_merge", "continue_work", "retry_capacity"]);
 export type IssueCommand = z.infer<typeof IssueCommandSchema>;
 export const IssuePlanDecisionSchema = z.enum(["approve", "request_revision", "reject"]);
 export const AttentionCategorySchema = z.enum(["member_authorization", "member_decision", "agent_contradiction", "agent_exhausted", "unsafe_recovery", "provider_ambiguity", "provider_authentication", "provider_connectivity_exhausted", "verification_unrecoverable", "target_drift", "capacity_exhausted"]);
@@ -303,7 +321,11 @@ export const IssueContinuationStateSchema = z.object({
   leadSessionRef: durableId.nullable().optional(),
   leadExecutionId: durableId.nullable().optional(),
   leadEvidenceArtifactId: durableId.nullable().optional(),
+  leadEvidenceSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   leadOutputArtifactId: durableId.nullable().optional(),
+  leadOutputSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+  leadInputManifestArtifactId: durableId.nullable().optional(),
+  leadInputManifestSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   leadOutputKind: IssueLeadOutputKindSchema.nullable().optional(),
   leadSummary: SafeSummarySchema.nullable().optional(),
   originalPlanSubject: PlanSubjectSchema.nullable().optional(),
@@ -320,6 +342,13 @@ export const IssueContinuationStateSchema = z.object({
   planMaterial: z.boolean().nullable().optional(),
   preservedWorktreeCompatibility: z.boolean().nullable().optional(),
   materialCategories: z.array(PlanMaterialCategorySchema).max(6).optional(),
+  blockedCategory: z.enum(["human_decision", "authentication", "configuration", "capacity", "execution_ownership"]).nullable().optional(),
+  blockedResumePhase: z.literal("planning").nullable().optional(),
+  blockerArtifactId: durableId.nullable().optional(),
+  blockerArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+  blockerResolutionId: durableId.nullable().optional(),
+  leadResumeInstructionArtifactId: durableId.nullable().optional(),
+  leadResumeInstructionSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   supplementalReviewUsed: z.boolean().optional(),
   supplementalReviewArtifactId: durableId.nullable().optional(),
   decisionId: durableId.nullable().optional(),
@@ -498,7 +527,11 @@ export const IssueWorkflowStateSchema = z.object({
   leadSessionRef: durableId.nullable().optional(),
   leadExecutionId: durableId.nullable().optional(),
   leadEvidenceArtifactId: durableId.nullable().optional(),
+  leadEvidenceSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   leadOutputArtifactId: durableId.nullable().optional(),
+  leadOutputSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+  leadInputManifestArtifactId: durableId.nullable().optional(),
+  leadInputManifestSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   leadOutputKind: IssueLeadOutputKindSchema.nullable().optional(),
   leadSummary: SafeSummarySchema.nullable().optional(),
   originalPlanSubject: PlanSubjectSchema.nullable().optional(),
@@ -515,6 +548,13 @@ export const IssueWorkflowStateSchema = z.object({
   planMaterial: z.boolean().nullable().optional(),
   preservedWorktreeCompatibility: z.boolean().nullable().optional(),
   materialCategories: z.array(PlanMaterialCategorySchema).max(6).optional(),
+  blockedCategory: z.enum(["human_decision", "authentication", "configuration", "capacity", "execution_ownership"]).nullable().optional(),
+  blockedResumePhase: z.literal("planning").nullable().optional(),
+  blockerArtifactId: durableId.nullable().optional(),
+  blockerArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+  blockerResolutionId: durableId.nullable().optional(),
+  leadResumeInstructionArtifactId: durableId.nullable().optional(),
+  leadResumeInstructionSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   supplementalReviewUsed: z.boolean().optional(),
   supplementalReviewArtifactId: durableId.nullable().optional(),
   decisionId: durableId.nullable().optional(),
@@ -698,6 +738,14 @@ export const StartPlanningInputSchema = z.object({
   planAuthorizationId: durableId.optional(),
   planArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
 });
+
+export const ResolveDecisionBlockerInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  actorUserId: durableId,
+  answerArtifactId: durableId,
+  answerSha256: z.string().regex(/^[a-f0-9]{64}$/),
+}).strict();
+export type ResolveDecisionBlockerInput = z.infer<typeof ResolveDecisionBlockerInputSchema>;
 
 export const RecordProgressInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
@@ -903,45 +951,6 @@ export const DeliveryDecisionActivityInputSchema = z.object({
   note: z.string().min(1).max(4_000),
 });
 
-export interface LeadPlanningActivityInput {
-  taskId: string;
-  companyId: string;
-  workflowId: string;
-  projectId: string;
-  projectRevisionId: string;
-  briefArtifactId: string;
-  imageArtifactIds: string[];
-  roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
-  revision: number;
-  revisionRequestId?: string;
-  resumeLeadSessionRef?: string;
-  capacityRequestId?: string;
-  leadSessionRef?: string;
-  revisionNoteArtifactId?: string;
-  revisionNoteSha256?: string;
-  memberResponseArtifactId?: string;
-  memberResponseSha256?: string;
-}
-
-export interface LeadPlanningResult {
-  leadSessionRef: string;
-  leadExecutionId: string;
-  leadEvidenceArtifactId: string;
-  leadEvidenceArtifactSha256?: string;
-  leadOutputArtifactId: string;
-  leadOutputArtifactSha256?: string;
-  leadOutputKind: "plan" | "decision_blocker";
-  leadSummary: string;
-  materialCategories: PlanMaterialCategory[];
-  material: boolean;
-  preservedWorktreeCompatibility?: boolean | null;
-  planSubject?: PlanSubject;
-  materialityEvidence?: MaterialityEvidenceSubject;
-  blockerSubject?: PlanBlockerSubject;
-  leadReviewResponseArtifactId?: string;
-  leadReviewResponseArtifactSha256?: string;
-}
-
 export interface SupplementalReviewActivityInput {
   taskId: string;
   companyId: string;
@@ -1063,6 +1072,21 @@ export interface AuthorizeFinalPlanActivityResult {
   authorizationKind: "routine_auto" | "human_approval";
   approvalDecisionId: string | null;
   authorizedAt: string;
+}
+
+export interface DecisionBlockerResolutionActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  actorUserId: string;
+  blockerOutputArtifactId: string;
+  blockerOutputSha256: string;
+  answerArtifactId: string;
+  answerSha256: string;
+}
+
+export interface DecisionBlockerResolutionActivityResult {
+  resolutionId: string;
 }
 
 export interface DeveloperExecutionActivityInput {
@@ -1303,6 +1327,7 @@ export interface MergeConflictPlanActivityInput {
   briefArtifactId: string;
   planRevision: number;
   forwardMergeId: string;
+  roleProfiles?: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
   leadSessionRef: string;
   leadOutputArtifactId: string;
   worktreePath: string;
@@ -1613,6 +1638,7 @@ export interface IssueActivities {
   runSupplementalReview(input: SupplementalReviewActivityInput): Promise<SupplementalReviewResult>;
   consolidateLeadPlan(input: ConsolidateLeadPlanActivityInput): Promise<LeadPlanningResult>;
   planDeliveryRepair(input: DeliveryRepairPlanActivityInput): Promise<DeliveryRepairPlanResult>;
+  recordDecisionBlockerResolution(input: DecisionBlockerResolutionActivityInput): Promise<DecisionBlockerResolutionActivityResult>;
   runDeveloperExecution(input: DeveloperExecutionActivityInput): Promise<WorkflowDeveloperExecutionResult>;
   runDeveloperExecutionSupervised(input: SupervisedDeveloperExecutionActivityInput): Promise<DeveloperTurnActivityOutcome<WorkflowDeveloperExecutionResult>>;
   reviewDelivery(input: WorkflowDeliveryReviewActivityInput): Promise<WorkflowDeliveryReviewResult>;

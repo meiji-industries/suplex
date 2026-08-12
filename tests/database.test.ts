@@ -160,7 +160,12 @@ test("0019 upgrades legacy Developer executions without inventing verification t
       DROP TABLE forge_developer_execution_truth;
       DROP TABLE forge_issue_worktrees;
       DROP TABLE forge_plan_authorizations;
-      DELETE FROM __drizzle_migrations WHERE created_at = (SELECT MAX(created_at) FROM __drizzle_migrations);
+      DELETE FROM __drizzle_migrations
+      WHERE created_at = (
+        SELECT created_at FROM __drizzle_migrations
+        ORDER BY created_at DESC
+        LIMIT 1 OFFSET 1
+      );
     `);
     legacy.close();
 

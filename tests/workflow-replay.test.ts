@@ -46,6 +46,21 @@ const capacityHistoryFixturePaths = [
   "worker-restart-wrapper-reattachment.json",
 ].map((filename) => join(process.cwd(), ".scratch/forge-mvp/replay", filename));
 
+function decodedPayloads(history: { events: unknown[] }): unknown[] {
+  const payloads: unknown[] = [];
+  const visit = (value: unknown): void => {
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    if (!value || typeof value !== "object") return;
+    const record = value as Record<string, unknown>;
+    if (typeof record.data === "string" && record.metadata && typeof record.metadata === "object") {
+      try { const decoded = JSON.parse(Buffer.from(record.data, "base64").toString("utf8")); payloads.push(decoded); visit(decoded); } catch { /* Non-JSON Temporal payloads are not state checkpoints. */ }
+    }
+    Object.values(record).forEach(visit);
+  };
+  visit(history);
+  return payloads;
+}
+
 async function mutationBundle(mode: "compatible" | "incompatible") {
   const loader = fileURLToPath(new URL("./fixtures/workflow-mutation-loader.cjs", import.meta.url));
   const options = productionWorkflowBundleOptions();
@@ -62,7 +77,7 @@ async function mutationBundle(mode: "compatible" | "incompatible") {
 
 test("INV-15 the versioned manifest consumes every sanitized fixture and batch replays the production bundle", async () => {
   const manifest = await readReplayManifest(manifestPath);
-  expect(manifest.fixtures).toHaveLength(32);
+  expect(manifest.fixtures).toHaveLength(45);
   expect(manifest.fixtures.map((fixture) => fixture.scenario)).toEqual(expect.arrayContaining([
     "backlog_planning",
     "normal_success",
@@ -88,10 +103,43 @@ test("INV-15 the versioned manifest consumes every sanitized fixture and batch r
     "developer_linked_retry",
     "developer_ownership_ambiguous",
     "developer_result_claim",
+    "routine_plan",
+    "material_approval",
+    "supplemental_consolidation",
+    "consolidated_blocker",
+    "stale_duplicate_decision",
+    "governance_worker_restart",
+    "routine_lead_plan",
+    "material_lead_plan",
+    "member_revision",
+    "decision_blocker",
+    "decision_resolution",
+    "cancel_while_planning",
+    "blocked_configuration",
   ]));
   const continueRuns = manifest.fixtures.filter((fixture) => fixture.scenario === "continue_as_new");
   expect(continueRuns.map((fixture) => fixture.runIndex)).toEqual([0, 1, 2]);
   await replayManifest(manifestPath);
+});
+
+test("Codex Lead replay histories preserve plan, blocker, resume, and cancellation semantics", async () => {
+  const expectations = [
+    { file: "routine-lead-plan.json", kind: "plan", material: false },
+    { file: "material-lead-plan.json", kind: "plan", material: true },
+    { file: "member-revision.json", resumeReason: "member_revision" },
+    { file: "decision-blocker.json", kind: "decision_blocker", blockedCategory: "human_decision" },
+    { file: "decision-resolution.json", resumeReason: "decision_resolution", material: true },
+    { file: "cancel-while-planning.json" },
+    { file: "blocked-configuration.json", blockedCategory: "configuration" },
+  ];
+  for (const expected of expectations) {
+    const history = await readReplayHistory(join(process.cwd(), ".scratch/forge-mvp/replay", expected.file));
+    const payloads = decodedPayloads(history);
+    if (expected.kind) expect(payloads.some((value) => value && typeof value === "object" && (value as { kind?: unknown }).kind === expected.kind)).toBe(true);
+    if (expected.material !== undefined) expect(payloads.some((value) => value && typeof value === "object" && (value as { material?: unknown }).material === expected.material)).toBe(true);
+    if (expected.resumeReason) expect(payloads.some((value) => value && typeof value === "object" && (value as { resume?: { reason?: unknown } }).resume?.reason === expected.resumeReason)).toBe(true);
+    if (expected.blockedCategory) expect(payloads.some((value) => value && typeof value === "object" && (value as { blockedCategory?: unknown }).blockedCategory === expected.blockedCategory)).toBe(true);
+  }
 });
 
 test("the captured backlog history still replays through the exact shared bundle", async () => {

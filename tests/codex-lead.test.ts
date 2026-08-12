@@ -9,7 +9,7 @@ import { ApplicationFailure } from "@temporalio/activity";
 
 import { ArtifactStore } from "../src/artifacts.js";
 import { CapacityManager } from "../src/capacity.js";
-import { AgentFailure, AgentService, LeadOutputSchema, resolveAgentCommand, runCodexProcess, type LeadProcessRunner, type SessionStore } from "../src/codex-lead.js";
+import { AgentFailure, AgentService, LeadOutputSchema, parseLeadOutput, resolveAgentCommand, runCodexProcess, type LeadProcessRunner, type SessionStore } from "../src/codex-lead.js";
 import { DeveloperService } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase, ProjectionIntegrityFailure } from "../src/database.js";
@@ -72,6 +72,25 @@ async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixtu
   return { root, database, config, briefId: brief.id };
 }
 
+function verifyRoutinePlanOutput(database: ForgeDatabase, input: { outputId: string; plan: { id: string; sha256: string }; evidence: { id: string; sha256: string }; leadExecutionId: string }) {
+  database.authQuery((db) => db.prepare("UPDATE forge_issue_outputs SET original_plan_revision = 1, final_version = 1, artifact_sha256 = ?, evidence_manifest_artifact_id = ?, evidence_manifest_sha256 = ?, legacy_unverified = 0 WHERE id = ?").run(input.plan.sha256, input.evidence.id, input.evidence.sha256, input.outputId));
+  return {
+    companyId: "company_1",
+    issueId: "task_1",
+    workflowId: "workflow-test-issue-task_1",
+    originalPlanRevision: 1,
+    outputId: input.outputId,
+    outputRevision: 1,
+    finalVersion: 1 as const,
+    artifactId: input.plan.id,
+    artifactSha256: input.plan.sha256,
+    leadSessionRef: "session_lead",
+    leadExecutionId: input.leadExecutionId,
+    evidenceManifestArtifactId: input.evidence.id,
+    evidenceManifestSha256: input.evidence.sha256,
+  };
+}
+
 async function repairFixture() {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
@@ -104,14 +123,21 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
   const sessions = new Map<string, string>();
   const sessionStore: SessionStore = { async create(raw) { sessions.set("session_opaque", raw); return "session_opaque"; }, async read(ref) { return sessions.get(ref) ?? ""; } };
   const calls: string[][] = [];
+  let resumedSessionRef: string | undefined;
+  let resumedModel: string | undefined;
   const runner: LeadProcessRunner = async (invocation) => {
     await invocation.onStart(4321, "2026-08-11T00:00:00.000Z");
     calls.push(invocation.args);
+    if (calls.length >= 2) {
+      const request = JSON.parse(await readFile(invocation.args.at(-1)!, "utf8")) as { resumeSessionRef?: string; model?: string };
+      resumedSessionRef = request.resumeSessionRef;
+      resumedModel = request.model;
+    }
     if (calls.length === 1) {
       await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-session-1" }));
       await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "not json Bearer gho_secret" } }));
     } else {
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "plan", summary: "A bounded fixture plan", reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect the fixture", verification: "The fixture test passes" }], compatibilityAnalysis: "No compatibility change is required.", operationalAnalysis: "The change is local.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] }) } }));
+      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "plan", summary: "A bounded fixture plan", reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect the fixture", entryPoint: null, completionCriterion: "The fixture is understood", verification: "The fixture test passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change is required.", operationalAnalysis: "The change is local.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] }) } }));
     }
     return { exitCode: 0, stderr: "" };
   };
@@ -120,14 +146,22 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
     const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1" }, revision: 1 });
     expect(result.leadSessionRef).toBe("session_opaque");
     expect(calls).toHaveLength(2);
-    expect(calls[1]).toContain("raw-session-1");
+    expect(resumedSessionRef).toBe("session_opaque");
     expect(sessions.get("session_opaque")).toBe("raw-session-1");
+    const briefSha = value.database.authQuery((db) => (db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ?").get(value.briefId) as { sha256: string }).sha256);
+    value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET model = 'changed-after-task-creation' WHERE id = 'profile_1'").run());
+    const resumed = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1" }, revision: 2, resume: { leadSessionRef: result.leadSessionRef, reason: "member_revision", instructionArtifactId: value.briefId, instructionSha256: briefSha } });
+    expect(resumed.leadSessionRef).toBe(result.leadSessionRef);
+    expect(resumedModel).toBe("gpt-5-codex");
     expect(value.database.authQuery((db) => db.prepare("SELECT status, session_ref, process_start_identity FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ status: "completed", session_ref: "session_opaque", process_start_identity: "4321:2026-08-11T00:00:00.000Z" });
     const evidence = value.database.authQuery((db) => db.prepare("SELECT a.storage_path, a.sha256 FROM forge_artifacts a WHERE a.id = ?").get(result.leadEvidenceArtifactId) as { storage_path: string; sha256: string });
     const evidenceText = await new ArtifactStore(value.config.artifactRoot).read({ companyId: "company_1", storagePath: evidence.storage_path, sha256: evidence.sha256 });
     expect(evidenceText.toString("utf8")).not.toContain("gho_secret");
     expect(evidenceText.toString("utf8")).not.toContain("raw-session-1");
     expect(value.database.authQuery((db) => db.prepare("SELECT kind, revision, session_ref FROM forge_issue_outputs WHERE task_id = 'task_1'").get())).toEqual({ kind: "plan", revision: 1, session_ref: "session_opaque" });
+    const replayed = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1" }, revision: 1 });
+    expect(replayed.leadExecutionId).toBe(result.leadExecutionId);
+    expect(calls).toHaveLength(3);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -136,12 +170,12 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
 
 test("a capacity request pins model, reasoning, and service priority through later profile edits", async () => {
   const value = await fixture("pinned-model");
-  const calls: string[][] = [];
+  const wrapperRequests: Array<{ model: string; reasoningLevel: string; servicePriority: string }> = [];
   const runner: LeadProcessRunner = async (invocation) => {
-    calls.push(invocation.args);
+    wrapperRequests.push(JSON.parse(await readFile(invocation.args.at(-1)!, "utf8")) as { model: string; reasoningLevel: string; servicePriority: string });
     await invocation.onStart(4330, "2026-08-12T00:00:00.000Z");
     await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-pinned-session" }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "plan", summary: "Pinned profile plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect the fixture", verification: "The focused test passes" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused test.", unresolvedTechnicalQuestions: [], materialCategories: [] }) } }));
+    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "plan", summary: "Pinned profile plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect the fixture", verification: "The focused test passes" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused test.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] }) } }));
     return { exitCode: 0, stderr: "" };
   };
   try {
@@ -154,8 +188,8 @@ test("a capacity request pins model, reasoning, and service priority through lat
     const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_pinned"; }, async read() { return "raw-pinned-session"; } } });
     const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1" }, revision: 1, capacityRequestId: request.id });
 
-    expect(calls[0]).toEqual(expect.arrayContaining(["--model", "pinned-model", "-c", 'model_reasoning_effort="high"', "-c", 'service_tier="priority"']));
-    expect(calls[0]).not.toContain("later-model");
+    expect(wrapperRequests[0]).toMatchObject({ model: "pinned-model", reasoningLevel: "high", servicePriority: "priority" });
+    expect(wrapperRequests[0]?.model).not.toBe("later-model");
     expect(value.database.authQuery((db) => db.prepare("SELECT profile_id, model, reasoning_level, service_priority, capacity_request_id FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ profile_id: "profile_1", model: "pinned-model", reasoning_level: "high", service_priority: "priority", capacity_request_id: request.id });
   } finally {
     value.database.close();
@@ -166,6 +200,110 @@ test("a capacity request pins model, reasoning, and service priority through lat
 test("Lead output schema rejects unresolved technical questions and malformed blockers", () => {
   expect(LeadOutputSchema.safeParse({ kind: "plan", summary: "x", reproduction: null, rootCauseAnalysis: null, steps: [], compatibilityAnalysis: "x", operationalAnalysis: "x", verificationStrategy: "x", unresolvedTechnicalQuestions: ["choose"] }).success).toBe(false);
   expect(LeadOutputSchema.safeParse({ kind: "decision_blocker", summary: "x", evidence: "x", owner: "developer", question: "x", nextAction: "x" }).success).toBe(false);
+});
+
+test("Lead output parsing rejects unknown null fields", () => {
+  const output = { kind: "plan", summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect", entryPoint: null, completionCriterion: "Inspected", verification: "Check" }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], unexpected: null };
+  expect(() => parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })])).toThrow(/required schema/);
+});
+
+test.each(["live", "exited"] as const)("Lead planning finalizes stored completion when the wrapper is %s", async (wrapperState) => {
+  const value = await fixture();
+  const executionId = "agent_attached";
+  const runtimeDir = join(value.config.runtimeRoot, "agent-turns", executionId);
+  await mkdir(runtimeDir, { recursive: true });
+  const output = { kind: "plan", summary: "An attached plan", reproduction: null, rootCauseAnalysis: "The worker restarted.", steps: [{ number: 1, instruction: "Inspect the stored turn", entryPoint: null, completionCriterion: "The turn is finalized", verification: "The attached result is returned" }], compatibilityAnalysis: "No compatibility change is required.", operationalAnalysis: "The wrapper owns the process.", verificationStrategy: "Run the focused test.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] };
+  await writeFile(join(runtimeDir, "spool.ndjson"), `${JSON.stringify({ type: "forge.session_bound", sessionRef: "session_opaque" })}\n${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })}\n`);
+  await writeFile(join(runtimeDir, "status.json"), JSON.stringify({ state: "completed", eventOffset: 1 }));
+  const manifest = await new ArtifactStore(value.config.artifactRoot).put("company_1", "lead-input-manifest", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from("{}") });
+  const now = new Date().toISOString();
+  value.database.authTransaction((db) => {
+    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(manifest.id, manifest.companyId, manifest.kind, manifest.filename, manifest.mimeType, manifest.byteSize, manifest.sha256, manifest.storagePath, manifest.createdAt);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES (?, 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:started', ?, ?, ?, 0)").run(executionId, `agent-turns/${executionId}/spool.ndjson`, `agent-turns/${executionId}/status.json`, now);
+  });
+  let calls = 0;
+  const controller = {
+    async inspect() { return wrapperState === "live" ? { pid: 4101, command: "wrapper", executable: "node", argv: ["node", "wrapper"], processGroup: 5101, startTime: "started" } : undefined; },
+    async signal() {},
+    async isProcessGroupAlive() { return false; },
+  };
+  try {
+    const service = new AgentService(value.database, value.config, {
+      processRunner: async () => { calls += 1; throw new Error("attached turns must not spawn"); },
+      processController: controller,
+      sessionStore: { async create() { return "session_opaque"; }, async read() { return "raw-session"; } },
+    });
+    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1" }, revision: 1 });
+    expect(result.leadExecutionId).toBe(executionId);
+    expect(calls).toBe(0);
+    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_agent_executions WHERE id = ?").get(executionId))).toEqual({ status: "completed" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("Lead stale-child reconciliation signals through the injected process controller", async () => {
+  const value = await fixture();
+  const now = new Date().toISOString();
+  value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, process_pid, process_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES ('agent_stale', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:wrapper-start', 4201, '4201:child-start', 'agent-turns/agent_stale/spool.ndjson', 'agent-turns/agent_stale/status.json', ?, 0)").run(now));
+  let groupAlive = true;
+  const signals: string[] = [];
+  const child = { pid: 4201, command: "codex", executable: "codex", argv: ["codex", "exec"], processGroup: 5101, startTime: "child-start" };
+  const controller = {
+    async inspect(pid: number) { return pid === 4201 && groupAlive ? child : undefined; },
+    async signal() {},
+    async signalGroup(_group: number, signal: "SIGTERM" | "SIGKILL") { signals.push(signal); groupAlive = false; },
+    async isProcessGroupAlive() { return groupAlive; },
+  };
+  const output = { kind: "plan", summary: "Recovered plan", reproduction: null, rootCauseAnalysis: "The worker restarted.", steps: [{ number: 1, instruction: "Recover", entryPoint: null, completionCriterion: "Recovered", verification: "Check" }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] };
+  try {
+    const service = new AgentService(value.database, value.config, {
+      processController: controller,
+      sessionStore: { async create() { return "session_opaque"; }, async read() { return "raw-session"; } },
+      processRunner: async (invocation) => {
+        await invocation.onStart(4301, "new-wrapper-start");
+        await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } }));
+        return { exitCode: 0, stderr: "" };
+      },
+    });
+    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1" }, revision: 1 });
+    expect(result.leadExecutionId).toBe("agent_stale");
+    expect(signals).toEqual(["SIGTERM"]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT attempt, status FROM forge_agent_executions WHERE id = 'agent_stale'").get())).toEqual({ attempt: 2, status: "completed" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("Lead live-wrapper attachment honors Activity cancellation", async () => {
+  const value = await fixture();
+  const executionId = "agent_cancel_attach";
+  const runtimeDir = join(value.config.runtimeRoot, "agent-turns", executionId);
+  await mkdir(runtimeDir, { recursive: true });
+  await writeFile(join(runtimeDir, "spool.ndjson"), "");
+  await writeFile(join(runtimeDir, "status.json"), JSON.stringify({ state: "running", eventOffset: 0 }));
+  const now = new Date().toISOString();
+  value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, heartbeat_at, event_offset) VALUES (?, 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:started', ?, ?, ?, ?, 0)").run(executionId, `agent-turns/${executionId}/spool.ndjson`, `agent-turns/${executionId}/status.json`, now, now));
+  let groupAlive = true;
+  const wrapper = { pid: 4101, command: "wrapper", executable: "node", argv: ["node", "wrapper"], processGroup: 5101, startTime: "started" };
+  const controller = {
+    async inspect() { return groupAlive ? wrapper : undefined; },
+    async signal() {},
+    async signalGroup() { groupAlive = false; },
+    async isProcessGroupAlive() { return groupAlive; },
+  };
+  const abort = new AbortController();
+  abort.abort();
+  try {
+    const service = new AgentService(value.database, value.config, { processController: controller, processRunner: async () => { throw new Error("cancelled attachment must not spawn"); }, sessionStore: { async create() { return "session_opaque"; }, async read() { return "raw-session"; } } });
+    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1" }, revision: 1 }, { signal: abort.signal })).rejects.toMatchObject({ code: "cancelled" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_agent_executions WHERE id = ?").get(executionId))).toEqual({ status: "cancelled", failure_code: "cancelled" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
 });
 
 test("delivery review schema separates advisory approval from blocking repair", () => {
@@ -378,7 +516,7 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
   const sessions = new Map([["session_primary", "raw-primary"]]);
   const sessionStore: SessionStore = { async create(raw) { sessions.set("session_review", raw); return "session_review"; }, async read(ref) { return sessions.get(ref) ?? ""; } };
-  const draft = await artifactStore.put("company_1", "lead-plan", { filename: "draft.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Draft plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", verification: "The check passes" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
+  const draft = await artifactStore.put("company_1", "lead-plan", { filename: "draft.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Draft plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
   const priorEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "prior.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"turn.completed\"}\n") });
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();
@@ -396,7 +534,7 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
       await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-review" }));
       await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "review", summary: "Review is independent", opinion: "approve", concerns: [], requiredChanges: [] }) } }));
     } else {
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ version: 1, originalPlanRevision: 2, reviewArtifactId, reviewResponse: "The independent review is addressed by the consolidated plan.", result: { kind: "plan", summary: "Consolidated plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", verification: "The check passes" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] } }) } }));
+      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ version: 1, originalPlanRevision: 2, reviewArtifactId, reviewResponse: "The independent review is addressed by the consolidated plan.", result: { kind: "plan", summary: "Consolidated plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] } }) } }));
     }
     return { exitCode: 0, stderr: "" };
   };
@@ -463,6 +601,7 @@ test("Developer execution safely resumes an owned worktree after its result was 
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_lead_for_retry', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_lead_for_retry', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_lead_for_retry', 1, 'plan', ?, ?, 'session_lead', 'Retry the bounded developer fixture', ?)").run(plan.id, leadEvidence.id, now);
   });
+  const finalPlanSubject = verifyRoutinePlanOutput(value.database, { outputId: "output_lead_for_retry", plan, evidence: leadEvidence, leadExecutionId: "agent_lead_for_retry" });
   let calls = 0;
   const runner: LeadProcessRunner = async (invocation) => {
     calls += 1;
@@ -478,7 +617,7 @@ test("Developer execution safely resumes an owned worktree after its result was 
     return { exitCode: 0, stderr: "" };
   };
   const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_retry"; }, async read() { return "raw-retry-session"; } } });
-  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id };
+  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, finalPlanSubject };
   try {
     await expect(service.run(input)).rejects.toMatchObject({ code: "process-exited" });
     const failed = value.database.authQuery((db) => db.prepare("SELECT id, evidence_artifact_id FROM forge_developer_executions WHERE task_id = 'task_1' AND attempt = 1").get() as { id: string; evidence_artifact_id: string });
@@ -504,6 +643,7 @@ test("a late Developer failure cannot overwrite a cancellation", async () => {
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_cancel_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_cancel_plan', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_cancel_lead', 1, 'plan', ?, ?, 'session_lead', 'Cancellation plan', ?)").run(plan.id, leadEvidence.id, now);
   });
+  const finalPlanSubject = verifyRoutinePlanOutput(value.database, { outputId: "output_cancel_plan", plan, evidence: leadEvidence, leadExecutionId: "agent_cancel_lead" });
   const runner: LeadProcessRunner = async (invocation) => {
     await invocation.onStart(4611, "2026-08-11T00:00:00.000Z");
     const executionId = (value.database.authQuery((db) => db.prepare("SELECT id FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get() as { id: string })).id;
@@ -512,7 +652,7 @@ test("a late Developer failure cannot overwrite a cancellation", async () => {
   };
   try {
     const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_developer"; }, async read() { return "raw-developer"; } } });
-    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id })).rejects.toBeInstanceOf(AgentFailure);
+    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, finalPlanSubject })).rejects.toBeInstanceOf(AgentFailure);
     expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, evidence_artifact_id FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get())).toMatchObject({ status: "cancelled", failure_code: null, evidence_artifact_id: expect.any(String) });
   } finally {
     value.database.close();
@@ -531,6 +671,7 @@ test("a late Developer success cannot overwrite a cancellation", async () => {
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_cancel_success_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_cancel_success_plan', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_cancel_success_lead', 1, 'plan', ?, ?, 'session_lead', 'Cancellation success race', ?)").run(plan.id, leadEvidence.id, now);
   });
+  const finalPlanSubject = verifyRoutinePlanOutput(value.database, { outputId: "output_cancel_success_plan", plan, evidence: leadEvidence, leadExecutionId: "agent_cancel_success_lead" });
   const runner: LeadProcessRunner = async (invocation) => {
     await invocation.onStart(4612, "2026-08-11T00:00:00.000Z");
     await writeFile(join(invocation.cwd, "CANCELLED_MARKER.md"), "cancelled delivery\n");
@@ -546,7 +687,7 @@ test("a late Developer success cannot overwrite a cancellation", async () => {
   };
   try {
     const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_developer"; }, async read() { return "raw-developer"; } } });
-    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id })).rejects.toMatchObject({ code: "developer-cancelled" });
+    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { lead: "profile_1", developer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, finalPlanSubject })).rejects.toMatchObject({ code: "developer-cancelled" });
     expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get())).toEqual({ status: "cancelled" });
   } finally {
     value.database.close();
@@ -578,11 +719,12 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
   });
   const sessions = new Map([["session_lead", "raw-lead"], ["session_developer", "raw-developer"]]);
   const sessionStore: SessionStore = { async create(raw) { const ref = `session_${raw}`; sessions.set(ref, raw); return ref; }, async read(ref) { return sessions.get(ref) ?? ""; } };
-  let reviewPrompt = "";
+  let reviewRequestPrompt = "";
   let reviewCalls = 0;
   const reviewRunner: LeadProcessRunner = async (invocation) => {
     await invocation.onStart(4701, "2026-08-11T00:00:00.000Z");
-    if (reviewCalls === 0) reviewPrompt = invocation.args.at(-1) ?? "";
+    const request = JSON.parse(await readFile(invocation.args.at(-1)!, "utf8")) as { promptPath: string };
+    if (reviewCalls === 0) reviewRequestPrompt = await readFile(request.promptPath, "utf8");
     await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-lead" }));
     reviewCalls += 1;
     const reviewOutput = reviewCalls === 1
@@ -600,9 +742,9 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
     const completedReview = review;
     expect(review.correctionAttempts).toBe(1);
     expect(reviewCalls).toBe(2);
-    expect(reviewPrompt).toContain(targetBaseSha);
-    expect(reviewPrompt).toContain(subjectCommit);
-    expect(reviewPrompt).toContain(subjectTree);
+    expect(reviewRequestPrompt).toContain(targetBaseSha);
+    expect(reviewRequestPrompt).toContain(subjectCommit);
+    expect(reviewRequestPrompt).toContain(subjectTree);
     expect(value.database.authQuery((db) => db.prepare("SELECT outcome, session_ref, subject_commit FROM forge_delivery_reviews WHERE id = ?").get(completedReview.review.reviewId))).toEqual({ outcome: "blocking", session_ref: "session_lead", subject_commit: subjectCommit });
     const reviewEvidenceRow = value.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_delivery_review_attempts attempt ON attempt.evidence_artifact_id = a.id WHERE attempt.completed_review_id = ?").get(completedReview.review.reviewId) as { storagePath: string; sha256: string });
     const reviewEvidenceText = (await new ArtifactStore(value.config.artifactRoot).read({ companyId: "company_1", storagePath: reviewEvidenceRow.storagePath, sha256: reviewEvidenceRow.sha256 })).toString("utf8");
@@ -658,7 +800,6 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
       expect(blocked).toMatchObject({ outcome: "blocked", code, cycle, subject: { developerExecutionId: "developer_review_subject", subjectCommit, subjectTree } });
       expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, finished_at FROM forge_delivery_repairs WHERE id = ?").get(blocked.repairAttemptId))).toMatchObject({ status: "blocked", failure_code: code, finished_at: expect.any(String) });
     }
-
     const repairRunner: LeadProcessRunner = async (invocation) => {
       await invocation.onStart(4703, "2026-08-11T00:02:00.000Z");
       await writeFile(join(invocation.cwd, "DELIVERED.md"), "forge developer proof\n");

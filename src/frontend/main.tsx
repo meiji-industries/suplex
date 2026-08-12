@@ -36,6 +36,7 @@ import { companySettingsPath, isApiError, readJson, withCompany, type ApiUser, t
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import type { HealthCheck, HealthSnapshot } from "../health.js";
 import type { TaskResponse } from "../http/contracts/tasks.js";
+import { ISSUE_PHASES, type IssuePhase } from "../issue-phases.js";
 import { isOwnedHealthCheck } from "../health-contract.js";
 import { releaseFailureCopy } from "../release-failures.js";
 import {
@@ -97,13 +98,13 @@ type ApiAttentionItem = { id: string; companyId: string; taskId: string; taskTit
 type ApiAttentionCompany = { companyId: string; companyName: string; companyStatus: string; activeIssueCount: number; phases: Record<string, number>; attentionCount: number; attention: ApiAttentionItem[]; recentOutcomes: Array<{ taskId: string; taskTitle: string; phase: string; updatedAt: string }>; projectionHealth: { projectedRevision: number; sourceRevision: number; projectedAt: string; stateChangedAt: string | null; reconciledAt: string | null; status: "current" | "stale" | "unknown"; lagMs: number } };
 type ApiAttentionEvidence = { artifactId: string; sha256: string; kind: string; content: string; truncated: boolean };
 type ApiTask = TaskResponse;
-type TaskPhase = ApiTask["phase"];
+type TaskPhase = IssuePhase;
 type ApiCi = NonNullable<ApiTask["ci"]>;
 type ApiRelease = NonNullable<ApiTask["release"]>;
 
 const DeveloperDiff = lazy(() => import("./components/app/developer-diff.js"));
 
-const taskPhases: TaskPhase[] = ["backlog", "planning", "supplemental_review", "plan_consolidation", "approval", "blocked", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"];
+const taskPhases = ISSUE_PHASES;
 
 function taskPhaseLabel(phase: TaskPhase): string {
   const labels: Partial<Record<TaskPhase, string>> = {
@@ -113,6 +114,7 @@ function taskPhaseLabel(phase: TaskPhase): string {
     repair_required: "Repair",
     delivery_reviewed: "Reviewed",
     delivery_blocked: "Blocked",
+    blocked: "Blocked",
     merge_conflict_reviewing: "Reviewing conflict",
     merge_conflict_required: "Conflict resolution",
     merge_conflict_resolving: "Resolving conflict",
@@ -848,7 +850,7 @@ function TaskOptions(): ReactElement {
   );
 }
 
-function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void> }): ReactElement {
+function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void> }): ReactElement {
   const approveCommand = task.commands.find((command) => command.name === "approve_plan" && command.subject?.kind === "plan_decision");
   const revisionCommand = task.commands.find((command) => command.name === "request_plan_revision" && command.subject?.kind === "plan_decision");
   const blockerCommand = task.commands.find((command) => command.name === "respond_plan_blocker" && command.subject?.kind === "plan_blocker");
@@ -861,6 +863,8 @@ function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onSta
     void readJson<{ events: DeveloperExecutionEventView[] }>(`/api/tasks/${encodeURIComponent(task.id)}/developer-executions/${encodeURIComponent(task.developerExecution.id)}/events`).then((result) => { if (active) setDeveloperEvents(result.events); }).catch(() => { if (active) setDeveloperEvents([]); });
     return () => { active = false; };
   }, [task.id, task.developerExecution?.id, task.developerExecution?.currentStep, task.developerExecution?.status]);
+  const [answer, setAnswer] = useState("");
+  useEffect(() => { setAnswer(""); }, [task.id, task.revision]);
   return (
     <ApplicationFrame title={task.title} headerActions={<TaskOptions />}>
       <article data-task-detail className="min-w-0">
@@ -891,6 +895,7 @@ function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onSta
                 {task.governance.supplementalReview ? <SupplementalReviewPanel value={{ reviewerProfileId: task.governance.supplementalReview.reviewerProfile.name, opinion: task.governance.supplementalReview.opinion, concerns: task.governance.supplementalReview.concerns, requiredChanges: task.governance.supplementalReview.requiredChanges, leadResponse: task.governance.supplementalReview.leadResponse.text }} /> : null}
                 {task.governance.decision ? <section className="space-y-1" data-plan-decision><h3 className="text-xs font-semibold">Member decision</h3><div className="text-[13px]">{task.governance.decision.decision} · {task.governance.decision.actor.displayName}</div><p className="whitespace-pre-wrap text-[12px]">{task.governance.decision.note}</p></section> : null}
                 {task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">Decision blocker</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}
+                {task.leadOutput?.content.kind === "decision_blocker" && task.allowedCommands.includes("resolve_decision_blocker") ? <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); void onResolveDecisionBlocker(answer); }}><FieldLabel htmlFor="decision-answer">Decision</FieldLabel><Textarea id="decision-answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Answer the Lead's question" maxLength={8000} /><Button size="sm" type="submit" disabled={busy || !answer.trim()}>{busy ? "Saving…" : "Resolve decision"}</Button></form> : null}
                 {task.developerExecution ? <div className="space-y-4"><DeveloperEvidence taskId={task.id} execution={task.developerExecution} events={developerEvents} />{task.developerExecution.status === "completed" ? <Suspense fallback={<Skeleton className="h-40 w-full" />}><DeveloperDiff taskId={task.id} executionId={task.developerExecution.id} /></Suspense> : null}</div> : null}
                 <DeliveryReviewPanel task={task} />
                 {task.ci ? <CiPanel task={task} ci={task.ci} /> : null}
@@ -1145,13 +1150,20 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
     } catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to continue work"); }
     finally { setBusy(false); }
   };
+  const resolveDecisionBlocker = async (answer: string): Promise<void> => {
+    if (!selected || !answer.trim()) return;
+    setBusy(true); setError("");
+    try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/resolve-decision-blocker`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision, answer }) }); selectedRef.current = updated; setSelected(updated); await reload(); }
+    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to resolve the decision blocker"); }
+    finally { setBusy(false); }
+  };
 
   if (routeTaskId && loading) return <TaskDetailsSkeleton />;
   if (routeTaskId && !companyId) return <TaskDetailsNotFound companyId="" returnTo={mode} />;
   if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
   if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
-  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} />;
+  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} />;
 
   if (mode === "board") {
     return (

@@ -59,7 +59,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
     await planningGate;
     const artifactStore = new ArtifactStore(config.artifactRoot);
     const evidence = await artifactStore.put(company.id, "agent-evidence", { filename: "agent.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"turn.completed\"}\n") });
-    const output = await artifactStore.put(company.id, "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "A focused browser plan", reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect repository", verification: "The issue is understood" }, { number: 2, instruction: "Run focused tests", verification: "The focused suite passes" }], compatibilityAnalysis: "The change is local.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [] })) });
+    const output = await artifactStore.put(company.id, "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "A focused browser plan", reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The issue is understood", verification: "Review the repository evidence" }, { number: 2, instruction: "Run focused tests", entryPoint: null, completionCriterion: "The focused suite passes", verification: "Confirm the focused suite result" }], compatibilityAnalysis: "The change is local.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
     database.authQuery((db) => {
       const now = new Date().toISOString();
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, output.id, output.companyId, output.kind, output.filename, output.mimeType, output.byteSize, output.sha256, output.storagePath, output.createdAt);
@@ -220,6 +220,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       expect(await taskDetail.locator('[data-task-lead-plan] [data-slot="accordion"]').count()).toBe(1);
       await taskDetail.getByRole("button", { name: "Inspect repository", exact: true }).click();
       await taskDetail.getByText("The issue is understood", { exact: true }).waitFor();
+      await taskDetail.getByText("Review the repository evidence", { exact: true }).waitFor();
       await taskDetail.getByRole("button", { name: "Request review", exact: true }).click();
       await taskDetail.getByRole("button", { name: "Approve plan", exact: true }).waitFor();
       await taskDetail.getByRole("button", { name: "Approve plan", exact: true }).click();

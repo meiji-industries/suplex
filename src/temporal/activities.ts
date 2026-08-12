@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import { ApplicationFailure, Context } from "@temporalio/activity";
+import { ApplicationFailure, CancelledFailure, Context } from "@temporalio/activity";
 import { z } from "zod";
 
 import { ProjectionIntegrityFailure, projectionStateHash, type ForgeDatabase } from "../database.js";
@@ -89,6 +89,7 @@ export interface ActivityOptions {
   developer?: Omit<Partial<Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">>, "runRepair"> & { runRepair?: (input: Parameters<DeveloperService["runRepair"]>[0]) => Promise<unknown> };
   githubRelease?: GithubReleaseAdapter;
   ciProvider?: CiProvider;
+  logSink?: (line: string) => void;
 }
 
 class SupervisedDeveloperTerminalError extends Error {
@@ -203,7 +204,7 @@ function reconcileBlocker(error: unknown): { code: TargetBaseBlockerCode; owner:
 }
 
 export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): ProbeActivities & IssueActivities & DeliveryBlockerActivities {
-  const logger = new StructuredLogger();
+  const logger = new StructuredLogger(options.logSink);
   const defaultAgent = new AgentService(database, config);
   const githubRelease = options.githubRelease ?? createGithubReleasePort();
   const defaultDeveloper = new DeveloperService(database, config, { github: githubRelease });
@@ -242,6 +243,11 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     try {
       return await operation();
     } catch (error) {
+      try {
+        if (Context.current().cancellationSignal.aborted) throw new CancelledFailure("CANCELLED");
+      } catch (cancellationError) {
+        if (cancellationError instanceof CancelledFailure) throw cancellationError;
+      }
       const permanentFailure = asNonRetryableApplicationFailure(error);
       if (permanentFailure) {
         if (error instanceof AgentFailure) await attentionFailure(input, agentCategory(error), error.code, error.message);
@@ -367,6 +373,13 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     const row = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND (? IS NULL OR branch_name = ?) ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.branchName ?? null, input.branchName ?? null) as { worktreePath: string } | undefined);
     if (!row?.worktreePath) throw new Error("Developer worktree context is unavailable");
     return row.worktreePath;
+  };
+  const cancellationSignal = (): AbortSignal | undefined => {
+    try { return Context.current().cancellationSignal; } catch { return undefined; }
+  };
+  const agentRuntime = (): { signal?: AbortSignal } => {
+    const signal = cancellationSignal();
+    return signal ? { signal } : {};
   };
   return {
     async recordProbeStarted(input: ProbeWorkflowInput): Promise<ProbeWorkflowState> {
@@ -573,25 +586,25 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       return { successorTaskId: input.successorTaskId, successorWorkflowId: input.successorWorkflowId, predecessorTaskId: input.predecessorTaskId, projectRevisionId: current.projectRevisionId, creationRevision: input.acceptedRevision };
     },
     async runLeadPlanning(input) {
-      const result = await invokeAgent(input, () => (agent?.runLeadPlanning ?? defaultAgent.runLeadPlanning.bind(defaultAgent))(input));
+      const result = await invokeAgent(input, () => agent?.runLeadPlanning ? agent.runLeadPlanning(input) : defaultAgent.runLeadPlanning(input, agentRuntime()));
       const leadEvidenceArtifactSha256 = artifactSha256(input.companyId, result.leadEvidenceArtifactId);
       const leadOutputArtifactSha256 = artifactSha256(input.companyId, result.leadOutputArtifactId);
-      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, { ...result, ...(leadEvidenceArtifactSha256 ? { leadEvidenceArtifactSha256 } : {}), ...(leadOutputArtifactSha256 ? { leadOutputArtifactSha256 } : {}), leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) });
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, { ...result, ...(leadEvidenceArtifactSha256 ? { leadEvidenceArtifactSha256, leadEvidenceSha256: leadEvidenceArtifactSha256 } : {}), ...(leadOutputArtifactSha256 ? { leadOutputArtifactSha256, leadOutputSha256: leadOutputArtifactSha256 } : {}), leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) });
     },
     async runSupplementalReview(input) {
-      const result = await invokeAgent(input, () => (agent?.runSupplementalReview ?? defaultAgent.runSupplementalReview.bind(defaultAgent))(input));
+      const result = await invokeAgent(input, () => agent?.runSupplementalReview ? agent.runSupplementalReview(input) : defaultAgent.runSupplementalReview(input, agentRuntime()));
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.executionId, sessionRef: result.sessionRef }, result);
     },
     async consolidateLeadPlan(input) {
-      const result = await invokeAgent(input, () => (agent?.consolidateLeadPlan ?? defaultAgent.consolidateLeadPlan.bind(defaultAgent))(input));
+      const result = await invokeAgent(input, () => agent?.consolidateLeadPlan ? agent.consolidateLeadPlan(input) : defaultAgent.consolidateLeadPlan(input, agentRuntime()));
       const leadEvidenceArtifactSha256 = artifactSha256(input.companyId, result.leadEvidenceArtifactId);
       const leadOutputArtifactSha256 = artifactSha256(input.companyId, result.leadOutputArtifactId);
-      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, { ...result, ...(leadEvidenceArtifactSha256 ? { leadEvidenceArtifactSha256 } : {}), ...(leadOutputArtifactSha256 ? { leadOutputArtifactSha256 } : {}), leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) });
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, { ...result, ...(leadEvidenceArtifactSha256 ? { leadEvidenceArtifactSha256, leadEvidenceSha256: leadEvidenceArtifactSha256 } : {}), ...(leadOutputArtifactSha256 ? { leadOutputArtifactSha256, leadOutputSha256: leadOutputArtifactSha256 } : {}), leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) });
     },
     async reviewDelivery(input: WorkflowDeliveryReviewActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.subject.developerExecutionId);
       const serviceInput = { ...input, worktreePath };
-      const result = await invokeAgent(input, async () => normalizeReviewResult(await (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(serviceInput), serviceInput));
+      const result = await invokeAgent(input, async () => normalizeReviewResult(await (agent?.reviewDelivery ? agent.reviewDelivery(serviceInput) : defaultAgent.reviewDelivery(serviceInput, agentRuntime())), serviceInput));
       if (result.outcome === "blocked") return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.executionId, sessionRef: result.sessionRef, worktreePath }, result);
       const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, result.review.opinionArtifactId, "delivery-review");
       const completed = DeliveryReviewActivityResultSchema.parse({ ...result, review: { ...result.review, summary: SafeSummarySchema.parse(result.review.summary), reviewArtifact } });
@@ -770,7 +783,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       const developerSessionRef = database.authQuery((db) => db.prepare("SELECT session_ref AS sessionRef FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND delivery_artifact_id = ? AND evidence_artifact_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId, input.deliveryArtifactId, input.evidenceArtifactId) as { sessionRef: string } | undefined)?.sessionRef;
       if (!developerSessionRef) throw new AgentFailure("scoped-input-missing", "Final review requires the exact Developer session");
       const reviewInput = { ...input, worktreePath, roleProfiles: input.roleProfiles, reviewKind: "final" as const, subject: { planRevision: input.planRevision, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree, developerExecutionId: input.developerExecutionId, deliveryArtifactId: input.deliveryArtifactId, developerEvidenceArtifactId: input.evidenceArtifactId, leadSessionRef: input.leadSessionRef, developerSessionRef }, supersedesReviewId: null };
-      const review = await invokeAgent(input, () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(reviewInput));
+      const review = await invokeAgent(input, () => agent?.reviewDelivery ? agent.reviewDelivery(reviewInput) : defaultAgent.reviewDelivery(reviewInput, agentRuntime()));
       const normalized = normalizeReviewResult(review, reviewInput);
       if (normalized.outcome !== "completed") throw new AgentFailure(normalized.code, normalized.summary);
       const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, normalized.review.opinionArtifactId, "delivery-review");
@@ -802,7 +815,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     async planMergeConflict(input: WorkflowMergeConflictPlanActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input);
       const rawInput: MergeConflictPlanActivityInput = { ...input, worktreePath };
-      const result = await invokeAgent(input, () => (agent?.planMergeConflict ?? defaultAgent.planMergeConflict.bind(defaultAgent))(rawInput));
+      const result = await invokeAgent(input, () => agent?.planMergeConflict ? agent.planMergeConflict(rawInput) : defaultAgent.planMergeConflict(rawInput, agentRuntime()));
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef, worktreePath }, result);
     },
     async resolveMergeConflict(input: WorkflowMergeConflictResolutionActivityInput) {
@@ -1003,7 +1016,30 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
         db.prepare("INSERT INTO forge_plan_decisions (id, task_id, company_id, workflow_id, plan_revision, decision, actor_user_id, note_artifact_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(decisionId, input.taskId, input.companyId, input.workflowId, input.planRevision, input.decision, input.actorUserId, artifact.id, artifact.createdAt);
       });
-      return { decisionId };
+      return { decisionId, noteArtifactId: artifact.id, noteSha256: artifact.sha256 };
+    },
+    async recordDecisionBlockerResolution(input) {
+      const actor = database.authQuery((db) => db.prepare("SELECT id, role, status FROM forge_users WHERE id = ?").get(input.actorUserId) as { id: string; role: string; status: string } | undefined);
+      if (!actor || actor.status !== "active") throw new AgentFailure("scope_configuration", "Decision blocker actor is unavailable");
+      const scoped = database.authQuery((db) => actor.role === "admin"
+        ? db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(input.taskId, input.companyId, input.workflowId)
+        : db.prepare("SELECT t.id FROM forge_tasks t JOIN forge_memberships m ON m.company_id = t.company_id WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND m.user_id = ? AND m.status = 'active'").get(input.taskId, input.companyId, input.workflowId, input.actorUserId)) as { id: string } | undefined;
+      if (!scoped) throw new AgentFailure("scope_configuration", "Decision blocker scope is unavailable");
+      const existing = database.authQuery((db) => db.prepare("SELECT id, answer_artifact_id, answer_sha256 FROM forge_decision_blocker_resolutions WHERE workflow_id = ? AND blocker_output_artifact_id = ?").get(input.workflowId, input.blockerOutputArtifactId) as { id: string; answer_artifact_id: string; answer_sha256: string } | undefined);
+      if (existing) {
+        if (existing.answer_artifact_id !== input.answerArtifactId || existing.answer_sha256 !== input.answerSha256) throw new AgentFailure("evidence_contradiction", "A different answer is already recorded for this decision blocker");
+        return { resolutionId: existing.id };
+      }
+      const resolutionId = `blocker_resolution_${randomBytes(12).toString("hex")}`;
+      const createdAt = new Date().toISOString();
+      try {
+        database.authTransaction((db) => db.prepare("INSERT INTO forge_decision_blocker_resolutions (id, task_id, company_id, workflow_id, blocker_output_artifact_id, blocker_output_sha256, answer_artifact_id, answer_sha256, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(resolutionId, input.taskId, input.companyId, input.workflowId, input.blockerOutputArtifactId, input.blockerOutputSha256, input.answerArtifactId, input.answerSha256, input.actorUserId, createdAt));
+      } catch (error) {
+        const retry = database.authQuery((db) => db.prepare("SELECT id, answer_artifact_id, answer_sha256 FROM forge_decision_blocker_resolutions WHERE workflow_id = ? AND blocker_output_artifact_id = ?").get(input.workflowId, input.blockerOutputArtifactId) as { id: string; answer_artifact_id: string; answer_sha256: string } | undefined);
+        if (retry && retry.answer_artifact_id === input.answerArtifactId && retry.answer_sha256 === input.answerSha256) return { resolutionId: retry.id };
+        throw error;
+      }
+      return { resolutionId };
     },
     async recordPlanBlockerResponse(input: PlanBlockerResponseActivityInput) {
       const actor = database.authQuery((db) => db.prepare("SELECT id, role, status FROM forge_users WHERE id = ?").get(input.actorUserId) as { id: string; role: string; status: string } | undefined);

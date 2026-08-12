@@ -4,9 +4,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { temporalConnectionOptions, type ForgeConfig } from "../config.js";
 import type { HealthCheck } from "../health.js";
 import { runtimeIdentifiers } from "../runtime-identifiers.js";
-import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, continueWorkUpdate, finalReviewUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, publishDraftUpdate, reconcileAcceptanceUpdate, reconcileCIUpdate, reconcileMergeUpdate, recordDeliveryDecisionUpdate, recordProgressUpdate, rejectPlanUpdate, repairCIUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, requestPlanRevisionUpdate, requestSupplementalReviewUpdate, respondPlanBlockerUpdate, resolveMergeConflictUpdate, revisePlanUpdate, retryCapacityUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, retryForwardMergeVerificationUpdate, retryTargetBaseReconciliationUpdate, startDevelopmentUpdate, startPlanningUpdate, verifyDeveloperOwnershipUpdate } from "./workflows.js";
+import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, continueWorkUpdate, finalReviewUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, publishDraftUpdate, reconcileAcceptanceUpdate, reconcileCIUpdate, reconcileMergeUpdate, recordDeliveryDecisionUpdate, recordProgressUpdate, rejectPlanUpdate, repairCIUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, requestPlanRevisionUpdate, requestSupplementalReviewUpdate, respondPlanBlockerUpdate, resolveDecisionBlockerUpdate, resolveMergeConflictUpdate, revisePlanUpdate, retryCapacityUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, retryForwardMergeVerificationUpdate, retryTargetBaseReconciliationUpdate, startDevelopmentUpdate, startPlanningUpdate, verifyDeveloperOwnershipUpdate } from "./workflows.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { ContinueWorkCommandSchema, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, StartPlanningInputSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
+import { ContinueWorkCommandSchema, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, StartPlanningInputSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
 import { clientPayloadInterceptor } from "./payload-boundary-interceptors.js";
 import { temporalDataConverter } from "./workflow-bundle.js";
@@ -258,6 +258,18 @@ export async function acceptIssuePlanning(config: ForgeConfig, workflowId: strin
   } finally {
     temporalClient.connection.close();
   }
+}
+
+export async function resolveIssueDecisionBlocker(config: ForgeConfig, workflowId: string, input: ResolveDecisionBlockerInput): Promise<IssueWorkflowState> {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
+  const validatedInput = ResolveDecisionBlockerInputSchema.parse(input);
+  assertPayloadWithinLimit("decision blocker resolution command", validatedInput);
+  const temporalClient = await connectTemporal(config);
+  try {
+    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(resolveDecisionBlockerUpdate, { args: [validatedInput] }));
+  } finally { temporalClient.connection.close(); }
 }
 
 async function issuePlanUpdate(config: ForgeConfig, workflowId: string, input: PlanCommandInput, update: typeof requestSupplementalReviewUpdate | typeof approvePlanUpdate | typeof requestPlanRevisionUpdate | typeof respondPlanBlockerUpdate | typeof rejectPlanUpdate | typeof recordDeliveryDecisionUpdate | typeof cancelIssueUpdate, label = "plan command"): Promise<IssueWorkflowState> {

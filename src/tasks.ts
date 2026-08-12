@@ -4,7 +4,6 @@ import type { AuthUser } from "./auth.js";
 import { AuthFailure, AuthService } from "./auth.js";
 import type { CheckConclusion, CheckStatus, CiOutcome, CiOwner } from "./ci.js";
 import type { ForgeConfig } from "./config.js";
-export type TaskPhase = "backlog" | "planning" | "supplemental_review" | "plan_consolidation" | "approval" | "blocked" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "merge_conflict_reviewing" | "merge_conflict_required" | "merge_conflict_resolving" | "ci_waiting" | "ci_repair_planning" | "ci_repairing" | "ci_repair_required" | "final_review" | "accepted" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
 import { ArtifactFailure, ArtifactManifestEntrySchema, ArtifactStore, type ArtifactManifestEntry, type PlannedArtifact, type StoredArtifact } from "./artifacts.js";
 import { LeadOutputSchema, SupplementalReviewSchema, type LeadOutput, type SupplementalReview } from "./codex-lead.js";
 import { CapacityManager } from "./capacity.js";
@@ -14,12 +13,14 @@ import { canonicalJson } from "./canonical-json.js";
 import { redact } from "./logging.js";
 import { ProjectFailure, ProjectService, type ProjectRole } from "./projects.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
-import { acceptIssueDelivery, acceptIssuePlanning, approveIssuePlan, cancelIssue, cancelIssueDevelopment, continueIssueWork, finalReviewIssue, IssueWorkflowStartFailure, publishIssueDraft, recordIssueDeliveryDecision, reconcileIssueAcceptance, reconcileIssueCI, reconcileIssueMerge, repairIssueCI, repairIssueDelivery, requestIssueDeliveryChanges, requestIssuePlanRevision, requestIssueSupplementalReview, respondIssuePlanBlocker, resolveIssueMergeConflict, reviseIssuePlan, retryIssueCapacity, retryIssueDevelopment, retryIssueForwardMergeVerification, retryIssueTargetBaseReconciliation, reviewIssueDelivery, startIssueDevelopment, startIssueWorkflow, verifyIssueDeveloperOwnership } from "./temporal/service.js";
-import { createInitialIssueWorkflowState, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type StartPlanningInput } from "./temporal/issue-contracts.js";
+import { acceptIssueDelivery, acceptIssuePlanning, approveIssuePlan, cancelIssue, cancelIssueDevelopment, continueIssueWork, finalReviewIssue, IssueWorkflowStartFailure, publishIssueDraft, recordIssueDeliveryDecision, reconcileIssueAcceptance, reconcileIssueCI, reconcileIssueMerge, repairIssueCI, repairIssueDelivery, requestIssueDeliveryChanges, requestIssuePlanRevision, requestIssueSupplementalReview, respondIssuePlanBlocker, resolveIssueDecisionBlocker, resolveIssueMergeConflict, reviseIssuePlan, retryIssueCapacity, retryIssueDevelopment, retryIssueForwardMergeVerification, retryIssueTargetBaseReconciliation, reviewIssueDelivery, startIssueDevelopment, startIssueWorkflow, verifyIssueDeveloperOwnership } from "./temporal/service.js";
+import { createInitialIssueWorkflowState, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type ResolveDecisionBlockerInput, type StartPlanningInput } from "./temporal/issue-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { taskCommandDescriptors, type TaskCommandDescriptor } from "./task-commands.js";
 import { MaterialityEvidenceArtifactSchema, PlanMaterialCategorySchema, PlanSubjectSchema, deterministicMaterialCategories, samePlanSubject, type MaterialityEvidenceSubject, type PlanBlockerSubject, type PlanDecisionSubject, type PlanMaterialCategory, type PlanSubject, type SupplementalReviewSubject } from "./plan-governance.js";
 import { PlanGovernanceRepository, hashPlanBlockerSubject, hashPlanDecisionSubject } from "./plan-governance-repository.js";
+
+export type TaskPhase = IssuePhase;
 
 export interface TaskFinding {
   code: string;
@@ -80,6 +81,7 @@ export interface TaskAgentInvocation {
   status: string;
   attempt: number;
   sessionPresent: boolean;
+  sessionRef: string | null;
   startedAt: string;
   finishedAt: string | null;
   failureCode: string | null;
@@ -365,6 +367,14 @@ export interface ForgeTask {
   supplementalReviewUsed?: boolean;
   supplementalReviewArtifactId?: string | null;
   decisionId?: string | null;
+  leadInputManifestArtifactId?: string;
+  leadInputManifestSha256?: string;
+  leadEvidenceSha256?: string;
+  leadOutputSha256?: string;
+  blockedCategory?: "human_decision" | "authentication" | "configuration" | "capacity" | "execution_ownership" | null | undefined;
+  blockedResumePhase?: "planning" | null | undefined;
+  blockerArtifactId?: string | null | undefined;
+  blockerArtifactSha256?: string | null | undefined;
   deliveryDecisionArtifactId?: string | null;
   predecessorTaskId?: string | null;
   successorTaskId?: string | null;
@@ -436,19 +446,15 @@ export interface ForgeTask {
     nextAction: { command: "retry_development" | "cancel_development" | "verify_developer_ownership" | "cancel_issue"; label: string; requiresConfirmation: boolean } | null;
   };
   leadOutput?: {
-    kind: "plan";
+    kind: "plan" | "decision_blocker";
     summary: string;
+    sessionRef: string;
     executionId: string;
     outputArtifactId: string;
+    outputSha256: string;
     evidenceArtifactId: string;
-    content: Extract<LeadOutput, { kind: "plan" }>;
-  } | {
-    kind: "decision_blocker";
-    summary: string;
-    executionId: string;
-    outputArtifactId: string;
-    evidenceArtifactId: string;
-    content: Extract<LeadOutput, { kind: "decision_blocker" }>;
+    evidenceSha256: string;
+    content: LeadOutput;
   };
   targetBaseReconciliation: {
     checkId: string | null;
@@ -598,6 +604,7 @@ export interface IssueWorkflowPort {
   reconcileAcceptance?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   reconcileMerge?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   retryCapacity?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
+  resolveDecisionBlocker?: (workflowId: string, input: ResolveDecisionBlockerInput) => Promise<IssueWorkflowState>;
 }
 
 interface TaskServiceOptions {
@@ -638,6 +645,7 @@ interface TaskRow {
   owner: "human" | "lead";
   allowed_commands_json: string;
   pending_action: string | null;
+  state_json: string;
   predecessor_task_id: string | null;
   successor_task_id: string | null;
 }
@@ -702,7 +710,9 @@ interface LeadOutputRow {
   session_ref: string;
   execution_id: string;
   output_artifact_id: string;
+  output_sha256: string;
   evidence_artifact_id: string;
+  evidence_sha256: string;
   storage_path: string;
   sha256: string;
 }
@@ -850,6 +860,7 @@ export class TaskService {
       reconcileMerge: (workflowId, input) => reconcileIssueMerge(config, workflowId, input),
       continueWork: (workflowId, input) => continueIssueWork(config, workflowId, input),
       retryCapacity: (workflowId, input) => retryIssueCapacity(config, workflowId, input),
+      resolveDecisionBlocker: (workflowId, input) => resolveIssueDecisionBlocker(config, workflowId, input),
     };
   }
 
@@ -1230,6 +1241,30 @@ export class TaskService {
     }
     const updated = this.getTask(actorUserId, taskId);
     return updated;
+  }
+
+  async resolveDecisionBlocker(actorUserId: string, taskId: string, expectedRevision: number, answer: string): Promise<ForgeTask> {
+    const task = this.getTask(actorUserId, taskId);
+    const normalizedAnswer = normalizeText(answer);
+    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before answering the Lead")], 409);
+    const blockerOutput = task.leadOutput;
+    if (!task.allowedCommands.includes("resolve_decision_blocker") || task.phase !== "blocked" || blockerOutput?.kind !== "decision_blocker") throw new TaskFailure("A decision blocker is not available", [finding("illegal-command", "phase", "This task is not waiting for a human decision")], 409);
+    if (normalizedAnswer.length < 1 || normalizedAnswer.length > 8_000) throw new TaskFailure("Decision answer must contain 1 to 8,000 characters", [finding("invalid-answer", "answer", "Provide a concise decision")], 422);
+    const blocker = this.database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'decision-blocker'").get(blockerOutput.outputArtifactId, task.companyId) as { sha256: string } | undefined);
+    if (!blocker) throw new TaskFailure("Decision blocker evidence is unavailable", [], 409);
+    const artifact = await this.artifacts.put(task.companyId, "decision-answer", { filename: `decision-answer-${task.id}.md`, mimeType: "text/markdown", bytes: Buffer.from(normalizedAnswer, "utf8") });
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
+    try {
+      const input: ResolveDecisionBlockerInput = { expectedRevision, actorUserId, answerArtifactId: artifact.id, answerSha256: artifact.sha256 };
+      await (this.workflow.resolveDecisionBlocker ? this.workflow.resolveDecisionBlocker(task.workflowId, input) : Promise.reject(new Error("Decision blocker workflow is unavailable")));
+    } catch (error) {
+      this.database.authTransaction((db) => db.prepare("DELETE FROM forge_artifacts WHERE id = ? AND company_id = ?").run(artifact.id, task.companyId));
+      await this.artifacts.remove({ companyId: artifact.companyId, storagePath: artifact.storagePath });
+      const message = error instanceof Error && /stale workflow revision/i.test(error.message) ? "Task changed before this action was accepted" : "Decision blocker could not be resolved";
+      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409);
+    }
+    await this.waitForProjection(taskId, expectedRevision + 1);
+    return this.getTask(actorUserId, taskId);
   }
 
   async requestSupplementalReview(actorUserId: string, taskId: string, expectedRevisionOrCommand: number | PlanCommandInput): Promise<ForgeTask> {
@@ -1825,7 +1860,8 @@ export class TaskService {
         role: invocation.role,
         status: invocation.status,
         attempt: invocation.attempt,
-        sessionPresent: Boolean(invocation.session_ref),
+        sessionPresent: invocation.session_ref !== null,
+        sessionRef: invocation.session_ref,
         startedAt: invocation.started_at,
         finishedAt: invocation.finished_at,
         failureCode: invocation.failure_code,
@@ -1905,6 +1941,9 @@ export class TaskService {
     const profiles = parseProfiles(row.role_profiles_json);
     const commands = taskCommandDescriptors(allowedCommands, { expectedRevision: row.projection_revision, ...(profiles.reviewer ? { reviewerProfileId: profiles.reviewer } : {}), ...(workflowState.originalPlanSubject !== undefined ? { originalPlanSubject: workflowState.originalPlanSubject } : {}), ...(workflowState.finalPlanSubject !== undefined ? { finalPlanSubject: workflowState.finalPlanSubject } : {}), ...(workflowState.materialityEvidence !== undefined ? { materialityEvidence: workflowState.materialityEvidence } : {}), ...(workflowState.planBlockerSubject !== undefined ? { planBlockerSubject: workflowState.planBlockerSubject } : {}) });
     return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: profiles, supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, capacity, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), timeline, agentInvocations, targetBaseReconciliation, reviewLineage, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, ...(planAuthorization ? { planAuthorizationId: planAuthorization.id, planArtifactSha256: planAuthorization.plan_sha256 } : {}), planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: parseMaterialCategories(governance.material_categories_json), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(deliveryGate ? { deliveryGate } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status === "completed" && !developerExecution.reconciliationArtifactId ? "unverified" : developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.reconciliationArtifactId ?? developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, reconciliationArtifactId: developerExecution.reconciliationArtifactId, manifestArtifactId: developerExecution.manifestArtifactId, rawReportArtifactId: developerExecution.rawReportArtifactId, beforeProviderArtifactId: developerExecution.beforeProviderArtifactId, afterProviderArtifactId: developerExecution.afterProviderArtifactId, boundaryMode: developerExecution.boundaryMode ?? undefined, providerObservation: developerExecution.beforeProviderSha256 && developerExecution.afterProviderSha256 ? developerExecution.beforeProviderSha256 === developerExecution.afterProviderSha256 ? "matching" : "different" : "unavailable", startingCommit: developerExecution.startingCommit, startingTree: developerExecution.startingTree, verificationCommands, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(ci ? { ci } : {}) };
+/* Superseded by the richer projection above.
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), ...(typeof reconciliationState.leadInputManifestArtifactId === "string" ? { leadInputManifestArtifactId: reconciliationState.leadInputManifestArtifactId } : {}), ...(typeof reconciliationState.leadInputManifestSha256 === "string" ? { leadInputManifestSha256: reconciliationState.leadInputManifestSha256 } : {}), ...(typeof reconciliationState.leadEvidenceSha256 === "string" ? { leadEvidenceSha256: reconciliationState.leadEvidenceSha256 } : {}), ...(typeof reconciliationState.leadOutputSha256 === "string" ? { leadOutputSha256: reconciliationState.leadOutputSha256 } : {}), ...(typeof reconciliationState.blockedCategory === "string" ? { blockedCategory: reconciliationState.blockedCategory as ForgeTask["blockedCategory"] } : {}), ...(reconciliationState.blockedResumePhase === "planning" ? { blockedResumePhase: reconciliationState.blockedResumePhase } : {}), ...(typeof reconciliationState.blockerArtifactId === "string" ? { blockerArtifactId: reconciliationState.blockerArtifactId } : {}), ...(typeof reconciliationState.blockerArtifactSha256 === "string" ? { blockerArtifactSha256: reconciliationState.blockerArtifactSha256 } : {}), timeline, agentInvocations, targetBaseReconciliation, reviewLineage, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(deliveryGate ? { deliveryGate } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
+*/
   }
 
   private releaseForTask(taskId: string, companyId: string, workflowId: string): TaskRelease | null | undefined {
@@ -1951,14 +1990,12 @@ export class TaskService {
   }
 
   private leadOutput(taskId: string, companyId: string): ForgeTask["leadOutput"] {
-    const row = this.database.authQuery((db) => db.prepare(`SELECT o.company_id, o.kind, o.summary, o.session_ref, o.execution_id, o.output_artifact_id, o.evidence_artifact_id, a.storage_path, a.sha256
-      FROM forge_issue_outputs o JOIN forge_artifacts a ON a.id = o.output_artifact_id
+    const row = this.database.authQuery((db) => db.prepare(`SELECT o.company_id, o.kind, o.summary, o.session_ref, o.execution_id, o.output_artifact_id, o.evidence_artifact_id, a.sha256 AS output_sha256, e.sha256 AS evidence_sha256, a.storage_path, a.sha256
+      FROM forge_issue_outputs o JOIN forge_artifacts a ON a.id = o.output_artifact_id JOIN forge_artifacts e ON e.id = o.evidence_artifact_id
       WHERE o.task_id = ? AND o.company_id = ? ORDER BY o.revision DESC LIMIT 1`).get(taskId, companyId) as LeadOutputRow | undefined);
     if (!row) return undefined;
     const content = LeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
-    if (row.kind === "plan" && content.kind === "plan") return { kind: "plan", summary: row.summary, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };
-    if (row.kind === "decision_blocker" && content.kind === "decision_blocker") return { kind: "decision_blocker", summary: row.summary, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };
-    return undefined;
+    return { kind: row.kind, summary: row.summary, sessionRef: row.session_ref, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, outputSha256: row.output_sha256, evidenceArtifactId: row.evidence_artifact_id, evidenceSha256: row.evidence_sha256, content };
   }
 
   private ciProjection(taskId: string, companyId: string): TaskCiProjection | undefined {
@@ -1987,7 +2024,7 @@ export class TaskService {
   }
 
   private taskQuery(scope: string): string {
-    return `SELECT t.id, t.company_id, t.project_id, t.title, t.brief_artifact_id, t.image_artifact_ids_json, t.role_profiles_json, t.supplemental_review, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.successor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.authoritative_revision, ip.projected_at, ip.phase, ip.owner, ip.allowed_commands_json, ip.pending_action, (SELECT a.filename FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS description FROM forge_tasks t JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope} ORDER BY t.created_at, t.id`;
+    return `SELECT t.id, t.company_id, t.project_id, t.title, t.brief_artifact_id, t.image_artifact_ids_json, t.role_profiles_json, t.supplemental_review, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.successor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.authoritative_revision, ip.projected_at, ip.phase, ip.owner, ip.allowed_commands_json, ip.pending_action, COALESCE((SELECT s.state_json FROM forge_workflow_snapshots s WHERE s.task_id = t.id ORDER BY s.revision DESC LIMIT 1), '{}') AS state_json, (SELECT a.filename FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS description FROM forge_tasks t JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope} ORDER BY t.created_at, t.id`;
   }
 
   private async deleteTask(taskId: string, artifacts: Array<StoredArtifact | undefined>): Promise<void> {

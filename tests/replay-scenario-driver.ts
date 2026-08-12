@@ -101,6 +101,7 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
     async recordPlanDecision(activityInput) { return { decisionId: `decision-${activityInput.workflowId}-${activityInput.planRevision}` }; },
     async authorizeFinalPlan(activityInput) { return { authorizationId: `authorization-${activityInput.workflowId}-${activityInput.planRevision}`, planRevision: activityInput.planRevision, planArtifactId: activityInput.planArtifactId, planArtifactSha256: "a".repeat(64), authorizationKind: activityInput.authorizationKind, approvalDecisionId: activityInput.approvalDecisionId ?? null, authorizedAt: "2026-01-01T00:00:00.000Z" }; },
     async recordPlanBlockerResponse() { throw new Error("Plan blocker response is not used by replay scenarios"); },
+    async recordDecisionBlockerResolution(activityInput) { return { resolutionId: `decision-resolution-${activityInput.workflowId}` }; },
     async runDeveloperExecution(activityInput) {
       const scenario = scenarioFor(activityInput.workflowId);
       if (scenario === "active_cancellation" || scenario === "continue_as_new" || scenario === "successor_creation") await developerGates.get(activityInput.workflowId)!.promise;

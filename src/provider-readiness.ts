@@ -1,5 +1,8 @@
 import { basename } from "node:path";
 import { spawn } from "node:child_process";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 import type { HealthCheck } from "./health.js";
 import { GhAuthStatusSchema } from "./schemas.js";
@@ -130,38 +133,48 @@ export class CodexReadinessProbe {
       };
     } else {
       try {
-        const smoke = await this.runner(this.command, [
-          "exec",
-          "--json",
-          "--ephemeral",
-          "--skip-git-repo-check",
-          "--sandbox",
-          "read-only",
-          "Return exactly a JSON object with an ok boolean. Do not use tools.",
-        ], { timeout: 20_000, maxBuffer: 64 * 1024, cwd: this.workingDirectory });
-        const events = smoke.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as unknown);
-        const completed = events.some((event) => event && typeof event === "object" && "type" in event && event.type === "turn.completed");
-        const validOutput = events.some((event) => {
-          if (!event || typeof event !== "object" || !("type" in event) || event.type !== "item.completed" || !("item" in event)) return false;
-          const item = event.item;
-          if (!item || typeof item !== "object" || !("type" in item) || item.type !== "agent_message" || !("text" in item) || typeof item.text !== "string") return false;
-          try {
-            const output = JSON.parse(item.text) as unknown;
-            return Boolean(output && typeof output === "object" && "ok" in output && output.ok === true);
-          } catch {
-            return false;
-          }
-        });
-        if (!completed || !validOutput) {
-          throw new Error("Codex smoke did not produce a completed structured JSON object");
+        const schemaRoot = await mkdtemp(join(tmpdir(), "forge-codex-readiness-"));
+        const schemaPath = join(schemaRoot, "schema.json");
+        await writeFile(schemaPath, JSON.stringify({ type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false }), { mode: 0o600 });
+        try {
+          const smoke = await this.runner(this.command, [
+            "exec",
+            "--json",
+            "--strict-config",
+            "--ignore-user-config",
+            "--output-schema",
+            schemaPath,
+            "--ephemeral",
+            "-C",
+            resolve(this.workingDirectory),
+            "--sandbox",
+            "read-only",
+            "Return exactly a JSON object with an ok boolean. Do not use tools.",
+          ], { timeout: 20_000, maxBuffer: 64 * 1024, cwd: this.workingDirectory });
+          const events = smoke.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as unknown);
+          const completed = events.some((event) => event && typeof event === "object" && "type" in event && event.type === "turn.completed");
+          const validOutput = events.some((event) => {
+            if (!event || typeof event !== "object" || !("type" in event) || event.type !== "item.completed" || !("item" in event)) return false;
+            const item = event.item;
+            if (!item || typeof item !== "object" || !("type" in item) || item.type !== "agent_message" || !("text" in item) || typeof item.text !== "string") return false;
+            try {
+              const output = JSON.parse(item.text) as unknown;
+              return Boolean(output && typeof output === "object" && "ok" in output && output.ok === true);
+            } catch {
+              return false;
+            }
+          });
+          if (!completed || !validOutput) throw new Error("Codex smoke did not produce a completed structured JSON object");
+          check = {
+            id: "codex-auth",
+            label: "Codex readiness",
+            status: "healthy",
+            summary: "Codex version, authentication, and structured smoke are ready",
+            details: { command: safeCommand, version, authentication: "available", smoke: "passed", failure: "none", testedAt, cacheExpiresAt, minVersion: MINIMUM_CODEX_VERSION },
+          };
+        } finally {
+          await rm(schemaRoot, { recursive: true, force: true });
         }
-        check = {
-          id: "codex-auth",
-          label: "Codex readiness",
-          status: "healthy",
-          summary: "Codex version, authentication, and structured smoke are ready",
-          details: { command: safeCommand, version, authentication: "available", smoke: "passed", failure: "none", testedAt, cacheExpiresAt, minVersion: MINIMUM_CODEX_VERSION },
-        };
       } catch (error) {
         const smokeFailure = smokeFailureKind(error);
         check = {

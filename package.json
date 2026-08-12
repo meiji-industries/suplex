@@ -31,7 +31,8 @@
     "test:governance-real": "vitest run tests/plan-governance.real.test.ts",
     "verify-ticket-07": "pnpm run test:governance-real",
     "test:browser": "pnpm run build && vitest run --config vitest.browser.config.ts",
-    "test:all": "pnpm run typecheck && pnpm run test && pnpm run test:replay && pnpm run test:temporal && pnpm run test:developer-proof && pnpm run test:browser"
+    "test:all": "pnpm run typecheck && pnpm run test && pnpm run test:replay && pnpm run test:temporal && pnpm run test:developer-proof && pnpm run test:browser",
+    "test:release:lead": "pnpm run build && vitest run tests/codex-lead.real.test.ts --reporter=dot"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

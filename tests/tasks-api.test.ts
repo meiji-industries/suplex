@@ -55,7 +55,7 @@ test("task API creates an idempotent backlog card and accepts only the current p
   const projects = new ProjectService(database, auth, config, { localRepository, github });
   const company = auth.createCompany("admin-1", "API Company");
   const profile = projects.createProfile("admin-1", { name: "API profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const project = await projects.createProject("admin-1", company.id, { name: "API project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
+  const project = await projects.createProject("admin-1", company.id, { name: "API project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, reviewer: profile.id, developer: profile.id } });
   const active = await projects.activateProject("admin-1", project.id);
   const projectState = (state: IssueWorkflowState): IssueWorkflowState => {
     database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state }));
@@ -130,10 +130,13 @@ test("task API creates an idempotent backlog card and accepts only the current p
     const started = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie, origin }, payload: { expectedRevision: 0 } });
     expect(started.statusCode).toBe(200);
     expect(started.json()).toMatchObject({ phase: "approval", owner: "human", revision: 1, planMaterial: true });
-    const reviewed = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/request-supplemental-review`, headers: { cookie, origin }, payload: { expectedRevision: 1 } });
+    const planSubject = { companyId: company.id, issueId: task.id, workflowId: task.workflowId, originalPlanRevision: 1, outputId: "plan-output-api", outputRevision: 1, finalVersion: 1 as const, artifactId: "plan-artifact-api", artifactSha256: "1".repeat(64), leadExecutionId: "lead-execution-api", evidenceManifestArtifactId: "lead-manifest-api", evidenceManifestSha256: "2".repeat(64) };
+    const materiality = { categories: ["user_visible_behavior"], artifactId: "materiality-api", artifactSha256: "3".repeat(64) };
+    const reviewed = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/request-supplemental-review`, headers: { cookie, origin }, payload: { expectedRevision: 1, subject: { originalPlan: planSubject, reviewerProfileId: profile.id, evidenceManifestArtifactId: planSubject.evidenceManifestArtifactId, evidenceManifestSha256: planSubject.evidenceManifestSha256 }, idempotencyKey: "review-api-0001" } });
     expect(reviewed.statusCode).toBe(200);
     expect(reviewed.json()).toMatchObject({ phase: "approval", revision: 2, supplementalReviewUsed: true });
-    const approved = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: { expectedRevision: 2, note: "Self-approved" } });
+    const approvalPayload = { expectedRevision: 2, subject: { plan: planSubject, materiality, expectedWorkflowRevision: 2 }, note: "Self-approved", idempotencyKey: "approve-api-0001" };
+    const approved = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: approvalPayload });
     expect(approved.statusCode).toBe(200);
     expect(approved.json()).toMatchObject({ phase: "ready_for_development", owner: "lead", revision: 3 });
     const artifactStore = new ArtifactStore(config.artifactRoot);
@@ -199,13 +202,19 @@ test("task API creates an idempotent backlog card and accepts only the current p
     await git(["commit", "-m", "deliver API fixture"], delivery.worktreePath);
     const resultCommit = await git(["rev-parse", "HEAD"], delivery.worktreePath);
     const resultTree = await git(["rev-parse", "HEAD^{tree}"], delivery.worktreePath);
+    const startingTree = await git(["rev-parse", `${targetBaseSha}^{tree}`], delivery.worktreePath);
     const now = "2026-08-11T00:01:00.000Z";
-    database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-api-diff', ?, ?, ?, 1, 2, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, 'clean')").run(task.id, company.id, task.workflowId, delivery.branchName, delivery.worktreePath, targetBaseSha, now, now, now, resultCommit, resultTree));
+    database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES ('authorization-api-diff', ?, ?, ?, ?, 1, ?, ?, 'routine_auto', NULL, ?)").run(task.id, company.id, project.id, task.workflowId, repairReport.id, repairReport.sha256, now);
+      db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, status, reserved_at, activated_at) VALUES ('lease-api-diff', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 'active', ?, ?)").run(task.id, company.id, project.id, task.workflowId, repositoryPath, worktreeRoot, delivery.worktreePath, delivery.branchName, targetBaseSha, "4".repeat(64), now, now);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-api-diff', ?, ?, ?, 1, 2, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, 'clean')").run(task.id, company.id, task.workflowId, delivery.branchName, delivery.worktreePath, targetBaseSha, now, now, now, resultCommit, resultTree);
+      db.prepare("INSERT INTO forge_developer_execution_truth (execution_id, authorization_id, worktree_lease_id, manifest_artifact_id, manifest_sha256, reconciliation_artifact_id, reconciliation_sha256, starting_commit, starting_tree, final_commit, final_tree) VALUES ('developer-api-diff', 'authorization-api-diff', 'lease-api-diff', ?, ?, ?, ?, ?, ?, ?, ?)").run(repairReport.id, repairReport.sha256, repairReport.id, repairReport.sha256, targetBaseSha, startingTree, resultCommit, resultTree);
+    });
     const developerDiff = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/developer-diff`, headers: { cookie, origin } });
     expect(developerDiff.statusCode).toBe(200);
     expect(developerDiff.json()).toMatchObject({ branchName: delivery.branchName, baseSha: targetBaseSha, headSha: resultCommit, patch: expect.stringContaining("+API delivery") });
     expect(JSON.stringify(developerDiff.json())).not.toContain(delivery.worktreePath);
-    expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: { expectedRevision: 2 } })).statusCode).toBe(409);
+    expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: approvalPayload })).statusCode).toBe(409);
     expect((await app.inject({ method: "GET", url: "/api/tasks", headers: { cookie, origin } })).json().tasks).toHaveLength(1);
     expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/images/does-not-exist`, headers: { cookie, origin } })).statusCode).toBe(404);
     const [unlinked, crossCompany] = await Promise.all([

@@ -20,6 +20,7 @@ export const RequiredRevisionNoteBodySchema = ExpectedRevisionBodySchema.extend(
 export const HttpPlanDecisionBodySchema = z.object({ subject: PublicPlanDecisionSubjectSchema, note: z.string().trim().min(1).max(1_000), idempotencyKey: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/) }).strict();
 export const HttpSupplementalReviewBodySchema = z.object({ expectedRevision: z.coerce.number().int().min(0), subject: PublicSupplementalReviewSubjectSchema, idempotencyKey: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/) }).strict();
 export const HttpPlanBlockerResponseBodySchema = z.object({ subject: PublicPlanBlockerSubjectSchema, expectedWorkflowRevision: z.number().int().nonnegative(), answer: z.string().trim().min(1).max(1_000), idempotencyKey: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/) }).strict();
+export const ResolveDecisionBlockerBodySchema = ExpectedRevisionBodySchema.extend({ answer: z.string().min(1).max(8_000) });
 export const EmptyBodySchema = z.object({}).passthrough();
 export const TokenBodySchema = z.object({ token: z.string().default("") });
 export const RegistrationVerificationBodySchema = z.object({ token: z.string().default(""), challengeId: z.string().default(""), response: z.unknown() });

@@ -1,7 +1,7 @@
 import { IssueCommandSchema, type IssueCommand } from "./temporal/issue-contracts.js";
 import type { MaterialityEvidenceSubject, PlanBlockerSubject, PlanDecisionSubject, PlanSubject, SupplementalReviewSubject } from "./plan-governance.js";
 
-export type TaskCommandEndpoint = "request-supplemental-review" | "approve-plan" | "request-plan-revision" | "respond-plan-blocker" | "start-planning" | "start-development" | "retry-development" | "cancel-development" | "verify-developer-ownership" | "review-delivery" | "repair-delivery" | "record-delivery-decision" | "publish-draft" | "resolve-merge-conflict" | "retry-target-base-reconciliation" | "retry-forward-merge-verification" | "reconcile-ci" | "repair-ci" | "final-review" | "accept-delivery" | "request-delivery-changes" | "cancel" | "reconcile-acceptance" | "reconcile-merge" | "retry-capacity" | "revise-plan" | "continue-work" | "record-progress";
+export type TaskCommandEndpoint = "request-supplemental-review" | "approve-plan" | "request-plan-revision" | "respond-plan-blocker" | "resolve-decision-blocker" | "start-planning" | "start-development" | "retry-development" | "cancel-development" | "verify-developer-ownership" | "review-delivery" | "repair-delivery" | "record-delivery-decision" | "publish-draft" | "resolve-merge-conflict" | "retry-target-base-reconciliation" | "retry-forward-merge-verification" | "reconcile-ci" | "repair-ci" | "final-review" | "accept-delivery" | "request-delivery-changes" | "cancel" | "reconcile-acceptance" | "reconcile-merge" | "retry-capacity" | "revise-plan" | "continue-work" | "record-progress";
 
 export interface TaskCommandDescriptor {
   name: IssueCommand;
@@ -47,6 +47,7 @@ function descriptor(name: IssueCommand, context: TaskCommandContext): TaskComman
     }
     case "respond_plan_blocker":
       return context.planBlockerSubject ? { ...base("Respond to blocker", "respond-plan-blocker", "required", "required"), subject: { kind: "plan_blocker", value: context.planBlockerSubject } } : undefined;
+    case "resolve_decision_blocker": return base("Resolve decision blocker", "resolve-decision-blocker", "required");
     case "start_planning": return base("Start planning", "start-planning");
     case "start_development": return base("Start development", "start-development");
     case "retry_development": return base("Retry development", "retry-development");

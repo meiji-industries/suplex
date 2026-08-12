@@ -424,48 +424,6 @@ test("forward merge leaves a guarded conflict for Lead planning instead of rewri
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("merge-conflict evidence stays in a verified company artifact before Lead planning", async () => {
-  const value = await fixture();
-  try {
-    const priorHead = "1".repeat(40);
-    const targetBaseSha = "2".repeat(40);
-    const combinedDiff = `diff --git a/shared.txt b/shared.txt\n${"x".repeat(80 * 1024)}`;
-    const artifacts = new ArtifactStore(value.config.artifactRoot);
-    const stored = await artifacts.put("company-a", "merge-conflict-evidence", {
-      filename: "conflict.json",
-      mimeType: "application/json",
-      bytes: Buffer.from(JSON.stringify({ version: 1, priorHead, targetBaseSha, conflictFiles: ["shared.txt"], combinedDiff })),
-    });
-    value.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(stored.id, stored.companyId, stored.kind, stored.filename, stored.mimeType, stored.byteSize, stored.sha256, stored.storagePath, stored.createdAt);
-      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-conflict', 'task-a', 'company-a', 'workflow-a', 1, 1, 'completed', 'issue/task-a', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean')").run(value.root, targetBaseSha, now, now, priorHead, treeSha);
-    });
-    const reference = { artifactId: stored.id, companyId: stored.companyId, kind: "merge-conflict-evidence" as const, sha256: stored.sha256, byteSize: stored.byteSize, mimeType: stored.mimeType };
-    let receivedDiff = "";
-    let planningCalls = 0;
-    const activities = createActivities(value.database, value.config, { agent: { async planMergeConflict(input) {
-      planningCalls += 1;
-      receivedDiff = input.conflictDiff;
-      return { planId: "plan-conflict", planArtifactId: "plan-artifact", evidenceArtifactId: "plan-evidence", leadExecutionId: "lead-execution", leadSessionRef: input.leadSessionRef, summary: "Verified conflict plan" };
-    } } });
-    const input = { taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", projectId: "project-a", projectRevisionId: "revision-a", briefArtifactId: "brief-a", planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "lead-plan", conflictEvidence: reference, branchName: "issue/task-a", priorHead, targetBaseSha };
-    await expect(activities.planMergeConflict(input)).resolves.toMatchObject({ planId: "plan-conflict" });
-    expect(receivedDiff).toBe(combinedDiff);
-    expect(planningCalls).toBe(1);
-    for (const invalid of [
-      { ...reference, companyId: "company-b" },
-      { ...reference, kind: "delivery-review" as const },
-      { ...reference, sha256: "f".repeat(64) },
-      { ...reference, byteSize: reference.byteSize + 1 },
-      { ...reference, mimeType: "text/plain" },
-      { ...reference, artifactId: "missing-artifact" },
-    ]) {
-      await expect(activities.planMergeConflict({ ...input, conflictEvidence: invalid })).rejects.toThrow(/artifact/i);
-    }
-    expect(planningCalls).toBe(1);
-  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
-});
-
 test("forward merge reports no drift without mutating the issue branch", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-forward-merge-no-drift-"));
   try {
@@ -531,6 +489,81 @@ test("forward merge records the merge evidence in the database", async () => {
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("verification-only retry revalidates the recorded merge without another merge", async () => {
+  const value = await fixture();
+  const repoPath = join(value.root, "repo");
+  await mkdir(repoPath, { recursive: true });
+  try {
+    await exec("git", ["init", "-b", "main"], { cwd: repoPath });
+    await exec("git", ["config", "user.email", "forge@example.test"], { cwd: repoPath });
+    await exec("git", ["config", "user.name", "Forge Test"], { cwd: repoPath });
+    await writeFile(join(repoPath, "base.txt"), "base\n"); await exec("git", ["add", "."], { cwd: repoPath }); await exec("git", ["commit", "-m", "base"], { cwd: repoPath });
+    const oldBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    await exec("git", ["checkout", "-b", "issue/task-a"], { cwd: repoPath });
+    await writeFile(join(repoPath, "issue.txt"), "issue\n"); await exec("git", ["add", "."], { cwd: repoPath }); await exec("git", ["commit", "-m", "issue"], { cwd: repoPath });
+    const priorHead = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    await exec("git", ["checkout", "main"], { cwd: repoPath }); await writeFile(join(repoPath, "base.txt"), "base updated\n"); await exec("git", ["add", "."], { cwd: repoPath }); await exec("git", ["commit", "-m", "base-update"], { cwd: repoPath });
+    const targetBaseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    await exec("git", ["checkout", "issue/task-a"], { cwd: repoPath });
+    const service = new ForwardMergeService(value.database);
+    const merged = await service.reconcile({ worktreePath: repoPath, expectedBaseSha: oldBase, expectedHeadSha: priorHead, branchName: "issue/task-a", repositoryPath: repoPath, currentBaseSha: targetBaseSha, taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", projectRevisionId: "revision-a", checkpoint: "pre_release", developerExecutionId: "developer-a" });
+    const retry = await service.revalidateMergedOperation({ forwardMergeId: merged.forwardMergeId!, worktreePath: repoPath, repositoryPath: repoPath, branchName: "issue/task-a", expectedBaseSha: oldBase, expectedHeadSha: merged.mergeCommit!, expectedHeadTree: merged.tree!, taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", projectRevisionId: "revision-a", checkpoint: "pre_release", developerExecutionId: "developer-a" });
+    expect(retry).toMatchObject({ status: "merged", forwardMergeId: merged.forwardMergeId, priorHead, targetBaseSha, mergeCommit: merged.mergeCommit, tree: merged.tree });
+    await expect(service.revalidateMergedOperation({ forwardMergeId: merged.forwardMergeId!, worktreePath: repoPath, repositoryPath: repoPath, branchName: "issue/task-a", expectedBaseSha: oldBase, expectedHeadSha: merged.mergeCommit!, expectedHeadTree: merged.tree!, taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", projectRevisionId: "revision-a", checkpoint: "pre_final_review", developerExecutionId: "developer-a" })).rejects.toMatchObject({ code: "merge-state-ownership-mismatch" });
+    await expect(service.revalidateMergedOperation({ forwardMergeId: merged.forwardMergeId!, worktreePath: repoPath, repositoryPath: repoPath, branchName: "issue/task-a", expectedBaseSha: oldBase, expectedHeadSha: merged.mergeCommit!, expectedHeadTree: merged.tree!, taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", projectRevisionId: "revision-other", checkpoint: "pre_release", developerExecutionId: "developer-a" })).rejects.toMatchObject({ code: "merge-state-ownership-mismatch" });
+    expect((await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim()).toBe(merged.mergeCommit);
+    expect((value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_forward_merges WHERE task_id = 'task-a'").get()) as { count: number }).count).toBe(1);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("a replacement Developer execution retries its recorded merge verification without repeating the merge", async () => {
+  const value = await fixture();
+  const repoPath = join(value.root, "repo");
+  const markerPath = join(value.root, "verification-retried");
+  await mkdir(repoPath, { recursive: true });
+  try {
+    await exec("git", ["init", "-b", "main"], { cwd: repoPath });
+    await exec("git", ["config", "user.email", "forge@example.test"], { cwd: repoPath });
+    await exec("git", ["config", "user.name", "Forge Test"], { cwd: repoPath });
+    await writeFile(join(repoPath, "package.json"), JSON.stringify({ name: "verification-retry", scripts: { test: "node test.cjs" } }));
+    await writeFile(join(repoPath, "test.cjs"), `const fs = require("node:fs"); const marker = ${JSON.stringify(markerPath)}; if (!fs.existsSync(marker)) { fs.writeFileSync(marker, "failed once"); process.exit(1); }`);
+    await writeFile(join(repoPath, ".gitignore"), "node_modules/\n");
+    await exec("pnpm", ["install"], { cwd: repoPath });
+    await exec("git", ["add", "."], { cwd: repoPath }); await exec("git", ["commit", "-m", "base"], { cwd: repoPath });
+    const oldBase = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    await exec("git", ["checkout", "-b", "issue/task-a"], { cwd: repoPath });
+    await writeFile(join(repoPath, "issue.txt"), "issue\n"); await exec("git", ["add", "."], { cwd: repoPath }); await exec("git", ["commit", "-m", "issue"], { cwd: repoPath });
+    const priorHead = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    const priorTree = (await exec("git", ["rev-parse", "HEAD^{tree}"], { cwd: repoPath })).stdout.trim();
+    await exec("git", ["checkout", "main"], { cwd: repoPath }); await writeFile(join(repoPath, "base.txt"), "base updated\n"); await exec("git", ["add", "."], { cwd: repoPath }); await exec("git", ["commit", "-m", "base-update"], { cwd: repoPath });
+    const targetBaseSha = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    await exec("git", ["checkout", "issue/task-a"], { cwd: repoPath });
+    value.database.authTransaction((db) => {
+      db.prepare("UPDATE forge_project_revisions SET normalized_json = ? WHERE id = 'revision-a'").run(JSON.stringify({ repository: "acme/forge", repositoryPath: repoPath, worktreeRoot: join(value.root, "worktrees"), baseBranch: "main", targetBranch: "main", baseSha: oldBase, targetSha: targetBaseSha, setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: [] }));
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-a', 'task-a', 'company-a', 'workflow-a', 1, 1, 'completed', 'issue/task-a', ?, ?, 'developer-session', ?, ?, ?, ?, ?, 'clean')").run(repoPath, oldBase, now, now, now, priorHead, priorTree);
+    });
+    await exec("git", ["remote", "add", "origin", repoPath], { cwd: repoPath });
+    const github = fakeGithub();
+    github.getBranchHead = async ({ branch }) => branch === "main" ? targetBaseSha : priorHead;
+    const activities = createActivities(value.database, value.config, { githubRelease: github });
+    const input = { taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", projectRevisionId: "revision-a", checkpoint: "pre_release" as const, developerExecutionId: "developer-a", expectedBaseSha: oldBase, expectedHeadSha: priorHead, expectedHeadTree: priorTree };
+    const blocked = await activities.reconcileTargetBase(input);
+    expect(blocked).toMatchObject({ outcome: "blocked", code: "verification_failed", retryable: true });
+    if (blocked.outcome !== "blocked" || !blocked.resultHead || !blocked.resultTree) throw new Error("Expected a recorded verification blocker");
+    const mergeId = blocked.checkId;
+    const mergeHead = (await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim();
+    expect(mergeHead).toBe(blocked.resultHead);
+    value.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state, execution_kind, supersedes_execution_id) VALUES ('developer-conflict-resolution', 'task-a', 'company-a', 'workflow-a', 1, 2, 'blocked', 'issue/task-a', ?, ?, 'developer-session', ?, ?, ?, ?, ?, 'clean', 'forward_merge', 'developer-a')").run(repoPath, targetBaseSha, now, now, now, blocked.resultHead, blocked.resultTree);
+      db.prepare("UPDATE forge_forward_merges SET developer_execution_id = ? WHERE id = ?").run("developer-conflict-resolution", mergeId);
+    });
+    const revalidated = await activities.reconcileTargetBase({ ...input, developerExecutionId: "developer-conflict-resolution", expectedHeadSha: blocked.resultHead, expectedHeadTree: blocked.resultTree, forwardMergeId: mergeId, verificationOnly: true });
+    expect(revalidated).toMatchObject({ outcome: "revalidated", checkId: mergeId, headSha: blocked.resultHead, headTree: blocked.resultTree });
+    expect((await exec("git", ["rev-parse", "HEAD"], { cwd: repoPath })).stdout.trim()).toBe(mergeHead);
+    expect((value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_forward_merges WHERE task_id = 'task-a'").get()) as { count: number }).count).toBe(1);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("forward merge no-drift ledger is idempotent across repeated checks", async () => {
   const value = await fixture();
   const repoPath = join(value.root, "repo");
@@ -582,7 +615,7 @@ test("forward merge in one worktree does not disturb another active worktree", a
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("publishRelease detects base drift, forward merges, and revalidates through a new draft", async () => {
+test("publishRelease rejects stale delivery before release mutation", async () => {
   const value = await fixture();
   try {
   const repo = join(value.root, "repo");
@@ -622,6 +655,7 @@ test("publishRelease detects base drift, forward merges, and revalidates through
     db.prepare("UPDATE forge_projects SET repository_identity = 'acme/forge' WHERE id = 'project-a'").run();
     db.prepare("INSERT OR REPLACE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-a', 'task-a', 'company-a', 'workflow-a', 1, 1, 'completed', 'issue/task-a', ?, ?, 'developer-session', ?, ?, ?, ?, ?, 'clean', ?, ?)").run(repo, oldBase, now, now, now, oldHead, oldTree, deliveryId, developerEvidenceId);
     db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES (?, 'task-a', 'company-a', 'workflow-a', 1, ?, ?, ?, 'lead-a', 'lead-session', 'approved', 'Approved exact delivery', ?, ?, 0, ?)").run(reviewId, oldBase, oldHead, oldTree, opinionId, leadEvidenceId, now);
+    db.prepare("UPDATE forge_project_revisions SET normalized_json = ? WHERE id = 'revision-a'").run(JSON.stringify({ repository: "acme/forge", repositoryPath: repo, worktreeRoot: join(value.root, "worktrees"), baseBranch: "main", targetBranch: "main", baseSha: oldBase, targetSha: oldHead, setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: [] }));
   });
 
   const github: GithubReleasePort & GithubAcceptancePort & { pushed: number; created: GithubPullRequest[]; nextHead: string; nextTree: string; nextBase: string } = {
@@ -650,35 +684,52 @@ test("publishRelease detects base drift, forward merges, and revalidates through
   await mkdir(join(value.config.artifactRoot, "company-a"), { recursive: true });
   await writeFile(join(value.config.artifactRoot, "company-a", deliveryId), JSON.stringify({ steps: [] }));
   value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET byte_size = ?, sha256 = ? WHERE id = ?").run(JSON.stringify({ steps: [] }).length, createHash("sha256").update(JSON.stringify({ steps: [] })).digest("hex"), deliveryId));
-  const drift = await activities.publishRelease({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", reviewId, developerExecutionId: "developer-a", branchName: "issue/task-a", targetBaseSha: oldBase, subjectCommit: oldHead, subjectTree: oldTree });
-  expect(drift.outcome).toBe("base-drift-merged");
-  if (drift.outcome !== "base-drift-merged") throw new Error("Expected a completed forward merge");
-  expect(drift.baseDriftMerged).toBe(true);
-  expect(drift.priorHead).toBe(oldHead);
-  expect(drift.targetBaseSha).toBe(newBase);
-  expect(drift.headSha).toBeTruthy();
-  expect(drift.headTree).toBeTruthy();
-  expect(drift.forwardMergeId).toBeTruthy();
-
-  const mergeHead = drift.headSha!;
-  const mergeTree = drift.headTree!;
-
-  const mergeReviewId = artifactId("review");
-  value.database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES (?, 'task-a', 'company-a', 'workflow-a', 1, ?, ?, ?, 'lead-a', 'lead-session', 'approved', 'Approved merged delivery', ?, ?, 0, ?)").run(mergeReviewId, newBase, mergeHead, mergeTree, opinionId, leadEvidenceId, now);
-  });
-
-  github.nextHead = mergeHead;
-  github.nextTree = mergeTree;
-  github.nextBase = newBase;
-  const release = await activities.publishRelease({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", reviewId: mergeReviewId, developerExecutionId: "developer-a", branchName: "issue/task-a", targetBaseSha: newBase, subjectCommit: mergeHead, subjectTree: mergeTree });
-  expect(release.outcome).toBe("completed");
-  if (release.outcome !== "completed") throw new Error("Expected completed publication");
-  expect(release.pullRequestNumber).toBeGreaterThan(0);
-  expect(release.isDraft).toBe(true);
+  await expect(activities.publishRelease({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", reviewId, developerExecutionId: "developer-a", branchName: "issue/task-a", targetBaseSha: oldBase, subjectCommit: oldHead, subjectTree: oldTree })).resolves.toMatchObject({ outcome: "blocked", code: "target-base-drift" });
   expect(github.pushed).toBe(0);
-  expect(release.headSha).toBe(mergeHead);
-  expect(release.headTree).toBe(mergeTree);
-  expect(release.targetBaseSha).toBe(newBase);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("existing PR retry observes remote state before repeating a push", async () => {
+  const value = await fixture();
+  try {
+    addReleaseFixtures(value.database);
+    const nextHead = "c".repeat(40);
+    const nextTree = "d".repeat(40);
+    value.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES ('review-new', 'task-a', 'company-a', 'workflow-a', 1, ?, ?, ?, 'lead-a', 'lead-session', 'approved', 'Approved new delivery', 'opinion-a', 'evidence-a', 0, ?)").run(baseSha, nextHead, nextTree, now);
+    });
+    let remoteHead: string | null = null;
+    let pullRequestHead = headSha;
+    let pushes = 0;
+    let hidePushedHeadOnce = false;
+    const github: GithubReleasePort = {
+      async checkAuthentication() {},
+      async getRemoteRepository() { return "acme/forge"; },
+      async getBranchHead({ branch }) { if (branch === "main") return baseSha; if (hidePushedHeadOnce) { hidePushedHeadOnce = false; throw new Error("temporary provider outage"); } return remoteHead; },
+      async inspectLocalRevision() { return { branch: "issue/task-a", headSha: nextHead, treeSha: nextTree, clean: true }; },
+      async pushNormal() { pushes += 1; remoteHead = nextHead; pullRequestHead = nextHead; hidePushedHeadOnce = true; throw new Error("timeout after push"); },
+      async listPullRequests() { return [{ number: 12, url: "https://github.com/acme/forge/pull/12", repository: "acme/forge", headBranch: "issue/task-a", baseBranch: "main", headSha: pullRequestHead, baseSha, isDraft: true, state: "open", mergedAt: null }]; },
+      async createDraftPullRequest() { throw new Error("must not create a second PR"); },
+      async getPullRequest() { return { number: 12, url: "https://github.com/acme/forge/pull/12", repository: "acme/forge", headBranch: "issue/task-a", baseBranch: "main", headSha: pullRequestHead, baseSha, isDraft: true, state: "open", mergedAt: null }; },
+    };
+    const release = new ReleaseService(value.database, new ArtifactStore(value.config.artifactRoot), github);
+    const input = {
+      taskId: "task-a",
+      companyId: "company-a",
+      workflowId: "workflow-a",
+      releaseId: "release-a",
+      coordinates: { projectRevisionId: "revision-a", repositoryPath: join(value.root, "repo"), worktreePath: join(value.root, "repo"), repository: "acme/forge", owner: "acme", headBranch: "issue/task-a", baseBranch: "main", expectedBaseSha: baseSha },
+      reviewedRevision: { reviewId: "review-new", developerExecutionId: "developer-a", commitSha: nextHead, treeSha: nextTree },
+      taskTitle: "Task A",
+      delivery: { filesChanged: ["feature.ts"], commandsRun: ["pnpm test"], testResults: ["passed"] },
+    };
+    await expect(release.publish(input)).rejects.toBeTruthy();
+    const recovered = await release.publish(input);
+    expect(recovered.releaseId).toBe("release-a");
+    expect(recovered.pullRequest.number).toBe(12);
+    expect(recovered.pullRequest.url).toBe("https://github.com/acme/forge/pull/12");
+    expect(pushes).toBe(1);
+    expect(value.database.authQuery((db) => db.prepare("SELECT head_sha FROM forge_releases WHERE id = 'release-a'").get())).toEqual({ head_sha: nextHead });
+    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_releases WHERE task_id = 'task-a'").get())).toEqual({ count: 1 });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

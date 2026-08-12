@@ -5,7 +5,7 @@ import { z } from "zod";
 
 import { ProjectionIntegrityFailure, type ForgeDatabase } from "../database.js";
 import type { ForgeConfig } from "../config.js";
-import { ArtifactStore } from "../artifacts.js";
+import { ArtifactStore, type StoredArtifact } from "../artifacts.js";
 import { redact } from "../logging.js";
 import { AgentFailure, AgentService } from "../codex-lead.js";
 import { DeveloperService } from "../codex-developer.js";
@@ -13,9 +13,12 @@ import { cancelDeveloperExecution } from "../developer-recovery.js";
 import { AcceptanceService } from "../acceptance.js";
 import { CiService, createGithubCiProvider, type CiProvider } from "../ci.js";
 import { createGithubReleasePort, GithubReleaseFailure, ReleaseService, type GithubReleaseAdapter } from "../github-release.js";
-import { ForwardMergeService } from "../forward-merge.js";
+import { ForwardMergeFailure, ForwardMergeService } from "../forward-merge.js";
+import { parseAcceptedProjectRevision, type AcceptedProjectRevision } from "../projects.js";
+import { runPinnedVerification } from "../verification.js";
+import { createGitCommandGuard } from "../worktrees.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { DeliveryDecisionActivityInputSchema, DeliveryReviewSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PublishReleaseActivityResultSchema, SafeSummarySchema, type AcceptDeliveryActivityInput, type DurableArtifactReference, type IssueActivities, type IssueProjectionEvent, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput, type WorkflowCiRepairActivityInput, type WorkflowDeliveryReviewActivityInput, type WorkflowDeveloperRepairActivityInput, type WorkflowFinalReviewActivityInput, type WorkflowMergeConflictPlanActivityInput, type WorkflowMergeConflictResolutionActivityInput } from "./issue-contracts.js";
+import { ArtifactReferenceSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, SafeSummarySchema, type AcceptDeliveryActivityInput, type DurableArtifactReference, type IssueActivities, type IssueProjectionEvent, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput, type ReconcileTargetBaseActivityInput, type ReconcileTargetBaseActivityResult, type TargetBaseBlockerCode, type WorkflowCiRepairActivityInput, type WorkflowDeliveryReviewActivityInput, type WorkflowDeveloperRepairActivityInput, type WorkflowFinalReviewActivityInput, type WorkflowMergeConflictPlanActivityInput, type WorkflowMergeConflictResolutionActivityInput } from "./issue-contracts.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
 import { CapacityManager } from "../capacity.js";
 
@@ -39,7 +42,7 @@ export function asNonRetryableApplicationFailure(error: unknown): ApplicationFai
   return undefined;
 }
 
-const PinnedProjectRevisionSchema = z.object({
+const LegacyPinnedProjectRevisionSchema = z.object({
   repositoryPath: z.string().min(1),
   worktreeRoot: z.string().min(1),
   repository: z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,99}\/[a-z0-9][a-z0-9_.-]{0,99}$/),
@@ -53,12 +56,9 @@ const PinnedProjectRevisionSchema = z.object({
 });
 const DeveloperDeliverySchema = z.object({ steps: z.array(z.object({ filesChanged: z.array(z.string()).optional(), commandsRun: z.array(z.string()).optional(), testResults: z.array(z.string()).optional() }).passthrough()).default([]) }).passthrough();
 
-function pinnedProjectRevision(raw: string): z.infer<typeof PinnedProjectRevisionSchema> {
-  try {
-    return PinnedProjectRevisionSchema.parse(JSON.parse(raw));
-  } catch {
-    throw new Error("Pinned project revision is unavailable");
-  }
+function pinnedProjectRevision(raw: string): AcceptedProjectRevision {
+  try { return parseAcceptedProjectRevision(raw); }
+  catch { return LegacyPinnedProjectRevisionSchema.parse(JSON.parse(raw)) as AcceptedProjectRevision; }
 }
 
 async function durableArtifactReference(database: ForgeDatabase, store: ArtifactStore, companyId: string, artifactId: string, kind?: DurableArtifactReference["kind"]): Promise<DurableArtifactReference> {
@@ -80,13 +80,30 @@ async function verifiedArtifactBytes(database: ForgeDatabase, store: ArtifactSto
   return store.read({ companyId, storagePath: row.storagePath, sha256: actual.sha256 });
 }
 
-const MergeConflictEvidenceSchema = z.object({
-  version: z.literal(1),
-  priorHead: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  targetBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  conflictFiles: z.array(z.string().min(1).max(1_000)).min(1).max(128),
-  combinedDiff: z.string().max(8 * 1024 * 1024),
-});
+function artifactReference(artifact: Pick<StoredArtifact, "id" | "sha256" | "kind">) {
+  return ArtifactReferenceSchema.parse({ id: artifact.id, sha256: artifact.sha256, kind: artifact.kind });
+}
+
+function registerArtifact(database: ForgeDatabase, artifact: StoredArtifact): void {
+  database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
+}
+
+function reconcileBlocker(error: unknown): { code: TargetBaseBlockerCode; owner: "human" | "provider" | "lead"; retryable: boolean; summary: string } {
+  const code = error instanceof ForwardMergeFailure ? error.code : "provider-unavailable";
+  const mapped: Record<string, { code: TargetBaseBlockerCode; owner: "human" | "provider" | "lead"; retryable: boolean; summary: string }> = {
+    "authentication-required": { code: "authentication_required", owner: "provider", retryable: false, summary: "Provider authentication is required before the target base can be reconciled" },
+    "provider-unavailable": { code: "provider_unavailable", owner: "provider", retryable: true, summary: "The target-base provider could not be observed; retry reconciliation" },
+    "remote-identity-mismatch": { code: "remote_identity_mismatch", owner: "human", retryable: false, summary: "The local repository remote does not match the accepted project identity" },
+    "base-advanced-again": { code: "base_advanced_again", owner: "provider", retryable: true, summary: "The target base advanced during reconciliation; retry the same checkpoint" },
+    "not-ancestor": { code: "base_rewritten", owner: "human", retryable: false, summary: "The observed target base is not a descendant of the accepted base" },
+    "worktree-ownership-mismatch": { code: "worktree_ownership_mismatch", owner: "human", retryable: false, summary: "The recorded Developer worktree no longer matches the accepted delivery" },
+    "worktree-dirty": { code: "worktree_dirty", owner: "human", retryable: false, summary: "The owned issue worktree is not clean" },
+    "merge-state-ownership-mismatch": { code: "merge_state_ownership_mismatch", owner: "human", retryable: false, summary: "The local merge state does not match the recorded reconciliation" },
+    "unsafe-command": { code: "merge_failed", owner: "human", retryable: false, summary: "The requested reconciliation command was rejected as unsafe" },
+    git: { code: "merge_failed", owner: "lead", retryable: true, summary: "The target-base forward merge could not be completed" },
+  };
+  return mapped[code] ?? { code: "provider_unavailable", owner: "provider", retryable: true, summary: "Target-base reconciliation could not be completed" };
+}
 
 export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): ProbeActivities & IssueActivities {
   const logger = new StructuredLogger();
@@ -97,7 +114,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
   const release = new ReleaseService(database, artifacts, githubRelease);
   const ci = new CiService(database, options.ciProvider ?? createGithubCiProvider(), artifacts);
   const acceptance = new AcceptanceService(database, githubRelease);
-  const forwardMerge = new ForwardMergeService(database);
+  const legacyForwardMerge = new ForwardMergeService(database);
   const capacity = new CapacityManager(database, config);
   const activityWorktrees = new Map<string, string>();
   const activityWorktreesByBranch = new Map<string, string>();
@@ -190,32 +207,121 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         let pinned: ReturnType<typeof pinnedProjectRevision>;
         try { pinned = pinnedProjectRevision(context.normalizedJson); } catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "The accepted project revision is incomplete"); }
         identity.repository = pinned.repository;
-        await githubRelease.checkAuthentication();
-        const currentBaseSha = await githubRelease.getBranchHead({ repository: pinned.repository, branch: pinned.baseBranch });
-        if (currentBaseSha === null) throw new GithubReleaseFailure("target-base-drift", "Target base branch is unavailable");
-        if (currentBaseSha.toLowerCase() !== context.targetBaseSha.toLowerCase()) {
-          const merged = await forwardMerge.reconcile({ worktreePath: context.worktreePath, repositoryPath: pinned.repositoryPath, branchName: context.branchName, expectedBaseSha: context.targetBaseSha, currentBaseSha, taskId: input.taskId, companyId: input.companyId });
+        let acceptedRevision = true;
+        try { parseAcceptedProjectRevision(context.normalizedJson); } catch { acceptedRevision = false; }
+        if (!acceptedRevision) {
+          await githubRelease.checkAuthentication();
+          const currentBaseSha = await githubRelease.getBranchHead({ repository: pinned.repository, branch: pinned.baseBranch });
+          if (currentBaseSha === null) throw new GithubReleaseFailure("target-base-drift", "Target base branch is unavailable");
+          if (currentBaseSha.toLowerCase() !== context.targetBaseSha.toLowerCase()) {
+            const merged = await legacyForwardMerge.reconcile({ worktreePath: context.worktreePath, repositoryPath: pinned.repositoryPath, branchName: context.branchName, expectedBaseSha: context.targetBaseSha, currentBaseSha, taskId: input.taskId, companyId: input.companyId });
           if (merged.status === "conflict") {
             const evidence = await artifacts.put(input.companyId, "merge-conflict-evidence", { filename: `${input.taskId}-${merged.forwardMergeId ?? "forward-merge"}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, priorHead: merged.priorHead, targetBaseSha: currentBaseSha, conflictFiles: merged.conflictFiles, combinedDiff: merged.conflictDiff ?? "" }), "utf8") });
             database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt));
             const reference = await durableArtifactReference(database, artifacts, input.companyId, evidence.id, "merge-conflict-evidence");
             return PublishReleaseActivityResultSchema.parse({ outcome: "base-drift-conflict", releaseId: null, repository: pinned.repository, branchName: context.branchName, headSha: context.subjectCommit, headTree: context.subjectTree, pullRequestNumber: null, pullRequestUrl: null, isDraft: false, reused: false, attempt: 1, baseDriftConflict: true, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), priorHead: merged.priorHead, mergeConflictEvidence: reference, targetBaseSha: currentBaseSha });
           }
-          const headSha = merged.mergeCommit ?? context.subjectCommit;
-          const headTree = merged.tree ?? context.subjectTree;
-          return PublishReleaseActivityResultSchema.parse({ outcome: "base-drift-merged", releaseId: null, repository: pinned.repository, branchName: context.branchName, headSha, headTree, pullRequestNumber: null, pullRequestUrl: null, isDraft: false, reused: false, attempt: 1, baseDriftMerged: true, targetBaseSha: currentBaseSha, priorHead: merged.priorHead, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), ...(merged.mergeCommit ? { mergeCommit: merged.mergeCommit } : {}), ...(merged.tree ? { tree: merged.tree } : {}) });
+            const headSha = merged.mergeCommit ?? context.subjectCommit;
+            const headTree = merged.tree ?? context.subjectTree;
+            return PublishReleaseActivityResultSchema.parse({ outcome: "base-drift-merged", releaseId: null, repository: pinned.repository, branchName: context.branchName, headSha, headTree, pullRequestNumber: null, pullRequestUrl: null, isDraft: false, reused: false, attempt: 1, baseDriftMerged: true, targetBaseSha: currentBaseSha, priorHead: merged.priorHead, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), ...(merged.mergeCommit ? { mergeCommit: merged.mergeCommit } : {}), ...(merged.tree ? { tree: merged.tree } : {}) });
+          }
         }
         let parsed: z.infer<typeof DeveloperDeliverySchema>;
         try { parsed = DeveloperDeliverySchema.parse(JSON.parse(artifacts.readSync({ companyId: input.companyId, storagePath: context.deliveryStoragePath, sha256: context.deliverySha }).toString("utf8"))); }
         catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "Completed delivery artifact is unavailable"); }
         const delivery = { filesChanged: parsed.steps.flatMap((step) => step.filesChanged ?? []), commandsRun: parsed.steps.flatMap((step) => step.commandsRun ?? []), testResults: parsed.steps.flatMap((step) => step.testResults ?? []) };
-        const result = await release.publish({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, coordinates: { projectRevisionId: context.projectRevisionId, repositoryPath: pinned.repositoryPath, worktreePath: context.worktreePath, repository: pinned.repository, owner: pinned.repository.split("/")[0]!, headBranch: context.branchName, baseBranch: pinned.baseBranch, expectedBaseSha: context.targetBaseSha }, reviewedRevision: { reviewId: context.reviewId, developerExecutionId: context.developerExecutionId, commitSha: context.subjectCommit, treeSha: context.subjectTree }, taskTitle: context.title, delivery });
+        const result = await release.publish({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, ...(input.releaseId ? { releaseId: input.releaseId } : {}), coordinates: { projectRevisionId: context.projectRevisionId, repositoryPath: pinned.repositoryPath, worktreePath: context.worktreePath, repository: pinned.repository, owner: pinned.repository.split("/")[0]!, headBranch: context.branchName, baseBranch: pinned.baseBranch, expectedBaseSha: context.targetBaseSha }, reviewedRevision: { reviewId: context.reviewId, developerExecutionId: context.developerExecutionId, commitSha: context.subjectCommit, treeSha: context.subjectTree }, taskTitle: context.title, delivery });
         return PublishReleaseActivityResultSchema.parse({ outcome: "completed", releaseId: result.releaseId, repository: result.repository, branchName: result.branchName, headSha: result.headSha, headTree: result.headTree, pullRequestNumber: result.pullRequest.number, pullRequestUrl: result.pullRequest.url, isDraft: result.pullRequest.isDraft, reused: result.reused, attempt: result.attempt, targetBaseSha: context.targetBaseSha });
       } catch (error) {
         const failure = error instanceof GithubReleaseFailure ? error : new GithubReleaseFailure("provider-unavailable", "Release context or provider state is unavailable");
         const operation = database.authQuery((db) => db.prepare("SELECT MAX(COALESCE(attempt, 0)) AS attempt FROM forge_provider_operations WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND kind IN ('push', 'create-draft-pr')").get(input.taskId, input.companyId, input.workflowId) as { attempt: number | null });
         return PublishReleaseActivityResultSchema.parse({ outcome: "blocked", releaseId: null, ...identity, pullRequestNumber: null, pullRequestUrl: null, isDraft: true, reused: false, code: failure.code, summary: failure.summary, retryAt: failure.retryAt, attempt: operation.attempt ?? 0, evidenceArtifactId: null });
       }
+    },
+    async reconcileTargetBase(rawInput: ReconcileTargetBaseActivityInput): Promise<ReconcileTargetBaseActivityResult> {
+      const input = ReconcileTargetBaseActivityInputSchema.parse(rawInput);
+      const checkId = `target_base_${randomBytes(12).toString("hex")}`;
+      const context = database.authQuery((db) => db.prepare(`SELECT t.project_revision_id AS projectRevisionId, r.normalized_json AS normalizedJson,
+          d.id AS developerExecutionId, d.status AS developerStatus, d.session_ref AS developerSessionRef,
+          d.branch_name AS branchName, d.worktree_path AS worktreePath, d.target_base_sha AS targetBaseSha,
+          d.result_commit AS resultCommit, d.result_tree AS resultTree, d.plan_revision AS planRevision,
+          d.delivery_artifact_id AS deliveryArtifactId, d.evidence_artifact_id AS evidenceArtifactId
+        FROM forge_tasks t
+        JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
+        JOIN forge_developer_executions d ON d.id = ? AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
+        WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_revision_id = ?`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId) as { projectRevisionId: string; normalizedJson: string; developerExecutionId: string; developerStatus: string; developerSessionRef: string | null; branchName: string; worktreePath: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null; planRevision: number; deliveryArtifactId: string | null; evidenceArtifactId: string | null } | undefined);
+      const blocked = (code: TargetBaseBlockerCode, owner: "human" | "provider" | "lead", retryable: boolean, summary: string, evidenceArtifact?: ReturnType<typeof artifactReference>, coordinates?: { observedBaseSha?: string; priorHead?: string; priorTree?: string; resultHead?: string; resultTree?: string }, operationId = input.forwardMergeId ?? checkId): ReconcileTargetBaseActivityResult => ({ outcome: "blocked", checkId: operationId, checkpoint: input.checkpoint, code, owner, retryable, summary, ...(evidenceArtifact ? { evidenceArtifact } : {}), ...(coordinates ?? {}) });
+      const retryingRecordedMerge = input.verificationOnly === true && input.forwardMergeId !== undefined;
+      if (!context || context.projectRevisionId !== input.projectRevisionId || !["completed", "blocked"].includes(context.developerStatus) || !context.resultCommit || !context.resultTree || (!retryingRecordedMerge && (context.targetBaseSha.toLowerCase() !== input.expectedBaseSha.toLowerCase() || context.resultCommit.toLowerCase() !== input.expectedHeadSha.toLowerCase() || context.resultTree.toLowerCase() !== input.expectedHeadTree.toLowerCase()))) {
+        return blocked("merge_state_ownership_mismatch", "human", false, "The exact Developer delivery no longer matches the reconciliation coordinates");
+      }
+      let pinned: ReturnType<typeof parseAcceptedProjectRevision>;
+      try { pinned = parseAcceptedProjectRevision(context.normalizedJson); } catch { return blocked("artifact_unavailable", "human", false, "The accepted project revision is unavailable or incomplete"); }
+      const artifacts = new ArtifactStore(config.artifactRoot);
+      const service = new ForwardMergeService(database, githubRelease, artifacts);
+      let merge;
+      try {
+        if (input.verificationOnly) {
+          if (!input.forwardMergeId) return blocked("merge_state_ownership_mismatch", "human", false, "The recorded forward-merge identity is unavailable");
+          merge = await service.revalidateMergedOperation({ forwardMergeId: input.forwardMergeId, worktreePath: context.worktreePath, repositoryPath: pinned.repositoryPath, branchName: context.branchName, expectedBaseSha: input.expectedBaseSha, expectedHeadSha: input.expectedHeadSha, expectedHeadTree: input.expectedHeadTree, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, checkpoint: input.checkpoint, developerExecutionId: input.developerExecutionId });
+        } else {
+          merge = await service.reconcile({ worktreePath: context.worktreePath, repositoryPath: pinned.repositoryPath, branchName: context.branchName, expectedBaseSha: input.expectedBaseSha, expectedHeadSha: input.expectedHeadSha, expectedHeadTree: input.expectedHeadTree, repository: pinned.repository, baseBranch: pinned.baseBranch, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, checkpoint: input.checkpoint, developerExecutionId: input.developerExecutionId, ...(input.releaseId ? { releaseId: input.releaseId } : {}), ...(input.deliveryReviewId ? { deliveryReviewId: input.deliveryReviewId } : {}), ...(input.ciRunId ? { ciRunId: input.ciRunId } : {}), ...(input.finalReviewId ? { finalReviewId: input.finalReviewId } : {}), ...(input.acceptanceId ? { acceptanceId: input.acceptanceId } : {}) });
+        }
+      } catch (error) {
+        const failure = reconcileBlocker(error);
+        return blocked(failure.code, failure.owner, failure.retryable, failure.summary);
+      }
+      if (merge.status === "no_drift") return { outcome: "no_drift", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree };
+      if (merge.status === "conflict") {
+        if (merge.conflictEvidenceTooLarge || !merge.conflictArtifact) return blocked("conflict_evidence_too_large", "lead", false, "Conflict evidence exceeded the safe artifact limit", undefined, { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree }, merge.forwardMergeId ?? checkId);
+        return { outcome: "conflict", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, conflictFileCount: merge.conflictFiles.length, conflictArtifact: artifactReference(merge.conflictArtifact) };
+      }
+      const storedDelivery = merge.forwardMergeId ? database.authQuery((db) => db.prepare(`SELECT developer_execution_id AS developerExecutionId, result_head AS resultHead, result_tree AS resultTree, verification_artifact_id AS verificationArtifactId, verification_artifact_sha256 AS verificationArtifactSha256, delivery_artifact_id AS deliveryArtifactId, delivery_artifact_sha256 AS deliveryArtifactSha256 FROM forge_forward_merges WHERE id = ? AND task_id = ? AND company_id = ?`).get(merge.forwardMergeId, input.taskId, input.companyId) as { developerExecutionId: string | null; resultHead: string | null; resultTree: string | null; verificationArtifactId: string | null; verificationArtifactSha256: string | null; deliveryArtifactId: string | null; deliveryArtifactSha256: string | null } | undefined) : undefined;
+      const storedArtifacts = storedDelivery && storedDelivery.developerExecutionId && storedDelivery.resultHead && storedDelivery.resultTree && storedDelivery.verificationArtifactId && storedDelivery.verificationArtifactSha256 && storedDelivery.deliveryArtifactId && storedDelivery.deliveryArtifactSha256
+        ? database.authQuery((db) => db.prepare("SELECT id, sha256, kind FROM forge_artifacts WHERE company_id = ? AND (id = ? OR id = ?) ORDER BY id").all(input.companyId, storedDelivery.verificationArtifactId, storedDelivery.deliveryArtifactId) as Array<{ id: string; sha256: string; kind: string }>)
+        : [];
+      if (storedDelivery && storedArtifacts.length === 2 && storedDelivery.developerExecutionId && storedDelivery.resultHead && storedDelivery.resultTree) {
+        const verificationArtifact = storedArtifacts.find((artifact) => artifact.id === storedDelivery.verificationArtifactId && artifact.sha256 === storedDelivery.verificationArtifactSha256 && artifact.kind === "forward-merge-verification");
+        const deliveryArtifact = storedArtifacts.find((artifact) => artifact.id === storedDelivery.deliveryArtifactId && artifact.sha256 === storedDelivery.deliveryArtifactSha256 && artifact.kind === "forward-merge-delivery");
+        if (verificationArtifact && deliveryArtifact) return { outcome: "revalidated", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, headSha: storedDelivery.resultHead, headTree: storedDelivery.resultTree, developerExecutionId: storedDelivery.developerExecutionId, deliveryArtifact: artifactReference({ id: deliveryArtifact.id, sha256: deliveryArtifact.sha256, kind: "forward-merge-delivery" }), verificationArtifact: artifactReference({ id: verificationArtifact.id, sha256: verificationArtifact.sha256, kind: "forward-merge-verification" }) };
+      }
+      const guard = await createGitCommandGuard(config.runtimeRoot);
+      try {
+        const verification = await runPinnedVerification({ worktreePath: context.worktreePath, setupCommand: pinned.setupCommand, verificationCommand: pinned.verificationCommand, runtimeRoot: config.runtimeRoot }, { guard });
+        const verificationArtifact = await artifacts.put(input.companyId, "forward-merge-verification", { filename: `${merge.forwardMergeId ?? checkId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(verification), "utf8") });
+        registerArtifact(database, verificationArtifact);
+        const recordVerification = (code: string, summary: string): void => {
+          database.authTransaction((db) => db.prepare("UPDATE forge_forward_merges SET result_head = ?, result_tree = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, failure_code = ?, failure_summary = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(merge.mergeCommit, merge.tree, verificationArtifact.id, verificationArtifact.sha256, code, summary, new Date().toISOString(), merge.forwardMergeId ?? "", input.taskId, input.companyId));
+        };
+        if (verification.outcome !== "passed") {
+          try {
+            await service.assertMergedOwnership({ worktreePath: context.worktreePath, branchName: context.branchName, priorHead: merge.priorHead, targetBaseSha: merge.targetBaseSha, mergeCommit: merge.mergeCommit!, tree: merge.tree! });
+          } catch {
+            const summary = "Pinned verification changed the forward-merge delivery";
+            recordVerification("merge_state_ownership_mismatch", summary);
+            return blocked("merge_state_ownership_mismatch", "human", false, summary, artifactReference(verificationArtifact), { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: merge.mergeCommit!, resultTree: merge.tree! }, merge.forwardMergeId ?? checkId);
+          }
+          recordVerification(verification.code ?? "verification_failed", verification.summary);
+          return blocked(verification.code === "verification_timed_out" ? "verification_timed_out" : verification.code === "verification_evidence_too_large" ? "verification_evidence_too_large" : "verification_failed", "lead", true, verification.summary, artifactReference(verificationArtifact), { observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, resultHead: merge.mergeCommit!, resultTree: merge.tree! }, merge.forwardMergeId ?? checkId);
+        }
+        await service.assertMergedOwnership({ worktreePath: context.worktreePath, branchName: context.branchName, priorHead: merge.priorHead, targetBaseSha: merge.targetBaseSha, mergeCommit: merge.mergeCommit!, tree: merge.tree! });
+        const deliveryArtifact = await artifacts.put(input.companyId, "forward-merge-delivery", { filename: `${merge.forwardMergeId ?? checkId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkId: merge.forwardMergeId ?? checkId, priorHead: merge.priorHead, priorTree: merge.priorTree, targetBaseSha: merge.targetBaseSha, resultCommit: merge.mergeCommit, resultTree: merge.tree, developerExecutionId: input.developerExecutionId, supersededDeliveryArtifactId: context.deliveryArtifactId, supersededEvidenceArtifactId: context.evidenceArtifactId, verificationArtifactId: verificationArtifact.id, verification }, null, 2), "utf8") });
+        registerArtifact(database, deliveryArtifact);
+        const newExecutionId = `developer_${randomBytes(12).toString("hex")}`;
+        const now = new Date().toISOString();
+        const nextAttempt = Number((database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, context.planRevision) as { attempt: number })).attempt) + 1;
+        database.authTransaction((db) => {
+          db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, supersedes_execution_id, session_ref, started_at, finished_at, heartbeat_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id, execution_kind) VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'clean', ?, ?, 'forward_merge')").run(newExecutionId, input.taskId, input.companyId, input.workflowId, context.planRevision, nextAttempt, context.branchName, context.worktreePath, merge.targetBaseSha, input.developerExecutionId, context.developerSessionRef, now, now, now, merge.mergeCommit, merge.tree, deliveryArtifact.id, verificationArtifact.id);
+          db.prepare("UPDATE forge_forward_merges SET result_head = ?, result_tree = ?, developer_execution_id = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, delivery_artifact_id = ?, delivery_artifact_sha256 = ?, supersedes_delivery_artifact_id = ?, supersedes_evidence_artifact_id = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(merge.mergeCommit, merge.tree, newExecutionId, verificationArtifact.id, verificationArtifact.sha256, deliveryArtifact.id, deliveryArtifact.sha256, context.deliveryArtifactId, context.evidenceArtifactId, now, merge.forwardMergeId ?? "", input.taskId, input.companyId);
+        });
+        return { outcome: "revalidated", checkId: merge.forwardMergeId ?? checkId, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: merge.targetBaseSha, priorHead: merge.priorHead, priorTree: merge.priorTree, headSha: merge.mergeCommit!, headTree: merge.tree!, developerExecutionId: newExecutionId, deliveryArtifact: artifactReference(deliveryArtifact), verificationArtifact: artifactReference(verificationArtifact) };
+      } catch (error) {
+        if (error instanceof ForwardMergeFailure) {
+          const failure = reconcileBlocker(error);
+          return blocked(failure.code, failure.owner, failure.retryable, failure.summary);
+        }
+        return blocked("verification_failed", "lead", true, "Pinned verification could not be completed");
+      } finally { await guard.cleanup(); }
     },
     async reconcileCi(input: ReconcileCiActivityInput) {
       const context = database.authQuery((db) => db.prepare("SELECT r.normalized_json AS normalizedJson FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' WHERE t.id = ? AND t.company_id = ?").get(input.taskId, input.companyId) as { normalizedJson: string } | undefined);
@@ -233,11 +339,6 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       if (!context || !pinned || context.supersededAt || context.pullRequestNumber === null) throw new Error("Final review release is unavailable");
       const currentPullRequest = await githubRelease.getPullRequest({ repository: context.repository, number: context.pullRequestNumber });
       if (currentPullRequest.state !== "open" || !currentPullRequest.isDraft || currentPullRequest.repository.toLowerCase() !== context.repository.toLowerCase() || currentPullRequest.number !== context.pullRequestNumber || currentPullRequest.url.replace(/\/$/, "").toLowerCase() !== context.pullRequestUrl?.replace(/\/$/, "").toLowerCase() || currentPullRequest.baseBranch !== context.baseBranch || currentPullRequest.baseSha.toLowerCase() !== context.baseSha.toLowerCase() || currentPullRequest.headBranch !== context.headBranch || currentPullRequest.headSha.toLowerCase() !== context.headSha.toLowerCase() || currentPullRequest.headSha.toLowerCase() !== input.subjectCommit.toLowerCase()) throw new Error("Pull request head changed before final review");
-      {
-        const currentBaseSha = await githubRelease.getBranchHead({ repository: pinned.repository, branch: pinned.baseBranch });
-        if (currentBaseSha === null) throw new Error("Target base branch is unavailable");
-        if (currentBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new Error("Target base has drifted since CI completed; a fresh forward merge and review are required");
-      }
       const review = await withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))({ ...input, worktreePath, reviewKind: "final" }));
       const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, review.opinionArtifactId, "delivery-review");
       return { finalReviewId: review.reviewId, leadExecutionId: review.leadExecutionId, leadSessionRef: review.leadSessionRef, opinionArtifactId: review.opinionArtifactId, evidenceArtifactId: review.evidenceArtifactId, reviewArtifact, outcome: review.outcome, summary: SafeSummarySchema.parse(review.summary) };
@@ -255,34 +356,18 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     async reconcileMerge(input: ReconcileMergeActivityInput) {
       const context = database.authQuery((db) => db.prepare("SELECT pr.normalized_json AS normalizedJson, r.pr_number AS pullRequestNumber FROM forge_tasks t JOIN forge_project_revisions pr ON pr.id = t.project_revision_id AND pr.state = 'accepted' JOIN forge_releases r ON r.id = ? AND r.task_id = t.id AND r.company_id = t.company_id WHERE t.id = ? AND t.company_id = ?").get(input.releaseId, input.taskId, input.companyId) as { normalizedJson: string; pullRequestNumber: number | null } | undefined);
       if (!context || context.pullRequestNumber === null) throw new Error("Merge reconciliation context is unavailable");
-      const pinned = pinnedProjectRevision(context.normalizedJson);
+      const pinned = parseAcceptedProjectRevision(context.normalizedJson);
       const result = await acceptance.reconcile({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, repository: pinned.repository, number: context.pullRequestNumber, expectedHeadSha: input.expectedHeadSha, expectedBaseBranch: pinned.baseBranch });
       return { outcome: result.outcome, pullRequestNumber: result.pullRequest?.number ?? context.pullRequestNumber, pullRequestUrl: result.pullRequest?.url ?? "" };
     },
     async planMergeConflict(input: WorkflowMergeConflictPlanActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input);
-      let conflictFiles = input.conflictFiles ?? [];
-      let conflictDiff = input.conflictDiff ?? "";
-      const conflictEvidence = input.conflictEvidence;
-      if (conflictEvidence) {
-        const evidence = MergeConflictEvidenceSchema.parse(JSON.parse((await verifiedArtifactBytes(database, artifacts, input.companyId, conflictEvidence, "merge-conflict-evidence")).toString("utf8")));
-        if (evidence.priorHead.toLowerCase() !== input.priorHead.toLowerCase() || evidence.targetBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new Error("Merge-conflict evidence identity is invalid");
-        conflictFiles = evidence.conflictFiles;
-        conflictDiff = evidence.combinedDiff;
-      }
-      if (!conflictFiles.length) throw new Error("Merge-conflict files are unavailable");
-      const rawInput: MergeConflictPlanActivityInput = { ...input, worktreePath, conflictFiles, conflictDiff };
+      const rawInput: MergeConflictPlanActivityInput = { ...input, worktreePath };
       return withCapacity(input, "lead", () => (agent?.planMergeConflict ?? defaultAgent.planMergeConflict.bind(defaultAgent))(rawInput));
     },
     async resolveMergeConflict(input: WorkflowMergeConflictResolutionActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
-      let conflictFiles = input.conflictFiles;
-      if (!conflictFiles) {
-        const row = database.authQuery((db) => db.prepare("SELECT conflict_files_json AS conflictFiles FROM forge_merge_conflict_resolutions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ? ORDER BY updated_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha) as { conflictFiles: string } | undefined);
-        conflictFiles = row ? JSON.parse(row.conflictFiles) as string[] : [];
-      }
-      if (!conflictFiles.length) throw new Error("Merge-conflict files are unavailable");
-      const rawInput: MergeConflictResolutionActivityInput = { ...input, worktreePath, conflictFiles };
+      const rawInput: MergeConflictResolutionActivityInput = { ...input, worktreePath };
       const operation = developer.runMergeConflictResolution ? developer.runMergeConflictResolution.bind(developer) : defaultDeveloper.runMergeConflictResolution.bind(defaultDeveloper);
       return withCapacity(input, "developer", () => operation(rawInput));
     },

@@ -3,6 +3,7 @@ import { access, constants, lstat, mkdir, mkdtemp, realpath, rename, rm, stat } 
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { z } from "zod";
 
 import type { AuthUser } from "./auth.js";
 import { AuthFailure, AuthService } from "./auth.js";
@@ -191,6 +192,28 @@ const secretPattern = /(?:gh[pousr]_|github_pat_|token\s*=|password\s*=|secret\s
 const modelIdPattern = /^[a-z0-9][a-z0-9._-]{1,119}$/;
 const approvedSetupCommands = new Set(["pnpm install", "pnpm install --frozen-lockfile", "npm install", "npm ci", "yarn install", "yarn install --immutable", "bun install", "mise run setup", "cargo fetch --locked"]);
 const approvedVerificationCommands = new Set(["pnpm test", "pnpm typecheck", "pnpm lint", "npm test", "npm run typecheck", "npm run lint", "yarn test", "yarn typecheck", "yarn lint", "bun test", "mise run test", "mise run typecheck", "mise run lint", "cargo test", "make test", "make check"]);
+
+export const AcceptedProjectRevisionSchema = z.object({
+  repositoryPath: z.string().min(1).max(1_000),
+  worktreeRoot: z.string().min(1).max(1_000),
+  repository: z.string().regex(/^[a-z0-9][a-z0-9_.-]{0,99}\/[a-z0-9][a-z0-9_.-]{0,99}$/),
+  baseBranch: z.string().min(1).max(256),
+  targetBranch: z.string().min(1).max(256),
+  baseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  targetSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  setupCommand: z.string().refine((value) => approvedSetupCommands.has(value), "Setup command is not an accepted project command"),
+  verificationCommand: z.string().refine((value) => approvedVerificationCommands.has(value), "Verification command is not an accepted project command"),
+  requiredChecks: z.array(z.string().min(1).max(120)).max(32),
+});
+export type AcceptedProjectRevision = z.infer<typeof AcceptedProjectRevisionSchema>;
+
+export function parseAcceptedProjectRevision(raw: string): AcceptedProjectRevision {
+  try {
+    return AcceptedProjectRevisionSchema.parse(JSON.parse(raw));
+  } catch {
+    throw new ProjectFailure("Pinned project revision is unavailable", [], 409);
+  }
+}
 
 const projectRevisionColumns = `p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id AND r.state = 'accepted'), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id AND r.state = 'accepted') AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha, (SELECT r.state FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS active_revision_state`;
 

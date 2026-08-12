@@ -118,6 +118,10 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       async projectIssueState(event: Parameters<typeof baseActivities.projectIssueState>[0]) {
         return event.state.issueId.startsWith("ci-") ? event.state : baseActivities.projectIssueState(event);
       },
+      async reconcileTargetBase(input: Parameters<typeof baseActivities.reconcileTargetBase>[0]) {
+        if (!input.taskId.startsWith("ci-")) return baseActivities.reconcileTargetBase(input);
+        return { outcome: "no_drift" as const, checkId: `target_base_${input.taskId}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: input.expectedBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree };
+      },
       async reconcileCi(input: Parameters<typeof baseActivities.reconcileCi>[0]) {
         if (!input.taskId.startsWith("ci-")) return baseActivities.reconcileCi(input);
         const calls = (ciCalls.get(input.taskId) ?? 0) + 1;
@@ -138,7 +142,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       },
       async finalReview(input: Parameters<typeof baseActivities.finalReview>[0]) {
         if (!input.taskId.startsWith("ci-")) return baseActivities.finalReview(input);
-        return { finalReviewId: `final_review_${input.taskId}`, leadExecutionId: `agent_final_${input.taskId}`, leadSessionRef: input.leadSessionRef, opinionArtifactId: `artifact_final_opinion_${input.taskId}`, evidenceArtifactId: `artifact_final_evidence_${input.taskId}`, outcome: "approved" as const, summary: "Exact release approved", findings: [] };
+        return { finalReviewId: `final_review_${input.taskId}`, leadExecutionId: `agent_final_${input.taskId}`, leadSessionRef: input.leadSessionRef, opinionArtifactId: `artifact_final_opinion_${input.taskId}`, evidenceArtifactId: `artifact_final_evidence_${input.taskId}`, reviewArtifact: { artifactId: `artifact_final_review_${input.taskId}`, companyId: "issue-company", kind: "delivery-review" as const, sha256: "f".repeat(64), byteSize: 1, mimeType: "application/json" }, outcome: "approved" as const, summary: "Exact release approved" };
       },
     };
     workerConnection = await NativeConnection.connect({ address: config.temporalAddress });

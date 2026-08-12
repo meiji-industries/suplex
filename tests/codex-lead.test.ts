@@ -45,10 +45,13 @@ async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixtu
   await mkdir(repositoryPath, { recursive: true });
   await mkdir(worktreeRoot, { recursive: true });
   await writeFile(join(repositoryPath, "README.md"), "fixture\n");
+  await writeFile(join(repositoryPath, "package.json"), JSON.stringify({ scripts: { test: "node -e 'process.exit(0)'" } }));
+  await writeFile(join(repositoryPath, ".gitignore"), "node_modules/\n");
+  await execFileAsync("pnpm", ["install", "--lockfile-only"], { cwd: repositoryPath });
   await execFileAsync("git", ["init"], { cwd: repositoryPath });
   await execFileAsync("git", ["config", "user.email", "forge-test@example.invalid"], { cwd: repositoryPath });
   await execFileAsync("git", ["config", "user.name", "Forge Test"], { cwd: repositoryPath });
-  await execFileAsync("git", ["add", "README.md"], { cwd: repositoryPath });
+  await execFileAsync("git", ["add", "README.md", "package.json", ".gitignore", "pnpm-lock.yaml"], { cwd: repositoryPath });
   await execFileAsync("git", ["commit", "-m", "fixture"], { cwd: repositoryPath });
   const config = createTestConfig(root, { repositoryRoot: root, artifactRoot: join(root, "artifacts"), runtimeRoot: join(root, "runtime") });
   const database = new ForgeDatabase(config.databasePath);
@@ -61,7 +64,7 @@ async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixtu
     db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company_1', 'Company One', 'active', ?)").run(now);
     db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES ('profile_1', 'Lead', 'codex', ?, 'medium', 'standard', 1, ?, ?)").run(model, now, now);
     db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES ('project_1', 'company_1', 'Project One', ?, ?, 'acme/forge', 'main', 'main', 'pnpm install', 'pnpm test', '[]', '[\"profile_1\"]', '{\"lead\":\"profile_1\"}', 'active', 'revision_1', ?, ?)").run(repositoryPath, join(root, "worktrees"), now, now);
-    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, created_at) VALUES ('revision_1', 'project_1', 1, 'identity_1', ?, ?, ?, 'user_1', ?)").run(JSON.stringify({ repository: "acme/forge", repositoryPath, worktreeRoot, targetBranch: "main", baseSha: targetSha, targetSha }), targetSha, targetSha, now);
+    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, created_at) VALUES ('revision_1', 'project_1', 1, 'identity_1', ?, ?, ?, 'user_1', ?)").run(JSON.stringify({ repository: "acme/forge", repositoryPath, worktreeRoot, baseBranch: "main", targetBranch: "main", baseSha: targetSha, targetSha, setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: [] }), targetSha, targetSha, now);
     db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company_1', ?, ?, ?, ?, ?, ?, ?)").run(brief.id, brief.kind, brief.filename, brief.mimeType, brief.byteSize, brief.sha256, brief.storagePath, brief.createdAt);
     db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task_1', 'company_1', 'project_1', 'Fixture task', ?, '[]', '{\"lead\":\"profile_1\"}', 0, 'workflow-test-issue-task_1', 'revision_1', 'idempotency_1', ?, ?)").run(brief.id, now, now);
   });
@@ -124,24 +127,26 @@ test("Lead authors a complete conflict-resolution plan from both merge sides", a
   await mkdir(worktreePath, { recursive: true });
   const plan = await artifactStore.put("company_1", "lead-plan", { filename: "approved.json", mimeType: "application/json", bytes: Buffer.from("{\"kind\":\"plan\"}") });
   const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
+  const conflictArtifact = await artifactStore.put("company_1", "forward-merge-conflict", { filename: "conflict.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkpoint: "pre_release", expectedBaseSha: "b".repeat(40), observedBaseSha: "b".repeat(40), priorHead: "a".repeat(40), priorTree: "a".repeat(40), conflictFiles: ["shared.txt"], combinedDiff: "<<<<<<< HEAD\nissue\n=======\nbase\n>>>>>>> base", priorCommitSummary: "", baseCommitSummary: "", commandEvidence: { command: "git diff --cc --no-ext-diff", complete: true } })) });
   const now = new Date().toISOString();
   value.database.authTransaction((db) => {
-    for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+    for (const artifact of [plan, leadEvidence, conflictArtifact]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+    db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, conflict_artifact_id, conflict_artifact_sha256, conflict_file_count, updated_at) VALUES ('merge-lead-1', 'task_1', 'company_1', ?, ?, ?, NULL, NULL, 'conflict', '[\"shared.txt\"]', ?, 'workflow-test-issue-task_1', 'revision_1', 'pre_release', ?, ?, ?, 1, ?)").run("b".repeat(40), "b".repeat(40), "a".repeat(40), now, "a".repeat(40), conflictArtifact.id, conflictArtifact.sha256, now);
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_conflict_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_conflict_plan', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_conflict_lead', 1, 'plan', ?, ?, 'session_lead', 'Approved plan', ?)").run(plan.id, leadEvidence.id, now);
   });
   const runner: LeadProcessRunner = async (invocation) => {
     await invocation.onStart(4801, "2026-08-11T00:00:00.000Z");
     await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-lead" }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "merge_conflict_plan", summary: "Resolve the shared file from both sides.", resolutions: [{ file: "shared.txt", resolution: "Preserve the issue behavior and incorporate the target-base validation." }], verificationStrategy: "Run the complete local verification suite after creating the merge commit.", unresolvedQuestions: [] }) } }));
+    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "merge_conflict_plan", summary: "Resolve the shared file from both sides.", resolutions: [{ number: 1, file: "shared.txt", resolution: "Preserve the issue behavior and incorporate the target-base validation.", intendedResult: "The merged file preserves both required behaviors.", issueInvariant: "The issue behavior remains intact.", baseInvariant: "The target-base behavior remains intact.", compatibilityConcern: "The merged file keeps its existing format." }], verificationStrategy: "Run the complete local verification suite after creating the merge commit.", unresolvedQuestions: [] }) } }));
     return { exitCode: 0, stderr: "" };
   };
   try {
     const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_lead"; }, async read() { return "raw-lead"; } } });
-    const result = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictFiles: ["shared.txt"], conflictDiff: "<<<<<<< HEAD\nissue\n=======\nbase\n>>>>>>> base" });
+    const result = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, forwardMergeId: "merge-lead-1", leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictArtifact: { id: conflictArtifact.id, sha256: conflictArtifact.sha256, kind: "forward-merge-conflict" }, conflictFileCount: 1 });
     expect(result).toMatchObject({ leadSessionRef: "session_lead", summary: "Resolve the shared file from both sides." });
     expect(value.database.authQuery((db) => db.prepare("SELECT status, lead_session_ref FROM forge_merge_conflict_resolutions WHERE id = ?").get(result.planId))).toEqual({ status: "planned", lead_session_ref: "session_lead" });
-    const second = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictFiles: ["shared.txt"], conflictDiff: "<<<<<<< HEAD\nissue\n=======\nbase\n>>>>>>> base" });
+    const second = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, forwardMergeId: "merge-lead-1", leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictArtifact: { id: conflictArtifact.id, sha256: conflictArtifact.sha256, kind: "forward-merge-conflict" }, conflictFileCount: 1 });
     expect(second.planId).toBe(result.planId);
     const count = value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_merge_conflict_resolutions WHERE workflow_id = 'workflow-test-issue-task_1' AND prior_head = ? AND target_base_sha = ?").get("a".repeat(40), "b".repeat(40))) as { count: number };
     expect(count.count).toBe(1);
@@ -445,11 +450,16 @@ test("Developer resolves a guarded merge conflict in the existing session and pr
   await expect(execFileAsync("git", ["merge", "--no-ff", "--no-edit", targetBaseSha], { cwd: worktreePath })).rejects.toBeTruthy();
   const plan = await new ArtifactStore(value.config.artifactRoot).put("company_1", "merge-conflict-plan", { filename: "merge-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "merge_conflict_plan", summary: "Resolve README", resolutions: [{ file: "README.md", resolution: "Keep the issue behavior and include the base change." }], verificationStrategy: "Run the complete local suite.", unresolvedQuestions: [] })) });
   const priorTree = (await execFileAsync("git", ["rev-parse", `${priorHead}^{tree}`], { cwd: worktreePath })).stdout.trim();
+  const artifactStore = new ArtifactStore(value.config.artifactRoot);
+  const priorDeliveryArtifact = await artifactStore.put("company_1", "developer-delivery", { filename: "prior-delivery.json", mimeType: "application/json", bytes: Buffer.from("{}") });
+  const priorEvidenceArtifact = await artifactStore.put("company_1", "agent-evidence", { filename: "prior-evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") });
+  const conflictArtifact = await artifactStore.put("company_1", "forward-merge-conflict", { filename: "conflict.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkpoint: "pre_release", expectedBaseSha: targetBaseSha, observedBaseSha: targetBaseSha, priorHead, priorTree, conflictFiles: ["README.md"], combinedDiff: "", priorCommitSummary: "", baseCommitSummary: "", commandEvidence: { command: "git diff --cc --no-ext-diff", complete: true } })) });
   const now = new Date().toISOString();
   value.database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(plan.id, "company_1", plan.kind, plan.filename, plan.mimeType, plan.byteSize, plan.sha256, plan.storagePath, plan.createdAt);
-    db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer_conflict_subject', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'completed', 'forge/issue/task_1', ?, ?, 'session_developer', ?, ?, ?, ?, 'clean')").run(worktreePath, targetBaseSha, now, now, priorHead, priorTree);
-    db.prepare("INSERT INTO forge_merge_conflict_resolutions (id, task_id, company_id, workflow_id, prior_head, target_base_sha, conflict_files_json, plan_artifact_id, status, created_at, updated_at) VALUES ('merge-plan-1', 'task_1', 'company_1', 'workflow-test-issue-task_1', ?, ?, '[\"README.md\"]', ?, 'planned', ?, ?)").run(priorHead, targetBaseSha, plan.id, now, now);
+    for (const artifact of [plan, priorDeliveryArtifact, priorEvidenceArtifact, conflictArtifact]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, "company_1", artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+    db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, conflict_artifact_id, conflict_artifact_sha256, conflict_file_count, updated_at) VALUES ('merge-developer-1', 'task_1', 'company_1', ?, ?, ?, NULL, NULL, 'conflict', '[\"README.md\"]', ?, 'workflow-test-issue-task_1', 'revision_1', 'pre_release', ?, ?, ?, 1, ?)").run(targetBaseSha, targetBaseSha, priorHead, now, priorTree, conflictArtifact.id, conflictArtifact.sha256, now);
+    db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_conflict_subject', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'completed', 'forge/issue/task_1', ?, ?, 'session_developer', ?, ?, ?, ?, 'clean', ?, ?)").run(worktreePath, targetBaseSha, now, now, priorHead, priorTree, priorDeliveryArtifact.id, priorEvidenceArtifact.id);
+    db.prepare("INSERT INTO forge_merge_conflict_resolutions (id, task_id, company_id, workflow_id, forward_merge_id, prior_head, target_base_sha, conflict_files_json, plan_artifact_id, status, created_at, updated_at) VALUES ('merge-plan-1', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'merge-developer-1', ?, ?, '[\"README.md\"]', ?, 'planned', ?, ?)").run(priorHead, targetBaseSha, plan.id, now, now);
   });
   const runner: LeadProcessRunner = async (invocation) => {
     await invocation.onStart(4802, "2026-08-11T00:00:00.000Z");
@@ -464,10 +474,27 @@ test("Developer resolves a guarded merge conflict in the existing session and pr
   };
   try {
     const developer = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_developer"; }, async read() { return "raw-developer"; } } });
-    const result = await developer.runMergeConflictResolution({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", planRevision: 1, developerExecutionId: "developer_conflict_subject", developerSessionRef: "session_developer", worktreePath, branchName: "forge/issue/task_1", priorHead, targetBaseSha, conflictFiles: ["README.md"], planArtifactId: plan.id });
+    const result = await developer.runMergeConflictResolution({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", planRevision: 1, forwardMergeId: "merge-developer-1", developerExecutionId: "developer_conflict_subject", developerSessionRef: "session_developer", worktreePath, branchName: "forge/issue/task_1", priorHead, targetBaseSha, conflictArtifact: { id: conflictArtifact.id, sha256: conflictArtifact.sha256, kind: "forward-merge-conflict" }, conflictFileCount: 1, planArtifactId: plan.id });
+    if ("outcome" in result) throw new Error("Expected deterministic merge verification to pass");
     expect(result).toMatchObject({ developerSessionRef: "session_developer", summary: "README conflict resolved." });
     const parents = (await execFileAsync("git", ["rev-list", "--parents", "-n", "1", "HEAD"], { cwd: worktreePath })).stdout.trim().split(/\s+/);
     expect(parents).toEqual([result.resultCommit, priorHead, targetBaseSha]);
+    const deliveryRow = value.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ?").get(result.deliveryArtifactId) as { storage_path: string; sha256: string });
+    const delivery = JSON.parse((await artifactStore.read({ companyId: "company_1", storagePath: deliveryRow.storage_path, sha256: deliveryRow.sha256 })).toString("utf8")) as Record<string, unknown>;
+    expect(delivery).toMatchObject({
+      version: 1,
+      checkId: "merge-developer-1",
+      priorHead,
+      priorTree,
+      targetBaseSha,
+      resultCommit: result.resultCommit,
+      resultTree: result.resultTree,
+      developerExecutionId: result.developerExecutionId,
+      supersededDeliveryArtifactId: priorDeliveryArtifact.id,
+      supersededEvidenceArtifactId: priorEvidenceArtifact.id,
+      verificationArtifactId: result.verificationArtifactId,
+      verification: { outcome: "passed" },
+    });
     expect(value.database.authQuery((db) => db.prepare("SELECT status, result_commit FROM forge_merge_conflict_resolutions WHERE id = 'merge-plan-1'").get())).toEqual({ status: "completed", result_commit: result.resultCommit });
   } finally {
     value.database.close();

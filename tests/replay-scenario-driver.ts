@@ -64,6 +64,9 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
       projections.get(event.state.workflowId)?.push(structuredClone(event.state));
       return event.state;
     },
+    async reconcileTargetBase(activityInput) {
+      return { outcome: "no_drift", checkId: `target-base-${activityInput.taskId}`, checkpoint: activityInput.checkpoint, expectedBaseSha: activityInput.expectedBaseSha, observedBaseSha: activityInput.expectedBaseSha, headSha: activityInput.expectedHeadSha, headTree: activityInput.expectedHeadTree };
+    },
     async runLeadPlanning(activityInput) {
       const scenario = scenarioFor(activityInput.workflowId);
       const attempt = (planningAttempts.get(activityInput.workflowId) ?? 0) + 1;

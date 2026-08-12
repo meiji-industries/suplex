@@ -22,11 +22,11 @@
     "dev": "tsx src/cli.ts start --foreground",
     "migration:new": "tsx scripts/create-migration.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run --exclude 'tests/temporal.integration.test.ts' --exclude 'tests/**/*.browser.test.ts'",
+    "test": "vitest run --exclude 'tests/*.temporal.test.ts' --exclude 'tests/temporal.integration.test.ts' --exclude 'tests/**/*.browser.test.ts'",
     "test:replay": "vitest run tests/workflow-replay.test.ts",
     "replay:capture": "tsx scripts/capture-workflow-history.ts",
     "workflow:bundle": "tsx scripts/build-workflow-bundle.ts",
-    "test:temporal": "vitest run tests/temporal.integration.test.ts",
+    "test:temporal": "vitest run tests/temporal.integration.test.ts tests/*.temporal.test.ts",
     "test:browser": "pnpm run build && vitest run --config vitest.browser.config.ts",
     "test:all": "pnpm run typecheck && pnpm run test && pnpm run test:temporal && pnpm run test:browser"
   },
@@ -61,6 +61,7 @@
   "devDependencies": {
     "@fastify/middie": "^9.3.3",
     "@tailwindcss/vite": "^4.3.3",
+    "@temporalio/testing": "^1.22.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.18",

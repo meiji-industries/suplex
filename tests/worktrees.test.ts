@@ -50,6 +50,24 @@ test("creates a deterministic exact-base worktree and guards prohibited Git/prov
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("the Developer guard blocks every prohibited mutation family", async () => {
+  const value = await fixture();
+  const guard = await createGitCommandGuard(join(value.root, "runtime"));
+  try {
+    for (const args of [
+      ["push"], ["rebase", "HEAD~1"], ["clean", "-fd"], ["reset", "--hard", "HEAD"], ["merge", "main"],
+      ["cherry-pick", "HEAD"], ["revert", "HEAD"], ["worktree", "remove", "other"], ["update-ref", "refs/heads/main", "HEAD"],
+      ["filter-repo"], ["gc"], ["prune"], ["branch", "-D", "old"], ["branch", "-d", "old"], ["commit", "--amend", "--no-edit"],
+    ]) {
+      await expect(execFileAsync("git", args, { cwd: value.repositoryPath, env: guard.env })).rejects.toThrow();
+    }
+    await expect(execFileAsync("gh", ["pr", "create"], { cwd: value.repositoryPath, env: guard.env })).rejects.toThrow();
+  } finally {
+    await guard.cleanup();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("rejects dirty, reused, colliding, symlinked, and unsafe worktree coordinates", async () => {
   const value = await fixture();
   try {

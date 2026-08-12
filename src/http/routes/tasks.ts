@@ -57,8 +57,11 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
 
   typed.post("/api/tasks/:taskId/publish-draft", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.publishDraft(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/resolve-merge-conflict", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.resolveMergeConflict(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
+  typed.post("/api/tasks/:taskId/retry-target-base-reconciliation", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.retryTargetBaseReconciliation(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
+  typed.post("/api/tasks/:taskId/retry-forward-merge-verification", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.retryForwardMergeVerification(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/reconcile-ci", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.reconcileCI(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/repair-ci", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.repairCI(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
+  typed.post("/api/tasks/:taskId/final-review", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.finalReview(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/accept-delivery", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.acceptDelivery(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/request-delivery-changes", { schema: { params: TaskIdParamsSchema, ...noteSchema } }, async (request, reply) => reply.send(await tasks.requestDeliveryChanges(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.note)));
   typed.post("/api/tasks/:taskId/cancel", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.cancelIssue(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
@@ -75,6 +78,10 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   typed.get("/api/tasks/:taskId/release/artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
     const artifact = await tasks.getReleaseArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
     return reply.header("Cache-Control", "private, no-store").type(artifact.mimeType).send(artifact.bytes);
+  });
+  typed.get("/api/tasks/:taskId/reconciliation-artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
+    const artifact = await tasks.getTargetBaseArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
+    return reply.header("Cache-Control", "private, no-store").type(artifact.artifact.mimeType).send(artifact.bytes);
   });
   typed.get("/api/tasks/events", async (request, reply) => {
     reply.hijack();

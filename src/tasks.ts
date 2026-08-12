@@ -9,7 +9,7 @@ import { LeadOutputSchema, type LeadOutput } from "./codex-lead.js";
 import { ForgeDatabase } from "./database.js";
 import { canonicalJson } from "./canonical-json.js";
 import { ProjectFailure, ProjectService, type ProjectRole } from "./projects.js";
-import { acceptIssueDelivery, acceptIssuePlanning, approveIssuePlan, cancelIssue, cancelIssueDevelopment, finalReviewIssue, IssueWorkflowStartFailure, publishIssueDraft, recordIssueDeliveryDecision, reconcileIssueCI, reconcileIssueMerge, rejectIssuePlan, repairIssueCI, repairIssueDelivery, requestIssueDeliveryChanges, requestIssueSupplementalReview, resolveIssueMergeConflict, retryIssueDevelopment, reviewIssueDelivery, startIssueDevelopment, startIssueWorkflow } from "./temporal/service.js";
+import { acceptIssueDelivery, acceptIssuePlanning, approveIssuePlan, cancelIssue, cancelIssueDevelopment, finalReviewIssue, IssueWorkflowStartFailure, publishIssueDraft, recordIssueDeliveryDecision, reconcileIssueCI, reconcileIssueMerge, rejectIssuePlan, repairIssueCI, repairIssueDelivery, requestIssueDeliveryChanges, requestIssueSupplementalReview, resolveIssueMergeConflict, retryIssueDevelopment, retryIssueForwardMergeVerification, retryIssueTargetBaseReconciliation, reviewIssueDelivery, startIssueDevelopment, startIssueWorkflow } from "./temporal/service.js";
 import type { IssueWorkflowInput, IssueWorkflowState, PlanCommandInput, StartPlanningInput } from "./temporal/issue-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 
@@ -151,6 +151,33 @@ export interface ForgeTask {
     evidenceArtifactId: string;
     content: LeadOutput;
   };
+  targetBaseReconciliation: {
+    checkId: string | null;
+    checkpoint: "pre_release" | "pre_final_review" | "pre_acceptance" | null;
+    status: "no_drift" | "revalidated" | "conflict" | "blocked" | null;
+    expectedBaseSha: string | null;
+    observedBaseSha: string | null;
+    priorHead: string | null;
+    priorTree: string | null;
+    resultHead: string | null;
+    resultTree: string | null;
+    conflictFileCount: number | null;
+    conflictArtifact: { id: string; sha256: string; kind: string } | null;
+    verificationArtifact: { id: string; sha256: string; kind: string } | null;
+    deliveryArtifact: { id: string; sha256: string; kind: string } | null;
+    invalidatedDeliveryReviewId: string | null;
+    invalidatedCiRunId: string | null;
+    invalidatedFinalReviewId: string | null;
+    invalidatedAcceptanceId: string | null;
+    releaseId: string | null;
+    pullRequestNumber: number | null;
+    pullRequestUrl: string | null;
+    blockerCode: string | null;
+    blockerOwner: string | null;
+    retryable: boolean | null;
+    summary: string | null;
+    actions: string[];
+  };
 }
 
 export interface TaskCiProjection {
@@ -255,6 +282,8 @@ export interface IssueWorkflowPort {
   recordDeliveryDecision?: (workflowId: string, input: StartPlanningInput & { note?: string }) => Promise<IssueWorkflowState>;
   publishDraft?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   resolveMergeConflict?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
+  retryTargetBaseReconciliation?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
+  retryForwardMergeVerification?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   reconcileCI?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   repairCI?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
   finalReview?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
@@ -462,6 +491,8 @@ export class TaskService {
       recordDeliveryDecision: (workflowId, input) => recordIssueDeliveryDecision(config, workflowId, input),
       publishDraft: (workflowId, input) => publishIssueDraft(config, workflowId, input),
       resolveMergeConflict: (workflowId, input) => resolveIssueMergeConflict(config, workflowId, input),
+      retryTargetBaseReconciliation: (workflowId, input) => retryIssueTargetBaseReconciliation(config, workflowId, input),
+      retryForwardMergeVerification: (workflowId, input) => retryIssueForwardMergeVerification(config, workflowId, input),
       reconcileCI: (workflowId, input) => reconcileIssueCI(config, workflowId, input),
       repairCI: (workflowId, input) => repairIssueCI(config, workflowId, input),
       finalReview: (workflowId, input) => finalReviewIssue(config, workflowId, input),
@@ -901,6 +932,14 @@ export class TaskService {
     return this.planCommand(actorUserId, taskId, expectedRevision, "resolve_merge_conflict", (workflowId, input) => this.workflow.resolveMergeConflict ? this.workflow.resolveMergeConflict(workflowId, input) : Promise.reject(new Error("Merge-conflict resolution workflow is unavailable")));
   }
 
+  async retryTargetBaseReconciliation(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
+    return this.planCommand(actorUserId, taskId, expectedRevision, "retry_target_base_reconciliation", (workflowId, input) => this.workflow.retryTargetBaseReconciliation ? this.workflow.retryTargetBaseReconciliation(workflowId, input) : Promise.reject(new Error("Target-base reconciliation workflow is unavailable")));
+  }
+
+  async retryForwardMergeVerification(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
+    return this.planCommand(actorUserId, taskId, expectedRevision, "retry_forward_merge_verification", (workflowId, input) => this.workflow.retryForwardMergeVerification ? this.workflow.retryForwardMergeVerification(workflowId, input) : Promise.reject(new Error("Forward-merge verification workflow is unavailable")));
+  }
+
   async reconcileCI(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
     return this.planCommand(actorUserId, taskId, expectedRevision, "reconcile_ci", (workflowId, input) => this.workflow.reconcileCI ? this.workflow.reconcileCI(workflowId, input) : Promise.reject(new Error("CI reconciliation workflow is unavailable")));
   }
@@ -987,6 +1026,21 @@ export class TaskService {
     if (!artifact) throw new TaskFailure("Not found", [], 404);
     const bytes = await this.artifacts.read({ companyId: task.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 });
     return { artifact: { artifactId: artifact.id, kind: artifact.kind, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }, bytes };
+  }
+
+  async getTargetBaseArtifact(actorUserId: string, taskId: string, artifactId: string): Promise<{ artifact: { artifactId: string; filename: string; mimeType: string; byteSize: number }; bytes: Buffer }> {
+    const task = this.getTask(actorUserId, taskId);
+    const allowed = this.database.authQuery((db) => db.prepare(`SELECT a.id, a.company_id, a.filename, a.mime_type, a.byte_size, a.storage_path, a.sha256
+      FROM forge_artifacts a JOIN forge_forward_merges m ON m.company_id = a.company_id AND (m.conflict_artifact_id = a.id OR m.verification_artifact_id = a.id OR m.delivery_artifact_id = a.id)
+      WHERE m.task_id = ? AND m.company_id = ? AND a.id = ? AND a.kind IN ('forward-merge-conflict', 'forward-merge-verification', 'forward-merge-delivery')`).get(task.id, task.companyId, artifactId) as ArtifactRow | undefined);
+    if (!allowed) throw new TaskFailure("Not found", [], 404);
+    try {
+      const bytes = await this.artifacts.read({ companyId: allowed.company_id, storagePath: allowed.storage_path, sha256: allowed.sha256 });
+      return { artifact: { artifactId: allowed.id, filename: allowed.filename, mimeType: allowed.mime_type, byteSize: allowed.byte_size }, bytes };
+    } catch (error) {
+      if (error instanceof ArtifactFailure) throw new TaskFailure("Not found", [], 404);
+      throw error;
+    }
   }
 
   private validateTaskInput(input: TaskInput): TaskFinding[] {
@@ -1076,7 +1130,42 @@ export class TaskService {
     const decision = this.database.authQuery((db) => db.prepare("SELECT artifact_id FROM forge_delivery_decisions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { artifact_id: string } | undefined);
     const ci = this.ciProjection(row.id, row.company_id);
     const release = this.releaseForTask(row.id, row.company_id, row.workflow_id);
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), timeline, agentInvocations, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
+    const snapshot = this.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND company_id = ? ORDER BY revision DESC LIMIT 1").get(row.id, row.company_id) as { state_json: string } | undefined);
+    let reconciliationState: Record<string, unknown> = {};
+    try { reconciliationState = snapshot ? JSON.parse(snapshot.state_json) as Record<string, unknown> : {}; } catch { reconciliationState = {}; }
+    const reconciliation = this.database.authQuery((db) => db.prepare(`SELECT id, checkpoint, status, expected_base_sha AS expectedBaseSha, current_base_sha AS observedBaseSha, prior_head AS priorHead, prior_tree AS priorTree, result_head AS resultHead, result_tree AS resultTree, conflict_file_count AS conflictFileCount, conflict_artifact_id AS conflictArtifactId, verification_artifact_id AS verificationArtifactId, delivery_artifact_id AS deliveryArtifactId, invalidated_delivery_review_id AS invalidatedDeliveryReviewId, invalidated_ci_run_id AS invalidatedCiRunId, invalidated_final_review_id AS invalidatedFinalReviewId, invalidated_acceptance_id AS invalidatedAcceptanceId, release_id AS releaseId, pull_request_number AS pullRequestNumber, failure_code AS failureCode, failure_summary AS failureSummary FROM forge_forward_merges WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY updated_at DESC, created_at DESC LIMIT 1`).get(row.id, row.company_id, row.workflow_id) as { id: string; checkpoint: string | null; status: string; expectedBaseSha: string; observedBaseSha: string; priorHead: string; priorTree: string | null; resultHead: string | null; resultTree: string | null; conflictFileCount: number | null; conflictArtifactId: string | null; verificationArtifactId: string | null; deliveryArtifactId: string | null; invalidatedDeliveryReviewId: string | null; invalidatedCiRunId: string | null; invalidatedFinalReviewId: string | null; invalidatedAcceptanceId: string | null; releaseId: string | null; pullRequestNumber: number | null; failureCode: string | null; failureSummary: string | null } | undefined);
+    const reference = (id: unknown): { id: string; sha256: string; kind: string } | null => {
+      if (typeof id !== "string") return null;
+      return this.database.authQuery((db) => db.prepare("SELECT id, sha256, kind FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind IN ('forward-merge-conflict', 'forward-merge-verification', 'forward-merge-delivery')").get(id, row.company_id) as { id: string; sha256: string; kind: string } | undefined) ?? null;
+    };
+    const targetBaseReconciliation: ForgeTask["targetBaseReconciliation"] = {
+      checkId: typeof reconciliationState.targetBaseCheckId === "string" ? reconciliationState.targetBaseCheckId : reconciliation?.id ?? null,
+      checkpoint: reconciliationState.targetBaseCheckpoint === "pre_release" || reconciliationState.targetBaseCheckpoint === "pre_final_review" || reconciliationState.targetBaseCheckpoint === "pre_acceptance" ? reconciliationState.targetBaseCheckpoint : reconciliation?.checkpoint === "pre_release" || reconciliation?.checkpoint === "pre_final_review" || reconciliation?.checkpoint === "pre_acceptance" ? reconciliation.checkpoint : null,
+      status: reconciliationState.targetBaseOutcome === "no_drift" || reconciliationState.targetBaseOutcome === "revalidated" || reconciliationState.targetBaseOutcome === "conflict" || reconciliationState.targetBaseOutcome === "blocked" ? reconciliationState.targetBaseOutcome : reconciliation?.status === "no_drift" || reconciliation?.status === "merged" || reconciliation?.status === "conflict" || reconciliation?.status === "blocked" ? reconciliation.status === "merged" ? "revalidated" : reconciliation.status : null,
+      expectedBaseSha: reconciliation?.expectedBaseSha ?? (typeof reconciliationState.targetBaseSha === "string" ? reconciliationState.targetBaseSha : null),
+      observedBaseSha: reconciliation?.observedBaseSha ?? (typeof reconciliationState.forwardMergeTargetBaseSha === "string" ? reconciliationState.forwardMergeTargetBaseSha : typeof reconciliationState.targetBaseSha === "string" ? reconciliationState.targetBaseSha : null),
+      priorHead: reconciliation?.priorHead ?? (typeof reconciliationState.forwardMergePriorHead === "string" ? reconciliationState.forwardMergePriorHead : null),
+      priorTree: reconciliation?.priorTree ?? null,
+      resultHead: reconciliation?.resultHead ?? (typeof reconciliationState.resultCommit === "string" ? reconciliationState.resultCommit : null),
+      resultTree: reconciliation?.resultTree ?? (typeof reconciliationState.resultTree === "string" ? reconciliationState.resultTree : null),
+      conflictFileCount: reconciliation?.conflictFileCount ?? (typeof reconciliationState.forwardMergeConflictFileCount === "number" ? reconciliationState.forwardMergeConflictFileCount : null),
+      conflictArtifact: reference(reconciliation?.conflictArtifactId ?? (reconciliationState.forwardMergeConflictArtifact && typeof reconciliationState.forwardMergeConflictArtifact === "object" ? (reconciliationState.forwardMergeConflictArtifact as { id?: unknown }).id : null)),
+      verificationArtifact: reference(reconciliation?.verificationArtifactId ?? reconciliationState.developerEvidenceArtifactId),
+      deliveryArtifact: reference(reconciliation?.deliveryArtifactId ?? reconciliationState.deliveryArtifactId),
+      invalidatedDeliveryReviewId: reconciliation?.invalidatedDeliveryReviewId ?? null,
+      invalidatedCiRunId: reconciliation?.invalidatedCiRunId ?? null,
+      invalidatedFinalReviewId: reconciliation?.invalidatedFinalReviewId ?? null,
+      invalidatedAcceptanceId: reconciliation?.invalidatedAcceptanceId ?? null,
+      releaseId: reconciliation?.releaseId ?? (typeof reconciliationState.releaseId === "string" ? reconciliationState.releaseId : null),
+      pullRequestNumber: reconciliation?.pullRequestNumber ?? (typeof reconciliationState.pullRequestNumber === "number" ? reconciliationState.pullRequestNumber : null),
+      pullRequestUrl: typeof reconciliationState.pullRequestUrl === "string" && /^https:\/\//.test(reconciliationState.pullRequestUrl) ? reconciliationState.pullRequestUrl : null,
+      blockerCode: reconciliation?.failureCode ?? (typeof reconciliationState.targetBaseBlockerCode === "string" ? reconciliationState.targetBaseBlockerCode : null),
+      blockerOwner: typeof reconciliationState.targetBaseBlockerOwner === "string" ? reconciliationState.targetBaseBlockerOwner : null,
+      retryable: typeof reconciliationState.targetBaseBlockerRetryable === "boolean" ? reconciliationState.targetBaseBlockerRetryable : null,
+      summary: reconciliation?.failureSummary ?? (typeof reconciliationState.targetBaseBlockerSummary === "string" ? reconciliationState.targetBaseBlockerSummary : null),
+      actions: json<string[]>(row.allowed_commands_json, []),
+    };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), timeline, agentInvocations, targetBaseReconciliation, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
   }
 
   private releaseForTask(taskId: string, companyId: string, workflowId: string): TaskRelease | null | undefined {

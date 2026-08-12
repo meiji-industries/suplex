@@ -13,8 +13,12 @@ import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import { PlanMaterialCategorySchema, classifyPlanMateriality, materialitySummary, type PlanMaterialCategory } from "./plan-governance.js";
 import { CiRepairPlanSchema, DeliveryReviewActivityInputSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./temporal/issue-contracts.js";
+import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
+import { parseAcceptedProjectRevision } from "./projects.js";
 
 const execFileAsync = promisify(execFile);
+
+type MergeConflictPlanInput = MergeConflictPlanActivityInput;
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
@@ -554,15 +558,32 @@ export class AgentService {
     }
   }
 
-  async planMergeConflict(rawInput: MergeConflictPlanActivityInput): Promise<MergeConflictPlanActivityResult> {
+  async planMergeConflict(rawInput: MergeConflictPlanInput): Promise<MergeConflictPlanActivityResult> {
     const input = rawInput;
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256
       FROM forge_tasks t
+      JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id AND b.id = ?
       JOIN forge_issue_outputs io ON io.task_id = t.id AND io.company_id = t.company_id AND io.workflow_id = t.workflow_id AND io.output_artifact_id = ? AND io.revision = ?
       JOIN forge_artifacts pa ON pa.id = io.output_artifact_id
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?`).get(input.briefArtifactId, input.leadOutputArtifactId, input.planRevision, input.taskId, input.companyId, input.projectId, input.projectRevisionId) as { title: string; briefStoragePath: string; briefSha256: string; planStoragePath: string; planSha256: string } | undefined);
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?`).get(input.briefArtifactId, input.leadOutputArtifactId, input.planRevision, input.taskId, input.companyId, input.projectId, input.projectRevisionId) as { title: string; normalizedJson: string; briefStoragePath: string; briefSha256: string; planStoragePath: string; planSha256: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Merge-conflict planning evidence is unavailable");
+    let conflict: ForwardMergeConflictArtifact;
+    const conflictRow = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_forward_merges f ON f.conflict_artifact_id = a.id AND f.id = ? AND f.task_id = ? AND f.company_id = ? AND f.project_revision_id = ? WHERE a.id = ? AND a.company_id = ? AND a.kind = 'forward-merge-conflict'").get(input.forwardMergeId, input.taskId, input.companyId, input.projectRevisionId, input.conflictArtifact.id, input.companyId) as { storagePath: string; sha256: string } | undefined);
+    if (!conflictRow || conflictRow.sha256 !== input.conflictArtifact.sha256) throw new AgentFailure("scoped-input-missing", "Forward-merge conflict evidence is unavailable");
+    try {
+      conflict = ForwardMergeConflictArtifactSchema.parse(JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: conflictRow.storagePath, sha256: conflictRow.sha256 })).toString("utf8")));
+    } catch {
+      throw new AgentFailure("scoped-input-corrupt", "Forward-merge conflict evidence failed integrity validation");
+    }
+    if (conflict.priorHead.toLowerCase() !== input.priorHead.toLowerCase() || conflict.observedBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase() || conflict.conflictFiles.length !== input.conflictFileCount) throw new AgentFailure("merge-conflict-identity-mismatch", "Forward-merge conflict evidence does not match the recorded merge");
+    let pinnedCommands: { setupCommand: string; verificationCommand: string };
+    try {
+      const revision = parseAcceptedProjectRevision(context.normalizedJson);
+      pinnedCommands = { setupCommand: revision.setupCommand, verificationCommand: revision.verificationCommand };
+    } catch {
+      throw new AgentFailure("scoped-input-missing", "The accepted project revision has no valid pinned verification commands");
+    }
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
     const [brief, plan] = await Promise.all([
       this.artifacts.read({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
@@ -578,7 +599,7 @@ export class AgentService {
     try {
       const result = await this.processRunner({
         command: this.command,
-        args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.mergeConflictPlanPrompt(context.title, brief, plan, input)],
+        args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.mergeConflictPlanPrompt(context.title, brief, plan, input, conflict, pinnedCommands)],
         cwd: worktreePath,
         onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
         onLine: async (line) => {
@@ -590,16 +611,18 @@ export class AgentService {
       });
       if (result.exitCode !== 0) throw agentProcessFailure(result, evidenceLines);
       const output = parseMergeConflictPlan(evidenceLines);
+      if (output.resolutions.some((resolution) => resolution.number === undefined || !resolution.intendedResult || !resolution.issueInvariant || !resolution.baseInvariant || !resolution.compatibilityConcern) || output.resolutions.some((resolution, index) => resolution.number !== index + 1)) throw new AgentFailure("invalid-merge-conflict-plan", "The Lead conflict plan must number each resolution and state both invariants plus compatibility concerns");
       const plannedFiles = new Set(output.resolutions.map((resolution) => resolution.file));
-      const missingFiles = input.conflictFiles.filter((file) => !plannedFiles.has(file));
-      if (missingFiles.length) throw new AgentFailure("incomplete-merge-conflict-plan", `The Lead plan omitted conflict files: ${missingFiles.join(", ")}`);
+      const missingFiles = conflict.conflictFiles.filter((file) => !plannedFiles.has(file));
+      const extraFiles = output.resolutions.filter((resolution) => !conflict.conflictFiles.includes(resolution.file));
+      if (missingFiles.length || extraFiles.length || plannedFiles.size !== output.resolutions.length) throw new AgentFailure("incomplete-merge-conflict-plan", "The Lead plan must cover each conflict file exactly once");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const planArtifact = await this.artifacts.put(input.companyId, "merge-conflict-plan", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(output, null, 2), "utf8") });
       const planId = `merge_plan_${createHash("sha256").update(`${input.workflowId}:${input.priorHead}:${input.targetBaseSha}`).digest("hex").slice(0, 32)}`;
       const now = this.now().toISOString();
       this.database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, planArtifact.id, planArtifact.companyId, planArtifact.kind, planArtifact.filename, planArtifact.mimeType, planArtifact.byteSize, planArtifact.sha256, planArtifact.storagePath, planArtifact.createdAt);
-        db.prepare("INSERT INTO forge_merge_conflict_resolutions (id, task_id, company_id, workflow_id, forward_merge_id, prior_head, target_base_sha, conflict_files_json, plan_artifact_id, plan_evidence_artifact_id, lead_execution_id, lead_session_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?) ON CONFLICT(workflow_id, prior_head, target_base_sha) DO UPDATE SET plan_artifact_id = excluded.plan_artifact_id, plan_evidence_artifact_id = excluded.plan_evidence_artifact_id, lead_execution_id = excluded.lead_execution_id, lead_session_ref = excluded.lead_session_ref, status = 'planned', updated_at = excluded.updated_at").run(planId, input.taskId, input.companyId, input.workflowId, input.forwardMergeId ?? null, input.priorHead, input.targetBaseSha, JSON.stringify(input.conflictFiles), planArtifact.id, evidence.id, executionId, input.leadSessionRef, now, now);
+        db.prepare("INSERT INTO forge_merge_conflict_resolutions (id, task_id, company_id, workflow_id, forward_merge_id, prior_head, target_base_sha, conflict_files_json, plan_artifact_id, plan_evidence_artifact_id, lead_execution_id, lead_session_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?) ON CONFLICT(workflow_id, prior_head, target_base_sha) DO UPDATE SET plan_artifact_id = excluded.plan_artifact_id, plan_evidence_artifact_id = excluded.plan_evidence_artifact_id, lead_execution_id = excluded.lead_execution_id, lead_session_ref = excluded.lead_session_ref, status = 'planned', updated_at = excluded.updated_at").run(planId, input.taskId, input.companyId, input.workflowId, input.forwardMergeId, input.priorHead, input.targetBaseSha, JSON.stringify(conflict.conflictFiles), planArtifact.id, evidence.id, executionId, input.leadSessionRef, now, now);
         db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(now, now, evidence.id, executionId);
       });
       return { planId, planArtifactId: planArtifact.id, evidenceArtifactId: evidence.id, leadExecutionId: executionId, leadSessionRef: input.leadSessionRef, summary: output.summary };
@@ -875,15 +898,16 @@ export class AgentService {
     } finally { clearInterval(heartbeat); }
   }
 
-  private mergeConflictPlanPrompt(title: string, brief: string, plan: string, input: MergeConflictPlanActivityInput): string {
+  private mergeConflictPlanPrompt(title: string, brief: string, plan: string, input: MergeConflictPlanInput, conflict: ForwardMergeConflictArtifact, pinnedCommands: { setupCommand: string; verificationCommand: string }): string {
     return [
       "You are Forge's Lead resolving a target-base forward-merge conflict. Continue the existing Lead session and work read-only. Do not modify files, abort the merge, use GitHub/provider commands, or invent facts.",
-      'Return exactly one JSON object with no markdown fences or commentary matching: {"kind":"merge_conflict_plan","summary":"...","resolutions":[{"file":"path","resolution":"specific resolution grounded in both sides"}],"verificationStrategy":"complete local verification after the merge commit","unresolvedQuestions":[]}. Every conflict file must appear exactly once and unresolvedQuestions must be empty.',
+      'Return exactly one JSON object with no markdown fences or commentary matching: {"kind":"merge_conflict_plan","summary":"...","resolutions":[{"number":1,"file":"path","resolution":"specific resolution grounded in both sides","intendedResult":"...","issueInvariant":"...","baseInvariant":"...","compatibilityConcern":"..."}],"verificationStrategy":"complete local verification after the merge commit","unresolvedQuestions":[]}. Number every resolution from 1; every conflict file must appear exactly once and unresolvedQuestions must be empty.',
       "Task: " + title + "\nBrief:\n" + brief,
       "Approved plan:\n" + plan,
       "Forward-merge identity:\n" + JSON.stringify({ branchName: input.branchName, priorHead: input.priorHead, targetBaseSha: input.targetBaseSha }),
-      "Conflict files:\n" + input.conflictFiles.join("\n"),
-      "Combined conflict evidence:\n" + input.conflictDiff,
+      "Conflict files:\n" + conflict.conflictFiles.join("\n"),
+      "Combined conflict evidence:\n" + conflict.combinedDiff,
+      "Pinned deterministic commands:\n" + JSON.stringify(pinnedCommands),
     ].join("\n\n");
   }
 

@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { temporalConnectionOptions, type ForgeConfig } from "../config.js";
 import type { HealthCheck } from "../health.js";
 import { runtimeIdentifiers } from "../runtime-identifiers.js";
-import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, finalReviewUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, publishDraftUpdate, reconcileCIUpdate, reconcileMergeUpdate, recordDeliveryDecisionUpdate, recordProgressUpdate, rejectPlanUpdate, repairCIUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, requestSupplementalReviewUpdate, resolveMergeConflictUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, startDevelopmentUpdate, startPlanningUpdate } from "./workflows.js";
+import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, finalReviewUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, publishDraftUpdate, reconcileCIUpdate, reconcileMergeUpdate, recordDeliveryDecisionUpdate, recordProgressUpdate, rejectPlanUpdate, repairCIUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, requestSupplementalReviewUpdate, resolveMergeConflictUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, retryForwardMergeVerificationUpdate, retryTargetBaseReconciliationUpdate, startDevelopmentUpdate, startPlanningUpdate } from "./workflows.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
@@ -340,6 +340,14 @@ export function resolveIssueMergeConflict(config: ForgeConfig, workflowId: strin
   return issueStartUpdate(config, workflowId, input, resolveMergeConflictUpdate, "merge-conflict resolution command");
 }
 
+export function retryIssueTargetBaseReconciliation(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+  return issueStartUpdate(config, workflowId, input, retryTargetBaseReconciliationUpdate, "target-base reconciliation retry command");
+}
+
+export function retryIssueForwardMergeVerification(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+  return issueStartUpdate(config, workflowId, input, retryForwardMergeVerificationUpdate, "forward-merge verification retry command");
+}
+
 export function reconcileIssueCI(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
   return issueStartUpdate(config, workflowId, input, reconcileCIUpdate, "CI reconciliation command");
 }
@@ -368,7 +376,7 @@ export function reconcileIssueMerge(config: ForgeConfig, workflowId: string, inp
   return issueStartUpdate(config, workflowId, input, reconcileMergeUpdate, "merge reconciliation command");
 }
 
-async function issueStartUpdate(config: ForgeConfig, workflowId: string, input: StartPlanningInput, update: typeof startDevelopmentUpdate | typeof retryDevelopmentUpdate | typeof cancelDevelopmentUpdate | typeof reviewDeliveryUpdate | typeof repairDeliveryUpdate | typeof publishDraftUpdate | typeof resolveMergeConflictUpdate | typeof reconcileCIUpdate | typeof repairCIUpdate | typeof finalReviewUpdate | typeof cancelIssueUpdate | typeof reconcileMergeUpdate, label: string): Promise<IssueWorkflowState> {
+async function issueStartUpdate(config: ForgeConfig, workflowId: string, input: StartPlanningInput, update: typeof startDevelopmentUpdate | typeof retryDevelopmentUpdate | typeof cancelDevelopmentUpdate | typeof reviewDeliveryUpdate | typeof repairDeliveryUpdate | typeof publishDraftUpdate | typeof resolveMergeConflictUpdate | typeof retryTargetBaseReconciliationUpdate | typeof retryForwardMergeVerificationUpdate | typeof reconcileCIUpdate | typeof repairCIUpdate | typeof finalReviewUpdate | typeof cancelIssueUpdate | typeof reconcileMergeUpdate, label: string): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
   if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
   const validatedInput = StartPlanningInputSchema.parse(durableCommand(workflowId, label, input));

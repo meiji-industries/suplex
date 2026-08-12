@@ -13,9 +13,14 @@ import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import type { GithubReleasePort } from "./github-release.js";
 import { createGitCommandGuard, WorktreeManager } from "./worktrees.js";
+import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
+import { runPinnedVerification } from "./verification.js";
+import { parseAcceptedProjectRevision } from "./projects.js";
 import { DeveloperRepairActivityInputSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairResult, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
 
 const execFileAsync = promisify(execFile);
+
+type MergeConflictResolutionInput = MergeConflictResolutionActivityInput;
 
 const ProjectRevisionSchema = z.object({
   repositoryPath: z.string().min(1),
@@ -288,13 +293,26 @@ export class DeveloperService {
     } finally { await guard?.cleanup(); }
   }
 
-  async runMergeConflictResolution(rawInput: MergeConflictResolutionActivityInput): Promise<MergeConflictResolutionActivityResult> {
+  async runMergeConflictResolution(rawInput: MergeConflictResolutionInput): Promise<MergeConflictResolutionActivityResult> {
     const input = rawInput;
-    const prior = this.database.authQuery((db) => db.prepare(`SELECT id, status, session_ref, branch_name, worktree_path
-      FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; status: string; session_ref: string | null; branch_name: string; worktree_path: string } | undefined);
+    const prior = this.database.authQuery((db) => db.prepare(`SELECT id, status, session_ref, branch_name, worktree_path, delivery_artifact_id, evidence_artifact_id
+      FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; status: string; session_ref: string | null; branch_name: string; worktree_path: string; delivery_artifact_id: string | null; evidence_artifact_id: string | null } | undefined);
     const planRow = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'merge-conflict-plan'").get(input.planArtifactId, input.companyId) as { storage_path: string; sha256: string } | undefined);
     if (!prior || !planRow || !["completed", "blocked"].includes(prior.status) || prior.session_ref !== input.developerSessionRef || prior.branch_name !== input.branchName || prior.worktree_path !== input.worktreePath) {
       throw new AgentFailure("merge-resolution-identity-mismatch", "Merge-conflict resolution coordinates do not match the owned Developer worktree");
+    }
+    let conflict: ForwardMergeConflictArtifact;
+    const conflictRow = this.database.authQuery((db) => db.prepare("SELECT a.storage_path, a.sha256 FROM forge_artifacts a JOIN forge_forward_merges f ON f.conflict_artifact_id = a.id AND f.id = ? AND f.task_id = ? AND f.company_id = ? WHERE a.id = ? AND a.company_id = ? AND a.kind = 'forward-merge-conflict'").get(input.forwardMergeId, input.taskId, input.companyId, input.conflictArtifact.id, input.companyId) as { storage_path: string; sha256: string } | undefined);
+    if (!conflictRow || conflictRow.sha256 !== input.conflictArtifact.sha256) throw new AgentFailure("merge-resolution-evidence-missing", "Forward-merge conflict evidence is unavailable");
+    try {
+      conflict = ForwardMergeConflictArtifactSchema.parse(JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: conflictRow.storage_path, sha256: conflictRow.sha256 })).toString("utf8")));
+    } catch {
+      throw new AgentFailure("merge-resolution-evidence-corrupt", "Forward-merge conflict evidence failed integrity validation");
+    }
+    if (conflict.priorHead.toLowerCase() !== input.priorHead.toLowerCase() || conflict.observedBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase() || conflict.conflictFiles.length !== input.conflictFileCount) throw new AgentFailure("merge-resolution-identity-mismatch", "Forward-merge conflict evidence does not match the owned merge");
+    const mergeState = await this.mergeState(input.worktreePath);
+    if (mergeState.head !== input.priorHead || mergeState.mergeHead !== input.targetBaseSha || JSON.stringify(mergeState.conflicts) !== JSON.stringify([...conflict.conflictFiles].sort())) {
+      throw new AgentFailure("merge_state_ownership_mismatch", "The in-progress merge no longer matches the recorded forward-merge operation");
     }
     const plan = (await this.artifacts.read({ companyId: input.companyId, storagePath: planRow.storage_path, sha256: planRow.sha256 })).toString("utf8");
     const rawSessionId = await this.sessionStore.read(input.developerSessionRef);
@@ -302,13 +320,15 @@ export class DeveloperService {
     const attempt = Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
     const guard = await createGitCommandGuard(this.config.runtimeRoot);
     const startedAt = this.now().toISOString();
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, input.worktreePath, input.targetBaseSha, `wrapper_${randomBytes(12).toString("hex")}`, guard.directory, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt));
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at, execution_kind) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'forward_merge')").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, input.worktreePath, input.targetBaseSha, `wrapper_${randomBytes(12).toString("hex")}`, guard.directory, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt));
     const evidenceLines: string[] = [];
     const expectedRawSessionId = rawSessionId;
+    let verificationArtifact: StoredArtifact | undefined;
+    let completedMerge: { headSha: string; treeSha: string } | undefined;
     try {
       const result = await this.processRunner({
         command: this.command,
-        args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.mergeConflictResolutionPrompt(plan, input)],
+        args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.mergeConflictResolutionPrompt(plan, input, conflict)],
         cwd: input.worktreePath,
         env: guard.env,
         detached: true,
@@ -322,25 +342,53 @@ export class DeveloperService {
       });
       if (result.exitCode !== 0) throw agentProcessFailure(result, evidenceLines);
       const report = parseMergeConflictResolutionReport(evidenceLines);
-      const missingFiles = input.conflictFiles.filter((file) => !report.resolvedFiles.includes(file));
+      const missingFiles = conflict.conflictFiles.filter((file) => !report.resolvedFiles.includes(file));
       if (missingFiles.length || report.blocker !== null) throw new AgentFailure("merge-resolution-incomplete", missingFiles.length ? `The Developer did not resolve: ${missingFiles.join(", ")}` : report.blocker ?? "Merge-conflict resolution is blocked");
       const gitState = await this.worktrees.inspectDelivery(input.worktreePath);
+      completedMerge = { headSha: gitState.headSha, treeSha: gitState.treeSha };
       const parents = (await execFileAsync("git", ["rev-list", "--parents", "-n", "1", "HEAD"], { cwd: input.worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim().split(/\s+/);
       if (gitState.branchName !== input.branchName || gitState.dirtyState !== "clean" || gitState.headSha.toLowerCase() !== report.resultCommit.toLowerCase() || gitState.treeSha.toLowerCase() !== report.resultTree.toLowerCase() || parents.length !== 3 || (parents[1] ?? "").toLowerCase() !== input.priorHead.toLowerCase() || (parents[2] ?? "").toLowerCase() !== input.targetBaseSha.toLowerCase()) {
         throw new AgentFailure("merge-resolution-revision-invalid", "Developer resolution did not produce the required clean two-parent merge commit");
       }
+      const revision = this.database.authQuery((db) => db.prepare("SELECT r.normalized_json FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?").get(input.taskId, input.companyId, input.workflowId) as { normalized_json: string } | undefined);
+      if (!revision) throw new AgentFailure("artifact_unavailable", "The accepted project revision is unavailable for deterministic verification");
+      let parsed;
+      try { parsed = parseAcceptedProjectRevision(revision.normalized_json); } catch { throw new AgentFailure("artifact_unavailable", "The accepted project revision does not contain valid pinned verification commands"); }
+      const verification = await runPinnedVerification({ worktreePath: input.worktreePath, setupCommand: parsed.setupCommand, verificationCommand: parsed.verificationCommand }, { guard });
+      const verificationArtifactRecord = await this.artifacts.put(input.companyId, "forward-merge-verification", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(verification), "utf8") });
+      verificationArtifact = verificationArtifactRecord;
+      const afterVerification = await this.worktrees.inspectDelivery(input.worktreePath);
+      const afterParents = (await execFileAsync("git", ["rev-list", "--parents", "-n", "1", "HEAD"], { cwd: input.worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim().split(/\s+/);
+      if (afterVerification.branchName !== input.branchName || afterVerification.headSha.toLowerCase() !== gitState.headSha.toLowerCase() || afterVerification.treeSha.toLowerCase() !== gitState.treeSha.toLowerCase() || afterVerification.dirtyState !== "clean" || afterParents.length !== 3 || afterParents[1]?.toLowerCase() !== input.priorHead.toLowerCase() || afterParents[2]?.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new AgentFailure("merge_state_ownership_mismatch", "Pinned verification changed the forward-merge delivery");
+      if (verification.outcome !== "passed") throw new AgentFailure(verification.code ?? "verification_failed", verification.summary);
       const resolutionArtifact = await this.artifacts.put(input.companyId, "merge-conflict-resolution", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(report, null, 2), "utf8") });
+      const deliveryArtifact = await this.artifacts.put(input.companyId, "forward-merge-delivery", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkId: input.forwardMergeId, priorHead: input.priorHead, priorTree: conflict.priorTree, targetBaseSha: input.targetBaseSha, resultCommit: gitState.headSha, resultTree: gitState.treeSha, developerExecutionId: executionId, supersedesDeveloperExecutionId: input.developerExecutionId, supersededDeliveryArtifactId: prior.delivery_artifact_id, supersededEvidenceArtifactId: prior.evidence_artifact_id, verificationArtifactId: verificationArtifactRecord.id, verification }, null, 2), "utf8") });
       const evidence = await this.artifacts.put(input.companyId, "agent-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
       const now = this.now().toISOString();
       this.database.authTransaction((db) => {
-        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, resolutionArtifact.id, resolutionArtifact.companyId, resolutionArtifact.kind, resolutionArtifact.filename, resolutionArtifact.mimeType, resolutionArtifact.byteSize, resolutionArtifact.sha256, resolutionArtifact.storagePath, resolutionArtifact.createdAt);
-        db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = 'clean', delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(now, now, gitState.headSha, gitState.treeSha, resolutionArtifact.id, evidence.id, executionId);
+        const artifacts = [evidence, resolutionArtifact, verificationArtifactRecord, deliveryArtifact];
+        const insert = db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        for (const artifact of artifacts) insert.run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+        db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = 'clean', delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(now, now, gitState.headSha, gitState.treeSha, deliveryArtifact.id, evidence.id, executionId);
+        db.prepare("UPDATE forge_forward_merges SET status = 'merged', merge_commit = ?, tree = ?, result_head = ?, result_tree = ?, developer_execution_id = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, delivery_artifact_id = ?, delivery_artifact_sha256 = ?, updated_at = ? WHERE task_id = ? AND company_id = ? AND conflict_artifact_id = ?").run(gitState.headSha, gitState.treeSha, gitState.headSha, gitState.treeSha, executionId, verificationArtifactRecord.id, verificationArtifactRecord.sha256, deliveryArtifact.id, deliveryArtifact.sha256, now, input.taskId, input.companyId, input.conflictArtifact.id);
         db.prepare("UPDATE forge_merge_conflict_resolutions SET developer_execution_id = ?, developer_session_ref = ?, result_commit = ?, result_tree = ?, status = 'completed', updated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ?").run(executionId, input.developerSessionRef, gitState.headSha, gitState.treeSha, now, input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha);
       });
-      return { developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, resultCommit: gitState.headSha, resultTree: gitState.treeSha, deliveryArtifactId: resolutionArtifact.id, evidenceArtifactId: evidence.id, summary: report.summary };
+      return { developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, resultCommit: gitState.headSha, resultTree: gitState.treeSha, deliveryArtifactId: deliveryArtifact.id, deliveryArtifactSha256: deliveryArtifact.sha256, evidenceArtifactId: evidence.id, evidenceArtifactSha256: evidence.sha256, verificationArtifactId: verificationArtifactRecord.id, verificationArtifactSha256: verificationArtifactRecord.sha256, summary: report.summary };
     } catch (error) {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("merge-resolution-failed", "Codex Developer merge-conflict resolution failed");
       const evidence = await this.artifacts.put(input.companyId, "agent-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
+      if (verificationArtifact && completedMerge && ["verification_failed", "verification_timed_out", "verification_evidence_too_large"].includes(failure.code)) {
+        const blockedVerificationArtifact = verificationArtifact;
+        const blockedMerge = completedMerge;
+        const now = this.now().toISOString();
+        this.database.authTransaction((db) => {
+          for (const artifact of [evidence, blockedVerificationArtifact]) db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+          db.prepare("UPDATE forge_developer_executions SET status = 'blocked', finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = 'clean', failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(now, now, blockedMerge.headSha, blockedMerge.treeSha, failure.code, failure.message, evidence.id, executionId);
+          db.prepare("UPDATE forge_forward_merges SET status = 'merged', merge_commit = ?, tree = ?, result_head = ?, result_tree = ?, developer_execution_id = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, failure_code = ?, failure_summary = ?, updated_at = ? WHERE task_id = ? AND company_id = ? AND conflict_artifact_id = ?").run(blockedMerge.headSha, blockedMerge.treeSha, blockedMerge.headSha, blockedMerge.treeSha, executionId, blockedVerificationArtifact.id, blockedVerificationArtifact.sha256, failure.code, failure.message, now, input.taskId, input.companyId, input.conflictArtifact.id);
+          db.prepare("UPDATE forge_merge_conflict_resolutions SET developer_execution_id = ?, developer_session_ref = ?, result_commit = ?, result_tree = ?, status = 'blocked', updated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ?").run(executionId, input.developerSessionRef, blockedMerge.headSha, blockedMerge.treeSha, now, input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha);
+        });
+        return { outcome: "verification_blocked", developerExecutionId: executionId, developerSessionRef: input.developerSessionRef, resultCommit: blockedMerge.headSha, resultTree: blockedMerge.treeSha, evidenceArtifactId: evidence.id, verificationArtifact: { id: blockedVerificationArtifact.id, sha256: blockedVerificationArtifact.sha256, kind: "forward-merge-verification" as const }, code: failure.code as "verification_failed" | "verification_timed_out" | "verification_evidence_too_large", summary: failure.message };
+      }
       this.database.authTransaction((db) => {
         db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
         db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId);
@@ -348,6 +396,16 @@ export class DeveloperService {
       });
       throw failure;
     } finally { await guard.cleanup(); }
+  }
+
+  private async mergeState(worktreePath: string): Promise<{ head: string; mergeHead: string; conflicts: string[] }> {
+    const run = async (args: string[]): Promise<string> => (await execFileAsync("git", args, { cwd: worktreePath, timeout: 8_000, maxBuffer: 128 * 1024 })).stdout.trim();
+    const [head, mergeHead, files] = await Promise.all([
+      run(["rev-parse", "HEAD"]),
+      run(["rev-parse", "MERGE_HEAD"]),
+      run(["diff", "--name-only", "--diff-filter=U"]),
+    ]);
+    return { head, mergeHead, conflicts: files.split("\n").filter(Boolean).sort() };
   }
 
   async runRepair(rawInput: DeveloperRepairActivityInput): Promise<DeveloperRepairResult> {
@@ -502,12 +560,12 @@ export class DeveloperService {
     } finally { await guard.cleanup(); }
   }
 
-  private mergeConflictResolutionPrompt(plan: string, input: MergeConflictResolutionActivityInput): string {
+  private mergeConflictResolutionPrompt(plan: string, input: MergeConflictResolutionInput, conflict: ForwardMergeConflictArtifact): string {
     return [
       "You are Forge's authenticated Developer continuing the same Developer session in the exact owned issue worktree. A guarded normal merge is already in progress. Resolve only the listed conflicts using the Lead-authored plan.",
       "Do not abort the merge, rebase, amend, reset, clean, force-push, use GitHub/provider commands, or modify another checkout. Inspect both sides and the combined conflict markers, apply the bounded resolutions, run the complete relevant local verification suite from the approved plan, stage only the resolved worktree, and create exactly one ordinary merge commit with both parents. Leave the worktree clean.",
       'Return exactly one JSON object with no markdown fences or commentary matching: {"kind":"merge_conflict_resolution","summary":"...","resolvedFiles":[],"commandsRun":[],"testResults":[],"resultCommit":"40+ hex","resultTree":"40+ hex","dirtyState":"clean","blocker":null}. Include every listed conflict file in resolvedFiles and report any blocker instead of claiming success.',
-      "Merge identity:\n" + JSON.stringify({ branchName: input.branchName, priorHead: input.priorHead, targetBaseSha: input.targetBaseSha, conflictFiles: input.conflictFiles }),
+      "Merge identity:\n" + JSON.stringify({ branchName: input.branchName, priorHead: input.priorHead, targetBaseSha: input.targetBaseSha, conflictFiles: conflict.conflictFiles }),
       "Lead-authored resolution plan:\n" + plan,
     ].join("\n\n");
   }

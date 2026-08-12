@@ -73,7 +73,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
     projectState(plannedState);
     return plannedState;
   }, async approvePlan(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft"], pendingAction: "Publish draft pull request", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development"], pendingAction: "Start development", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
   }, async publishDraft(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
@@ -84,6 +84,28 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, body_artifact_id, reused, created_at, updated_at) VALUES ('release-browser', ?, ?, ?, 'release-browser-key', 'acme/forge', 'issue/browser-task', 'main', ?, ?, ?, 'draft', 21, 'https://github.com/acme/forge/pull/21', 'Browser task', ?, 1, ?, ?)").run(plannedState!.issueId, company.id, plannedState!.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), releaseBody.id, now, now);
     });
     plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for required CI", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    projectState(plannedState);
+    return plannedState;
+  }, async startDevelopment(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    const taskId = workflowId.split("-issue-")[1]!;
+    const now = new Date().toISOString();
+    database.authQuery((db) => db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, failure_code, failure_summary, updated_at) VALUES ('merge-browser', ?, ?, ?, ?, ?, NULL, NULL, 'blocked', '[]', ?, ?, ?, 'pre_release', ?, 'provider_unavailable', 'Provider unavailable', ?)").run(taskId, company.id, "a".repeat(40), "a".repeat(40), "c".repeat(40), now, workflowId, project.activeRevisionId!, "c".repeat(40), now));
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Provider unavailable", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseSha: "a".repeat(40), targetBaseCheckId: "merge-browser", targetBaseCheckpoint: "pre_release", targetBaseOutcome: "blocked", targetBaseBlockerCode: "provider_unavailable", targetBaseBlockerOwner: "provider", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Provider unavailable", resultCommit: "c".repeat(40), resultTree: "d".repeat(40) };
+    projectState(plannedState);
+    return plannedState;
+  }, async retryTargetBaseReconciliation(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET status = 'conflict', current_base_sha = ?, conflict_files_json = '[\"README.md\"]', conflict_file_count = 1, failure_code = NULL, failure_summary = NULL, updated_at = ? WHERE id = 'merge-browser'").run("b".repeat(40), new Date().toISOString()));
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "merge_conflict_required", owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseOutcome: "conflict", targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null, forwardMergeId: "merge-browser", forwardMergePriorHead: "c".repeat(40), forwardMergePriorTree: "d".repeat(40), forwardMergeTargetBaseSha: "b".repeat(40), forwardMergeConflictArtifact: { id: "conflict-browser", sha256: "e".repeat(64), kind: "forward-merge-conflict" }, forwardMergeConflictFileCount: 1, mergeResolutionPlanArtifactId: "conflict-plan-browser" };
+    projectState(plannedState);
+    return plannedState;
+  }, async resolveMergeConflict(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET status = 'merged', result_head = ?, result_tree = ?, failure_code = 'verification_failed', failure_summary = 'Pinned verification failed', updated_at = ? WHERE id = 'merge-browser'").run("f".repeat(40), "1".repeat(40), new Date().toISOString()));
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "delivery_blocked", owner: "lead", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], pendingAction: "Pinned verification failed", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseOutcome: "blocked", targetBaseBlockerCode: "verification_failed", targetBaseBlockerOwner: "lead", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: "Pinned verification failed", resultCommit: "f".repeat(40), resultTree: "1".repeat(40) };
+    projectState(plannedState);
+    return plannedState;
+  }, async retryForwardMergeVerification(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET status = 'no_drift', failure_code = NULL, failure_summary = NULL, updated_at = ? WHERE id = 'merge-browser'").run(new Date().toISOString()));
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish one exact draft pull request", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseOutcome: "no_drift", targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null };
     projectState(plannedState);
     return plannedState;
   }, async rejectPlan(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
@@ -184,12 +206,25 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await prLink.focus();
       expect(await prLink.evaluate((element) => element === document.activeElement)).toBe(true);
       expect(await taskDetail.locator('[data-task-lead-plan] [data-slot="accordion"]').count()).toBe(1);
-      await taskDetail.getByRole("button", { name: /Step 1 Inspect repository/ }).click();
+      await taskDetail.getByRole("button", { name: "Inspect repository", exact: true }).click();
       await taskDetail.getByText("The issue is understood", { exact: true }).waitFor();
       await taskDetail.getByRole("button", { name: "Request review", exact: true }).click();
       await taskDetail.getByRole("button", { name: "Approve plan", exact: true }).waitFor();
       await taskDetail.getByRole("button", { name: "Approve plan", exact: true }).click();
+      await taskDetail.locator('[data-status="ready_for_development"]').waitFor();
+      await taskDetail.getByRole("button", { name: "Start development", exact: true }).click();
+      await taskDetail.locator('[data-status="delivery_blocked"]').waitFor();
+      await taskDetail.getByText("Target-base reconciliation", { exact: true }).waitFor();
+      await taskDetail.getByText("Provider unavailable", { exact: true }).first().waitFor();
+      await taskDetail.getByRole("button", { name: "Retry reconciliation", exact: true }).click();
+      await expect.poll(() => plannedState?.phase).toBe("merge_conflict_required");
+      await taskDetail.locator('[data-status="merge_conflict_required"]').waitFor();
+      await taskDetail.getByRole("button", { name: "Resolve conflicts", exact: true }).click();
+      await taskDetail.locator('[data-status="delivery_blocked"]').waitFor();
+      await taskDetail.getByText("Pinned verification failed", { exact: true }).first().waitFor();
+      await taskDetail.getByRole("button", { name: "Retry verification", exact: true }).click();
       await taskDetail.locator('[data-status="delivery_reviewed"]').waitFor();
+      await taskDetail.getByText("no_drift", { exact: true }).waitFor();
       await taskDetail.getByRole("button", { name: "Publish draft", exact: true }).click();
       await taskDetail.locator('[data-status="ci_waiting"]').waitFor();
       await observerDetail.locator('[data-status="ci_waiting"]').waitFor();
@@ -199,7 +234,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       expect(await taskDetail.getByText(/## Summary/).isVisible()).toBe(true);
       const progress = taskDetail.locator("[data-task-progress]");
       expect(await progress.locator('[data-slot="timeline"][data-orientation="horizontal"]').count()).toBe(1);
-      expect(await progress.getByText("Done in 1 min", { exact: true }).isVisible()).toBe(true);
+      expect(await progress.getByText("Done in 1 min", { exact: true }).first().isVisible()).toBe(true);
       expect(await progress.getByText(/^Step [123]$/).count()).toBe(0);
       expect(new URL(page.url()).pathname).toBe(detailPath);
       const history = taskDetail.locator("[data-task-history]");
@@ -228,7 +263,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
       expect(new URL(page.url()).pathname).toBe("/board");
       expect(await page.getByText("Backlog", { exact: true }).isVisible()).toBe(true);
-      for (const group of ["Planning", "Building", "Review", "CI", "Acceptance", "Done"]) expect(await page.getByText(group, { exact: true }).isVisible()).toBe(true);
+      for (const phase of ["Planning", "Development", "Reviewing", "Waiting for CI", "Final review", "Done"]) expect(await page.getByText(phase, { exact: true }).isVisible()).toBe(true);
       const boardTask = page.getByRole("button", { name: /Browser task/ });
       await boardTask.waitFor();
       await boardTask.scrollIntoViewIfNeeded();

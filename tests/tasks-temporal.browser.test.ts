@@ -137,15 +137,14 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
       const page = await context.newPage();
       let taskListResponses = 0;
       page.on("response", (response) => { if (/\/api\/companies\/[^/]+\/tasks$/.test(new URL(response.url()).pathname)) taskListResponses += 1; });
-      await page.goto(`${config.reachableAddress}/tasks`);
+      await page.goto(`${config.reachableAddress}/tasks?company=${company.id}`);
+      await page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();
+      await page.getByRole("button", { name: "New task", exact: true }).click();
+      await page.getByRole("dialog", { name: "New task" }).waitFor();
       await page.getByRole("combobox", { name: "Project" }).click();
       await page.getByRole("option", { name: "Temporal project" }).click();
       await page.getByLabel("Task title", { exact: true }).fill("Durable browser task");
       await page.getByLabel("Task description", { exact: true }).fill("## Durable brief\n\nSurvive the restart.");
-      await page.getByText("Advanced choices", { exact: true }).click();
-      await page.getByRole("combobox", { name: "Reviewer profile" }).click();
-      await page.getByRole("option", { name: "Controlled profile" }).click();
-      await page.getByRole("checkbox", { name: "Request supplemental review" }).click();
       await page.getByLabel("Task images", { exact: true }).setInputFiles(imagePath);
       await page.getByRole("button", { name: "Create task" }).click();
       await page.waitForURL(/\/tasks\/[^/?]+/);
@@ -154,8 +153,8 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
       await pane.getByRole("heading", { name: "Durable browser task", exact: true }).waitFor();
       const persisted = apiDatabase!.authQuery((db) => db.prepare("SELECT id, workflow_id, role_profiles_json, supplemental_review FROM forge_tasks WHERE title = 'Durable browser task'").get() as { id: string; workflow_id: string; role_profiles_json: string; supplemental_review: number });
       workflowId = persisted.workflow_id;
-      expect(JSON.parse(persisted.role_profiles_json)).toMatchObject({ lead: profile.id, developer: profile.id, reviewer: profile.id });
-      expect(persisted.supplemental_review).toBe(1);
+      expect(JSON.parse(persisted.role_profiles_json)).toMatchObject({ lead: profile.id, developer: profile.id });
+      expect(persisted.supplemental_review).toBe(0);
       expect(apiDatabase!.authQuery((db) => db.prepare("SELECT state FROM forge_task_creation_intents WHERE task_id = ?").get(persisted.id))).toEqual({ state: "started" });
       expect(apiDatabase!.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE id = ?").get(persisted.id))).toEqual({ count: 1 });
       expect(apiDatabase!.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts WHERE company_id = ?").get(company.id))).toEqual({ count: 2 });
@@ -165,8 +164,8 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
       expect(attachmentResponse.status()).toBe(200);
       expect(Buffer.from(await attachmentResponse.body())).toEqual(await readFile(imagePath));
       await pane.getByRole("button", { name: "Start planning" }).click();
-      await pane.getByText(/planning · revision 1/).waitFor();
-      expect(apiDatabase!.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE workflow_id = ? ORDER BY revision").all(workflowId))).toEqual([{ revision: 0 }, { revision: 1 }]);
+      await pane.locator('[data-status="planning"]').waitFor();
+      await expect.poll(() => apiDatabase!.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE workflow_id = ? ORDER BY revision").all(workflowId))).toEqual([{ revision: 0 }, { revision: 1 }]);
       const stale = await page.evaluate(async (id) => { const csrf = document.cookie.split("; ").find((value) => value.startsWith("csrf_v1="))?.split("=", 2)[1] ?? ""; const response = await fetch(`/api/tasks/${id}/start-planning`, { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-V1": csrf }, body: JSON.stringify({ expectedRevision: 0 }) }); return { status: response.status, body: await response.json() }; }, workflowId.split("-issue-").at(-1)!);
       expect(stale).toMatchObject({ status: 409, body: { current: { revision: 1, phase: "planning" } } });
 
@@ -174,14 +173,14 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
       await stopApi(); await stopWorker(); await stopTemporal();
       await startTemporal(); await startWorker(); await startApi();
       await expect.poll(() => taskListResponses, { timeout: 15_000 }).toBeGreaterThan(responsesBeforeRestart);
-      await pane.getByText(/planning · revision 1/).waitFor();
+      await pane.locator('[data-status="planning"]').waitFor();
       expect(apiDatabase!.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE workflow_id = ? ORDER BY revision").all(workflowId))).toEqual([{ revision: 0 }, { revision: 1 }]);
       expect(apiDatabase!.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE workflow_id = ?").get(workflowId))).toEqual({ count: 1 });
       await page.setViewportSize({ width: 390, height: 844 });
       expect(await pane.getByText("Owner", { exact: true }).isVisible()).toBe(true);
       expect(await pane.getByText("Projection", { exact: true }).isVisible()).toBe(true);
       expect(await pane.getByRole("link", { name: "evidence.png" }).isVisible()).toBe(true);
-      await pane.getByText(/planning · revision 1/).waitFor();
+      await pane.locator('[data-status="planning"]').waitFor();
 
       const temporal = await Connection.connect({ address: config.temporalAddress });
       try {

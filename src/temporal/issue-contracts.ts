@@ -4,6 +4,104 @@ import { ReleaseFailureCodeSchema } from "../release-failures.js";
 import { PlanMaterialCategorySchema, type PlanMaterialCategory } from "../plan-governance.js";
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+const sha = z.string().regex(/^[a-f0-9]{40,64}$/i);
+
+export const TargetBaseCheckpointSchema = z.enum(["pre_release", "pre_final_review", "pre_acceptance"]);
+export type TargetBaseCheckpoint = z.infer<typeof TargetBaseCheckpointSchema>;
+
+export const TargetBaseBlockerCodeSchema = z.enum([
+  "authentication_required",
+  "provider_unavailable",
+  "remote_identity_mismatch",
+  "base_rewritten",
+  "base_advanced_again",
+  "worktree_ownership_mismatch",
+  "worktree_dirty",
+  "merge_state_ownership_mismatch",
+  "merge_failed",
+  "conflict_evidence_too_large",
+  "artifact_unavailable",
+  "verification_failed",
+  "verification_timed_out",
+  "verification_evidence_too_large",
+]);
+export type TargetBaseBlockerCode = z.infer<typeof TargetBaseBlockerCodeSchema>;
+
+export const TargetBaseArtifactKindSchema = z.enum(["forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery"]);
+export const ArtifactReferenceSchema = z.object({ id: durableId, sha256: z.string().regex(/^[a-f0-9]{64}$/), kind: TargetBaseArtifactKindSchema }).strict();
+export type ArtifactReference = z.infer<typeof ArtifactReferenceSchema>;
+
+export const ReconcileTargetBaseActivityInputSchema = z.object({
+  taskId: durableId,
+  companyId: durableId,
+  workflowId: durableId,
+  projectRevisionId: durableId,
+  checkpoint: TargetBaseCheckpointSchema,
+  developerExecutionId: durableId,
+  expectedBaseSha: sha,
+  expectedHeadSha: sha,
+  expectedHeadTree: sha,
+  forwardMergeId: durableId.optional(),
+  verificationOnly: z.boolean().optional(),
+  deliveryReviewId: durableId.optional(),
+  ciRunId: durableId.optional(),
+  finalReviewId: durableId.optional(),
+  acceptanceId: durableId.optional(),
+  releaseId: durableId.optional(),
+}).strict();
+
+const noDriftResult = z.object({
+  outcome: z.literal("no_drift"),
+  checkId: durableId,
+  checkpoint: TargetBaseCheckpointSchema,
+  expectedBaseSha: sha,
+  observedBaseSha: sha,
+  headSha: sha,
+  headTree: sha,
+}).strict();
+const revalidatedResult = z.object({
+  outcome: z.literal("revalidated"),
+  checkId: durableId,
+  checkpoint: TargetBaseCheckpointSchema,
+  expectedBaseSha: sha,
+  observedBaseSha: sha,
+  priorHead: sha,
+  priorTree: sha,
+  headSha: sha,
+  headTree: sha,
+  developerExecutionId: durableId,
+  deliveryArtifact: ArtifactReferenceSchema,
+  verificationArtifact: ArtifactReferenceSchema,
+}).strict();
+const conflictResult = z.object({
+  outcome: z.literal("conflict"),
+  checkId: durableId,
+  checkpoint: TargetBaseCheckpointSchema,
+  expectedBaseSha: sha,
+  observedBaseSha: sha,
+  priorHead: sha,
+  priorTree: sha,
+  conflictFileCount: z.number().int().min(1).max(128),
+  conflictArtifact: ArtifactReferenceSchema,
+}).strict();
+const blockedResult = z.object({
+  outcome: z.literal("blocked"),
+  checkId: durableId,
+  checkpoint: TargetBaseCheckpointSchema,
+  code: TargetBaseBlockerCodeSchema,
+  owner: z.enum(["human", "provider", "lead"]),
+  retryable: z.boolean(),
+  summary: z.string().min(1).max(500),
+  evidenceArtifact: ArtifactReferenceSchema.optional(),
+  observedBaseSha: sha.optional(),
+  priorHead: sha.optional(),
+  priorTree: sha.optional(),
+  resultHead: sha.optional(),
+  resultTree: sha.optional(),
+}).strict();
+export const ReconcileTargetBaseActivityResultSchema = z.discriminatedUnion("outcome", [noDriftResult, revalidatedResult, conflictResult, blockedResult]);
+export type ReconcileTargetBaseActivityInput = z.infer<typeof ReconcileTargetBaseActivityInputSchema>;
+export type ReconcileTargetBaseActivityResult = z.infer<typeof ReconcileTargetBaseActivityResultSchema>;
 
 export const DurableArtifactKindSchema = z.enum([
   "task-brief",
@@ -90,7 +188,7 @@ export type CiRepairPlan = z.infer<typeof CiRepairPlanSchema>;
 export const MergeConflictPlanSchema = z.object({
   kind: z.literal("merge_conflict_plan"),
   summary: z.string().min(1).max(2_000),
-  resolutions: z.array(z.object({ file: z.string().min(1).max(1_000), resolution: z.string().min(1).max(8_000) })).min(1).max(128),
+  resolutions: z.array(z.object({ file: z.string().min(1).max(1_000), resolution: z.string().min(1).max(8_000), number: z.number().int().positive().optional(), intendedResult: z.string().min(1).max(4_000).optional(), issueInvariant: z.string().min(1).max(4_000).optional(), baseInvariant: z.string().min(1).max(4_000).optional(), compatibilityConcern: z.string().min(1).max(4_000).optional() })).min(1).max(128),
   verificationStrategy: z.string().min(1).max(12_000),
   unresolvedQuestions: z.array(z.string().max(2_000)).max(16).length(0),
 });
@@ -99,7 +197,7 @@ export type MergeConflictPlan = z.infer<typeof MergeConflictPlanSchema>;
 
 export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"]);
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
-export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "record_progress", "start_development", "retry_development", "cancel_development", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "cancel_issue", "reconcile_merge", "continue_work"]);
+export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "record_progress", "start_development", "retry_development", "cancel_development", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "cancel_issue", "reconcile_merge", "continue_work"]);
 export const IssuePlanDecisionSchema = z.enum(["approve", "reject"]);
 export const IssueContinuationStateSchema = z.object({
   phase: IssuePhaseSchema,
@@ -149,10 +247,20 @@ export const IssueContinuationStateSchema = z.object({
   deliveryDecisionArtifactId: durableId.nullable().optional(),
   forwardMergeId: durableId.nullable().optional(),
   forwardMergePriorHead: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
+  forwardMergePriorTree: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
   forwardMergeTargetBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
   mergeConflictEvidence: DurableArtifactReferenceSchema.nullable().optional(),
   forwardMergeConflictFiles: z.array(z.string().max(1_000)).max(128).optional(),
   forwardMergeConflictDiff: z.string().max(80_000).nullable().optional(),
+  targetBaseCheckId: durableId.nullable().optional(),
+  targetBaseCheckpoint: TargetBaseCheckpointSchema.nullable().optional(),
+  targetBaseOutcome: z.enum(["no_drift", "revalidated", "conflict", "blocked"]).nullable().optional(),
+  targetBaseBlockerCode: TargetBaseBlockerCodeSchema.nullable().optional(),
+  targetBaseBlockerOwner: z.enum(["human", "provider", "lead"]).nullable().optional(),
+  targetBaseBlockerRetryable: z.boolean().nullable().optional(),
+  targetBaseBlockerSummary: z.string().max(500).nullable().optional(),
+  forwardMergeConflictArtifact: ArtifactReferenceSchema.nullable().optional(),
+  forwardMergeConflictFileCount: z.number().int().nonnegative().max(128).nullable().optional(),
   mergeResolutionPlanId: durableId.nullable().optional(),
   mergeResolutionPlanArtifactId: durableId.nullable().optional(),
   mergeResolutionLeadExecutionId: durableId.nullable().optional(),
@@ -274,10 +382,20 @@ export const IssueWorkflowStateSchema = z.object({
   deliveryDecisionArtifactId: durableId.nullable().optional(),
   forwardMergeId: durableId.nullable().optional(),
   forwardMergePriorHead: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
+  forwardMergePriorTree: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
   forwardMergeTargetBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
   mergeConflictEvidence: DurableArtifactReferenceSchema.nullable().optional(),
   forwardMergeConflictFiles: z.array(z.string().max(1_000)).max(128).optional(),
   forwardMergeConflictDiff: z.string().max(80_000).nullable().optional(),
+  targetBaseCheckId: durableId.nullable().optional(),
+  targetBaseCheckpoint: TargetBaseCheckpointSchema.nullable().optional(),
+  targetBaseOutcome: z.enum(["no_drift", "revalidated", "conflict", "blocked"]).nullable().optional(),
+  targetBaseBlockerCode: TargetBaseBlockerCodeSchema.nullable().optional(),
+  targetBaseBlockerOwner: z.enum(["human", "provider", "lead"]).nullable().optional(),
+  targetBaseBlockerRetryable: z.boolean().nullable().optional(),
+  targetBaseBlockerSummary: z.string().max(500).nullable().optional(),
+  forwardMergeConflictArtifact: ArtifactReferenceSchema.nullable().optional(),
+  forwardMergeConflictFileCount: z.number().int().nonnegative().max(128).nullable().optional(),
   mergeResolutionPlanId: durableId.nullable().optional(),
   mergeResolutionPlanArtifactId: durableId.nullable().optional(),
   mergeResolutionLeadExecutionId: durableId.nullable().optional(),
@@ -660,6 +778,10 @@ export interface PublishReleaseActivityInput {
   targetBaseSha: string;
   subjectCommit: string;
   subjectTree: string;
+  planSummary?: string;
+  deliverySummary?: string;
+  verificationSummary?: string;
+  releaseId?: string;
 }
 
 const PublishReleaseIdentitySchema = z.object({
@@ -670,7 +792,6 @@ const PublishReleaseIdentitySchema = z.object({
   reused: z.boolean(),
   attempt: z.number().int().nonnegative(),
 });
-const sha = z.string().regex(/^[a-f0-9]{40,64}$/i);
 export const PublishReleaseActivityResultSchema = z.discriminatedUnion("outcome", [
   PublishReleaseIdentitySchema.extend({ outcome: z.literal("completed"), releaseId: durableId, pullRequestNumber: z.number().int().positive(), pullRequestUrl: z.string().url().max(2_000), isDraft: z.literal(true), targetBaseSha: sha.optional() }),
   PublishReleaseIdentitySchema.extend({ outcome: z.literal("blocked"), releaseId: durableId.nullable(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.boolean(), code: ReleaseFailureCodeSchema, summary: z.string().max(500), retryAt: z.string().datetime().nullable(), evidenceArtifactId: durableId.nullable() }),
@@ -687,22 +808,19 @@ export interface MergeConflictPlanActivityInput {
   projectRevisionId: string;
   briefArtifactId: string;
   planRevision: number;
-  forwardMergeId?: string;
+  forwardMergeId: string;
   leadSessionRef: string;
   leadOutputArtifactId: string;
-  conflictEvidence?: DurableArtifactReference;
   worktreePath: string;
   branchName: string;
   priorHead: string;
   targetBaseSha: string;
-  conflictFiles: string[];
-  conflictDiff: string;
+  conflictArtifact: ArtifactReference;
+  conflictFileCount: number;
 }
 
-export type WorkflowMergeConflictPlanActivityInput = Omit<MergeConflictPlanActivityInput, "worktreePath" | "conflictFiles" | "conflictDiff"> & {
+export type WorkflowMergeConflictPlanActivityInput = Omit<MergeConflictPlanActivityInput, "worktreePath"> & {
   worktreePath?: string;
-  conflictFiles?: string[];
-  conflictDiff?: string;
 };
 
 export interface MergeConflictPlanActivityResult {
@@ -719,30 +837,49 @@ export interface MergeConflictResolutionActivityInput {
   companyId: string;
   workflowId: string;
   planRevision: number;
+  forwardMergeId: string;
   developerExecutionId: string;
   developerSessionRef: string;
   worktreePath: string;
   branchName: string;
   priorHead: string;
   targetBaseSha: string;
-  conflictFiles: string[];
+  conflictArtifact: ArtifactReference;
+  conflictFileCount: number;
   planArtifactId: string;
 }
 
-export type WorkflowMergeConflictResolutionActivityInput = Omit<MergeConflictResolutionActivityInput, "worktreePath" | "conflictFiles"> & {
+export type WorkflowMergeConflictResolutionActivityInput = Omit<MergeConflictResolutionActivityInput, "worktreePath"> & {
   worktreePath?: string;
-  conflictFiles?: string[];
 };
 
-export interface MergeConflictResolutionActivityResult {
+export interface MergeConflictResolutionActivitySuccess {
   developerExecutionId: string;
   developerSessionRef: string;
   resultCommit: string;
   resultTree: string;
   deliveryArtifactId: string;
+  deliveryArtifactSha256: string;
   evidenceArtifactId: string;
+  evidenceArtifactSha256: string;
+  verificationArtifactId: string;
+  verificationArtifactSha256: string;
   summary: string;
 }
+
+export interface MergeConflictResolutionVerificationBlocked {
+  outcome: "verification_blocked";
+  developerExecutionId: string;
+  developerSessionRef: string;
+  resultCommit: string;
+  resultTree: string;
+  evidenceArtifactId: string;
+  verificationArtifact: ArtifactReference;
+  code: "verification_failed" | "verification_timed_out" | "verification_evidence_too_large";
+  summary: string;
+}
+
+export type MergeConflictResolutionActivityResult = MergeConflictResolutionActivitySuccess | MergeConflictResolutionVerificationBlocked;
 
 export interface ReconcileCiActivityInput {
   taskId: string;
@@ -918,6 +1055,7 @@ export interface IssueActivities {
   recordDeliveryDecision(input: DeliveryDecisionActivityInput): Promise<{ artifactId: string }>;
   cancelDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<{ status: "cancelled" | "ownership_ambiguous"; reason?: string | undefined }>;
   publishRelease(input: PublishReleaseActivityInput): Promise<PublishReleaseActivityResult>;
+  reconcileTargetBase(input: ReconcileTargetBaseActivityInput): Promise<ReconcileTargetBaseActivityResult>;
   reconcileCi(input: ReconcileCiActivityInput): Promise<ReconcileCiActivityResult>;
   planCiRepair(input: CiRepairPlanActivityInput): Promise<CiRepairPlanActivityResult>;
   runCiRepair(input: WorkflowCiRepairActivityInput): Promise<WorkflowCiRepairActivityResult>;

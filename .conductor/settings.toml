@@ -1,0 +1,15 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+setup = "mise install"
+run_mode = "concurrent"
+
+[scripts.run.dev]
+available_in = [ "local" ]
+command = "mise run dev"
+default = true
+icon = "play"
+
+[scripts.run.test]
+command = "mise run test"
+icon = "test-tube"

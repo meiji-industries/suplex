@@ -12,7 +12,22 @@ interface DevService {
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
 }
 
+export interface DevPorts {
+  forge?: number;
+  temporal: number;
+  temporalUi: number;
+}
+
 const tscCli = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
+
+export function resolveDevPorts(conductorPort: string | undefined): DevPorts {
+  if (conductorPort === undefined) return { temporal: 7233, temporalUi: 8233 };
+  const forge = Number(conductorPort);
+  if (!Number.isInteger(forge) || forge < 1 || forge > 65533) {
+    throw new Error(`CONDUCTOR_PORT must reserve three valid ports; received ${conductorPort}`);
+  }
+  return { forge, temporal: forge + 1, temporalUi: forge + 2 };
+}
 
 function startService(name: string, command: string, args: string[], environment: NodeJS.ProcessEnv = {}): DevService {
   process.stdout.write(`[dev] starting ${name}\n`);
@@ -108,13 +123,14 @@ async function acquireDevLock(runtimeRoot: string): Promise<(() => Promise<void>
   }
 }
 
-async function superviseDevStack(): Promise<number> {
+async function superviseDevStack(ports: DevPorts): Promise<number> {
   await mkdir(join(".forge", "dev"), { recursive: true });
   const services = [
-    startService("Temporal", "temporal", ["server", "start-dev", "--db-filename", ".forge/dev/temporal.db", "--namespace", "forge-dev", "--search-attribute", "CompanyId=Keyword", "--search-attribute", "ProjectId=Keyword", "--search-attribute", "IssueId=Keyword"]),
+    startService("Temporal", "temporal", ["server", "start-dev", "--port", String(ports.temporal), "--ui-port", String(ports.temporalUi), "--db-filename", ".forge/dev/temporal.db", "--namespace", "forge-dev", "--search-attribute", "CompanyId=Keyword", "--search-attribute", "ProjectId=Keyword", "--search-attribute", "IssueId=Keyword"]),
     startService("Forge", process.execPath, ["--import", "tsx", "src/cli.ts", "start", "--foreground"], {
+      ...(ports.forge === undefined ? {} : { FORGE_PORT: String(ports.forge) }),
       FORGE_TEMPORAL_TARGET: "local",
-      FORGE_TEMPORAL_ADDRESS: "127.0.0.1:7233",
+      FORGE_TEMPORAL_ADDRESS: `127.0.0.1:${ports.temporal}`,
       FORGE_TEMPORAL_NAMESPACE: "forge-dev",
       FORGE_DEVELOPMENT_WATCH: "1",
       FORGE_FRONTEND_DEV_SERVER: "1",
@@ -182,14 +198,15 @@ async function superviseDevStack(): Promise<number> {
 }
 
 async function main(): Promise<void> {
+  const ports = resolveDevPorts(process.env.CONDUCTOR_PORT);
   const releaseLock = await acquireDevLock(loadConfig().runtimeRoot);
   if (!releaseLock) return;
   try {
     await runPreparation("type-checking", [tscCli, "--noEmit"]);
-    process.exitCode = await superviseDevStack();
+    process.exitCode = await superviseDevStack(ports);
   } finally {
     await releaseLock();
   }
 }
 
-await main();
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await main();

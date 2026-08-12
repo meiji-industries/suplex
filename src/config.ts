@@ -30,6 +30,7 @@ export interface ForgeConfig {
   deliveryRepairCycleLimit: number;
   externalTurnCapacity: number;
   installationId: string;
+  developmentAutoLogin: boolean;
 }
 
 export class UnsafeBindingError extends Error {
@@ -204,6 +205,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
     deliveryRepairCycleLimit,
     externalTurnCapacity,
     installationId: stableInstallationId,
+    developmentAutoLogin: parsedEnvironment.data.FORGE_DEVELOPMENT_AUTO_LOGIN === "1",
   });
 }
 
@@ -231,6 +233,7 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     deliveryRepairCycleLimit: overrides.deliveryRepairCycleLimit ?? 2,
     externalTurnCapacity: overrides.externalTurnCapacity ?? 2,
     installationId: overrides.installationId ?? "test-installation",
+    developmentAutoLogin: overrides.developmentAutoLogin ?? false,
   };
 }
 

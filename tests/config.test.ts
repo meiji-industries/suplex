@@ -87,6 +87,20 @@ test("allows loopback only when Tailscale Serve is the explicit HTTPS boundary",
   expect(config.reachableAddress).toBe("https://forge.tailnet.ts.net:4111");
 });
 
+test("allows development auto-login only on a loopback binding", () => {
+  const development = loadConfig({
+    ...baseEnvironment,
+    FORGE_TAILSCALE_EXPOSURE: "serve",
+    FORGE_BIND_ADDRESS: "127.0.0.1",
+    FORGE_TEMPORAL_TARGET: "local",
+    FORGE_TEMPORAL_ADDRESS: "127.0.0.1:7233",
+    FORGE_TEMPORAL_NAMESPACE: "forge-dev",
+    FORGE_DEVELOPMENT_AUTO_LOGIN: "1",
+  });
+  expect(development.developmentAutoLogin).toBe(true);
+  expect(() => loadConfig({ ...baseEnvironment, FORGE_DEVELOPMENT_AUTO_LOGIN: "1" })).toThrow(/loopback bind address/);
+});
+
 test("still rejects loopback direct production binding", () => {
   expect(() => loadConfig({ ...baseEnvironment, FORGE_BIND_ADDRESS: "127.0.0.1" })).toThrow(UnsafeBindingError);
 });

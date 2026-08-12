@@ -56,12 +56,14 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
   installHttpErrorHandlers(app);
 
   const configuredOrigin = new URL(dependencies.config.reachableAddress).origin;
+  const developmentOrigins = new Set([`http://localhost:${dependencies.config.port}`, `http://127.0.0.1:${dependencies.config.port}`, `http://[::1]:${dependencies.config.port}`]);
   app.addHook("preHandler", async (request: FastifyRequest, reply: FastifyReply) => {
     if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
     const hasSession = [SESSION_COOKIE_NAME, LEGACY_SESSION_COOKIE_NAME].some((name) => typeof request.cookies[name] === "string" && request.cookies[name] !== "");
     if (!hasSession) return;
     const origin = Array.isArray(request.headers.origin) ? request.headers.origin[0] : request.headers.origin;
     if (typeof origin === "string" && origin === configuredOrigin) return;
+    if (dependencies.config.developmentAutoLogin && typeof origin === "string" && developmentOrigins.has(origin)) return;
     const token = Array.isArray(request.headers[CSRF_HEADER_NAME]) ? request.headers[CSRF_HEADER_NAME][0] : request.headers[CSRF_HEADER_NAME];
     const cookieToken = request.cookies[CSRF_COOKIE_NAME];
     if (typeof token === "string" && token === cookieToken && token.length >= 32) return;

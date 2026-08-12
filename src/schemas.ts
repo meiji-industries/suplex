@@ -24,6 +24,7 @@ export const ForgeEnvironmentSchema = z.object({
   FORGE_TASK_QUEUE: z.string().min(1).optional(),
   FORGE_DELIVERY_REPAIR_LIMIT: z.string().regex(/^\d+$/).optional(),
   FORGE_CODEX_CAPACITY: z.string().regex(/^\d+$/).optional(),
+  FORGE_DEVELOPMENT_AUTO_LOGIN: z.literal("1").optional(),
 }).passthrough();
 
 export const ForgeConfigSchema = z.object({
@@ -46,12 +47,16 @@ export const ForgeConfigSchema = z.object({
   deliveryRepairCycleLimit: z.number().int().min(0).max(5),
   externalTurnCapacity: z.number().int().min(1).max(64),
   installationId: z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/),
+  developmentAutoLogin: z.boolean(),
 }).superRefine((config, context) => {
   if (config.temporalTarget === "cloud" && !config.temporalApiKey) {
     context.addIssue({ code: "custom", path: ["temporalApiKey"], message: "Temporal Cloud requires an API key" });
   }
   if (config.temporalTarget === "local" && config.temporalApiKey) {
     context.addIssue({ code: "custom", path: ["temporalApiKey"], message: "Local Temporal must not use a Cloud API key" });
+  }
+  if (config.developmentAutoLogin && !["127.0.0.1", "::1"].includes(config.bindAddress)) {
+    context.addIssue({ code: "custom", path: ["developmentAutoLogin"], message: "Development auto-login requires a loopback bind address" });
   }
 });
 

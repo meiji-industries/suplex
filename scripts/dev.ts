@@ -134,6 +134,8 @@ async function superviseDevStack(ports: DevPorts): Promise<number> {
       FORGE_TEMPORAL_NAMESPACE: "forge-dev",
       FORGE_DEVELOPMENT_WATCH: "1",
       FORGE_FRONTEND_DEV_SERVER: "1",
+      FORGE_DEVELOPMENT_AUTO_LOGIN: "1",
+      FORGE_REPOSITORY_ROOT: process.cwd(),
     }),
   ];
   let shuttingDown = false;

@@ -15,10 +15,16 @@ declare module "fastify" {
   }
 }
 
-export async function sessionUser(auth: AuthService | undefined, request: Pick<FastifyRequest, "cookies">, reply?: FastifyReply, config?: ForgeConfig): Promise<AuthUser | undefined> {
+export async function sessionUser(auth: AuthService | undefined, request: Pick<FastifyRequest, "cookies" | "headers">, reply?: FastifyReply, config?: ForgeConfig): Promise<AuthUser | undefined> {
   if (!auth) return undefined;
   const current = await auth.getUserBySession(request.cookies[SESSION_COOKIE_NAME] ?? "");
   if (current) return current;
+  const developmentHosts = config ? new Set([`localhost:${config.port}`, `127.0.0.1:${config.port}`, `[::1]:${config.port}`]) : undefined;
+  if (config?.developmentAutoLogin && reply && developmentHosts?.has(request.headers.host?.toLowerCase() ?? "")) {
+    const result = auth.developmentSignIn();
+    setSessionCookie(config, reply, result.sessionToken, false);
+    return result.user;
+  }
   const legacyToken = request.cookies[LEGACY_SESSION_COOKIE_NAME] ?? "";
   const legacy = await auth.getUserBySession(legacyToken);
   if (legacy && reply && config) {
@@ -35,18 +41,18 @@ export function authenticatedUser(request: FastifyRequest): AuthUser {
   return request.forgeUser;
 }
 
-export function setSessionCookie(config: ForgeConfig, reply: FastifyReply, sessionToken: string): void {
+export function setSessionCookie(config: ForgeConfig, reply: FastifyReply, sessionToken: string, secure = config.reachableAddress.startsWith("https:")): void {
   reply.setCookie(SESSION_COOKIE_NAME, sessionToken, {
     httpOnly: true,
     sameSite: "lax",
-    secure: config.reachableAddress.startsWith("https:"),
+    secure,
     path: "/",
     maxAge: 7 * 24 * 60 * 60,
   });
   reply.setCookie(CSRF_COOKIE_NAME, newCsrfToken(), {
     httpOnly: false,
     sameSite: "strict",
-    secure: config.reachableAddress.startsWith("https:"),
+    secure,
     path: "/",
     maxAge: 7 * 24 * 60 * 60,
   });

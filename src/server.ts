@@ -11,6 +11,7 @@ import { CiService, createGithubCiProvider } from "./ci.js";
 import { AuthService } from "./auth.js";
 import { loadConfig, type ForgeConfig } from "./config.js";
 import { ForgeDatabase } from "./database.js";
+import { seedDevelopmentData } from "./development.js";
 import { createHostHealthDependencies } from "./host-health.js";
 import { createFastifyLogger, StructuredLogger } from "./logging.js";
 import { ProjectService } from "./projects.js";
@@ -28,6 +29,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig()): Pro
   const database = new ForgeDatabase(config.databasePath);
   const auth = new AuthService(database, config);
   const projects = new ProjectService(database, auth, config);
+  await seedDevelopmentData(auth, projects, config);
   const tasks = new TaskService(database, auth, projects, config);
   const attention = new AttentionService(database, auth);
   const githubRelease = createGithubReleasePort();

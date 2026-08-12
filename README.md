@@ -7,11 +7,13 @@ The health surface uses a source-owned shadcn/Rhea-style component layer with Ba
 ## Develop locally
 
 ```sh
-mise install
+mise run worktree
 mise run dev
 ```
 
-This runs Forge, the frontend watcher, and the pinned Temporal CLI development server together. Temporal listens only on `127.0.0.1:7233`, exposes its UI at `http://localhost:8233`, and persists development state in `.forge/dev/temporal.db`. It needs no Cloud credentials and must not be used in production.
+The worktree task installs the pinned tools and dependencies and is also used by Conductor setup. The dev server signs loopback requests in as a development administrator and, when the local database is empty, seeds a Development company, default Codex profile, and draft project for the current checkout. Auto-login is never enabled for the Tailscale address.
+
+Forge, the frontend watcher, and the pinned Temporal CLI development server run together. Temporal listens only on `127.0.0.1:7233`, exposes its UI at `http://localhost:8233`, and persists development state in `.forge/dev/temporal.db`. It needs no Cloud credentials and must not be used in production.
 
 ## Run in production
 

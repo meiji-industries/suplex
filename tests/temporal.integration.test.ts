@@ -17,6 +17,7 @@ import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 import { createActivities } from "../src/temporal/activities.js";
 import { replayIssueHistory, type ReplayHistory } from "../src/temporal/replay.js";
 import { AgentFailure } from "../src/codex-lead.js";
+import { ProjectionRebuildService } from "../src/projection-rebuild.js";
 import { approveIssuePlan, cancelIssue, connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, rejectIssuePlan, repairIssueDelivery, reviewIssueDelivery, startIssueDevelopment, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
 import { activityPayloadInterceptors } from "../src/temporal/payload-boundary-interceptors.js";
 import { buildProductionWorkflowBundle, temporalDataConverter } from "../src/temporal/workflow-bundle.js";
@@ -110,8 +111,8 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     const baseActivities = createActivities(database, config, { agent: integrationAgent, developer: integrationDeveloper });
     const integrationActivities = {
       ...baseActivities,
-      async projectIssueState(state: Parameters<typeof baseActivities.projectIssueState>[0]) {
-        return state.issueId.startsWith("ci-") ? state : baseActivities.projectIssueState(state);
+      async projectIssueState(event: Parameters<typeof baseActivities.projectIssueState>[0]) {
+        return event.state.issueId.startsWith("ci-") ? event.state : baseActivities.projectIssueState(event);
       },
       async reconcileCi(input: Parameters<typeof baseActivities.reconcileCi>[0]) {
         if (!input.taskId.startsWith("ci-")) return baseActivities.reconcileCi(input);
@@ -176,6 +177,8 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-permanent-failure', 'issue-company', 'issue-project', 'Permanent failure issue', 'issue-brief', '[]', '{}', 0, ?, 'issue-revision', 'issue-permanent-failure-key', ?, ?)").run(`${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-permanent-failure`, new Date().toISOString(), new Date().toISOString());
     });
     const startedIssue = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-restart", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false });
+    const duplicateIssue = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-restart", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false });
+    expect(duplicateIssue).toMatchObject({ workflowId: startedIssue.workflowId, runId: startedIssue.runId, existing: true });
     let issueState = await queryIssueWorkflow(config, startedIssue.workflowId);
     for (let attempt = 0; attempt < 20 && issueState.phase !== "backlog"; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 100));
@@ -195,7 +198,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     releasePlanning();
     holdPlanning = false;
     const plannedIssue = await plannedIssuePromise;
-    expect(plannedIssue).toMatchObject({ phase: "approval", revision: 2, owner: "human", planMaterial: true, materialCategories: ["security_permissions"] });
+    expect(plannedIssue).toMatchObject({ phase: "approval", revision: 2, owner: "human", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"] });
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-restart'").get())).toEqual({ revision: 2, phase: "approval" });
     const revisionRequested = await rejectIssuePlan(config, startedIssue.workflowId, { expectedRevision: 2, actorUserId: "issue-admin", note: "Please address the security boundary" });
     expect(revisionRequested).toMatchObject({ phase: "planning", revision: 3, allowedCommands: ["start_planning"], planRevision: null, planMaterial: null });
@@ -276,6 +279,8 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     expect(continuationState.decisionId).toMatch(/^decision_/);
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-continuation'").get())).toEqual({ revision: 3, phase: "ready_for_development" });
     expect(database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = 'issue-continuation' ORDER BY revision").all())).toEqual([{ revision: 0 }, { revision: 1 }, { revision: 2 }, { revision: 3 }]);
+    expect(await new ProjectionRebuildService(database, config).rebuild({ companyId: "issue-company", taskId: "issue-continuation" })).toEqual({ rebuilt: 1, findings: [] });
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-continuation'").get())).toEqual({ revision: 3, phase: "ready_for_development" });
     const scenarioClient = await connectTemporal(config);
     try {
       const executions = await runReplayScenarioCorpus({ client: scenarioClient.client.workflow, connection: workerConnection, namespace: config.temporalNamespace, taskQueue: `${config.taskQueue}-replay-scenarios` });

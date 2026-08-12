@@ -36,7 +36,7 @@ const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app
 
   await app.register(authMe, { prefix: "/api/auth" });
   await app.register(companies, { auth: options.auth });
-  await app.register(administration, { auth: options.auth, ...(options.projects ? { projects: options.projects } : {}), ...(options.attention ? { attention: options.attention } : {}), ...(options.database ? { database: options.database } : {}) });
+  await app.register(administration, { auth: options.auth, ...(options.config ? { config: options.config } : {}), ...(options.projects ? { projects: options.projects } : {}), ...(options.attention ? { attention: options.attention } : {}), ...(options.database ? { database: options.database } : {}) });
   if (options.projects) await app.register(projects, { projects: options.projects });
   if (options.tasks) await app.register(tasks, { tasks: options.tasks });
   if (options.attention) await app.register(attention, { attention: options.attention });

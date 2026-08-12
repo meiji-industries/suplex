@@ -1,16 +1,25 @@
 import { ActivityFailure, allHandlersFinished, ApplicationFailure, condition, continueAsNew, defineQuery, defineUpdate, patched, proxyActivities, setHandler, sleep, workflowInfo } from "@temporalio/workflow";
 
 import { ProbeWorkflowInputSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { createInitialIssueWorkflowState, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueActivities, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueActivities, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertContinuationStateWithinLimit, assertPayloadWithinLimit, WORKFLOW_HISTORY_EVENT_LIMIT } from "./policy.js";
 
 const { recordProbeStarted } = proxyActivities<ProbeActivities>({
   startToCloseTimeout: "1 minute",
 });
 
-const { projectIssueState } = proxyActivities<IssueActivities>({
+const { projectIssueState: projectIssueStateActivity } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
 });
+
+async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> {
+  return projectIssueStateActivity(IssueProjectionEventSchema.parse({
+    schemaVersion: 1,
+    runId: workflowInfo().runId,
+    eventId: state.lastEventId,
+    state,
+  }));
+}
 const { runLeadPlanning } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
 });
@@ -143,7 +152,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const continuation = validatedInput.continuationState;
   const continueAfter = validatedInput.continueAsNewAfter ?? 0;
   let state = IssueWorkflowStateSchema.parse({
-    ...createInitialIssueWorkflowState(validatedInput),
+    ...buildInitialIssueWorkflowState(validatedInput),
     activeOperation: null,
     processedCommandIds: [],
     ...(continuation ?? {}),
@@ -738,6 +747,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     },
   });
   assertPayloadWithinLimit("Issue Workflow result", state);
+  // Continue-As-New carries the last business revision into a fresh run. The
+  // previous run already projected that revision, so emitting it again with a
+  // different continuationCount would correctly look like conflicting
+  // authoritative history to the projection boundary.
   if (!continuation) await projectIssueState(state);
   while (true) {
     if (state.phase === "ci_waiting") {

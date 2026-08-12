@@ -60,9 +60,9 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
   const ciAttempts = new Map<string, number>();
   const scenarioFor = (workflowId: string): ReplayScenario => replayScenarios.find((scenario) => workflowId.endsWith(scenario))!;
   const activities: IssueActivities = {
-    async projectIssueState(state) {
-      projections.get(state.workflowId)?.push(structuredClone(state));
-      return state;
+    async projectIssueState(event) {
+      projections.get(event.state.workflowId)?.push(structuredClone(event.state));
+      return event.state;
     },
     async runLeadPlanning(activityInput) {
       const scenario = scenarioFor(activityInput.workflowId);

@@ -4,12 +4,12 @@ import type { AuthUser } from "./auth.js";
 import { AuthFailure, AuthService } from "./auth.js";
 import type { CheckConclusion, CheckStatus, CiOutcome, CiOwner } from "./ci.js";
 import type { ForgeConfig } from "./config.js";
-import { ArtifactFailure, ArtifactStore, type StoredArtifact } from "./artifacts.js";
+import { ArtifactFailure, ArtifactManifestEntrySchema, ArtifactStore, type ArtifactManifestEntry, type PlannedArtifact, type StoredArtifact } from "./artifacts.js";
 import { LeadOutputSchema, type LeadOutput } from "./codex-lead.js";
-import { ForgeDatabase, projectionStateHash } from "./database.js";
+import { ForgeDatabase } from "./database.js";
+import { canonicalJson } from "./canonical-json.js";
 import { ProjectFailure, ProjectService, type ProjectRole } from "./projects.js";
-import { acceptIssueDelivery, approveIssuePlan, cancelIssue, cancelIssueDevelopment, finalReviewIssue, IssueWorkflowStartFailure, publishIssueDraft, recordIssueDeliveryDecision, reconcileIssueCI, reconcileIssueMerge, rejectIssuePlan, repairIssueCI, repairIssueDelivery, requestIssueDeliveryChanges, requestIssueSupplementalReview, resolveIssueMergeConflict, retryIssueDevelopment, reviewIssueDelivery, startIssueDevelopment, startIssuePlanning, startIssueWorkflow } from "./temporal/service.js";
-import { createInitialIssueWorkflowState } from "./temporal/issue-contracts.js";
+import { acceptIssueDelivery, acceptIssuePlanning, approveIssuePlan, cancelIssue, cancelIssueDevelopment, finalReviewIssue, IssueWorkflowStartFailure, publishIssueDraft, recordIssueDeliveryDecision, reconcileIssueCI, reconcileIssueMerge, rejectIssuePlan, repairIssueCI, repairIssueDelivery, requestIssueDeliveryChanges, requestIssueSupplementalReview, resolveIssueMergeConflict, retryIssueDevelopment, reviewIssueDelivery, startIssueDevelopment, startIssueWorkflow } from "./temporal/service.js";
 import type { IssueWorkflowInput, IssueWorkflowState, PlanCommandInput, StartPlanningInput } from "./temporal/issue-contracts.js";
 
 export type TaskPhase = "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "merge_conflict_reviewing" | "merge_conflict_required" | "merge_conflict_resolving" | "ci_waiting" | "ci_repair_planning" | "ci_repairing" | "ci_repair_required" | "final_review" | "accepted" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
@@ -24,13 +24,15 @@ export class TaskFailure extends Error {
   readonly statusCode: number;
   readonly publicMessage: string;
   readonly findings: TaskFinding[];
+  readonly current: ForgeTask | undefined;
 
-  constructor(publicMessage: string, findings: TaskFinding[] = [], statusCode = 400) {
+  constructor(publicMessage: string, findings: TaskFinding[] = [], statusCode = 400, current?: ForgeTask) {
     super(publicMessage);
     this.name = "TaskFailure";
     this.publicMessage = publicMessage;
     this.findings = findings;
     this.statusCode = statusCode;
+    this.current = current;
   }
 }
 
@@ -99,7 +101,7 @@ export interface ForgeTask {
   updatedAt: string;
   timeline: TaskTimelineEntry[];
   agentInvocations: TaskAgentInvocation[];
-  projection?: { authoritativeRevision: number; projectedRevision: number; projectedAt: string };
+  projection: { authoritativeRevision: number; projectedRevision: number; projectedAt: string; status: "current" | "lagging" };
   planRevision?: number | null;
   planMaterial?: boolean | null;
   materialCategories?: string[];
@@ -233,6 +235,16 @@ interface TaskServiceOptions {
   artifactStore?: ArtifactStore;
   workflow?: IssueWorkflowPort;
   now?: () => Date;
+  fault?: (point: TaskCreationFaultPoint, ids: { intentId: string; taskId: string; artifactIndex?: number }) => void | Promise<void>;
+}
+
+export type TaskCreationFaultPoint = "after_intent_reserved" | "after_manifest_persisted" | "after_artifact_staged" | "after_artifact_finalized" | "after_task_committed" | "before_workflow_start" | "after_workflow_accepted" | "after_projection_applied" | "before_response";
+
+class CreationLeaseLost extends Error {
+  constructor() {
+    super("Task creation lease was lost");
+    this.name = "CreationLeaseLost";
+  }
 }
 
 interface TaskRow {
@@ -250,8 +262,8 @@ interface TaskRow {
   updated_at: string;
   description: string;
   projection_revision: number;
-  authoritative_revision?: number;
-  projected_at?: string;
+  authoritative_revision: number;
+  projected_at: string;
   phase: TaskPhase;
   owner: "human" | "lead";
   allowed_commands_json: string;
@@ -290,6 +302,9 @@ interface CreationIntentRow {
   request_hash: string;
   project_revision_id: string;
   artifact_ids_json: string;
+  artifact_manifest_json: string;
+  lease_token: string | null;
+  lease_expires_at: string | null;
   state: "staging" | "workflow_starting" | "started" | "failed_before_start";
   attempt: number;
   error_code: string | null;
@@ -358,15 +373,7 @@ function normalizeText(value: string): string {
   return value.trim().replace(/\r\n?/g, "\n");
 }
 
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function creationRequestHash(input: {
+export function creationRequestHash(input: {
   companyId: string;
   projectId: string;
   title: string;
@@ -391,6 +398,7 @@ function creationRequestHash(input: {
 
 export class TaskService {
   private readonly now: () => Date;
+  private readonly fault?: TaskServiceOptions["fault"];
   private readonly artifacts: ArtifactStore;
   private readonly workflow: IssueWorkflowPort;
   private readonly eventListeners = new Set<{ afterCursor: number; send: (event: TaskEvent, cursor: number) => void }>();
@@ -405,10 +413,11 @@ export class TaskService {
     options: TaskServiceOptions = {},
   ) {
     this.now = options.now ?? (() => new Date());
+    this.fault = options.fault;
     this.artifacts = options.artifactStore ?? new ArtifactStore(config.artifactRoot);
     this.workflow = options.workflow ?? {
       start: (input) => startIssueWorkflow(config, input),
-      startPlanning: (workflowId, input) => startIssuePlanning(config, workflowId, input),
+      startPlanning: (workflowId, input) => acceptIssuePlanning(config, workflowId, input),
       requestSupplementalReview: (workflowId, input) => requestIssueSupplementalReview(config, workflowId, input),
       approvePlan: (workflowId, input) => approveIssuePlan(config, workflowId, input),
       rejectPlan: (workflowId, input) => rejectIssuePlan(config, workflowId, input),
@@ -428,6 +437,10 @@ export class TaskService {
       cancelIssue: (workflowId, input) => cancelIssue(config, workflowId, input),
       reconcileMerge: (workflowId, input) => reconcileIssueMerge(config, workflowId, input),
     };
+  }
+
+  private async maybeFault(point: TaskCreationFaultPoint, ids: { intentId: string; taskId: string; artifactIndex?: number }): Promise<void> {
+    await this.fault?.(point, ids);
   }
 
   taskEventCursor(): number {
@@ -537,7 +550,8 @@ export class TaskService {
       projectRevisionId: project.activeRevisionId,
     });
     const idempotencyKey = input.idempotencyKey.trim();
-    const reserved = this.reserveCreationIntent({ companyId, projectId: input.projectId, idempotencyKey, requestHash, projectRevisionId: project.activeRevisionId });
+    let reserved = this.reserveCreationIntent({ companyId, projectId: input.projectId, idempotencyKey, requestHash, projectRevisionId: project.activeRevisionId });
+    await this.maybeFault("after_intent_reserved", { intentId: reserved.intent.id, taskId: reserved.intent.task_id });
     if (!reserved.created) {
       if (reserved.intent.request_hash === "legacy-unknown") {
         throw new TaskFailure("This idempotency key belongs to a legacy task whose request identity is unavailable", [finding("legacy-idempotency-unknown", "idempotencyKey", "Use a new idempotency key to create a new task")], 409);
@@ -545,50 +559,70 @@ export class TaskService {
       if (reserved.intent.request_hash !== requestHash) {
         throw new TaskFailure("This idempotency key was already used for a different task request", [finding("idempotency_conflict", "idempotencyKey", "Retry with the original request or use a new idempotency key")], 409);
       }
-      return this.resumeCreationIntent(actorUserId, reserved.intent, input);
+      if (reserved.intent.state !== "failed_before_start") return this.resumeCreationIntent(actorUserId, reserved.intent, input);
+      const claimed = this.claimCreationIntent(reserved.intent.id, "failed_before_start");
+      if (!claimed) return this.resumeCreationIntent(actorUserId, this.readCreationIntent({ id: reserved.intent.id }) ?? reserved.intent, input);
+      await this.cleanupCreationArtifacts(claimed);
+      reserved = { created: true, intent: claimed };
     }
-    if (reserved.intent.state === "failed_before_start") await this.cleanupCreationArtifacts(reserved.intent);
 
     const imageArtifacts: StoredArtifact[] = [];
     let briefArtifact: StoredArtifact | undefined;
+    const plannedArtifacts: PlannedArtifact[] = [];
     try {
       const taskId = reserved.intent.task_id;
       const workflowId = reserved.intent.workflow_id;
-      this.updateCreationIntent(reserved.intent.id, { state: "staging", errorCode: null, attempt: reserved.intent.attempt + 1 });
-      briefArtifact = await this.artifacts.put(companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from(input.description, "utf8") });
-      this.updateCreationIntent(reserved.intent.id, { artifactIds: [briefArtifact.id] });
-      for (const { image, bytes } of decodedImages) {
-        const artifact = await this.artifacts.put(companyId, "task-image", { filename: image.filename, mimeType: image.mimeType, bytes });
-        imageArtifacts.push(artifact);
-        this.updateCreationIntent(reserved.intent.id, { artifactIds: [briefArtifact, ...imageArtifacts].map((entry) => entry.id) });
+      this.updateCreationIntent(reserved.intent.id, { state: "staging", errorCode: null, attempt: reserved.intent.attempt + 1 }, reserved.intent.lease_token);
+      const briefBytes = Buffer.from(normalizeText(input.description), "utf8");
+      plannedArtifacts.push(this.artifacts.plan(companyId, reserved.intent.id, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: briefBytes }));
+      for (const { image, bytes } of decodedImages) plannedArtifacts.push(this.artifacts.plan(companyId, reserved.intent.id, "task-image", { filename: image.filename, mimeType: image.mimeType, bytes }));
+      const manifest = plannedArtifacts.map(({ stagingPath: _stagingPath, ...entry }) => ArtifactManifestEntrySchema.parse(entry));
+      this.updateCreationIntent(reserved.intent.id, { artifactManifest: manifest }, reserved.intent.lease_token);
+      await this.maybeFault("after_manifest_persisted", { intentId: reserved.intent.id, taskId });
+      for (const [artifactIndex, planned] of plannedArtifacts.entries()) {
+        const bytes = artifactIndex === 0 ? briefBytes : decodedImages[artifactIndex - 1]!.bytes;
+        const artifact = await this.artifacts.write(planned, bytes);
+        await this.maybeFault("after_artifact_finalized", { intentId: reserved.intent.id, taskId, artifactIndex });
+        if (artifactIndex === 0) briefArtifact = artifact;
+        else imageArtifacts.push(artifact);
+        this.updateCreationIntent(reserved.intent.id, { artifactIds: [briefArtifact, ...imageArtifacts].filter((entry): entry is StoredArtifact => Boolean(entry)).map((entry) => entry.id) }, reserved.intent.lease_token);
       }
+      if (!briefArtifact) throw new ArtifactFailure("artifact-corrupt", "Task brief could not be stored");
+      await this.maybeFault("after_artifact_staged", { intentId: reserved.intent.id, taskId });
       const now = this.now().toISOString();
-      const initialState = createInitialIssueWorkflowState({ issueId: taskId, companyId, projectId: input.projectId, workflowId, projectRevisionId: project.activeRevisionId, requestHash });
-      const eventHash = projectionStateHash(initialState);
       this.database.authTransaction((db) => {
         db.prepare(`INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(briefArtifact!.id, companyId, briefArtifact!.kind, briefArtifact!.filename, briefArtifact!.mimeType, briefArtifact!.byteSize, briefArtifact!.sha256, briefArtifact!.storagePath, briefArtifact!.createdAt);
         for (const artifact of imageArtifacts) db.prepare(`INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(artifact.id, companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
         db.prepare(`INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(taskId, companyId, input.projectId, input.title.trim(), briefArtifact!.id, JSON.stringify(imageArtifacts.map((artifact) => artifact.id)), JSON.stringify(roleProfiles), input.supplementalReview === true ? 1 : 0, workflowId, project.activeRevisionId, idempotencyKey, requestHash, now, now);
-        db.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, projected_at) VALUES (?, ?, ?, ?, 0, 'backlog', 'human', ?, ?, ?, ?, ?, 0, ?)`).run(taskId, companyId, input.projectId, workflowId, JSON.stringify(["start_planning"]), "Start planning", now, `${workflowId}:0`, eventHash, now);
-        db.prepare(`INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, 0, 'task_created', ?, ?, ?)`).run(`${workflowId}:0`, taskId, companyId, workflowId, JSON.stringify({ revision: 0, stateHash: eventHash }), now, eventHash);
-        db.prepare(`INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, ?, ?, 0, ?, ?)`).run(taskId, companyId, workflowId, JSON.stringify(initialState), now);
-        db.prepare("UPDATE forge_task_creation_intents SET task_id = ?, state = 'workflow_starting', updated_at = ?, error_code = NULL WHERE id = ?").run(taskId, now, reserved.intent.id);
+        const intentUpdate = db.prepare("UPDATE forge_task_creation_intents SET task_id = ?, state = 'workflow_starting', lease_expires_at = ?, updated_at = ?, error_code = NULL WHERE id = ? AND lease_token = ?").run(taskId, new Date(this.now().getTime() + 30_000).toISOString(), now, reserved.intent.id, reserved.intent.lease_token);
+        if (intentUpdate.changes !== 1) throw new CreationLeaseLost();
         this.auth.recordAuditEventInTransaction(db, actorUserId, "task_created", undefined, companyId, { taskId, projectId: input.projectId, workflowId });
       });
-      await this.startCreationWorkflow(reserved.intent.id, taskId, companyId, input.projectId, project.activeRevisionId, briefArtifact, imageArtifacts, roleProfiles, input.supplementalReview === true, requestHash, workflowId);
+      await this.maybeFault("after_task_committed", { intentId: reserved.intent.id, taskId });
+      await this.startCreationWorkflow(reserved.intent.id, reserved.intent.lease_token, taskId, companyId, input.projectId, project.activeRevisionId, briefArtifact, imageArtifacts, roleProfiles, input.supplementalReview === true, requestHash, workflowId);
       const task = this.getTask(actorUserId, taskId);
+      await this.maybeFault("before_response", { intentId: reserved.intent.id, taskId });
       return { task, created: true };
     } catch (error) {
+      if (error instanceof CreationLeaseLost) {
+        throw new TaskFailure("Task creation is already in progress", [finding("creation-lease-lost", "idempotencyKey", "Retry with the same idempotency key to observe the winning attempt")], 409);
+      }
+      const current = this.readCreationIntent({ id: reserved.intent.id }) ?? reserved.intent;
+      if (current.lease_token !== reserved.intent.lease_token && current.state !== "started") {
+        throw new TaskFailure("Task creation is already in progress", [finding("creation-lease-lost", "idempotencyKey", "Retry with the same idempotency key to observe the winning attempt")], 409);
+      }
       const ambiguousStart = error instanceof TaskFailure && error.findings.some((item) => item.code === "workflow-start-ambiguous");
-      if (!ambiguousStart && (briefArtifact || imageArtifacts.length)) {
-        const current = this.readCreationIntent({ id: reserved.intent.id }) ?? reserved.intent;
+      const durableCreationState = current.state === "workflow_starting" || current.state === "started";
+      if (!ambiguousStart && !durableCreationState && plannedArtifacts.length > 0) {
         await this.cleanupCreationArtifacts(current, [briefArtifact, ...imageArtifacts]);
-        this.updateCreationIntent(reserved.intent.id, { state: "failed_before_start", errorCode: error instanceof ArtifactFailure ? error.code : "creation-failed" });
+        try { this.updateCreationIntent(reserved.intent.id, { state: "failed_before_start", errorCode: error instanceof ArtifactFailure ? error.code : "creation-failed" }, reserved.intent.lease_token); } catch (leaseError) { if (!(leaseError instanceof CreationLeaseLost)) throw leaseError; }
+      }
+      if (durableCreationState && !(error instanceof TaskFailure)) {
+        throw new TaskFailure("Task creation is awaiting reconciliation", [finding("creation-reconciliation-required", "workflow", "Forge retained the durable task; retry with the same idempotency key")], 503);
       }
       if (error instanceof TaskFailure) throw error;
       if (error instanceof ArtifactFailure) {
-        if (error instanceof ArtifactFailure) throw new TaskFailure("Task brief is invalid", [finding(error.code, "images", error.message)], 422);
-        throw error;
+        throw new TaskFailure("Task brief is invalid", [finding(error.code, "images", error.message)], 422);
       }
       if (error instanceof ProjectFailure || error instanceof AuthFailure) throw error;
       throw new TaskFailure("Task creation failed", [], 400);
@@ -597,38 +631,66 @@ export class TaskService {
 
   private reserveCreationIntent(input: { companyId: string; projectId: string; idempotencyKey: string; requestHash: string; projectRevisionId: string }): { created: boolean; intent: CreationIntentRow } {
     return this.database.authTransaction((db) => {
-      const existing = db.prepare("SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents WHERE company_id = ? AND idempotency_key = ?").get(input.companyId, input.idempotencyKey) as CreationIntentRow | undefined;
-      if (existing) {
-        if (existing.state === "failed_before_start") return { created: true, intent: existing };
-        return { created: false, intent: existing };
-      }
+      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents";
       const now = this.now().toISOString();
+      const leaseToken = id("lease");
+      const leaseExpiresAt = new Date(this.now().getTime() + 30_000).toISOString();
       const taskId = id("task");
       const workflowId = `${this.config.installationId ? `workflow-${this.config.installationId}` : "workflow"}-issue-${taskId}`;
       const intentId = id("creation");
-      db.prepare(`INSERT INTO forge_task_creation_intents (id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, state, attempt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', 'staging', 0, ?, ?)`).run(intentId, input.companyId, input.projectId, taskId, workflowId, input.idempotencyKey, input.requestHash, input.projectRevisionId, now, now);
-      return { created: true, intent: db.prepare("SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents WHERE id = ?").get(intentId) as CreationIntentRow };
+      const inserted = db.prepare(`INSERT INTO forge_task_creation_intents (id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?, 'staging', 0, ?, ?) ON CONFLICT(company_id, idempotency_key) DO NOTHING`).run(intentId, input.companyId, input.projectId, taskId, workflowId, input.idempotencyKey, input.requestHash, input.projectRevisionId, leaseToken, leaseExpiresAt, now, now);
+      const intent = db.prepare(`${select} WHERE company_id = ? AND idempotency_key = ?`).get(input.companyId, input.idempotencyKey) as CreationIntentRow;
+      return { created: inserted.changes === 1, intent };
+    });
+  }
+
+  private claimCreationIntent(intentId: string, priorState: "failed_before_start" | "staging", expectedLeaseToken?: string | null): CreationIntentRow | undefined {
+    return this.database.authTransaction((db) => {
+      const now = this.now();
+      const token = id("lease");
+      const expiry = new Date(now.getTime() + 30_000).toISOString();
+      const result = priorState === "failed_before_start"
+        ? db.prepare("UPDATE forge_task_creation_intents SET state = 'staging', lease_token = ?, lease_expires_at = ?, error_code = NULL, updated_at = ? WHERE id = ? AND state = 'failed_before_start'").run(token, expiry, now.toISOString(), intentId)
+        : db.prepare("UPDATE forge_task_creation_intents SET lease_token = ?, lease_expires_at = ?, updated_at = ? WHERE id = ? AND state = 'staging' AND lease_token = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?)").run(token, expiry, now.toISOString(), intentId, expectedLeaseToken ?? "", now.toISOString());
+      if (result.changes !== 1) return undefined;
+      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents WHERE id = ?";
+      return db.prepare(select).get(intentId) as CreationIntentRow | undefined;
     });
   }
 
   private readCreationIntent(idOrCompany: { id: string } | { companyId: string; idempotencyKey: string }): CreationIntentRow | undefined {
     return this.database.authQuery((db) => {
-      if ("id" in idOrCompany) return db.prepare("SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents WHERE id = ?").get(idOrCompany.id) as CreationIntentRow | undefined;
-      return db.prepare("SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents WHERE company_id = ? AND idempotency_key = ?").get(idOrCompany.companyId, idOrCompany.idempotencyKey) as CreationIntentRow | undefined;
+      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents";
+      if ("id" in idOrCompany) return db.prepare(`${select} WHERE id = ?`).get(idOrCompany.id) as CreationIntentRow | undefined;
+      return db.prepare(`${select} WHERE company_id = ? AND idempotency_key = ?`).get(idOrCompany.companyId, idOrCompany.idempotencyKey) as CreationIntentRow | undefined;
     });
   }
 
-  private updateCreationIntent(intentId: string, update: { state?: CreationIntentRow["state"]; artifactIds?: string[]; errorCode?: string | null; attempt?: number }): void {
+  private updateCreationIntent(intentId: string, update: { state?: CreationIntentRow["state"]; artifactIds?: string[]; artifactManifest?: ArtifactManifestEntry[]; errorCode?: string | null; attempt?: number }, expectedLeaseToken?: string | null): void {
     this.database.authTransaction((db) => {
-      const current = db.prepare("SELECT artifact_ids_json, attempt FROM forge_task_creation_intents WHERE id = ?").get(intentId) as { artifact_ids_json: string; attempt: number } | undefined;
+      const current = db.prepare("SELECT artifact_ids_json, artifact_manifest_json, lease_token, attempt, error_code FROM forge_task_creation_intents WHERE id = ?").get(intentId) as { artifact_ids_json: string; artifact_manifest_json: string; lease_token: string | null; attempt: number; error_code: string | null } | undefined;
       if (!current) return;
       const artifactIds = update.artifactIds ?? parseImageIds(current.artifact_ids_json);
-      db.prepare("UPDATE forge_task_creation_intents SET state = COALESCE(?, state), artifact_ids_json = ?, error_code = ?, attempt = COALESCE(?, attempt), updated_at = ? WHERE id = ?").run(update.state ?? null, JSON.stringify(artifactIds), update.errorCode === undefined ? null : update.errorCode, update.attempt ?? null, this.now().toISOString(), intentId);
+      const manifest = update.artifactManifest ?? json<ArtifactManifestEntry[]>(current.artifact_manifest_json, []);
+      const now = this.now();
+      const state = update.state;
+      const clearLease = state === "started" || state === "failed_before_start";
+      const leaseToken = clearLease ? null : current.lease_token;
+      const leaseExpiresAt = clearLease || !leaseToken ? null : new Date(now.getTime() + 30_000).toISOString();
+      const errorCode = update.errorCode === undefined ? current.error_code : update.errorCode;
+      const result = expectedLeaseToken === undefined
+        ? db.prepare("UPDATE forge_task_creation_intents SET state = COALESCE(?, state), artifact_ids_json = ?, artifact_manifest_json = ?, lease_token = ?, lease_expires_at = ?, error_code = ?, attempt = COALESCE(?, attempt), updated_at = ? WHERE id = ?").run(state ?? null, JSON.stringify(artifactIds), JSON.stringify(manifest), leaseToken, leaseExpiresAt, errorCode, update.attempt ?? null, now.toISOString(), intentId)
+        : db.prepare("UPDATE forge_task_creation_intents SET state = COALESCE(?, state), artifact_ids_json = ?, artifact_manifest_json = ?, lease_token = ?, lease_expires_at = ?, error_code = ?, attempt = COALESCE(?, attempt), updated_at = ? WHERE id = ? AND lease_token = ?").run(state ?? null, JSON.stringify(artifactIds), JSON.stringify(manifest), leaseToken, leaseExpiresAt, errorCode, update.attempt ?? null, now.toISOString(), intentId, expectedLeaseToken);
+      if (expectedLeaseToken !== undefined && result.changes !== 1) throw new CreationLeaseLost();
     });
   }
 
   private async cleanupCreationArtifacts(intent: CreationIntentRow, artifacts: Array<StoredArtifact | undefined> = []): Promise<void> {
     const ids = [...new Set([...parseImageIds(intent.artifact_ids_json), ...artifacts.flatMap((artifact) => artifact ? [artifact.id] : [])])];
+    const manifest = json<ArtifactManifestEntry[]>(intent.artifact_manifest_json, []).flatMap((entry) => {
+      const parsed = ArtifactManifestEntrySchema.safeParse(entry);
+      return parsed.success ? [parsed.data] : [];
+    });
     const rows = this.database.authQuery((db) => {
       if (!ids.length) return [] as Array<{ id: string; company_id: string; storage_path: string }>;
       const placeholders = ids.map(() => "?").join(",");
@@ -637,7 +699,8 @@ export class TaskService {
     this.database.authTransaction((db) => {
       for (const row of rows) db.prepare("DELETE FROM forge_artifacts WHERE id = ? AND company_id = ?").run(row.id, row.company_id);
     });
-    await Promise.all([...rows, ...artifacts.filter((artifact): artifact is StoredArtifact => Boolean(artifact)).map((artifact) => ({ id: artifact.id, company_id: artifact.companyId, storage_path: artifact.storagePath }))].map((artifact) => this.artifacts.remove({ companyId: artifact.company_id, storagePath: artifact.storage_path })));
+    const exactPaths = [...manifest.map((entry) => ({ storagePath: entry.storagePath, stagingPath: `${intent.company_id}/.staging/${intent.id}/${entry.id}.tmp` })), ...rows.map((row) => ({ storagePath: row.storage_path, stagingPath: `${intent.company_id}/.staging/${intent.id}/${row.id}.tmp` })), ...artifacts.filter((artifact): artifact is StoredArtifact => Boolean(artifact)).map((artifact) => ({ storagePath: artifact.storagePath, stagingPath: `${intent.company_id}/.staging/${intent.id}/${artifact.id}.tmp` }))];
+    await Promise.all(exactPaths.map((path) => this.artifacts.removePlanned(path)));
   }
 
   private async resumeCreationIntent(actorUserId: string, intent: CreationIntentRow, input: TaskInput): Promise<{ task: ForgeTask; created: boolean }> {
@@ -654,7 +717,7 @@ export class TaskService {
           const placeholders = imageIds.map(() => "?").join(",");
           return db.prepare(`SELECT id, sha256 FROM forge_artifacts WHERE company_id = ? AND id IN (${placeholders}) ORDER BY rowid`).all(intent.company_id, ...imageIds) as Array<{ id: string; sha256: string }>;
         });
-        await this.startCreationWorkflow(intent.id, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), JSON.parse(task.role_profiles_json) as Partial<Record<ProjectRole, string>>, task.supplemental_review === 1, intent.request_hash, task.workflow_id);
+        await this.startCreationWorkflow(intent.id, intent.lease_token, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), JSON.parse(task.role_profiles_json) as Partial<Record<ProjectRole, string>>, task.supplemental_review === 1, intent.request_hash, task.workflow_id);
         const updated = this.getTask(actorUserId, task.id);
         return { task: updated, created: false };
       }
@@ -670,40 +733,57 @@ export class TaskService {
       const current = this.readCreationIntent({ id: intent.id });
       if (!current || current.state !== "staging") return this.createTask(actorUserId, intent.company_id, input);
     }
-    this.updateCreationIntent(intent.id, { state: "failed_before_start", errorCode: "staging-interrupted" });
-    await this.cleanupCreationArtifacts(intent);
+    const claimed = this.claimCreationIntent(intent.id, "staging", intent.lease_token);
+    if (!claimed) return this.resumeCreationIntent(actorUserId, this.readCreationIntent({ id: intent.id }) ?? intent, input);
+    await this.cleanupCreationArtifacts(claimed);
+    this.updateCreationIntent(intent.id, { state: "failed_before_start", errorCode: "staging-interrupted" }, claimed.lease_token);
     return this.createTask(actorUserId, intent.company_id, input);
   }
 
-  private async startCreationWorkflow(intentId: string, taskId: string, companyId: string, projectId: string, projectRevisionId: string, briefArtifact: Pick<StoredArtifact, "id" | "sha256">, imageArtifacts: Array<Pick<StoredArtifact, "id" | "sha256">>, roleProfiles: Partial<Record<ProjectRole, string>>, supplementalReview: boolean, requestHash: string, workflowId: string): Promise<void> {
+  private async startCreationWorkflow(intentId: string, leaseToken: string | null, taskId: string, companyId: string, projectId: string, projectRevisionId: string, briefArtifact: Pick<StoredArtifact, "id" | "sha256">, imageArtifacts: Array<Pick<StoredArtifact, "id" | "sha256">>, roleProfiles: Partial<Record<ProjectRole, string>>, supplementalReview: boolean, requestHash: string, workflowId: string): Promise<void> {
+    let accepted = false;
     try {
+      await this.maybeFault("before_workflow_start", { intentId, taskId });
       await this.workflow.start({ companyId, projectId, issueId: taskId, projectRevisionId, briefArtifactId: briefArtifact.id, briefSha256: briefArtifact.sha256, imageArtifactIds: imageArtifacts.map((artifact) => artifact.id), requestHash, roleProfiles, supplementalReview, repairCycleLimit: this.config.deliveryRepairCycleLimit, workflowId });
+      accepted = true;
+      await this.maybeFault("after_workflow_accepted", { intentId, taskId });
+      await this.waitForProjection(taskId, 0);
+      await this.maybeFault("after_projection_applied", { intentId, taskId });
     } catch (error) {
+      if (accepted) throw new TaskFailure("Task workflow start is awaiting reconciliation", [finding("workflow-start-ambiguous", "workflow", "Forge retained the task and will reconcile the durable workflow on retry")], 503);
       if (error instanceof IssueWorkflowStartFailure && error.provenAbsent) {
         const intent = this.readCreationIntent({ id: intentId });
         if (intent) {
           await this.deleteTask(taskId, []);
-          this.updateCreationIntent(intentId, { state: "failed_before_start", errorCode: error.code });
+          this.updateCreationIntent(intentId, { state: "failed_before_start", errorCode: error.code }, leaseToken);
         }
         throw new TaskFailure("Task workflow could not be started", [finding("workflow-unavailable", "workflow", "The durable issue workflow is unavailable")], 503);
       }
       throw new TaskFailure("Task workflow start is awaiting reconciliation", [finding("workflow-start-ambiguous", "workflow", "Forge retained the task and will reconcile the durable workflow on retry")], 503);
     }
-    this.updateCreationIntent(intentId, { state: "started", errorCode: null });
+    this.updateCreationIntent(intentId, { state: "started", errorCode: null }, leaseToken);
+  }
+
+  private async waitForProjection(taskId: string, minimumRevision: number): Promise<void> {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const projection = this.database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_projections WHERE task_id = ?").get(taskId) as { revision: number } | undefined);
+      if (projection && projection.revision >= minimumRevision) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("Workflow projection did not become available");
   }
 
   async startPlanning(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
-    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before starting planning")], 409);
+    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before starting planning")], 409, task);
     if (!task.allowedCommands.includes("start_planning")) throw new TaskFailure("Planning cannot start from the current state", [finding("illegal-command", "phase", "Start planning is not available")], 409);
-    let state: IssueWorkflowState;
     try {
-      state = await this.workflow.startPlanning(task.workflowId, { expectedRevision, actorUserId });
+      await this.workflow.startPlanning(task.workflowId, { expectedRevision, actorUserId });
+      await this.waitForProjection(taskId, expectedRevision + 1);
     } catch (error) {
       const message = error instanceof Error && /stale workflow revision/i.test(error.message) ? "Task changed before this action was accepted" : "Planning command could not be accepted";
-      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409);
+      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409, this.getTask(actorUserId, taskId));
     }
-    this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state, ...(state.planRevision !== undefined ? { planRevision: state.planRevision } : {}), ...(state.planMaterial !== undefined ? { planMaterial: state.planMaterial } : {}), ...(state.materialCategories !== undefined ? { materialCategories: state.materialCategories } : {}), ...(state.supplementalReviewUsed !== undefined ? { supplementalReviewUsed: state.supplementalReviewUsed } : {}), ...(state.supplementalReviewArtifactId !== undefined ? { supplementalReviewArtifactId: state.supplementalReviewArtifactId } : {}), ...(state.decisionId !== undefined ? { decisionId: state.decisionId } : {}) });
     const updated = this.getTask(actorUserId, taskId);
     return updated;
   }
@@ -734,16 +814,14 @@ export class TaskService {
 
   async recordDeliveryDecision(actorUserId: string, taskId: string, expectedRevision: number, note?: string): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
-    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409);
+    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
     if (!task.allowedCommands.includes("record_delivery_decision")) throw new TaskFailure("A delivery decision is not available", [finding("illegal-command", "phase", "A member decision is not available")], 409);
-    let state: IssueWorkflowState;
     try {
-      state = await (this.workflow.recordDeliveryDecision ? this.workflow.recordDeliveryDecision(task.workflowId, { expectedRevision, actorUserId, ...(note !== undefined ? { note } : {}) }) : Promise.reject(new Error("Delivery decision workflow is unavailable")));
+      await (this.workflow.recordDeliveryDecision ? this.workflow.recordDeliveryDecision(task.workflowId, { expectedRevision, actorUserId, ...(note !== undefined ? { note } : {}) }) : Promise.reject(new Error("Delivery decision workflow is unavailable")));
     } catch (error) {
       const message = error instanceof Error && /stale workflow revision/i.test(error.message) ? "Task changed before this action was accepted" : "Delivery decision could not be accepted";
-      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409);
+      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409, this.getTask(actorUserId, taskId));
     }
-    this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state });
     const updated = this.getTask(actorUserId, taskId);
     return updated;
   }
@@ -808,28 +886,24 @@ export class TaskService {
 
   private async planCommand(actorUserId: string, taskId: string, expectedRevision: number, commandName: string, command: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
-    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409);
+    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
     if (!task.allowedCommands.includes(commandName)) throw new TaskFailure("Plan action is not available", [finding("illegal-command", "phase", "This plan action is not available")], 409);
-    let state: IssueWorkflowState;
-    try { state = await command(task.workflowId, { expectedRevision, actorUserId }); } catch (error) {
+    try { await command(task.workflowId, { expectedRevision, actorUserId }); } catch (error) {
       const message = error instanceof Error && /stale workflow revision/i.test(error.message) ? "Task changed before this action was accepted" : "Plan action could not be accepted";
-      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409);
+      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409, this.getTask(actorUserId, taskId));
     }
-    this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state, ...(state.planRevision !== undefined ? { planRevision: state.planRevision } : {}), ...(state.planMaterial !== undefined ? { planMaterial: state.planMaterial } : {}), ...(state.materialCategories !== undefined ? { materialCategories: state.materialCategories } : {}), ...(state.supplementalReviewUsed !== undefined ? { supplementalReviewUsed: state.supplementalReviewUsed } : {}), ...(state.supplementalReviewArtifactId !== undefined ? { supplementalReviewArtifactId: state.supplementalReviewArtifactId } : {}), ...(state.decisionId !== undefined ? { decisionId: state.decisionId } : {}) });
     const updated = this.getTask(actorUserId, taskId);
     return updated;
   }
 
   private async memberCommand(actorUserId: string, taskId: string, expectedRevision: number, commandName: string, command: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
-    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409);
+    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
     if (!task.allowedCommands.includes(commandName)) throw new TaskFailure("Task action is not available", [finding("illegal-command", "phase", "This task action is not available")], 409);
-    let state: IssueWorkflowState;
-    try { state = await command(task.workflowId, { expectedRevision, actorUserId }); } catch (error) {
+    try { await command(task.workflowId, { expectedRevision, actorUserId }); } catch (error) {
       const message = error instanceof Error && /stale workflow revision/i.test(error.message) ? "Task changed before this action was accepted" : "Task action could not be accepted";
-      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409);
+      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409, this.getTask(actorUserId, taskId));
     }
-    this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state });
     const updated = this.getTask(actorUserId, taskId);
     return updated;
   }
@@ -942,7 +1016,7 @@ export class TaskService {
     const findings = review ? this.database.authQuery((db) => db.prepare("SELECT id, severity, rationale, evidence_ref, disposition, repair_instruction FROM forge_delivery_findings WHERE review_id = ? AND task_id = ? AND company_id = ? ORDER BY id").all(review.id, row.id, row.company_id) as Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidence_ref: string; disposition: string; repair_instruction: string | null }>) : [];
     const decision = this.database.authQuery((db) => db.prepare("SELECT artifact_id FROM forge_delivery_decisions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { artifact_id: string } | undefined);
     const ci = this.ciProjection(row.id, row.company_id);
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), timeline, agentInvocations, ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), timeline, agentInvocations, ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
   }
 
   private leadOutput(taskId: string, companyId: string): ForgeTask["leadOutput"] {
@@ -976,7 +1050,7 @@ export class TaskService {
   }
 
   private taskQuery(scope: string): string {
-    return `SELECT t.id, t.company_id, t.project_id, t.title, t.brief_artifact_id, t.image_artifact_ids_json, t.role_profiles_json, t.supplemental_review, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.successor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.phase, ip.owner, ip.allowed_commands_json, ip.pending_action, (SELECT a.filename FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS description FROM forge_tasks t JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope} ORDER BY t.created_at, t.id`;
+    return `SELECT t.id, t.company_id, t.project_id, t.title, t.brief_artifact_id, t.image_artifact_ids_json, t.role_profiles_json, t.supplemental_review, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.successor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.authoritative_revision, ip.projected_at, ip.phase, ip.owner, ip.allowed_commands_json, ip.pending_action, (SELECT a.filename FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS description FROM forge_tasks t JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope} ORDER BY t.created_at, t.id`;
   }
 
   private async deleteTask(taskId: string, artifacts: Array<StoredArtifact | undefined>): Promise<void> {

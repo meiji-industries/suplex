@@ -313,6 +313,37 @@ export const IssueWorkflowStateSchema = z.object({
   successorTaskId: durableId.nullable().optional(),
 });
 
+export function buildInitialIssueWorkflowState(input: IssueWorkflowInput): IssueWorkflowState {
+  return IssueWorkflowStateSchema.parse({
+    workflowId: input.workflowId,
+    companyId: input.companyId,
+    projectId: input.projectId,
+    issueId: input.issueId,
+    projectRevisionId: input.projectRevisionId,
+    ...(input.requestHash ? { requestHash: input.requestHash } : {}),
+    phase: "backlog",
+    revision: 0,
+    owner: "human",
+    allowedCommands: ["start_planning"],
+    pendingAction: "Start planning",
+    lastEventId: `${input.workflowId}:0`,
+    continuationCount: 0,
+    lastSummaryHash: null,
+    repairCycle: 0,
+  });
+}
+
+export const IssueProjectionEventSchema = z.object({
+  schemaVersion: z.literal(1),
+  runId: durableId,
+  eventId: durableId,
+  state: IssueWorkflowStateSchema,
+}).superRefine((event, context) => {
+  if (event.eventId !== event.state.lastEventId) context.addIssue({ code: "custom", path: ["eventId"], message: "Projection event ID must match state.lastEventId" });
+});
+
+export type IssueProjectionEvent = z.infer<typeof IssueProjectionEventSchema>;
+
 export const StartPlanningInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   actorUserId: durableId,
@@ -341,26 +372,6 @@ export type IssueWorkflowState = z.infer<typeof IssueWorkflowStateSchema>;
 export type StartPlanningInput = z.input<typeof StartPlanningInputSchema>;
 export type RecordProgressInput = z.input<typeof RecordProgressInputSchema>;
 export type PlanCommandInput = z.input<typeof PlanCommandInputSchema>;
-
-export function createInitialIssueWorkflowState(input: Pick<IssueWorkflowInput, "workflowId" | "companyId" | "projectId" | "issueId" | "projectRevisionId" | "requestHash">): IssueWorkflowState {
-  return IssueWorkflowStateSchema.parse({
-    workflowId: input.workflowId,
-    companyId: input.companyId,
-    projectId: input.projectId,
-    issueId: input.issueId,
-    projectRevisionId: input.projectRevisionId,
-    ...(input.requestHash ? { requestHash: input.requestHash } : {}),
-    phase: "backlog",
-    revision: 0,
-    owner: "human",
-    allowedCommands: ["start_planning"],
-    pendingAction: "Start planning",
-    lastEventId: `${input.workflowId}:0`,
-    continuationCount: 0,
-    lastSummaryHash: null,
-    repairCycle: 0,
-  });
-}
 
 export const DeliveryReviewActivityInputSchema = z.object({
   taskId: durableId,
@@ -896,7 +907,7 @@ export interface ReconcileMergeActivityResult {
 }
 
 export interface IssueActivities {
-  projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState>;
+  projectIssueState(event: IssueProjectionEvent): Promise<IssueWorkflowState>;
   runLeadPlanning(input: LeadPlanningActivityInput): Promise<LeadPlanningResult>;
   runSupplementalReview(input: SupplementalReviewActivityInput): Promise<SupplementalReviewResult>;
   consolidateLeadPlan(input: ConsolidateLeadPlanActivityInput): Promise<LeadPlanningResult>;

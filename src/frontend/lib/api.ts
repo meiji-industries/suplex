@@ -19,12 +19,14 @@ export type ApiCompany = {
 export class ApiError extends Error {
   readonly statusCode: number;
   readonly findings?: Array<{ field: string; message: string }>;
+  readonly current?: unknown;
 
-  constructor(message: string, statusCode: number, findings?: Array<{ field: string; message: string }>) {
+  constructor(message: string, statusCode: number, findings?: Array<{ field: string; message: string }>, current?: unknown) {
     super(message);
     this.name = "ApiError";
     this.statusCode = statusCode;
     if (findings) this.findings = findings;
+    if (current !== undefined) this.current = current;
   }
 }
 
@@ -48,14 +50,14 @@ export async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
     },
   });
   const text = await response.text();
-  let body: T & { error?: string; findings?: Array<{ field: string; message: string }> } = {} as T & { error?: string; findings?: Array<{ field: string; message: string }> };
+  let body: T & { error?: string; findings?: Array<{ field: string; message: string }>; current?: unknown } = {} as T & { error?: string; findings?: Array<{ field: string; message: string }>; current?: unknown };
   try {
-    body = (text ? JSON.parse(text) : {}) as T & { error?: string; findings?: Array<{ field: string; message: string }> };
+    body = (text ? JSON.parse(text) : {}) as T & { error?: string; findings?: Array<{ field: string; message: string }>; current?: unknown };
   } catch {
-    body = {} as T & { error?: string; findings?: Array<{ field: string; message: string }> };
+    body = {} as T & { error?: string; findings?: Array<{ field: string; message: string }>; current?: unknown };
   }
   if (!response.ok) {
-    throw new ApiError(body.error ?? "Request failed", response.status, body.findings);
+    throw new ApiError(body.error ?? "Request failed", response.status, body.findings, body.current);
   }
   return body;
 }

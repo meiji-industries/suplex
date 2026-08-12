@@ -1,21 +1,25 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
 import { AuthService } from "../src/auth.js";
-import { createTestConfig } from "../src/config.js";
+import { createTestConfig, type ForgeConfig } from "../src/config.js";
 import { ForgeDatabase, projectionStateHash } from "../src/database.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
-import type { IssueWorkflowInput, IssueWorkflowState, StartPlanningInput } from "../src/temporal/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueWorkflowInput, type IssueWorkflowState, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
 
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
 const github: GithubAdapter = { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } };
 
-async function fixture(): Promise<{ root: string; database: ForgeDatabase; auth: AuthService; projects: ProjectService; tasks: TaskService; adminId: string; companyId: string; projectId: string; profileId: string }> {
+function project(database: ForgeDatabase, state: IssueWorkflowState, runId = "run-1"): void {
+  database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId, eventId: state.lastEventId, state }));
+}
+
+async function fixture(): Promise<{ root: string; config: ForgeConfig; database: ForgeDatabase; auth: AuthService; projects: ProjectService; tasks: TaskService; workflow: IssueWorkflowPort; adminId: string; companyId: string; projectId: string; profileId: string }> {
   const root = await mkdtemp(join(tmpdir(), "forge-task-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
@@ -33,8 +37,9 @@ async function fixture(): Promise<{ root: string; database: ForgeDatabase; auth:
   const stateByTask = new Map<string, IssueWorkflowState>();
   const workflow: IssueWorkflowPort = {
     async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) {
-      const state: IssueWorkflowState = { workflowId: input.workflowId!, companyId: input.companyId, projectId: input.projectId, issueId: input.issueId, projectRevisionId: input.projectRevisionId, phase: "backlog", revision: 0, owner: "human", allowedCommands: ["start_planning"], pendingAction: "Start planning", lastEventId: `${input.workflowId}:0`, continuationCount: 0, lastSummaryHash: null };
+      const state = buildInitialIssueWorkflowState({ ...input, workflowId: input.workflowId! });
       stateByTask.set(input.issueId, state);
+      database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run-1", eventId: state.lastEventId, state }));
       return { workflowId: state.workflowId, runId: "run-1" };
     },
     async startPlanning(workflowId: string, input: StartPlanningInput) {
@@ -42,12 +47,93 @@ async function fixture(): Promise<{ root: string; database: ForgeDatabase; auth:
       if (input.expectedRevision !== current.revision) throw new Error("Stale workflow revision");
       const next = { ...current, phase: "planning" as const, revision: 1, owner: "lead" as const, allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:1` };
       stateByTask.set(next.issueId, next);
+      database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run-1", eventId: next.lastEventId, state: next }));
       return next;
     },
   };
   const tasks = new TaskService(database, auth, projects, config, { workflow });
-  return { root, database, auth, projects, tasks, adminId: "admin-1", companyId: company.id, projectId: project.id, profileId: profile.id };
+  return { root, config, database, auth, projects, tasks, workflow, adminId: "admin-1", companyId: company.id, projectId: project.id, profileId: profile.id };
 }
+
+test("a creator that loses its lease cannot advance the creation intent", async () => {
+  const value = await fixture();
+  try {
+    const tasks = new TaskService(value.database, value.auth, value.projects, value.config, {
+      workflow: value.workflow,
+      fault(point, ids) {
+        if (point === "after_manifest_persisted") value.database.authTransaction((db) => db.prepare("UPDATE forge_task_creation_intents SET lease_token = 'lease-stolen' WHERE id = ?").run(ids.intentId));
+      },
+    });
+    await expect(tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Lease task", description: "body", idempotencyKey: "lease-task-0001", images: [] })).rejects.toMatchObject({ statusCode: 409, findings: [expect.objectContaining({ code: "creation-lease-lost" })] });
+    expect(value.database.authQuery((db) => db.prepare("SELECT state, lease_token, artifact_ids_json FROM forge_task_creation_intents WHERE idempotency_key = 'lease-task-0001'").get())).toEqual({ state: "staging", lease_token: "lease-stolen", artifact_ids_json: "[]" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE idempotency_key = 'lease-task-0001'").get())).toEqual({ count: 0 });
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+for (const faultPoint of ["after_artifact_finalized", "after_task_committed", "before_response"] as const) {
+  test(`an exact retry converges after ${faultPoint}`, async () => {
+    const value = await fixture();
+    try {
+      let failOnce = true;
+      const faulting = new TaskService(value.database, value.auth, value.projects, value.config, {
+        workflow: value.workflow,
+        fault(point) {
+          if (point === faultPoint && failOnce) {
+            failOnce = false;
+            throw new Error(`simulated crash at ${point}`);
+          }
+        },
+      });
+      const taskInput = { projectId: value.projectId, title: `Recovery ${faultPoint}`, description: "durable body", idempotencyKey: `recovery-${faultPoint.replaceAll("_", "-")}`, images: [] };
+      await expect(faulting.createTask(value.adminId, value.companyId, taskInput)).rejects.toBeDefined();
+
+      const beforeRetry = value.database.authQuery((db) => db.prepare("SELECT state FROM forge_task_creation_intents WHERE idempotency_key = ?").get(taskInput.idempotencyKey) as { state: string });
+      expect(beforeRetry.state).toBe(faultPoint === "after_artifact_finalized" ? "failed_before_start" : faultPoint === "after_task_committed" ? "workflow_starting" : "started");
+      if (faultPoint === "after_artifact_finalized") {
+        expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE idempotency_key = ?").get(taskInput.idempotencyKey))).toEqual({ count: 0 });
+        const files = await readdir(join(value.root, "artifacts"), { recursive: true }).catch(() => [] as string[]);
+        expect(files.filter((entry) => entry.endsWith(".bin") || entry.endsWith(".tmp"))).toEqual([]);
+      }
+
+      const retried = await value.tasks.createTask(value.adminId, value.companyId, taskInput);
+      expect(retried.created).toBe(faultPoint === "after_artifact_finalized");
+      expect(retried.task).toMatchObject({ phase: "backlog", revision: 0 });
+      expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE idempotency_key = ?").get(taskInput.idempotencyKey))).toEqual({ count: 1 });
+      expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts WHERE company_id = ?").get(value.companyId))).toEqual({ count: 1 });
+      expect(value.database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all(retried.task.id))).toEqual([{ revision: 0 }]);
+    } finally {
+      value.database.close(); await rm(value.root, { recursive: true, force: true });
+    }
+  });
+}
+
+test("concurrent identical submissions converge and conflicting submissions fail closed", async () => {
+  const value = await fixture();
+  try {
+    const identicalInput = { projectId: value.projectId, title: "Concurrent task", description: "same body", idempotencyKey: "concurrent-task-0001", images: [] };
+    const [first, second] = await Promise.all([
+      value.tasks.createTask(value.adminId, value.companyId, identicalInput),
+      value.tasks.createTask(value.adminId, value.companyId, identicalInput),
+    ]);
+    expect(first.task.id).toBe(second.task.id);
+    expect([first.created, second.created].sort()).toEqual([false, true]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE idempotency_key = ?").get(identicalInput.idempotencyKey))).toEqual({ count: 1 });
+    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_issue_timeline WHERE task_id = ? AND revision = 0").get(first.task.id))).toEqual({ count: 1 });
+
+    const conflictKey = "concurrent-task-0002";
+    const outcomes = await Promise.allSettled([
+      value.tasks.createTask(value.adminId, value.companyId, { ...identicalInput, idempotencyKey: conflictKey, title: "Winner" }),
+      value.tasks.createTask(value.adminId, value.companyId, { ...identicalInput, idempotencyKey: conflictKey, title: "Different request" }),
+    ]);
+    expect(outcomes.filter((outcome) => outcome.status === "fulfilled")).toHaveLength(1);
+    expect(outcomes.filter((outcome) => outcome.status === "rejected")).toEqual([expect.objectContaining({ reason: expect.objectContaining({ statusCode: 409, findings: [expect.objectContaining({ code: "idempotency_conflict" })] }) })]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE idempotency_key = ?").get(conflictKey))).toEqual({ count: 1 });
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
 
 test("creates one durable backlog task, verifies immutable images, and starts planning with an expected revision", async () => {
   const value = await fixture();
@@ -69,7 +155,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     const initialState = JSON.parse(initialSnapshot.state_json) as IssueWorkflowState;
     expect(initialState).toMatchObject({ issueId: first.task.id, repairCycle: 0 });
     expect(initialState).not.toHaveProperty("taskId");
-    expect(() => value.database.projectIssueState({ taskId: initialState.issueId, companyId: initialState.companyId, projectId: initialState.projectId, workflowId: initialState.workflowId, revision: initialState.revision, phase: initialState.phase, owner: initialState.owner, allowedCommands: initialState.allowedCommands, pendingAction: initialState.pendingAction, lastEventId: initialState.lastEventId, state: initialState })).not.toThrow();
+    expect(() => project(value.database, initialState)).not.toThrow();
     const duplicate = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Investigate queue", description: "## Reproduce\n\nPlease inspect the queue.", idempotencyKey: "queue-task-0001", supplementalReview: true, images: [{ filename: "evidence.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] });
     expect(duplicate.created).toBe(false);
     expect(duplicate.task.id).toBe(first.task.id);
@@ -90,10 +176,10 @@ test("repairs the legacy revision-zero seed before applying the Temporal initial
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Legacy seed", description: "body", idempotencyKey: "legacy-seed-0001", images: [] });
     const snapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(created.task.id) as { state_json: string });
     const canonical = JSON.parse(snapshot.state_json) as IssueWorkflowState;
-    const planning = { ...canonical, revision: 1, phase: "planning" as const, owner: "lead" as const, allowedCommands: [] as const, pendingAction: "Lead planning", lastEventId: `${canonical.workflowId}:1` };
-    const approval = { ...planning, revision: 2, phase: "approval" as const, owner: "human" as const, allowedCommands: ["approve_plan" as const, "reject_plan" as const, "cancel_issue" as const], pendingAction: "Approve final plan", lastEventId: `${canonical.workflowId}:2` };
-    value.database.projectIssueState({ taskId: planning.issueId, companyId: planning.companyId, projectId: planning.projectId, workflowId: planning.workflowId, revision: planning.revision, phase: planning.phase, owner: planning.owner, allowedCommands: [...planning.allowedCommands], pendingAction: planning.pendingAction, lastEventId: planning.lastEventId, state: planning });
-    value.database.projectIssueState({ taskId: approval.issueId, companyId: approval.companyId, projectId: approval.projectId, workflowId: approval.workflowId, revision: approval.revision, phase: approval.phase, owner: approval.owner, allowedCommands: [...approval.allowedCommands], pendingAction: approval.pendingAction, lastEventId: approval.lastEventId, state: approval });
+    const planning = IssueWorkflowStateSchema.parse({ ...canonical, revision: 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${canonical.workflowId}:1` });
+    const approval = IssueWorkflowStateSchema.parse({ ...planning, revision: 2, phase: "approval", owner: "human", allowedCommands: ["approve_plan", "reject_plan", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${canonical.workflowId}:2` });
+    project(value.database, planning);
+    project(value.database, approval);
     const { issueId, repairCycle: _repairCycle, ...seed } = canonical;
     const legacy = { ...seed, taskId: issueId };
     const legacyHash = projectionStateHash(legacy);
@@ -103,7 +189,7 @@ test("repairs the legacy revision-zero seed before applying the Temporal initial
       db.prepare("UPDATE forge_issue_projections SET event_hash = ? WHERE task_id = ? AND revision = 0").run(legacyHash, issueId);
     });
 
-    expect(() => value.database.projectIssueState({ taskId: canonical.issueId, companyId: canonical.companyId, projectId: canonical.projectId, workflowId: canonical.workflowId, revision: canonical.revision, phase: canonical.phase, owner: canonical.owner, allowedCommands: canonical.allowedCommands, pendingAction: canonical.pendingAction, lastEventId: canonical.lastEventId, state: canonical })).not.toThrow();
+    expect(() => project(value.database, canonical)).not.toThrow();
     const repaired = value.database.authQuery((db) => ({
       snapshot: db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(issueId) as { state_json: string },
       timeline: db.prepare("SELECT event_hash FROM forge_issue_timeline WHERE task_id = ? AND revision = 0").get(issueId) as { event_hash: string },
@@ -132,7 +218,7 @@ test("streams projection changes written by the Temporal worker process", async 
     const unsubscribeDenied = value.tasks.subscribe("sync-member", (event) => deniedEvents.push(event));
     const workerDatabase = new ForgeDatabase(join(value.root, "forge.sqlite"));
     try {
-      workerDatabase.projectIssueState({ taskId: created.task.id, companyId: created.task.companyId, projectId: created.task.projectId, workflowId: created.task.workflowId, revision: 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${created.task.workflowId}:1` });
+      project(workerDatabase, IssueWorkflowStateSchema.parse({ ...created.task, issueId: created.task.id, projectRevisionId: created.task.projectRevisionId, revision: 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${created.task.workflowId}:1`, continuationCount: 0, lastSummaryHash: null, repairCycle: 0 }), "run-worker");
       await expect.poll(() => events).toEqual([{ type: "invalidate", taskId: created.task.id, companyId: created.task.companyId, revision: 1 }]);
       expect(deniedEvents).toEqual([]);
     } finally {
@@ -154,8 +240,11 @@ test("projection writes are monotonic and corrupted or traversing artifacts fail
     await writeFile(join(value.root, "artifacts", artifact.storage_path), "corrupted");
     await expect(value.tasks.getTaskImage(value.adminId, created.task.id, imageId)).rejects.toMatchObject({ code: "hash-mismatch" });
     await expect(value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Traversal", description: "body", idempotencyKey: "artifact-task-0002", images: [{ filename: "../secret.png", mimeType: "image/png", base64: Buffer.from("proof").toString("base64") }] })).rejects.toMatchObject({ findings: [expect.objectContaining({ code: "invalid-image-filename" })] });
-    value.database.projectIssueState({ taskId: created.task.id, companyId: created.task.companyId, projectId: created.task.projectId, workflowId: created.task.workflowId, revision: 4, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${created.task.workflowId}:4` });
-    value.database.projectIssueState({ taskId: created.task.id, companyId: created.task.companyId, projectId: created.task.projectId, workflowId: created.task.workflowId, revision: 2, phase: "backlog", owner: "human", allowedCommands: ["start_planning"], pendingAction: "Start planning", lastEventId: `${created.task.workflowId}:2` });
+    const initial = IssueWorkflowStateSchema.parse(JSON.parse(value.database.authQuery((db) => (db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(created.task.id) as { state_json: string }).state_json)));
+    const newer = IssueWorkflowStateSchema.parse({ ...initial, revision: 4, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${created.task.workflowId}:4` });
+    const stale = IssueWorkflowStateSchema.parse({ ...initial, revision: 2, lastEventId: `${created.task.workflowId}:2` });
+    value.database.projectIssueEvent({ schemaVersion: 1, runId: "run-1", eventId: newer.lastEventId, state: newer });
+    value.database.projectIssueEvent({ schemaVersion: 1, runId: "run-1", eventId: stale.lastEventId, state: stale });
     expect(value.database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = ?").get(created.task.id))).toEqual({ revision: 4, phase: "planning" });
     await readFile(join(value.root, "artifacts", artifact.storage_path));
   } finally {

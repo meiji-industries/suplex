@@ -14,6 +14,7 @@ import { BackupService, reconcileRestoredState } from "./backup.js";
 import { AttentionService } from "./attention.js";
 import { CapacityManager } from "./capacity.js";
 import { createGithubReleasePort } from "./github-release.js";
+import { ProjectionRebuildFailure, ProjectionRebuildService } from "./projection-rebuild.js";
 
 const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
 const foreground = process.argv.includes("--foreground");
@@ -54,7 +55,14 @@ async function main(): Promise<void> {
       const result = await service.restore(archive, destination);
       const restoredDatabase = new ForgeDatabase(`${destination}/forge-backup/app/forge.sqlite`);
       try {
-        const rebuilt = restoredDatabase.rebuildIssueProjections();
+        let rebuild: Awaited<ReturnType<ProjectionRebuildService["rebuild"]>> | undefined;
+        let rebuildFailure: { code: string; summary: string } | undefined;
+        try {
+          rebuild = await new ProjectionRebuildService(restoredDatabase, config).rebuild();
+        } catch (error) {
+          if (!(error instanceof ProjectionRebuildFailure)) throw error;
+          rebuildFailure = { code: error.code, summary: error.message };
+        }
         const restoredAuth = new AuthService(restoredDatabase, config);
         const companies = new AttentionService(restoredDatabase, restoredAuth).rebuildAll();
         new CapacityManager(restoredDatabase, config).reconcileFromLedgers();
@@ -67,14 +75,16 @@ async function main(): Promise<void> {
           backupDurationMs: result.durationMs,
           restoreDurationMs: result.restoreDurationMs,
           verification: { valid: result.valid, verifiedAt: result.verifiedAt, errors: result.errors },
-          projectionsRebuilt: rebuilt,
+          projectionRebuild: rebuild ? { status: "rebuilt", rebuilt: rebuild.rebuilt, findings: rebuild.findings } : { status: "blocked", ...rebuildFailure },
+          projectionsRebuilt: rebuild?.rebuilt ?? 0,
+          projectionIntegrityFindings: rebuild?.findings ?? [],
           companiesRebuilt: companies,
           reconciliation,
           requiresReauthentication: true,
           nextSteps: ["Recreate the restored Cloud configuration without copying secrets; preserve installationId, temporalNamespace, and taskQueue", "Create a new Temporal Cloud API key for the restored host", "Reauthenticate the restored host integrations", "Start Forge against the existing Temporal Cloud namespace", "Inspect interrupted Developer turns before explicitly retrying or cancelling them"],
         };
         await writeFile(join(destination, "forge-backup", "restore-handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`, { mode: 0o600 });
-        process.stdout.write(`Restored projection state (${rebuilt} issue snapshots, ${companies} companies); `);
+        process.stdout.write(rebuild ? `Restored projection state (${rebuild.rebuilt} issue snapshots, ${companies} companies); ` : `Restored database; projection rebuild blocked (${rebuildFailure?.code}), ${companies} companies reconciled; `);
         process.stdout.write(`reconciled ${reconciliation.developerExecutions.length} Developer executions and ${reconciliation.providers.length} provider releases; `);
       } finally { restoredDatabase.close(); }
       process.stdout.write(`backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"} (${result.restoreDurationMs}ms); see forge-backup/restore-handoff.json\n`);
@@ -84,11 +94,11 @@ async function main(): Promise<void> {
   if (command === "rebuild-projections") {
     const database = new ForgeDatabase(config.databasePath);
     try {
-      const rebuilt = database.rebuildIssueProjections();
+      const rebuild = await new ProjectionRebuildService(database, config).rebuild();
       const attention = new AttentionService(database, new AuthService(database, config));
       attention.rebuildAll();
       new CapacityManager(database, config).reconcileFromLedgers();
-      process.stdout.write(`Rebuilt ${rebuilt} issue projections and reconciled operator ledgers\n`);
+      process.stdout.write(`Rebuilt ${rebuild.rebuilt} issue projections (${rebuild.findings.length} findings) and reconciled operator ledgers\n`);
     } finally { database.close(); }
     return;
   }

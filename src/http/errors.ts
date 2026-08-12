@@ -24,10 +24,23 @@ function isValidationError(error: unknown): error is { validation?: ValidationIs
   return Boolean(error && typeof error === "object" && "validation" in error);
 }
 
+function conflictSnapshot(task: TaskFailure["current"]): unknown {
+  if (!task) return undefined;
+  return {
+    id: task.id,
+    revision: task.revision,
+    phase: task.phase,
+    owner: task.owner,
+    allowedCommands: task.allowedCommands,
+    pendingAction: task.pendingAction,
+    projection: task.projection,
+  };
+}
+
 function sendDomainFailure(reply: FastifyReply, error: AuthFailure | ProjectFailure | TaskFailure): void {
   const body = error instanceof AuthFailure
     ? { error: error.publicMessage, ...(error.code !== "auth_failure" ? { code: error.code } : {}) }
-    : { error: error.publicMessage, findings: error.findings };
+    : { error: error.publicMessage, findings: error.findings, ...(error instanceof TaskFailure && error.current ? { current: conflictSnapshot(error.current) } : {}) };
   reply.code(error.statusCode).send(body);
 }
 

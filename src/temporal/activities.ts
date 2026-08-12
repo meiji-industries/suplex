@@ -15,7 +15,7 @@ import { CiService, createGithubCiProvider, type CiProvider } from "../ci.js";
 import { createGithubReleasePort, ReleaseService, type GithubReleasePort } from "../github-release.js";
 import { ForwardMergeService } from "../forward-merge.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { DeliveryDecisionActivityInputSchema, DeliveryReviewSchema, DurableArtifactReferenceSchema, IssueWorkflowStateSchema, SafeSummarySchema, type AcceptDeliveryActivityInput, type DurableArtifactReference, type IssueActivities, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput, type WorkflowCiRepairActivityInput, type WorkflowDeliveryReviewActivityInput, type WorkflowDeveloperRepairActivityInput, type WorkflowFinalReviewActivityInput, type WorkflowMergeConflictPlanActivityInput, type WorkflowMergeConflictResolutionActivityInput } from "./issue-contracts.js";
+import { DeliveryDecisionActivityInputSchema, DeliveryReviewSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, SafeSummarySchema, type AcceptDeliveryActivityInput, type DurableArtifactReference, type IssueActivities, type IssueProjectionEvent, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput, type WorkflowCiRepairActivityInput, type WorkflowDeliveryReviewActivityInput, type WorkflowDeveloperRepairActivityInput, type WorkflowFinalReviewActivityInput, type WorkflowMergeConflictPlanActivityInput, type WorkflowMergeConflictResolutionActivityInput } from "./issue-contracts.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
 import { CapacityManager } from "../capacity.js";
 
@@ -35,7 +35,7 @@ export class CapacityWaitError extends Error {
 
 export function asNonRetryableApplicationFailure(error: unknown): ApplicationFailure | undefined {
   if (error instanceof AgentFailure && error.nonRetryable) return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
-  if (error instanceof ProjectionIntegrityFailure) return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message, taskId: error.taskId, revision: error.revision });
+  if (error instanceof ProjectionIntegrityFailure) return ApplicationFailure.nonRetryable(error.message, "projection_integrity_failure", { code: error.code, summary: error.message, taskId: error.taskId, revision: error.revision });
   return undefined;
 }
 
@@ -84,12 +84,6 @@ const MergeConflictEvidenceSchema = z.object({
   conflictFiles: z.array(z.string().min(1).max(1_000)).min(1).max(128),
   combinedDiff: z.string().max(8 * 1024 * 1024),
 });
-
-function compactWorkflowState(input: IssueWorkflowState): IssueWorkflowState {
-  const state = { ...input } as Record<string, unknown>;
-  for (const key of ["worktreePath", "deliveryBlockingFindings", "deliveryRepairPlan", "forwardMergeConflictFiles", "forwardMergeConflictDiff", "conflictFiles", "conflictDiff"]) delete state[key];
-  return IssueWorkflowStateSchema.parse(state);
-}
 
 export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): ProbeActivities & IssueActivities {
   const logger = new StructuredLogger();
@@ -145,62 +139,17 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         status: "running",
       });
     },
-    async projectIssueState(input: IssueWorkflowState): Promise<IssueWorkflowState> {
-      const state = compactWorkflowState(IssueWorkflowStateSchema.parse(input));
+    async projectIssueState(input: IssueProjectionEvent): Promise<IssueWorkflowState> {
+      const event = IssueProjectionEventSchema.parse(input);
       try {
-        database.projectIssueState({
-          taskId: state.issueId,
-          companyId: state.companyId,
-          projectId: state.projectId,
-          workflowId: state.workflowId,
-          revision: state.revision,
-          phase: state.phase,
-          owner: state.owner,
-          allowedCommands: state.allowedCommands,
-          pendingAction: state.pendingAction,
-          lastEventId: state.lastEventId,
-          state,
-          ...(state.planRevision !== undefined ? { planRevision: state.planRevision } : {}),
-          ...(state.planMaterial !== undefined ? { planMaterial: state.planMaterial } : {}),
-          ...(state.materialCategories !== undefined ? { materialCategories: state.materialCategories } : {}),
-          ...(state.supplementalReviewUsed !== undefined ? { supplementalReviewUsed: state.supplementalReviewUsed } : {}),
-          ...(state.supplementalReviewArtifactId !== undefined ? { supplementalReviewArtifactId: state.supplementalReviewArtifactId } : {}),
-          ...(state.decisionId !== undefined ? { decisionId: state.decisionId } : {}),
-          ...(state.developerExecutionId !== undefined ? { developerExecutionId: state.developerExecutionId } : {}),
-          ...(state.developerSessionRef !== undefined ? { developerSessionRef: state.developerSessionRef } : {}),
-          ...(state.worktreePath !== undefined ? { worktreePath: state.worktreePath } : {}),
-          ...(state.branchName !== undefined ? { branchName: state.branchName } : {}),
-          ...(state.targetBaseSha !== undefined ? { targetBaseSha: state.targetBaseSha } : {}),
-          ...(state.currentStep !== undefined ? { currentStep: state.currentStep } : {}),
-          ...(state.resultCommit !== undefined ? { resultCommit: state.resultCommit } : {}),
-          ...(state.resultTree !== undefined ? { resultTree: state.resultTree } : {}),
-          ...(state.dirtyState !== undefined ? { dirtyState: state.dirtyState } : {}),
-          ...(state.deliveryArtifactId !== undefined ? { deliveryArtifactId: state.deliveryArtifactId } : {}),
-          ...(state.developerEvidenceArtifactId !== undefined ? { developerEvidenceArtifactId: state.developerEvidenceArtifactId } : {}),
-          ...(state.deliverySummary !== undefined ? { deliverySummary: state.deliverySummary } : {}),
-          ...(state.developerOutcome !== undefined ? { developerOutcome: state.developerOutcome } : {}),
-          ...(state.deliveryReviewId !== undefined ? { deliveryReviewId: state.deliveryReviewId } : {}),
-          ...(state.deliveryReviewOutcome !== undefined ? { deliveryReviewOutcome: state.deliveryReviewOutcome } : {}),
-          ...(state.deliveryReviewSummary !== undefined ? { deliveryReviewSummary: state.deliveryReviewSummary } : {}),
-          ...(state.deliveryBlockingFindings !== undefined ? { deliveryBlockingFindings: state.deliveryBlockingFindings } : {}),
-          ...(state.deliveryRepairPlan !== undefined ? { deliveryRepairPlan: state.deliveryRepairPlan } : {}),
-          ...(state.repairCycle !== undefined ? { repairCycle: state.repairCycle } : {}),
-          ...(state.deliveryDecisionArtifactId !== undefined ? { deliveryDecisionArtifactId: state.deliveryDecisionArtifactId } : {}),
-          ...(state.ciReason !== undefined ? { ciReason: state.ciReason } : {}),
-          ...(state.ciOwner !== undefined ? { ciOwner: state.ciOwner } : {}),
-          ...(state.ciRepairable !== undefined ? { ciRepairable: state.ciRepairable } : {}),
-          ...(state.ciAttemptId !== undefined ? { ciAttemptId: state.ciAttemptId } : {}),
-          ...(state.ciEvidenceArtifactId !== undefined ? { ciEvidenceArtifactId: state.ciEvidenceArtifactId } : {}),
-          ...(state.ciPolicyHash !== undefined ? { ciPolicyHash: state.ciPolicyHash } : {}),
-          ...(state.ciPropagationDeadline !== undefined ? { ciPropagationDeadline: state.ciPropagationDeadline } : {}),
-          ...(state.ciOverallDeadline !== undefined ? { ciOverallDeadline: state.ciOverallDeadline } : {}),
-        });
+        database.observeIssueProjection(event);
+        database.projectIssueEvent(event);
       } catch (error) {
         const permanentFailure = asNonRetryableApplicationFailure(error);
         if (permanentFailure) throw permanentFailure;
         throw error;
       }
-      return state;
+      return IssueWorkflowStateSchema.parse(event.state);
     },
     async runLeadPlanning(input) {
       const result = await withCapacity(input, "lead", () => (agent?.runLeadPlanning ?? defaultAgent.runLeadPlanning.bind(defaultAgent))(input));

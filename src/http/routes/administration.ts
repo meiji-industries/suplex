@@ -6,20 +6,25 @@ import type { AttentionService } from "../../attention.js";
 import type { AuthService } from "../../auth.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { ProjectService } from "../../projects.js";
+import type { ForgeConfig } from "../../config.js";
+import { ProjectionRebuildFailure, ProjectionRebuildService } from "../../projection-rebuild.js";
 import { AuditEventListResponseSchema, CredentialIdParamsSchema, CredentialListResponseSchema, ErrorResponseSchema, InvitationResponseSchema, InvitationSummaryListResponseSchema, UserIdParamsSchema, UserListResponseSchema } from "../contracts/common.js";
 import { DisplayNameBodySchema } from "../contracts/auth.js";
 import { ModelBodySchema, ModelIdParamsSchema, ModelListResponseSchema, ModelResponseSchema, ModelStatusBodySchema, ProfileBodySchema, ProfileResponseSchema } from "../contracts/projects.js";
+
+const ProjectionRebuildBodySchema = z.object({ companyId: z.string().optional(), taskId: z.string().optional() }).default({});
 
 export interface AdministrationRoutesOptions {
   auth: AuthService;
   projects?: ProjectService;
   database?: ForgeDatabase;
   attention?: AttentionService;
+  config?: ForgeConfig;
 }
 
 const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (app, options) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const { auth, projects, database, attention } = options;
+  const { auth, projects, database, attention, config } = options;
   typed.post("/api/admin/invitations", { schema: { body: DisplayNameBodySchema, response: { 201: InvitationResponseSchema } } }, async (request, reply) => reply.code(201).send(auth.inviteUser(request.forgeUser.id, { displayName: request.body.displayName })));
   typed.get("/api/admin/invitations", { schema: { response: { 200: InvitationSummaryListResponseSchema } } }, async (request, reply) => reply.send({ invitations: auth.listInvitations(request.forgeUser.id) }));
   typed.get("/api/admin/users", { schema: { response: { 200: UserListResponseSchema } } }, async (request, reply) => reply.send({ users: auth.listUsers(request.forgeUser.id) }));
@@ -40,11 +45,21 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     typed.patch("/api/admin/models/:modelId", { schema: { params: ModelIdParamsSchema, body: ModelStatusBodySchema, response: { 200: ModelResponseSchema } } }, async (request, reply) => reply.send(projects.setModelStatus(request.forgeUser.id, request.params.modelId, request.body.status)));
   }
   if (database && attention) {
-    typed.post("/api/admin/rebuild-projections", { schema: { response: { 200: z.object({ rebuilt: z.number() }), 403: ErrorResponseSchema } } }, async (request, reply) => {
+    typed.post("/api/admin/rebuild-projections", { schema: { body: ProjectionRebuildBodySchema, response: { 200: z.object({ rebuilt: z.number(), findings: z.array(z.object({ taskId: z.string(), code: z.string(), summary: z.string() })) }), 403: ErrorResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
       if (request.forgeUser.role !== "admin") return reply.code(403).send({ error: "Administrator access required" });
-      const rebuilt = database.rebuildIssueProjections();
+      if (!config) return reply.code(503).send({ error: "Temporal rebuild is unavailable" });
+      let result;
+      try {
+        result = await new ProjectionRebuildService(database, config).rebuild({
+          ...(request.body.companyId ? { companyId: request.body.companyId } : {}),
+          ...(request.body.taskId ? { taskId: request.body.taskId } : {}),
+        });
+      } catch (error) {
+        if (error instanceof ProjectionRebuildFailure) return reply.code(503).send({ error: error.message, code: error.code });
+        throw error;
+      }
       for (const company of auth.listVisibleCompanies(request.forgeUser.id)) attention.rebuild(company.id);
-      return reply.send({ rebuilt });
+      return reply.send(result);
     });
   }
 };

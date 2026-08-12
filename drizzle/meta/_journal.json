@@ -141,6 +141,13 @@
       "when": 1786427400000,
       "tag": "0019_exact_head_ci_repair",
       "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1786427500000,
+      "tag": "0020_durable_task_projection_provenance",
+      "breakpoints": true
     }
   ]
 }

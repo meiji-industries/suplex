@@ -301,11 +301,7 @@ test("restore drill preserves users, completed work, artifacts, and draft releas
       expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_sessions WHERE revoked_at IS NULL").get())).toEqual({ count: 0 });
       expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_invitations").get())).toEqual({ count: 0 });
 
-      restoredDatabase.authTransaction((db) => {
-        db.prepare("DELETE FROM forge_issue_projections").run();
-        db.prepare("DELETE FROM forge_attention_items").run();
-      });
-      expect(restoredDatabase.rebuildIssueProjections()).toBe(2);
+      restoredDatabase.authTransaction((db) => db.prepare("DELETE FROM forge_attention_items").run());
       expect(new AttentionService(restoredDatabase, new AuthService(restoredDatabase, value.config)).rebuildAll()).toBe(2);
       new CapacityManager(restoredDatabase, value.config).reconcileFromLedgers();
 

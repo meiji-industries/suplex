@@ -82,7 +82,7 @@ type ApiAttentionCompany = { companyId: string; companyName: string; companyStat
 type ApiAgentInvocation = { id: string; role: "lead" | "reviewer" | "developer"; status: string; attempt: number; sessionPresent: boolean; startedAt: string; finishedAt: string | null; failureCode: string | null; failureSummary: string | null; evidenceArtifactId: string | null };
 type ApiCi = { runId: string; releaseId: string; repository: string; pullRequestNumber: number; pullRequestUrl: string; baseBranch: string; headBranch: string; expectedHeadSha: string; expectedHeadTree: string; status: string; outcome: string | null; reason: string | null; owner: string | null; repairable: boolean; policyHash: string; policy: { projectRevisionId: string; requiredChecks: string[]; acceptedConclusions: ["success"] }; leadSessionContinuity: boolean; developerSessionContinuity: boolean; firstObservedAt: string | null; propagationDeadline: string | null; overallDeadline: string | null; nextRetryAt: string | null; completedAt: string | null; supersededAt: string | null; supersededRuns: Array<{ runId: string; releaseId: string; expectedHeadSha: string; expectedHeadTree: string | null; status: string; supersededAt: string | null }>; attempts: Array<{ id: string; attemptNumber: number; observedRepository: string | null; observedPrNumber: number | null; observedBaseBranch: string | null; observedBaseSha: string | null; observedHeadBranch: string | null; observedHeadSha: string | null; outcome: string; reason: string; owner: string | null; repairable: boolean; retryAt: string | null; summary: string; evidenceArtifactId: string | null; createdAt: string; checks: Array<{ providerCheckId: string; name: string; headSha: string; status: string; conclusion: string | null; detailsUrl: string | null; summary: string | null; startedAt: string | null; completedAt: string | null; selectedForEvaluation: boolean }> }>; repairPlan: { id: string; status: string; ciRunId: string; ciAttemptId: string; failedHeadSha: string; planArtifactId: string; evidenceArtifactId: string; summary: string; steps: Array<{ number: number; instruction: string; verification: string }>; createdAt: string; updatedAt: string; consumedAt: string | null; supersededAt: string | null } | null; repairs: Array<{ id: string; repairPlanId: string; priorCommit: string; priorTree: string; newCommit: string | null; newTree: string | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null; status: string; summary: string | null; createdAt: string; completedAt: string | null }> };
 type ApiTaskPhase = "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "merge_conflict_reviewing" | "merge_conflict_required" | "merge_conflict_resolving" | "ci_waiting" | "ci_repair_planning" | "ci_repairing" | "ci_repair_required" | "final_review" | "accepted" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
-type ApiTask = { id: string; companyId: string; projectId: string; title: string; description: string; briefArtifactId: string; images: Array<{ artifactId: string; filename: string; mimeType: string; byteSize: number }>; roleProfiles: Record<string, string>; supplementalReview: boolean; workflowId: string; projectRevisionId: string; phase: ApiTaskPhase; revision: number; owner: "human" | "lead"; allowedCommands: string[]; pendingAction: string | null; createdAt: string; updatedAt: string; timeline: Array<{ id: string; revision: number; eventType: string; metadata: Record<string, string | number | boolean>; createdAt: string }>; agentInvocations: ApiAgentInvocation[]; planRevision?: number | null; planMaterial?: boolean | null; materialCategories?: string[]; supplementalReviewUsed?: boolean; supplementalReviewArtifactId?: string | null; decisionId?: string | null; deliveryReview?: { id: string; outcome: "approved" | "blocking"; summary: string; planRevision: number; baseSha: string; subjectCommit: string; subjectTree: string; findings: Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidenceRef: string; disposition: string; repairInstruction: string | null }> }; developerExecution?: { id: string; status: string; attempt: number; branchName: string; targetBaseSha: string; currentStep?: number | null; resultCommit?: string | null; resultTree?: string | null; dirtyState?: string | null; deliveryArtifactId?: string | null; deliverySummary?: string | null }; leadOutput?: { kind: "plan" | "decision_blocker"; summary: string; executionId: string; outputArtifactId: string; evidenceArtifactId: string; content: { kind: "plan"; summary: string; reproduction: string | null; rootCauseAnalysis: string | null; steps: Array<{ number: number; instruction: string; verification: string }>; compatibilityAnalysis: string; operationalAnalysis: string; verificationStrategy: string; unresolvedTechnicalQuestions: string[] } | { kind: "decision_blocker"; summary: string; evidence: string; owner: "human"; question: string; nextAction: string } } ; ci?: ApiCi };
+type ApiTask = { id: string; companyId: string; projectId: string; title: string; description: string; briefArtifactId: string; images: Array<{ artifactId: string; filename: string; mimeType: string; byteSize: number }>; roleProfiles: Record<string, string>; supplementalReview: boolean; workflowId: string; projectRevisionId: string; phase: ApiTaskPhase; revision: number; owner: "human" | "lead"; allowedCommands: string[]; pendingAction: string | null; createdAt: string; updatedAt: string; projection: { authoritativeRevision: number; projectedRevision: number; projectedAt: string; status: "current" | "lagging" }; timeline: Array<{ id: string; revision: number; eventType: string; metadata: Record<string, string | number | boolean>; createdAt: string }>; agentInvocations: ApiAgentInvocation[]; planRevision?: number | null; planMaterial?: boolean | null; materialCategories?: string[]; supplementalReviewUsed?: boolean; supplementalReviewArtifactId?: string | null; decisionId?: string | null; deliveryReview?: { id: string; outcome: "approved" | "blocking"; summary: string; planRevision: number; baseSha: string; subjectCommit: string; subjectTree: string; findings: Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidenceRef: string; disposition: string; repairInstruction: string | null }> }; developerExecution?: { id: string; status: string; attempt: number; branchName: string; targetBaseSha: string; currentStep?: number | null; resultCommit?: string | null; resultTree?: string | null; dirtyState?: string | null; deliveryArtifactId?: string | null; deliverySummary?: string | null }; leadOutput?: { kind: "plan" | "decision_blocker"; summary: string; executionId: string; outputArtifactId: string; evidenceArtifactId: string; content: { kind: "plan"; summary: string; reproduction: string | null; rootCauseAnalysis: string | null; steps: Array<{ number: number; instruction: string; verification: string }>; compatibilityAnalysis: string; operationalAnalysis: string; verificationStrategy: string; unresolvedTechnicalQuestions: string[] } | { kind: "decision_blocker"; summary: string; evidence: string; owner: "human"; question: string; nextAction: string } } ; ci?: ApiCi };
 
 const taskPhaseGroups = [
   { label: "Backlog", phases: ["backlog"] },
@@ -695,31 +695,32 @@ async function fileAsImage(file: File): Promise<{ filename: string; mimeType: st
 type TaskPlanAction = "request-supplemental-review" | "approve-plan" | "reject-plan" | "start-development" | "retry-development" | "cancel-development" | "review-delivery" | "repair-delivery" | "record-delivery-decision" | "publish-draft" | "reconcile-ci" | "repair-ci" | "final-review" | "accept-delivery" | "request-delivery-changes" | "cancel" | "reconcile-merge";
 
 function TaskActions({ task, busy, onStartPlanning, onPlanAction }: { task: ApiTask; busy: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void> }): ReactElement {
+  const disabled = busy || task.projection.status === "lagging";
   return (
     <div className="flex flex-wrap gap-2">
-      {task.allowedCommands.includes("start_planning") ? <Button size="sm" onClick={() => void onStartPlanning()} disabled={busy}>{busy ? "Planning…" : "Start planning"}</Button> : null}
-      {task.allowedCommands.includes("request_supplemental_review") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("request-supplemental-review")} disabled={busy}>Request review</Button> : null}
-      {task.allowedCommands.includes("approve_plan") ? <Button size="sm" onClick={() => void onPlanAction("approve-plan", "Approved final plan")} disabled={busy}>Approve plan</Button> : null}
-      {task.allowedCommands.includes("reject_plan") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reject-plan", "Please revise the plan")} disabled={busy}>Request changes</Button> : null}
-      {task.allowedCommands.includes("start_development") ? <Button size="sm" onClick={() => void onPlanAction("start-development")} disabled={busy}>{busy ? "Executing…" : "Start development"}</Button> : null}
-      {task.allowedCommands.includes("retry_development") ? <Button size="sm" onClick={() => void onPlanAction("retry-development")} disabled={busy}>{busy ? "Retrying…" : "Retry development"}</Button> : null}
-      {task.allowedCommands.includes("cancel_development") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("cancel-development")} disabled={busy}>Cancel development</Button> : null}
-      {task.allowedCommands.includes("review_delivery") ? <Button size="sm" onClick={() => void onPlanAction("review-delivery")} disabled={busy}>{busy ? "Reviewing…" : "Review delivery"}</Button> : null}
-      {task.allowedCommands.includes("repair_delivery") ? <Button size="sm" onClick={() => void onPlanAction("repair-delivery")} disabled={busy}>{busy ? "Repairing…" : "Repair delivery"}</Button> : null}
-      {task.allowedCommands.includes("record_delivery_decision") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("record-delivery-decision", "Member decision recorded")} disabled={busy}>Record decision</Button> : null}
-      {task.allowedCommands.includes("publish_draft") ? <Button size="sm" onClick={() => void onPlanAction("publish-draft")} disabled={busy}>{busy ? "Publishing…" : "Publish draft"}</Button> : null}
-      {task.allowedCommands.includes("reconcile_ci") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reconcile-ci")} disabled={busy}>{busy ? "Reconciling…" : "Retry CI reconciliation"}</Button> : null}
-      {task.allowedCommands.includes("repair_ci") ? <Button size="sm" onClick={() => void onPlanAction("repair-ci")} disabled={busy}>{busy ? "Repairing…" : "Run CI repair"}</Button> : null}
-      {task.allowedCommands.includes("final_review") ? <Button size="sm" onClick={() => void onPlanAction("final-review")} disabled={busy}>Final review</Button> : null}
-      {task.allowedCommands.includes("accept_delivery") ? <Button size="sm" onClick={() => void onPlanAction("accept-delivery")} disabled={busy}>Accept</Button> : null}
-      {task.allowedCommands.includes("request_delivery_changes") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("request-delivery-changes", "Please make the requested delivery changes")} disabled={busy}>Request changes</Button> : null}
-      {task.allowedCommands.includes("reconcile_merge") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reconcile-merge")} disabled={busy}>Reconcile merge</Button> : null}
-      {task.allowedCommands.includes("cancel_issue") ? <Button size="sm" variant="ghost" onClick={() => void onPlanAction("cancel")} disabled={busy}>Cancel</Button> : null}
+      {task.allowedCommands.includes("start_planning") ? <Button size="sm" onClick={() => void onStartPlanning()} disabled={disabled}>{busy ? "Planning…" : "Start planning"}</Button> : null}
+      {task.allowedCommands.includes("request_supplemental_review") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("request-supplemental-review")} disabled={disabled}>Request review</Button> : null}
+      {task.allowedCommands.includes("approve_plan") ? <Button size="sm" onClick={() => void onPlanAction("approve-plan", "Approved final plan")} disabled={disabled}>Approve plan</Button> : null}
+      {task.allowedCommands.includes("reject_plan") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reject-plan", "Please revise the plan")} disabled={disabled}>Request changes</Button> : null}
+      {task.allowedCommands.includes("start_development") ? <Button size="sm" onClick={() => void onPlanAction("start-development")} disabled={disabled}>{busy ? "Executing…" : "Start development"}</Button> : null}
+      {task.allowedCommands.includes("retry_development") ? <Button size="sm" onClick={() => void onPlanAction("retry-development")} disabled={disabled}>{busy ? "Retrying…" : "Retry development"}</Button> : null}
+      {task.allowedCommands.includes("cancel_development") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("cancel-development")} disabled={disabled}>Cancel development</Button> : null}
+      {task.allowedCommands.includes("review_delivery") ? <Button size="sm" onClick={() => void onPlanAction("review-delivery")} disabled={disabled}>{busy ? "Reviewing…" : "Review delivery"}</Button> : null}
+      {task.allowedCommands.includes("repair_delivery") ? <Button size="sm" onClick={() => void onPlanAction("repair-delivery")} disabled={disabled}>{busy ? "Repairing…" : "Repair delivery"}</Button> : null}
+      {task.allowedCommands.includes("record_delivery_decision") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("record-delivery-decision", "Member decision recorded")} disabled={disabled}>Record decision</Button> : null}
+      {task.allowedCommands.includes("publish_draft") ? <Button size="sm" onClick={() => void onPlanAction("publish-draft")} disabled={disabled}>{busy ? "Publishing…" : "Publish draft"}</Button> : null}
+      {task.allowedCommands.includes("reconcile_ci") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reconcile-ci")} disabled={disabled}>{busy ? "Reconciling…" : "Retry CI reconciliation"}</Button> : null}
+      {task.allowedCommands.includes("repair_ci") ? <Button size="sm" onClick={() => void onPlanAction("repair-ci")} disabled={disabled}>{busy ? "Repairing…" : "Run CI repair"}</Button> : null}
+      {task.allowedCommands.includes("final_review") ? <Button size="sm" onClick={() => void onPlanAction("final-review")} disabled={disabled}>Final review</Button> : null}
+      {task.allowedCommands.includes("accept_delivery") ? <Button size="sm" onClick={() => void onPlanAction("accept-delivery")} disabled={disabled}>Accept</Button> : null}
+      {task.allowedCommands.includes("request_delivery_changes") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("request-delivery-changes", "Please make the requested delivery changes")} disabled={disabled}>Request changes</Button> : null}
+      {task.allowedCommands.includes("reconcile_merge") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reconcile-merge")} disabled={disabled}>Reconcile merge</Button> : null}
+      {task.allowedCommands.includes("cancel_issue") ? <Button size="sm" variant="ghost" onClick={() => void onPlanAction("cancel")} disabled={disabled}>Cancel</Button> : null}
     </div>
   );
 }
 
-function TaskDetailsPage({ task, project, companyId, returnTo = "tasks", busy, error, onStartPlanning, onPlanAction }: { task: ApiTask; project: ApiProject | undefined; companyId: string; returnTo?: "tasks" | "board"; busy: boolean; error: string; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void> }): ReactElement {
+function TaskDetailsPage({ task, project, profiles, companyId, returnTo = "tasks", busy, error, onStartPlanning, onPlanAction }: { task: ApiTask; project: ApiProject | undefined; profiles: ApiProfile[]; companyId: string; returnTo?: "tasks" | "board"; busy: boolean; error: string; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void> }): ReactElement {
   const ci = task.ci;
   const latestAttempt = ci?.attempts[0];
   const requiredChecks = ci?.policy.requiredChecks ?? [];
@@ -736,6 +737,7 @@ function TaskDetailsPage({ task, project, companyId, returnTo = "tasks", busy, e
           </Breadcrumb>
           <div className="flex flex-wrap items-center gap-2"><h2 className="text-xl font-semibold tracking-tight">{task.title}</h2><Badge variant="secondary" data-status={task.phase}>{taskPhaseLabel(task.phase)}</Badge></div>
           <p className="text-xs text-muted-foreground">{project?.name ?? "Unknown project"} · {task.phase} · revision {task.revision}</p>
+          <div aria-live="polite" className="text-[11px] text-muted-foreground">{task.projection.status === "lagging" ? `Projection lag: r${task.projection.projectedRevision} → r${task.projection.authoritativeRevision}` : `Projection current · r${task.projection.projectedRevision}`}</div>
           <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} />
           {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
         </header>
@@ -760,6 +762,9 @@ function TaskDetailsPage({ task, project, companyId, returnTo = "tasks", busy, e
               <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Owner</dt><dd>{task.owner}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd>{task.pendingAction ?? "None"}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Projection</dt><dd>{task.projection.status === "lagging" ? `Lagging r${task.projection.projectedRevision} → r${task.projection.authoritativeRevision}` : `Current · r${task.projection.projectedRevision}`}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Profiles</dt><dd>{Object.entries(task.roleProfiles).length ? Object.entries(task.roleProfiles).map(([role, profileId]) => <div key={role}>{role}: {profiles.find((profile) => profile.id === profileId)?.name ?? profileId}</div>) : "Project defaults"}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Supplemental review</dt><dd>{task.supplementalReview ? "Enabled" : "Off"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Updated</dt><dd>{adminDate(task.updatedAt)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Task ID</dt><dd><code className="break-all text-[11px]">{task.id}</code></dd></div>
@@ -783,6 +788,7 @@ function TaskDetailsNotFound({ companyId, returnTo = "tasks" }: { companyId: str
 function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactElement {
   const { currentCompany, loading, user, error: companyError, reloadCompanies } = useCompanyContext();
   const [projects, setProjects] = useState<ApiProject[]>([]);
+  const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   const [tasks, setTasks] = useState<ApiTask[]>([]);
   const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [selectedState, setSelected] = useState<ApiTask>();
@@ -791,6 +797,8 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [images, setImages] = useState<Array<{ filename: string; mimeType: string; base64: string }>>([]);
+  const [roleProfiles, setRoleProfiles] = useState<Record<string, string>>({});
+  const [supplementalReview, setSupplementalReview] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [detailNotFound, setDetailNotFound] = useState(false);
@@ -805,12 +813,13 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
     setError("");
     if (!companyId || loading) { setLoadedCompanyId(""); setProjects([]); setTasks([]); return; }
     try {
-      const [projectResult, taskResult] = await Promise.all([
+      const [projectResult, taskResult, profileResult] = await Promise.all([
         readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
         readJson<{ tasks: ApiTask[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks`),
+        readJson<{ profiles: ApiProfile[] }>("/api/profiles"),
       ]);
       if (token !== requestToken.current) return;
-      setProjects(projectResult.projects); setTasks(taskResult.tasks);
+      setProjects(projectResult.projects); setTasks(taskResult.tasks); setProfiles(profileResult.profiles);
       setProjectId((current) => projectResult.projects.some((project) => project.id === current && project.status === "active") ? current : projectResult.projects.find((project) => project.status === "active")?.id ?? "");
       const detailPrefix = mode === "board" ? "/board/" : "/tasks/";
       const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
@@ -828,7 +837,7 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
     selectedRef.current = undefined;
-    setSelected(undefined); setProjectId(""); setTitle(""); setDescription(""); setImages([]); setDetailNotFound(false);
+    setSelected(undefined); setProjectId(""); setTitle(""); setDescription(""); setImages([]); setRoleProfiles({}); setSupplementalReview(false); setDetailNotFound(false);
   }, [companyId]);
   useEffect(() => {
     const events = new EventSource("/api/tasks/events");
@@ -860,7 +869,7 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
     if (!companyId || currentCompany?.status !== "active") return;
     setBusy(true); setError("");
     try {
-      const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, idempotencyKey: crypto.randomUUID() }) });
+      const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, roleProfiles, supplementalReview, idempotencyKey: crypto.randomUUID() }) });
       window.location.assign(withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId));
     } catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to create task"); }
     finally { setBusy(false); }
@@ -868,8 +877,6 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
   const startPlanning = async (): Promise<void> => {
     if (!selected) return;
     setBusy(true); setError("");
-    const optimistic: ApiTask = { ...selected, phase: "planning", revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Lead planning" };
-    selectedRef.current = optimistic; setSelected(optimistic); setTasks((current) => current.map((task) => task.id === optimistic.id ? optimistic : task));
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); selectedRef.current = updated; setSelected(updated); setTasks((current) => current.map((task) => task.id === updated.id ? updated : task)); await reload(); }
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
     finally { setBusy(false); }
@@ -878,7 +885,7 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
     if (!selected) return;
     setBusy(true); setError("");
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/${path}`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision, ...(note ? { note } : {}) }) }); selectedRef.current = updated; setSelected(updated); await reload(); }
-    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to update the plan"); }
+    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; if (isApiError(reason, 409)) await reload(); setError(reason instanceof Error ? reason.message : "Unable to update the plan"); }
     finally { setBusy(false); }
   };
 
@@ -887,7 +894,7 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
   if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
   if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
-  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} returnTo={mode} busy={busy} error={error} onStartPlanning={startPlanning} onPlanAction={planAction} />;
+  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} profiles={profiles} companyId={companyId} returnTo={mode} busy={busy} error={error} onStartPlanning={startPlanning} onPlanAction={planAction} />;
 
   if (mode === "board") {
     return (
@@ -946,9 +953,18 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
         <section className="max-w-[440px] bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">New task</span><a className="text-[11px] text-muted-foreground hover:text-foreground" href={withCompany("/board", companyId)}>Open board</a></div>
             {currentCompany ? <div className="mb-3 flex items-center gap-2 pb-2 text-xs"><span className="font-medium truncate">{currentCompany.name}</span><span className="text-[11px] text-muted-foreground">{currentCompany.status}</span></div> : null}
             {currentCompany?.status === "active" ? <FieldGroup>
-              <Field><FieldLabel htmlFor="task-project">Project</FieldLabel><Select value={projectId || null} onValueChange={(value) => setProjectId(value ?? "")}><SelectTrigger id="task-project"><SelectValue placeholder="Select a project">{(value) => availableProjects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Select a project")}</SelectValue></SelectTrigger><SelectContent>{availableProjects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select></Field>
+              <Field><FieldLabel htmlFor="task-project">Project</FieldLabel><Select value={projectId || null} onValueChange={(value) => { setProjectId(value ?? ""); setRoleProfiles({}); }}><SelectTrigger id="task-project"><SelectValue placeholder="Select a project">{(value) => availableProjects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Select a project")}</SelectValue></SelectTrigger><SelectContent>{availableProjects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select></Field>
               <Field><FieldLabel htmlFor="task-title">Task title</FieldLabel><Input id="task-title" value={title} onChange={(event) => setTitle(event.target.value)} /></Field>
               <Field><FieldLabel htmlFor="task-description">Task description</FieldLabel><Textarea id="task-description" placeholder="Markdown description" value={description} onChange={(event) => setDescription(event.target.value)} /></Field>
+              <details className="text-xs"><summary className="cursor-pointer py-1 font-medium">Advanced choices</summary><FieldSet>
+                <FieldLegend variant="label">Role and review overrides</FieldLegend>
+                {(["lead", "developer", "reviewer"] as const).map((role) => {
+                  const project = availableProjects.find((candidate) => candidate.id === projectId);
+                  const allowed = profiles.filter((profile) => project?.allowedProfileIds.includes(profile.id));
+                  return <Field key={role}><FieldLabel htmlFor={`task-${role}-profile`}>{role[0]!.toUpperCase() + role.slice(1)} profile</FieldLabel><Select value={roleProfiles[role] ?? null} onValueChange={(value) => setRoleProfiles((current) => value ? { ...current, [role]: value } : Object.fromEntries(Object.entries(current).filter(([key]) => key !== role)))}><SelectTrigger id={`task-${role}-profile`}><SelectValue placeholder="Project default">{(value) => allowed.find((profile) => profile.id === value)?.name ?? (value ? "Unavailable profile" : "Project default")}</SelectValue></SelectTrigger><SelectContent><SelectItem value={null}>Project default</SelectItem>{allowed.map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>)}</SelectContent></Select></Field>;
+                })}
+                <Field orientation="horizontal"><Checkbox id="task-supplemental-review" checked={supplementalReview} onCheckedChange={(checked) => setSupplementalReview(checked === true)} /><FieldLabel htmlFor="task-supplemental-review">Request supplemental review</FieldLabel></Field>
+              </FieldSet></details>
               <InlineAttachmentPicker attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} disabled={busy} />
             </FieldGroup> : currentCompany ? <p className="text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New tasks are unavailable." : "Company archived. New tasks are unavailable."}</p> : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
             {currentCompany?.status === "active" ? <Button className="mt-3 w-full" onClick={() => void create()} disabled={busy || !companyId || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button> : null}

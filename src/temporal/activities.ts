@@ -1,12 +1,13 @@
 import { randomBytes } from "node:crypto";
 
+import { ApplicationFailure } from "@temporalio/activity";
 import { z } from "zod";
 
 import type { ForgeDatabase } from "../database.js";
 import type { ForgeConfig } from "../config.js";
 import { ArtifactStore } from "../artifacts.js";
 import { redact } from "../logging.js";
-import { AgentService } from "../codex-lead.js";
+import { AgentFailure, AgentService } from "../codex-lead.js";
 import { DeveloperService } from "../codex-developer.js";
 import { cancelDeveloperExecution } from "../developer-recovery.js";
 import { AcceptanceService } from "../acceptance.js";
@@ -29,6 +30,11 @@ export class CapacityWaitError extends Error {
     super(`Forge capacity is unavailable; retry request ${requestId} at queue position ${position}`);
     this.name = "CapacityWaitError";
   }
+}
+
+export function asNonRetryableApplicationFailure(error: unknown): ApplicationFailure | undefined {
+  if (!(error instanceof AgentFailure) || !error.nonRetryable) return undefined;
+  return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
 }
 
 const PinnedProjectRevisionSchema = z.object({
@@ -67,7 +73,15 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     const request = capacity.request({ ...input, turnKind });
     const admitted = capacity.tryAcquire(request.id);
     if (!admitted.acquired) throw new CapacityWaitError(request.id, capacity.position(request.id) ?? 1);
-    try { return await operation(); } finally { capacity.release(request.id, "turn-completed"); }
+    try {
+      return await operation();
+    } catch (error) {
+      const permanentFailure = asNonRetryableApplicationFailure(error);
+      if (permanentFailure) throw permanentFailure;
+      throw error;
+    } finally {
+      capacity.release(request.id, "turn-completed");
+    }
   };
   return {
     async recordProbeStarted(input: ProbeWorkflowInput): Promise<ProbeWorkflowState> {

@@ -127,6 +127,13 @@
       "when": 1786427200000,
       "tag": "0017_project_revision_state",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786427300000,
+      "tag": "0018_task_creation_projection_integrity",
+      "breakpoints": true
     }
   ]
 }

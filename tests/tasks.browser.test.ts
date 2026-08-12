@@ -27,7 +27,7 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
   const root = await mkdtemp(join(tmpdir(), "forge-task-browser-test-"));
   const repositoryRoot = join(root, "repositories"); const worktreeRoot = join(root, "worktrees"); const repositoryPath = join(repositoryRoot, "repo");
   await mkdir(repositoryPath, { recursive: true }); await mkdir(worktreeRoot, { recursive: true });
-  const imagePath = join(root, "evidence.png"); await writeFile(imagePath, "browser-image");
+  const imagePath = join(root, "evidence.png"); await writeFile(imagePath, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin-1', 'Admin', 'admin@forge.local', 'admin', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run());
   const config = createTestConfig(root, { repositoryRoot, worktreeRoot, reachableAddress: "http://127.0.0.1:4111" });
@@ -93,18 +93,33 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
       await page.getByLabel("Task images", { exact: true }).setInputFiles(imagePath);
       await page.getByRole("button", { name: "Remove evidence.png", exact: true }).waitFor();
       await page.getByRole("button", { name: "Create task" }).click();
-      await page.getByRole("button", { name: /Browser task/ }).waitFor();
-      await page.getByRole("button", { name: "Start planning", exact: true }).waitFor();
-      await page.getByRole("button", { name: "Start planning", exact: true }).click();
-      await page.getByText(/approval · revision 1/).waitFor();
-      await page.getByText("evidence.png", { exact: true }).waitFor();
-      await page.getByText("Lead plan", { exact: true }).waitFor();
-      await page.getByText("Inspect repository", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "Request review", exact: true }).click();
-      await page.getByText(/approval · revision 2/).waitFor();
-      await page.getByRole("button", { name: "Approve plan", exact: true }).click();
-      await page.getByText(/ready_for_development · revision 3/).waitFor();
-      const narrow = await context.newPage(); await narrow.setViewportSize({ width: 390, height: 844 }); await narrow.goto(`${baseUrl}/tasks`); expect(await narrow.getByRole("button", { name: "Open navigation" }).isVisible()).toBe(true); await narrow.close(); await page.close(); await context.close();
+      const taskDialog = page.getByRole("dialog");
+      await taskDialog.waitFor();
+      expect(await taskDialog.getByRole("heading", { name: "Browser task", exact: true }).isVisible()).toBe(true);
+      expect(new URL(page.url()).pathname).toMatch(/^\/tasks\//);
+      await taskDialog.getByRole("button", { name: "Start planning", exact: true }).click();
+      await taskDialog.getByText(/approval · revision 1/).waitFor();
+      await taskDialog.getByText("evidence.png", { exact: true }).waitFor();
+      await taskDialog.getByText("Lead plan", { exact: true }).waitFor();
+      await taskDialog.getByText("Inspect repository", { exact: true }).waitFor();
+      await taskDialog.getByRole("button", { name: "Request review", exact: true }).click();
+      await taskDialog.getByText(/approval · revision 2/).waitFor();
+      await taskDialog.getByRole("button", { name: "Approve plan", exact: true }).click();
+      await taskDialog.getByText(/ready_for_development · revision 3/).waitFor();
+      await taskDialog.getByRole("button", { name: "Close", exact: true }).click();
+      await expect.poll(async () => taskDialog.count()).toBe(0);
+      expect(new URL(page.url()).pathname).toBe("/tasks");
+
+      const narrow = await context.newPage();
+      await narrow.setViewportSize({ width: 390, height: 844 });
+      await narrow.goto(`${baseUrl}/tasks`);
+      expect(await narrow.getByRole("button", { name: "Open navigation" }).isVisible()).toBe(true);
+      await narrow.getByRole("button", { name: /Browser task/ }).click();
+      const narrowDialog = narrow.getByRole("dialog");
+      await narrowDialog.waitFor();
+      expect(await narrowDialog.getByRole("heading", { name: "Browser task", exact: true }).isVisible()).toBe(true);
+      expect(await narrowDialog.getByText("Description", { exact: true }).isVisible()).toBe(true);
+      await narrow.close(); await page.close(); await context.close();
     } finally { await browser.close(); }
   } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }
 });

@@ -10,6 +10,7 @@ import { desc, eq } from "drizzle-orm";
 
 import { probeWorkflows, workerRegistrations } from "./database-schema.js";
 import { authSchema, type AuthSchema } from "./auth-schema.js";
+import { IssueWorkflowStateSchema, type IssueWorkflowState } from "./temporal/issue-contracts.js";
 
 export type ProbeStatus = "running" | "completed";
 
@@ -40,6 +41,7 @@ export interface IssueProjectionRecord {
   companyId: string;
   projectId: string;
   workflowId: string;
+  projectRevisionId?: string;
   revision: number;
   phase: "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "merge_conflict_reviewing" | "merge_conflict_required" | "merge_conflict_resolving" | "ci_waiting" | "ci_repair_required" | "final_review" | "accepted" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
   owner: "human" | "lead";
@@ -53,6 +55,31 @@ export interface IssueProjectionRecord {
   supplementalReviewArtifactId?: string | null;
   decisionId?: string | null;
   state?: Record<string, unknown>;
+}
+
+export class ProjectionIntegrityFailure extends Error {
+  readonly code = "projection_integrity_failure" as const;
+  readonly taskId: string | undefined;
+  readonly revision: number | undefined;
+
+  constructor(message: string, details: { taskId?: string; revision?: number } = {}) {
+    super(message);
+    this.name = "ProjectionIntegrityFailure";
+    this.taskId = details.taskId;
+    this.revision = details.revision;
+  }
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  if (value !== null && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJson(entry)}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+export function projectionStateHash(state: unknown): string {
+  return createHash("sha256").update(canonicalJson(state)).digest("hex");
 }
 
 export type SchemaState = "current" | "behind" | "ahead" | "partial" | "corrupt" | "locked" | "unavailable";
@@ -319,119 +346,122 @@ export class ForgeDatabase {
     return operation(this.db);
   }
 
+  private validatedProjectionState(state: IssueProjectionRecord): IssueWorkflowState {
+    const candidate = state.state ? {
+      ...(state.state as Record<string, unknown>),
+      issueId: (state.state as Record<string, unknown>).issueId ?? state.taskId,
+      taskId: undefined,
+      companyId: (state.state as Record<string, unknown>).companyId ?? state.companyId,
+      projectId: (state.state as Record<string, unknown>).projectId ?? state.projectId,
+      workflowId: (state.state as Record<string, unknown>).workflowId ?? state.workflowId,
+      projectRevisionId: (state.state as Record<string, unknown>).projectRevisionId ?? state.projectRevisionId ?? "projection-legacy",
+      continuationCount: (state.state as Record<string, unknown>).continuationCount ?? 0,
+      lastSummaryHash: (state.state as Record<string, unknown>).lastSummaryHash ?? null,
+    } : {
+      workflowId: state.workflowId,
+      companyId: state.companyId,
+      projectId: state.projectId,
+      issueId: state.taskId,
+      projectRevisionId: state.projectRevisionId ?? "projection-legacy",
+      revision: state.revision,
+      phase: state.phase,
+      owner: state.owner,
+      allowedCommands: state.allowedCommands,
+      pendingAction: state.pendingAction,
+      lastEventId: state.lastEventId,
+      continuationCount: 0,
+      lastSummaryHash: null,
+      ...(state.planRevision !== undefined ? { planRevision: state.planRevision } : {}),
+      ...(state.planMaterial !== undefined ? { planMaterial: state.planMaterial } : {}),
+      ...(state.materialCategories !== undefined ? { materialCategories: state.materialCategories } : {}),
+      ...(state.supplementalReviewUsed !== undefined ? { supplementalReviewUsed: state.supplementalReviewUsed } : {}),
+      ...(state.supplementalReviewArtifactId !== undefined ? { supplementalReviewArtifactId: state.supplementalReviewArtifactId } : {}),
+      ...(state.decisionId !== undefined ? { decisionId: state.decisionId } : {}),
+    };
+    let parsed: IssueWorkflowState;
+    try {
+      parsed = IssueWorkflowStateSchema.parse(candidate);
+    } catch {
+      throw new ProjectionIntegrityFailure("Workflow projection state failed schema validation", { taskId: state.taskId, revision: state.revision });
+    }
+    if (parsed.workflowId !== state.workflowId || parsed.companyId !== state.companyId || parsed.projectId !== state.projectId || parsed.issueId !== state.taskId || parsed.revision !== state.revision || parsed.lastEventId !== state.lastEventId) {
+      throw new ProjectionIntegrityFailure("Workflow projection identity does not match its envelope", { taskId: state.taskId, revision: state.revision });
+    }
+    return parsed;
+  }
+
+  private applyIssueProjection(database: Database.Database, parsed: IssueWorkflowState, updatedAt: string): void {
+    const stateHash = projectionStateHash(parsed);
+    const eventType = parsed.phase === "backlog" ? "task_created" : parsed.phase === "planning" ? "planning_started" : `phase_${parsed.phase}`;
+    const eventById = database.prepare("SELECT revision, event_hash FROM forge_issue_timeline WHERE id = ? AND workflow_id = ?").get(parsed.lastEventId, parsed.workflowId) as { revision: number; event_hash: string } | undefined;
+    if (eventById && eventById.event_hash && eventById.event_hash !== stateHash) throw new ProjectionIntegrityFailure("Projection event identity was reused with a different state", { taskId: parsed.issueId, revision: parsed.revision });
+    const eventByRevision = database.prepare("SELECT id, event_hash FROM forge_issue_timeline WHERE workflow_id = ? AND revision = ?").get(parsed.workflowId, parsed.revision) as { id: string; event_hash: string } | undefined;
+    if (eventByRevision && eventByRevision.event_hash && eventByRevision.event_hash !== stateHash) throw new ProjectionIntegrityFailure("Projection revision was reused with a different state", { taskId: parsed.issueId, revision: parsed.revision });
+    if (!eventById && !eventByRevision) {
+      database.prepare(`INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(parsed.lastEventId, parsed.issueId, parsed.companyId, parsed.workflowId, parsed.revision, eventType, JSON.stringify({ revision: parsed.revision, phase: parsed.phase, stateHash }), updatedAt, stateHash);
+    }
+
+    const current = database.prepare("SELECT revision, event_hash FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string } | undefined;
+    if (current && current.revision > parsed.revision) return;
+    if (current && current.revision === parsed.revision && current.event_hash !== stateHash) throw new ProjectionIntegrityFailure("Projection revision was overwritten with a different state", { taskId: parsed.issueId, revision: parsed.revision });
+
+    const snapshot = database.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = ?").get(parsed.issueId, parsed.revision) as { state_json: string } | undefined;
+    if (snapshot) {
+      let stored: unknown;
+      try { stored = JSON.parse(snapshot.state_json); } catch { throw new ProjectionIntegrityFailure("Authoritative workflow snapshot is not valid JSON", { taskId: parsed.issueId, revision: parsed.revision }); }
+      const storedRecord = stored as Record<string, unknown>;
+      const storedParsed = IssueWorkflowStateSchema.safeParse({ ...storedRecord, issueId: storedRecord.issueId ?? parsed.issueId, companyId: storedRecord.companyId ?? parsed.companyId, projectId: storedRecord.projectId ?? parsed.projectId, workflowId: storedRecord.workflowId ?? parsed.workflowId, projectRevisionId: storedRecord.projectRevisionId ?? parsed.projectRevisionId, owner: storedRecord.owner === "system" ? "human" : storedRecord.owner, continuationCount: storedRecord.continuationCount ?? 0, lastSummaryHash: storedRecord.lastSummaryHash ?? null });
+      if (!storedParsed.success || projectionStateHash(storedParsed.data) !== stateHash) throw new ProjectionIntegrityFailure("Authoritative workflow snapshot was overwritten with a different state", { taskId: parsed.issueId, revision: parsed.revision });
+    }
+    if (!snapshot) database.prepare(`INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run(parsed.issueId, parsed.companyId, parsed.workflowId, parsed.revision, JSON.stringify(parsed), updatedAt);
+    if (current && current.revision === parsed.revision && current.event_hash === stateHash) return;
+
+    database.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, projected_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, project_id = excluded.project_id, workflow_id = excluded.workflow_id, revision = excluded.revision, phase = excluded.phase, owner = excluded.owner, allowed_commands_json = excluded.allowed_commands_json, pending_action = excluded.pending_action, updated_at = excluded.updated_at, last_event_id = excluded.last_event_id, event_hash = excluded.event_hash, authoritative_revision = excluded.authoritative_revision, projected_at = excluded.projected_at
+      WHERE forge_issue_projections.revision < excluded.revision`).run(
+      parsed.issueId, parsed.companyId, parsed.projectId, parsed.workflowId, parsed.revision, parsed.phase, parsed.owner, JSON.stringify(parsed.allowedCommands), parsed.pendingAction, updatedAt, parsed.lastEventId, stateHash, parsed.revision, updatedAt,
+    );
+    database.prepare(`INSERT INTO forge_issue_governance (task_id, company_id, plan_revision, plan_material, material_categories_json, supplemental_review_used, supplemental_review_artifact_id, decision_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, plan_revision = excluded.plan_revision, plan_material = excluded.plan_material, material_categories_json = excluded.material_categories_json, supplemental_review_used = excluded.supplemental_review_used, supplemental_review_artifact_id = excluded.supplemental_review_artifact_id, decision_id = excluded.decision_id`).run(
+      parsed.issueId, parsed.companyId, parsed.planRevision ?? null, parsed.planMaterial === undefined || parsed.planMaterial === null ? null : parsed.planMaterial ? 1 : 0, JSON.stringify(parsed.materialCategories ?? []), parsed.supplementalReviewUsed ? 1 : 0, parsed.supplementalReviewArtifactId ?? null, parsed.decisionId ?? null,
+    );
+  }
+
   projectIssueState(state: IssueProjectionRecord): void {
     this.db.transaction(() => {
       const updatedAt = new Date().toISOString();
-      this.db.prepare(`INSERT OR IGNORE INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        state.lastEventId,
-        state.taskId,
-        state.companyId,
-        state.workflowId,
-        state.revision,
-        state.phase === "backlog" ? "task_created" : state.phase === "planning" ? "planning_started" : `phase_${state.phase}`,
-        JSON.stringify({ revision: state.revision, phase: state.phase }),
-        updatedAt,
-      );
-      const current = this.db.prepare("SELECT revision FROM forge_issue_projections WHERE task_id = ?").get(state.taskId) as { revision: number } | undefined;
-      if (current && current.revision > state.revision) return;
-      this.db.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, project_id = excluded.project_id, workflow_id = excluded.workflow_id, revision = excluded.revision, phase = excluded.phase, owner = excluded.owner, allowed_commands_json = excluded.allowed_commands_json, pending_action = excluded.pending_action, updated_at = excluded.updated_at, last_event_id = excluded.last_event_id
-        WHERE forge_issue_projections.revision <= excluded.revision`).run(
-        state.taskId,
-        state.companyId,
-        state.projectId,
-        state.workflowId,
-        state.revision,
-        state.phase,
-        state.owner,
-        JSON.stringify(state.allowedCommands),
-        state.pendingAction,
-        updatedAt,
-        state.lastEventId,
-      );
-      this.db.prepare(`INSERT INTO forge_issue_governance (task_id, company_id, plan_revision, plan_material, material_categories_json, supplemental_review_used, supplemental_review_artifact_id, decision_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, plan_revision = excluded.plan_revision, plan_material = excluded.plan_material, material_categories_json = excluded.material_categories_json, supplemental_review_used = excluded.supplemental_review_used, supplemental_review_artifact_id = excluded.supplemental_review_artifact_id, decision_id = excluded.decision_id`).run(
-        state.taskId,
-        state.companyId,
-        state.planRevision ?? null,
-        state.planMaterial === undefined || state.planMaterial === null ? null : state.planMaterial ? 1 : 0,
-        JSON.stringify(state.materialCategories ?? []),
-        state.supplementalReviewUsed ? 1 : 0,
-        state.supplementalReviewArtifactId ?? null,
-        state.decisionId ?? null,
-      );
-      this.db.prepare(`INSERT OR IGNORE INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?)`).run(
-        state.taskId,
-        state.companyId,
-        state.workflowId,
-        state.revision,
-        JSON.stringify(state.state ?? {
-          taskId: state.taskId,
-          companyId: state.companyId,
-          projectId: state.projectId,
-          workflowId: state.workflowId,
-          revision: state.revision,
-          phase: state.phase,
-          owner: state.owner,
-          allowedCommands: state.allowedCommands,
-          pendingAction: state.pendingAction,
-          lastEventId: state.lastEventId,
-          planRevision: state.planRevision ?? null,
-          planMaterial: state.planMaterial ?? null,
-          materialCategories: state.materialCategories ?? [],
-          supplementalReviewUsed: state.supplementalReviewUsed ?? false,
-          supplementalReviewArtifactId: state.supplementalReviewArtifactId ?? null,
-          decisionId: state.decisionId ?? null,
-        }),
-        updatedAt,
-      );
+      const parsed = this.validatedProjectionState(state);
+      this.applyIssueProjection(this.db, parsed, updatedAt);
     })();
   }
 
   rebuildIssueProjections(taskId?: string): number {
     return this.db.transaction(() => {
       const snapshots = (taskId
-        ? this.db.prepare("SELECT task_id, company_id, workflow_id, revision, state_json FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY task_id, revision").all(taskId)
-        : this.db.prepare("SELECT task_id, company_id, workflow_id, revision, state_json FROM forge_workflow_snapshots ORDER BY task_id, revision").all()) as Array<{ task_id: string; company_id: string; workflow_id: string; revision: number; state_json: string }>;
-      const taskIds = [...new Set(snapshots.map((snapshot) => snapshot.task_id))];
+        ? this.db.prepare("SELECT task_id, company_id, workflow_id, revision, state_json, updated_at FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY task_id, revision").all(taskId)
+        : this.db.prepare("SELECT task_id, company_id, workflow_id, revision, state_json, updated_at FROM forge_workflow_snapshots ORDER BY task_id, revision").all()) as Array<{ task_id: string; company_id: string; workflow_id: string; revision: number; state_json: string; updated_at: string }>;
+      const parsedSnapshots = snapshots.map((snapshot) => {
+        let raw: unknown;
+        try { raw = JSON.parse(snapshot.state_json); } catch { throw new ProjectionIntegrityFailure("Stored workflow snapshot is not valid JSON", { taskId: snapshot.task_id, revision: snapshot.revision }); }
+        const legacyOwner = String((raw as Record<string, unknown>).owner ?? "human") === "system" ? "human" : String((raw as Record<string, unknown>).owner ?? "human");
+        const parsed = this.validatedProjectionState({ taskId: snapshot.task_id, companyId: snapshot.company_id, projectId: String((raw as Record<string, unknown>).projectId ?? ""), workflowId: snapshot.workflow_id, revision: snapshot.revision, phase: String((raw as Record<string, unknown>).phase ?? "failed") as IssueProjectionRecord["phase"], owner: legacyOwner as IssueProjectionRecord["owner"], allowedCommands: Array.isArray((raw as Record<string, unknown>).allowedCommands) ? (raw as Record<string, unknown>).allowedCommands as string[] : [], pendingAction: typeof (raw as Record<string, unknown>).pendingAction === "string" ? (raw as Record<string, unknown>).pendingAction as string : null, lastEventId: String((raw as Record<string, unknown>).lastEventId ?? `${snapshot.workflow_id}:${snapshot.revision}`), state: { ...(raw as Record<string, unknown>), taskId: undefined, issueId: (raw as Record<string, unknown>).issueId ?? snapshot.task_id, companyId: (raw as Record<string, unknown>).companyId ?? snapshot.company_id, workflowId: (raw as Record<string, unknown>).workflowId ?? snapshot.workflow_id, projectId: (raw as Record<string, unknown>).projectId ?? String((raw as Record<string, unknown>).projectId ?? ""), projectRevisionId: (raw as Record<string, unknown>).projectRevisionId ?? "projection-legacy", owner: legacyOwner } });
+        if (parsed.revision !== snapshot.revision || parsed.workflowId !== snapshot.workflow_id || parsed.companyId !== snapshot.company_id) throw new ProjectionIntegrityFailure("Stored workflow snapshot envelope does not match its state", { taskId: snapshot.task_id, revision: snapshot.revision });
+        return { snapshot, parsed };
+      });
+      const taskIds = [...new Set(parsedSnapshots.map(({ snapshot }) => snapshot.task_id))];
+      for (const task of taskIds) {
+        const row = this.db.prepare("SELECT company_id, workflow_id, project_id FROM forge_tasks WHERE id = ?").get(task) as { company_id: string; workflow_id: string; project_id: string } | undefined;
+        const first = parsedSnapshots.find(({ snapshot }) => snapshot.task_id === task);
+        if (!row || !first || row.company_id !== first.snapshot.company_id || row.workflow_id !== first.snapshot.workflow_id || row.project_id !== first.parsed.projectId) throw new ProjectionIntegrityFailure("Workflow snapshot crossed its task scope", { taskId: task });
+      }
       for (const id of taskIds) {
         this.db.prepare("DELETE FROM forge_issue_projections WHERE task_id = ?").run(id);
         this.db.prepare("DELETE FROM forge_issue_governance WHERE task_id = ?").run(id);
       }
-      for (const snapshot of snapshots) {
-        let state: Record<string, unknown>;
-        try { state = JSON.parse(snapshot.state_json) as Record<string, unknown>; } catch { continue; }
-        this.db.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(task_id) DO UPDATE SET revision = excluded.revision, phase = excluded.phase, owner = excluded.owner, allowed_commands_json = excluded.allowed_commands_json, pending_action = excluded.pending_action, updated_at = excluded.updated_at, last_event_id = excluded.last_event_id
-          WHERE forge_issue_projections.revision <= excluded.revision`).run(
-          snapshot.task_id,
-          snapshot.company_id,
-          String(state.projectId ?? ""),
-          snapshot.workflow_id,
-          snapshot.revision,
-          String(state.phase ?? "failed"),
-          String(state.owner ?? "human"),
-          JSON.stringify(Array.isArray(state.allowedCommands) ? state.allowedCommands : []),
-          typeof state.pendingAction === "string" ? state.pendingAction : null,
-          new Date().toISOString(),
-          String(state.lastEventId ?? `${snapshot.workflow_id}:${snapshot.revision}`),
-        );
-        this.db.prepare(`INSERT INTO forge_issue_governance (task_id, company_id, plan_revision, plan_material, material_categories_json, supplemental_review_used, supplemental_review_artifact_id, decision_id)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(task_id) DO UPDATE SET plan_revision = excluded.plan_revision, plan_material = excluded.plan_material, material_categories_json = excluded.material_categories_json, supplemental_review_used = excluded.supplemental_review_used, supplemental_review_artifact_id = excluded.supplemental_review_artifact_id, decision_id = excluded.decision_id`).run(
-          snapshot.task_id,
-          snapshot.company_id,
-          typeof state.planRevision === "number" ? state.planRevision : null,
-          state.planMaterial === true ? 1 : state.planMaterial === false ? 0 : null,
-          JSON.stringify(Array.isArray(state.materialCategories) ? state.materialCategories : []),
-          state.supplementalReviewUsed === true ? 1 : 0,
-          typeof state.supplementalReviewArtifactId === "string" ? state.supplementalReviewArtifactId : null,
-          typeof state.decisionId === "string" ? state.decisionId : null,
-        );
+      for (const { snapshot, parsed } of parsedSnapshots) {
+        this.applyIssueProjection(this.db, parsed, snapshot.updated_at);
       }
       return taskIds.length;
     })();

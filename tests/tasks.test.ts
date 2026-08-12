@@ -54,7 +54,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
   try {
     const events: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number }> = [];
     const unsubscribe = value.tasks.subscribe(value.adminId, (event) => events.push(event));
-    const first = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Investigate queue", description: "## Reproduce\n\nPlease inspect the queue.", idempotencyKey: "queue-task-0001", supplementalReview: true, images: [{ filename: "evidence.png", mimeType: "image/png", base64: Buffer.from("png-fixture").toString("base64") }] });
+    const first = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Investigate queue", description: "## Reproduce\n\nPlease inspect the queue.", idempotencyKey: "queue-task-0001", supplementalReview: true, images: [{ filename: "evidence.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] });
     unsubscribe();
     expect(first.created).toBe(true);
     expect(first.task.phase).toBe("backlog");
@@ -64,13 +64,15 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     expect(first.task.supplementalReview).toBe(true);
     expect(first.task.roleProfiles.lead).toBe(value.profileId);
     expect(events).toEqual([{ type: "invalidate", taskId: first.task.id, companyId: value.companyId, revision: 0 }]);
-    const duplicate = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Different title", description: "Different", idempotencyKey: "queue-task-0001", images: [] });
+    const duplicate = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Investigate queue", description: "## Reproduce\n\nPlease inspect the queue.", idempotencyKey: "queue-task-0001", supplementalReview: true, images: [{ filename: "evidence.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] });
     expect(duplicate.created).toBe(false);
     expect(duplicate.task.id).toBe(first.task.id);
     await expect(value.tasks.startPlanning(value.adminId, first.task.id, 9)).rejects.toMatchObject({ statusCode: 409, findings: [expect.objectContaining({ code: "stale-revision" })] });
     const planning = await value.tasks.startPlanning(value.adminId, first.task.id, 0);
     expect(planning).toMatchObject({ phase: "planning", revision: 1, owner: "lead", pendingAction: "Lead planning", allowedCommands: [] });
     expect(planning.timeline.map((entry) => entry.eventType)).toEqual(["task_created", "planning_started"]);
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'lead', 'failed', 1, '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId));
+    expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "lead", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry." })]);
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }
@@ -79,7 +81,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
 test("projection writes are monotonic and corrupted or traversing artifacts fail closed", async () => {
   const value = await fixture();
   try {
-    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Artifact task", description: "body", idempotencyKey: "artifact-task-0001", images: [{ filename: "proof.png", mimeType: "image/png", base64: Buffer.from("proof").toString("base64") }] });
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Artifact task", description: "body", idempotencyKey: "artifact-task-0001", images: [{ filename: "proof.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] });
     const imageId = created.task.images[0]!.artifactId;
     const artifact = value.database.authQuery((db) => db.prepare("SELECT storage_path FROM forge_artifacts WHERE id = ?").get(imageId) as { storage_path: string });
     await writeFile(join(value.root, "artifacts", artifact.storage_path), "corrupted");

@@ -8,7 +8,7 @@ import { z } from "zod";
 
 import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
-import { AgentFailure, FileSessionStore, runCodexProcess, type LeadProcessResult, type LeadProcessRunner, type SessionStore } from "./codex-lead.js";
+import { AgentFailure, agentProcessFailure, FileSessionStore, runCodexProcess, type LeadProcessRunner, type SessionStore } from "./codex-lead.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import { createGitCommandGuard, WorktreeManager } from "./worktrees.js";
@@ -145,13 +145,6 @@ function parseMergeConflictResolutionReport(lines: string[]): z.infer<typeof Dev
   return result.data;
 }
 
-function processFailure(result: LeadProcessResult): string {
-  if (/not logged in|login required|authentication required|unauthenticated|oauth authorization required/i.test(result.stderr)) return "login-expired";
-  if (/rate[ -]?limit|too many requests|\b429\b/i.test(result.stderr)) return "rate-limited";
-  if (/model .*not supported|unsupported model|invalid model/i.test(result.stderr)) return "model-unavailable";
-  return result.exitCode === 0 ? "process-output-failed" : "process-exited";
-}
-
 function scopedRepository(root: string, candidate: string): Promise<string> {
   return Promise.all([realpath(root), realpath(candidate)]).then(([absoluteRoot, absoluteCandidate]) => {
     const path = relative(absoluteRoot, absoluteCandidate);
@@ -227,6 +220,7 @@ export class DeveloperService {
     this.database.authTransaction((db) => db.prepare(`INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, 1)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, wrapperId, guard!.directory, prior?.id ?? null, startedAt, startedAt));
     const prompt = this.prompt(context.title, brief, planText, leadEvidence, worktree);
     const evidenceLines = [JSON.stringify({ type: "forge.prompt", text: redact(prompt) })];
+    const outputLines: string[] = [];
     let sessionRef: string | undefined;
     let rawSessionId: string | undefined;
     try {
@@ -242,12 +236,13 @@ export class DeveloperService {
           onLine: async (line) => {
             const sanitized = safeJsonLine(line);
             evidenceLines.push(sanitized);
+            outputLines.push(line);
             const event = eventValue(line);
             if (event.threadId && !sessionRef) { rawSessionId = event.threadId; sessionRef = await this.sessionStore.create(rawSessionId); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET session_ref = ?, heartbeat_at = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), executionId)); }
             await this.heartbeat(executionId);
           },
         });
-        if (result.exitCode !== 0) throw new AgentFailure(processFailure(result), "Codex Developer did not complete");
+        if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines, profile.model);
         if (!sessionRef || !rawSessionId || sessionRef === input.leadSessionRef) throw new AgentFailure("session-identity-conflict", "Developer session must be distinct from the Lead session");
         const report = parseDeliveryReport(evidenceLines);
         const gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
@@ -309,7 +304,7 @@ export class DeveloperService {
           await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET heartbeat_at = ? WHERE id = ?").run(this.now().toISOString(), executionId));
         },
       });
-      if (result.exitCode !== 0) throw new AgentFailure(processFailure(result), "Codex Developer merge-conflict resolution did not complete");
+      if (result.exitCode !== 0) throw agentProcessFailure(result, evidenceLines);
       const report = parseMergeConflictResolutionReport(evidenceLines);
       const missingFiles = input.conflictFiles.filter((file) => !report.resolvedFiles.includes(file));
       if (missingFiles.length || report.blocker !== null) throw new AgentFailure("merge-resolution-incomplete", missingFiles.length ? `The Developer did not resolve: ${missingFiles.join(", ")}` : report.blocker ?? "Merge-conflict resolution is blocked");
@@ -393,7 +388,7 @@ export class DeveloperService {
         });
         if (result.exitCode !== 0) {
           evidenceLines.push(JSON.stringify({ type: "forge.process-failure", exitCode: result.exitCode, stderr: redact(result.stderr) }));
-          throw new AgentFailure(processFailure(result), "Codex Developer repair did not complete");
+          throw agentProcessFailure(result, outputLines);
         }
         const report = parseRepairReport(outputLines);
         if (report.addressedFindingIds.some((id) => !input.blockingFindings.some((finding) => finding.findingId === id))) throw new AgentFailure("repair-scope-violation", "Developer repair reported a finding outside the bounded blocking set");

@@ -96,11 +96,13 @@ export type LeadProcessRunner = (invocation: LeadInvocation) => Promise<LeadProc
 
 export class AgentFailure extends Error {
   readonly code: string;
+  readonly nonRetryable: boolean;
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, options: { nonRetryable?: boolean } = {}) {
     super(message);
     this.name = "AgentFailure";
     this.code = code;
+    this.nonRetryable = options.nonRetryable ?? false;
   }
 }
 
@@ -319,11 +321,19 @@ async function readDeliveryGitEvidence(worktreePath: string, targetBaseSha: stri
   };
 }
 
-function failureCode(result: LeadProcessResult): string {
-  if (/not logged in|login required|authentication required|unauthenticated|oauth authorization required/i.test(result.stderr)) return "login-expired";
-  if (/rate[ -]?limit|too many requests|\b429\b/i.test(result.stderr)) return "rate-limited";
-  if (/model .*not supported|unsupported model|invalid model/i.test(result.stderr)) return "model-unavailable";
-  return result.exitCode === 0 ? "process-output-failed" : "process-exited";
+export function agentProcessFailure(result: LeadProcessResult, outputLines: string[] = [], model?: string): AgentFailure {
+  const diagnosticText = `${result.stderr}\n${outputLines.join("\n")}`;
+  if (/not logged in|login required|authentication required|unauthenticated|oauth authorization required/i.test(diagnosticText)) {
+    return new AgentFailure("login-expired", "Agent provider authentication is unavailable. Sign in again, then retry.", { nonRetryable: true });
+  }
+  if (/rate[ -]?limit|too many requests|\b429\b/i.test(diagnosticText)) {
+    return new AgentFailure("rate-limited", "Agent provider rate limiting prevented this invocation from completing.");
+  }
+  if (/model .*not supported|unsupported model|invalid model|unknown model|model_not_found|model metadata .*not found|model .*does not exist/i.test(diagnosticText)) {
+    const configuredModel = model ? ` “${model}”` : "";
+    return new AgentFailure("model-unavailable", `The configured model${configuredModel} is unavailable for the active provider account. Select a supported model, then retry.`, { nonRetryable: true });
+  }
+  return new AgentFailure(result.exitCode === 0 ? "process-output-failed" : "process-exited", "The agent invocation did not complete.");
 }
 
 async function taskScopedPath(root: string, candidate: string): Promise<string> {
@@ -489,7 +499,7 @@ export class AgentService {
           },
         }).finally(() => clearInterval(heartbeat));
         if (result.exitCode !== 0) {
-          lastFailure = new AgentFailure(failureCode(result), "Codex Lead execution did not complete");
+          lastFailure = agentProcessFailure(result, lines, leadProfile.model);
           break;
         }
         try {
@@ -547,7 +557,7 @@ export class AgentService {
           await this.databaseHeartbeat(executionId, "running");
         },
       });
-      if (result.exitCode !== 0) throw new AgentFailure(failureCode(result), "Codex Lead merge-conflict planning did not complete");
+      if (result.exitCode !== 0) throw agentProcessFailure(result, evidenceLines);
       const output = parseMergeConflictPlan(evidenceLines);
       const plannedFiles = new Set(output.resolutions.map((resolution) => resolution.file));
       const missingFiles = input.conflictFiles.filter((file) => !plannedFiles.has(file));
@@ -652,7 +662,7 @@ export class AgentService {
           await this.databaseHeartbeat(executionId, "running");
         },
       });
-      if (result.exitCode !== 0) throw new AgentFailure(failureCode(result), "Codex Lead delivery review did not complete");
+      if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines, leadProfile.model);
       const review = DeliveryReviewSchema.parse(parseDeliveryReview(outputLines));
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const opinion = await this.artifacts.put(input.companyId, "delivery-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
@@ -715,7 +725,7 @@ export class AgentService {
           await this.databaseHeartbeat(executionId, "running");
         },
       });
-      if (result.exitCode !== 0) throw new AgentFailure(failureCode(result), "Supplemental review did not complete");
+      if (result.exitCode !== 0) throw agentProcessFailure(result, lines, profile.model);
       const review = parseSupplementalReview(lines);
       if (!sessionRef) throw new AgentFailure("missing-session", "Supplemental review did not return a session reference");
       const evidence = await this.persistEvidence(input.companyId, executionId, lines);
@@ -755,7 +765,7 @@ export class AgentService {
     const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
     try {
       const result = await this.processRunner({ command: this.command, args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.consolidationPrompt(draftText, reviewText)], cwd: repositoryPath, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { lines.push(safeJsonLine(line)); await this.databaseHeartbeat(executionId, "running"); } });
-      if (result.exitCode !== 0) throw new AgentFailure(failureCode(result), "Lead consolidation did not complete");
+      if (result.exitCode !== 0) throw agentProcessFailure(result, lines, lead.model);
       const output = parseLeadOutput(lines);
       const persisted = await this.persistOutput({ taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, projectId: rawInput.projectId, projectRevisionId: rawInput.projectRevisionId, briefArtifactId: rawInput.briefArtifactId, imageArtifactIds: rawInput.imageArtifactIds, roleProfiles: rawInput.roleProfiles, revision: rawInput.revision }, executionId, rawInput.leadSessionRef, lines, output);
       await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), persisted.evidence.id, executionId));

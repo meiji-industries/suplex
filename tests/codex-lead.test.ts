@@ -5,12 +5,14 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 
 import { expect, test } from "vitest";
+import { ApplicationFailure } from "@temporalio/activity";
 
 import { ArtifactStore } from "../src/artifacts.js";
-import { AgentService, LeadOutputSchema, runCodexProcess, type LeadProcessRunner, type SessionStore } from "../src/codex-lead.js";
+import { AgentFailure, AgentService, LeadOutputSchema, runCodexProcess, type LeadProcessRunner, type SessionStore } from "../src/codex-lead.js";
 import { DeveloperService } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
+import { asNonRetryableApplicationFailure } from "../src/temporal/activities.js";
 import { DeliveryReviewSchema } from "../src/temporal/issue-contracts.js";
 
 const execFileAsync = promisify(execFile);
@@ -144,10 +146,10 @@ test("Lead planning classifies a successful process without schema output", asyn
 });
 
 test.each([
-  ["login-expired", "OAuth authorization required"],
-  ["rate-limited", "HTTP 429: rate limit exceeded"],
-  ["process-exited", "worker crashed"],
-])("Lead process failures are typed without exposing provider stderr (%s)", async (code, stderr) => {
+  ["login-expired", "OAuth authorization required", "Agent provider authentication is unavailable. Sign in again, then retry."],
+  ["rate-limited", "HTTP 429: rate limit exceeded", "Agent provider rate limiting prevented this invocation from completing."],
+  ["process-exited", "worker crashed", "The agent invocation did not complete."],
+])("Lead process failures are typed without exposing provider stderr (%s)", async (code, stderr, summary) => {
   const value = await fixture();
   const runner: LeadProcessRunner = async (invocation) => {
     await invocation.onStart(4322, "2026-08-11T00:00:00.000Z");
@@ -158,12 +160,44 @@ test.each([
     const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_failure"; }, async read() { return "raw-failure-session"; } } });
     await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code });
     const failure = value.database.authQuery((db) => db.prepare("SELECT failure_code, failure_summary FROM forge_agent_executions WHERE task_id = 'task_1'").get() as { failure_code: string; failure_summary: string });
-    expect(failure).toEqual({ failure_code: code, failure_summary: "Codex Lead execution did not complete" });
+    expect(failure).toEqual({ failure_code: code, failure_summary: summary });
     expect(failure.failure_summary).not.toContain(stderr);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
   }
+});
+
+test("Lead planning treats a structured unsupported-model response as a permanent actionable failure", async () => {
+  const value = await fixture("gpt-5-codex");
+  const runner: LeadProcessRunner = async (invocation) => {
+    await invocation.onStart(4324, "2026-08-11T00:00:00.000Z");
+    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-model-failure" }));
+    await invocation.onLine(JSON.stringify({ type: "error", message: JSON.stringify({ status: 400, error: { type: "invalid_request_error", message: "The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account." } }) }));
+    return { exitCode: 1, stderr: "" };
+  };
+  try {
+    const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_model_failure"; }, async read() { return "raw-model-failure"; } } });
+    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1" }, revision: 1 })).rejects.toMatchObject({
+      code: "model-unavailable",
+      nonRetryable: true,
+      message: "The configured model “gpt-5-codex” is unavailable for the active provider account. Select a supported model, then retry.",
+    });
+    expect(value.database.authQuery((db) => db.prepare("SELECT failure_code, failure_summary FROM forge_agent_executions WHERE task_id = 'task_1'").get())).toEqual({
+      failure_code: "model-unavailable",
+      failure_summary: "The configured model “gpt-5-codex” is unavailable for the active provider account. Select a supported model, then retry.",
+    });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("permanent agent failures become non-retryable Temporal application failures", () => {
+  expect(asNonRetryableApplicationFailure(new AgentFailure("process-exited", "Codex exited"))).toBeUndefined();
+  const actual = asNonRetryableApplicationFailure(new AgentFailure("model-unavailable", "Choose a supported model", { nonRetryable: true }));
+  expect(actual).toBeInstanceOf(ApplicationFailure);
+  expect(actual).toMatchObject({ type: "model-unavailable", nonRetryable: true, message: "Choose a supported model", details: [{ code: "model-unavailable", summary: "Choose a supported model" }] });
 });
 
 test("supplemental review uses a fresh session and primary Lead consolidation resumes its session", async () => {

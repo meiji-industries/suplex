@@ -10,10 +10,17 @@ export interface PageRoutesOptions {
   auth?: AuthService;
   config?: ForgeConfig;
   readHealth: () => Promise<HealthSnapshot>;
+  transformHtml?: (url: string, html: string) => Promise<string>;
 }
 
 const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
   const { auth } = options;
+  const assetMode = options.transformHtml ? "development" : "built";
+  const sendHtml = async (request: FastifyRequest, reply: FastifyReply, html: string): Promise<FastifyReply> => {
+    const body = options.transformHtml ? await options.transformHtml(request.url, html) : html;
+    if (options.transformHtml) reply.header("Cache-Control", "no-store");
+    return reply.type("text/html; charset=utf-8").send(body);
+  };
   const requirePageSession = async (request: FastifyRequest, reply: FastifyReply): Promise<boolean> => {
     if (auth && !(await sessionUser(auth, request, reply, options.config))) {
       await reply.redirect("/auth");
@@ -26,14 +33,14 @@ const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
     if (auth && !(await sessionUser(auth, request, reply, options.config))) return reply.redirect("/auth");
     return reply.redirect("/health");
   });
-  app.get("/auth", async (_request, reply) => reply.type("text/html; charset=utf-8").send(renderApplicationPage("auth")));
+  app.get("/auth", async (request, reply) => sendHtml(request, reply, renderApplicationPage("auth", assetMode)));
   app.get("/admin", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
-    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("admin"));
+    return sendHtml(request, reply, renderApplicationPage("admin", assetMode));
   });
   app.get("/admin/profiles", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
-    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("admin"));
+    return sendHtml(request, reply, renderApplicationPage("admin", assetMode));
   });
   app.get<{ Params: { companyId: string } }>("/companies/:companyId/settings", async (request, reply) => {
     const user = auth ? await sessionUser(auth, request, reply, options.config) : undefined;
@@ -46,27 +53,35 @@ const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
         return reply.code(404).type("text/plain; charset=utf-8").send("Not found");
       }
     }
-    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("company-settings"));
+    return sendHtml(request, reply, renderApplicationPage("company-settings", assetMode));
   });
   app.get("/projects", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
-    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("projects"));
+    return sendHtml(request, reply, renderApplicationPage("projects", assetMode));
   });
   app.get("/tasks", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
-    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("tasks"));
+    return sendHtml(request, reply, renderApplicationPage("tasks", assetMode));
   });
   app.get("/tasks/:taskId", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
-    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("tasks"));
+    return sendHtml(request, reply, renderApplicationPage("tasks", assetMode));
+  });
+  app.get("/board", async (request, reply) => {
+    if (!(await requirePageSession(request, reply))) return reply;
+    return sendHtml(request, reply, renderApplicationPage("board", assetMode));
+  });
+  app.get("/board/:taskId", async (request, reply) => {
+    if (!(await requirePageSession(request, reply))) return reply;
+    return sendHtml(request, reply, renderApplicationPage("board", assetMode));
   });
   app.get("/attention", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
-    return reply.type("text/html; charset=utf-8").send(renderApplicationPage("attention"));
+    return sendHtml(request, reply, renderApplicationPage("attention", assetMode));
   });
   app.get("/health", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
-    return reply.type("text/html; charset=utf-8").send(renderHealthPage(await options.readHealth()));
+    return sendHtml(request, reply, renderHealthPage(await options.readHealth(), assetMode));
   });
 };
 

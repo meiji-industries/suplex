@@ -41,9 +41,12 @@ export interface AppDependencies {
   database?: ForgeDatabase;
   logger?: Logger | false;
   https?: { key: Buffer; cert: Buffer };
+  frontendDevelopment?: {
+    transformIndexHtml(url: string, html: string): Promise<string>;
+  };
 }
 
-export function createApp(dependencies: AppDependencies): FastifyInstance {
+export function createAppServer(dependencies: AppDependencies): FastifyInstance {
   const app = (dependencies.logger === undefined || dependencies.logger === false
     ? Fastify({ logger: false, ...(dependencies.https ? { https: dependencies.https } : {}) })
     : Fastify({ loggerInstance: dependencies.logger, ...(dependencies.https ? { https: dependencies.https } : {}) })) as unknown as FastifyInstance;
@@ -65,17 +68,30 @@ export function createApp(dependencies: AppDependencies): FastifyInstance {
     return reply.code(403).send({ error: "request_origin_invalid" });
   });
 
+  return app;
+}
+
+export function registerAppRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
   const getHealth = dependencies.getHealth ?? (() => inspectHostHealth(dependencies.config, dependencies.health));
   const readHealth = async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth());
   const { auth, projects: projectService, tasks: taskService, attention: attentionService, database } = dependencies;
 
-  void app.register(pages, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config });
+  void app.register(pages, {
+    readHealth,
+    ...(auth ? { auth } : {}),
+    config: dependencies.config,
+    ...(dependencies.frontendDevelopment ? { transformHtml: dependencies.frontendDevelopment.transformIndexHtml } : {}),
+  });
   void app.register(health, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config });
   if (auth) {
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
     void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}) });
   }
-  void app.register(assets, { prefix: "/assets" });
+  if (!dependencies.frontendDevelopment) void app.register(assets, { prefix: "/assets" });
+}
 
+export function createApp(dependencies: AppDependencies): FastifyInstance {
+  const app = createAppServer(dependencies);
+  registerAppRoutes(app, dependencies);
   return app;
 }

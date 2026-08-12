@@ -23,7 +23,7 @@ function fakeWebAuthn(): WebAuthnAdapter {
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
 const github: GithubAdapter = { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } };
 
-test("task desktop flow attaches an image, shows Backlog, starts planning, and remains usable on narrow viewports", async () => {
+test("task creation and the dedicated board remain usable on desktop and narrow viewports", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-task-browser-test-"));
   const repositoryRoot = join(root, "repositories"); const worktreeRoot = join(root, "worktrees"); const repositoryPath = join(repositoryRoot, "repo");
   await mkdir(repositoryPath, { recursive: true }); await mkdir(worktreeRoot, { recursive: true });
@@ -130,6 +130,19 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
       await page.waitForURL(/\/tasks\?company=/);
       expect(new URL(page.url()).pathname).toBe("/tasks");
       expect(new URL(page.url()).searchParams.get("company")).toBe(company.id);
+
+      await page.getByRole("link", { name: "Board", exact: true }).click();
+      await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
+      expect(new URL(page.url()).pathname).toBe("/board");
+      expect(await page.getByText("Backlog", { exact: true }).isVisible()).toBe(true);
+      const boardTask = page.getByRole("button", { name: /Browser task/ });
+      await boardTask.waitFor();
+      await boardTask.scrollIntoViewIfNeeded();
+      expect(await boardTask.isVisible()).toBe(true);
+      await boardTask.click();
+      await page.locator("[data-task-detail]").waitFor();
+      expect(new URL(page.url()).pathname).toMatch(/^\/board\//);
+      expect(await page.locator("[data-task-detail]").getByRole("link", { name: "Board", exact: true }).isVisible()).toBe(true);
 
       const narrow = await context.newPage();
       await narrow.setViewportSize({ width: 390, height: 844 });

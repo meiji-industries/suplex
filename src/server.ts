@@ -34,7 +34,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig()): Pro
   const release = new ReleaseService(database, new ArtifactStore(config.artifactRoot), githubRelease);
   const ci = new CiService(database, createGithubCiProvider());
   const acceptance = new AcceptanceService(database, githubRelease);
-  const app = createApp({
+  const dependencies = {
     config,
     health: createHostHealthDependencies(config, database),
     auth,
@@ -46,7 +46,19 @@ export async function createForgeServer(config: ForgeConfig = loadConfig()): Pro
     ci,
     acceptance,
     logger: createFastifyLogger(),
-  });
+  } satisfies Parameters<typeof createApp>[0];
+  let app: FastifyInstance;
+  try {
+    if (process.env.FORGE_FRONTEND_DEV_SERVER === "1") {
+      const { createDevelopmentApp } = await import("./frontend-development.js");
+      app = (await createDevelopmentApp(dependencies)).app;
+    } else {
+      app = createApp(dependencies);
+    }
+  } catch (error) {
+    database.close();
+    throw error;
+  }
   return { app, database };
 }
 

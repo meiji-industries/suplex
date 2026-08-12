@@ -1,4 +1,4 @@
-import { AlertTriangle, ClipboardList, FolderGit2, Menu, Settings, ShieldCheck, type LucideIcon } from "lucide-react";
+import { AlertTriangle, Columns3, ClipboardList, FolderGit2, Menu, Settings, ShieldCheck, type LucideIcon } from "lucide-react";
 import { useMemo, useState, type ReactElement } from "react";
 
 import { Button } from "../ui/button.js";
@@ -28,6 +28,7 @@ function NavigationGroups({ close }: { close?: () => void }): ReactElement {
       { title: "Work", items: [
         { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 },
         { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList },
+        { href: withCompany("/board", companyId), label: "Board", icon: Columns3 },
       ]},
     ];
   }, [companyId]);

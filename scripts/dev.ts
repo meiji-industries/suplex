@@ -13,7 +13,6 @@ interface DevService {
 }
 
 const tscCli = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
-const viteCli = fileURLToPath(new URL("../node_modules/vite/bin/vite.js", import.meta.url));
 
 function startService(name: string, command: string, args: string[], environment: NodeJS.ProcessEnv = {}): DevService {
   process.stdout.write(`[dev] starting ${name}\n`);
@@ -21,6 +20,10 @@ function startService(name: string, command: string, args: string[], environment
     cwd: process.cwd(),
     env: { ...process.env, ...environment },
     stdio: "inherit",
+    // Keep terminal interrupts on the supervisor. It forwards one signal to
+    // each service instead of every process in the tree receiving Ctrl+C and
+    // forwarding it again to its own children.
+    detached: true,
   });
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
     child.once("error", reject);
@@ -109,8 +112,13 @@ async function superviseDevStack(): Promise<number> {
   await mkdir(join(".forge", "dev"), { recursive: true });
   const services = [
     startService("Temporal", "temporal", ["server", "start-dev", "--db-filename", ".forge/dev/temporal.db", "--namespace", "forge-dev", "--search-attribute", "CompanyId=Keyword", "--search-attribute", "ProjectId=Keyword", "--search-attribute", "IssueId=Keyword"]),
-    startService("Forge", process.execPath, ["--import", "tsx", "src/cli.ts", "start", "--foreground"], { FORGE_TEMPORAL_TARGET: "local", FORGE_TEMPORAL_ADDRESS: "127.0.0.1:7233", FORGE_TEMPORAL_NAMESPACE: "forge-dev" }),
-    startService("frontend watcher", process.execPath, [viteCli, "build", "--watch"]),
+    startService("Forge", process.execPath, ["--import", "tsx", "src/cli.ts", "start", "--foreground"], {
+      FORGE_TEMPORAL_TARGET: "local",
+      FORGE_TEMPORAL_ADDRESS: "127.0.0.1:7233",
+      FORGE_TEMPORAL_NAMESPACE: "forge-dev",
+      FORGE_DEVELOPMENT_WATCH: "1",
+      FORGE_FRONTEND_DEV_SERVER: "1",
+    }),
   ];
   let shuttingDown = false;
   let requestedExitCode = 0;
@@ -128,7 +136,13 @@ async function superviseDevStack(): Promise<number> {
     const forceTimer = setTimeout(() => {
       for (const service of services) {
         if (service.child.exitCode === null && service.child.signalCode === null) {
-          service.child.kill("SIGKILL");
+          if (service.child.pid) {
+            try {
+              process.kill(-service.child.pid, "SIGKILL");
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
+            }
+          }
         }
       }
     }, 15_000);
@@ -171,8 +185,7 @@ async function main(): Promise<void> {
   const releaseLock = await acquireDevLock(loadConfig().runtimeRoot);
   if (!releaseLock) return;
   try {
-    await runPreparation("compiling TypeScript", [tscCli]);
-    await runPreparation("building frontend", [viteCli, "build"]);
+    await runPreparation("type-checking", [tscCli, "--noEmit"]);
     process.exitCode = await superviseDevStack();
   } finally {
     await releaseLock();

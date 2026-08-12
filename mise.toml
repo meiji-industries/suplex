@@ -11,13 +11,15 @@ FORGE_BIND_ADDRESS = "127.0.0.1"
 _.path = "./node_modules/.bin"
 
 [tasks.dev]
-description = "Run Temporal, Forge, and the frontend watcher in the foreground"
+description = "Run Temporal and Forge with Vite HMR and backend live reload"
 run = "mise exec -- node --import tsx scripts/dev.ts"
 
 [tasks.dev.env]
 FORGE_TEMPORAL_TARGET = "local"
 FORGE_TEMPORAL_ADDRESS = "127.0.0.1:7233"
 FORGE_TEMPORAL_NAMESPACE = "forge-dev"
+FORGE_DEVELOPMENT_WATCH = "1"
+FORGE_FRONTEND_DEV_SERVER = "1"
 
 [tasks.temporal]
 description = "Start the local Temporal development server"
@@ -37,7 +39,7 @@ description = "Rebuild the frontend when source files change"
 run = "pnpm exec vite build --watch"
 
 [tasks.vite]
-description = "Start the Vite dev server"
+description = "Start a standalone Vite dev server (normally embedded by mise run dev)"
 run = "pnpm exec vite"
 
 [tasks.build]

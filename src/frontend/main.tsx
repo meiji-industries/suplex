@@ -27,12 +27,21 @@ import { isOwnedHealthCheck } from "../health-contract.js";
 import {
   Activity,
   Archive,
+  CheckCircle2,
   ChevronRight,
   CircleHelp,
+  CircleDashed,
+  CircleDotDashed,
+  CircleX,
   Clock3,
   Database,
+  Ellipsis,
+  Filter,
   GitBranch,
   HardDrive,
+  Layers3,
+  ListFilter,
+  Plus,
   RefreshCw,
   RotateCcw,
   Save,
@@ -689,14 +698,14 @@ function TaskActions({ task, busy, onStartPlanning, onPlanAction }: { task: ApiT
   );
 }
 
-function TaskDetailsPage({ task, project, companyId, busy, error, onStartPlanning, onPlanAction }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void> }): ReactElement {
+function TaskDetailsPage({ task, project, companyId, returnTo = "tasks", busy, error, onStartPlanning, onPlanAction }: { task: ApiTask; project: ApiProject | undefined; companyId: string; returnTo?: "tasks" | "board"; busy: boolean; error: string; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void> }): ReactElement {
   return (
     <ApplicationFrame title={task.title}>
       <article data-task-detail className="min-w-0">
         <header className="space-y-4 px-4 py-4 sm:px-6 lg:px-10">
           <Breadcrumb>
             <BreadcrumbList>
-              <BreadcrumbItem><BreadcrumbLink href={withCompany("/tasks", companyId)}>Tasks</BreadcrumbLink></BreadcrumbItem>
+              <BreadcrumbItem><BreadcrumbLink href={withCompany(`/${returnTo}`, companyId)}>{returnTo === "board" ? "Board" : "Tasks"}</BreadcrumbLink></BreadcrumbItem>
               <BreadcrumbSeparator />
               <BreadcrumbItem><BreadcrumbPage>{project?.name ?? "Unknown project"}</BreadcrumbPage></BreadcrumbItem>
             </BreadcrumbList>
@@ -742,17 +751,18 @@ function TaskDetailsSkeleton(): ReactElement {
   return <ApplicationFrame title="Task"><div data-task-detail-loading className="grid gap-8 px-4 py-6 sm:px-6 lg:grid-cols-[minmax(0,1fr)_260px] lg:px-10" aria-busy="true" aria-label="Loading task"><div className="space-y-4"><Skeleton className="h-4 w-40" /><Skeleton className="h-8 w-3/4" /><Skeleton className="h-24 w-full" /><Skeleton className="h-40 w-full" /></div><div className="space-y-3"><Skeleton className="h-4 w-24" /><Skeleton className="h-6 w-full" /><Skeleton className="h-6 w-3/4" /></div></div></ApplicationFrame>;
 }
 
-function TaskDetailsNotFound({ companyId }: { companyId: string }): ReactElement {
-  return <ApplicationFrame title="Task not found"><div className="space-y-3 px-4 py-8 sm:px-6 lg:px-10"><p className="text-xs text-muted-foreground">Task not found for this company.</p><a className="text-xs underline underline-offset-2" href={withCompany("/tasks", companyId)}>Back to Tasks</a></div></ApplicationFrame>;
+function TaskDetailsNotFound({ companyId, returnTo = "tasks" }: { companyId: string; returnTo?: "tasks" | "board" }): ReactElement {
+  return <ApplicationFrame title="Task not found"><div className="space-y-3 px-4 py-8 sm:px-6 lg:px-10"><p className="text-xs text-muted-foreground">Task not found for this company.</p><a className="text-xs underline underline-offset-2" href={withCompany(`/${returnTo}`, companyId)}>Back to {returnTo === "board" ? "Board" : "Tasks"}</a></div></ApplicationFrame>;
 }
 
-function TasksView(): ReactElement {
+function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactElement {
   const { currentCompany, loading, user, error: companyError, reloadCompanies } = useCompanyContext();
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [tasks, setTasks] = useState<ApiTask[]>([]);
   const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [selectedState, setSelected] = useState<ApiTask>();
   const [projectId, setProjectId] = useState("");
+  const [boardProjectId, setBoardProjectId] = useState("all");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [images, setImages] = useState<Array<{ filename: string; mimeType: string; base64: string }>>([]);
@@ -777,7 +787,8 @@ function TasksView(): ReactElement {
       if (token !== requestToken.current) return;
       setProjects(projectResult.projects); setTasks(taskResult.tasks);
       setProjectId((current) => projectResult.projects.some((project) => project.id === current && project.status === "active") ? current : projectResult.projects.find((project) => project.status === "active")?.id ?? "");
-      const routeTaskId = window.location.pathname.startsWith("/tasks/") ? decodeURIComponent(window.location.pathname.slice("/tasks/".length)) : "";
+      const detailPrefix = mode === "board" ? "/board/" : "/tasks/";
+      const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
       const nextSelected = routeTaskId ? taskResult.tasks.find((task) => task.id === routeTaskId) : selectedRef.current ? taskResult.tasks.find((task) => task.id === selectedRef.current!.id) : undefined;
       setSelected(nextSelected);
       setDetailNotFound(Boolean(routeTaskId) && !nextSelected);
@@ -788,7 +799,7 @@ function TasksView(): ReactElement {
       else if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
       else setError("Unable to load tasks");
     }
-  }, [companyId, loading, reloadCompanies]);
+  }, [companyId, loading, mode, reloadCompanies]);
   useEffect(() => { void reload(); }, [reload]);
   useEffect(() => {
     selectedRef.current = undefined;
@@ -802,12 +813,16 @@ function TasksView(): ReactElement {
   }, [reload]);
 
   const scopeLoaded = Boolean(companyId) && loadedCompanyId === companyId;
-  const routeTaskId = window.location.pathname.startsWith("/tasks/") ? decodeURIComponent(window.location.pathname.slice("/tasks/".length)) : "";
+  const routeBase = mode === "board" ? "/board" : "/tasks";
+  const detailPrefix = `${routeBase}/`;
+  const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
   const visibleProjects = scopeLoaded ? projects : [];
   const visibleTasks = scopeLoaded ? tasks : [];
-  const taskBoard = Object.fromEntries(taskPhases.map((phase) => [phase, visibleTasks.filter((task) => task.phase === phase)])) as Record<(typeof taskPhases)[number], ApiTask[]>;
+  const boardTasks = boardProjectId === "all" ? visibleTasks : visibleTasks.filter((task) => task.projectId === boardProjectId);
+  const taskBoard = Object.fromEntries(taskPhases.map((phase) => [phase, boardTasks.filter((task) => task.phase === phase)])) as Record<(typeof taskPhases)[number], ApiTask[]>;
   const selected = scopeLoaded ? selectedState : undefined;
   const availableProjects = visibleProjects.filter((project) => project.companyId === companyId && project.status === "active");
+  const selectTask = (task: ApiTask): void => { setSelected(task); selectedRef.current = task; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`${routeBase}/${encodeURIComponent(task.id)}`, companyId)); };
   const addImages = async (files: File[]): Promise<void> => {
     setError("");
     if (images.length + files.length > 8) { setError("At most eight images may be attached"); return; }
@@ -843,17 +858,67 @@ function TasksView(): ReactElement {
   };
 
   if (routeTaskId && loading) return <TaskDetailsSkeleton />;
-  if (routeTaskId && !companyId) return <TaskDetailsNotFound companyId="" />;
+  if (routeTaskId && !companyId) return <TaskDetailsNotFound companyId="" returnTo={mode} />;
   if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
-  if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} />;
-  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} onStartPlanning={startPlanning} onPlanAction={planAction} />;
+  if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
+  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} returnTo={mode} busy={busy} error={error} onStartPlanning={startPlanning} onPlanAction={planAction} />;
+
+  if (mode === "board") {
+    return (
+      <ApplicationFrame title="Board" headerRight={<span className="text-[11px] text-muted-foreground">Read-only state</span>}>
+        <div className="flex h-[calc(100vh-2.5rem)] min-h-0 flex-col border-t border-border/70 bg-background">
+          <div className="flex h-11 shrink-0 items-center justify-between border-b border-border/70 px-3 sm:px-4">
+            <div className="flex items-center gap-2">
+              <Select value={boardProjectId} onValueChange={(value) => setBoardProjectId(value ?? "all")}>
+                <SelectTrigger aria-label="Filter board by project" className="h-7 w-auto min-w-28 rounded-full border-border bg-background px-2.5 text-xs shadow-none">
+                  <SelectValue>{(value) => value === "all" ? "All projects" : visibleProjects.find((project) => project.id === value)?.name ?? "All projects"}</SelectValue>
+                </SelectTrigger>
+                <SelectContent><SelectItem value="all">All projects</SelectItem>{visibleProjects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent>
+              </Select>
+              <Layers3 className="size-3.5 text-muted-foreground" aria-hidden="true" />
+            </div>
+            <div className="flex items-center gap-1">
+              <Button variant="ghost" size="icon-sm" aria-label="Filter board" title="Filter board"><Filter className="size-3.5" /></Button>
+              <Button variant="outline" size="icon-sm" aria-label="Board display options" title="Board display options"><ListFilter className="size-3.5" /></Button>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-2">
+            <Kanban value={taskBoard} onValueChange={() => {}} getItemValue={(task) => task.id} className="h-full">
+              <KanbanBoard className="h-full min-w-max grid-flow-col auto-cols-[286px] grid-cols-none gap-2">
+                {taskPhases.map((phase) => {
+                  const statusClass = phase === "failed" || phase === "delivery_blocked" ? "text-rose-500" : phase === "delivery_reviewed" ? "text-indigo-500" : phase === "development" || phase === "delivery_ready" || phase === "reviewing_delivery" ? "text-amber-500" : phase === "backlog" || phase === "planning" ? "text-muted-foreground" : "text-blue-500";
+                  const StatusIcon = phase === "delivery_reviewed" ? CheckCircle2 : phase === "failed" || phase === "delivery_blocked" ? CircleX : phase === "development" || phase === "delivery_ready" || phase === "reviewing_delivery" ? CircleDotDashed : CircleDashed;
+                  return <KanbanColumn disabled key={phase} value={phase} className="min-h-0 rounded-md bg-muted/45">
+                    <div className="flex h-10 shrink-0 items-center justify-between px-3 text-xs">
+                      <div className="flex min-w-0 items-center gap-2"><StatusIcon className={`size-3.5 shrink-0 ${statusClass}`} /><span className="truncate font-medium">{taskPhaseLabel(phase)}</span><span className="text-muted-foreground">{taskBoard[phase].length}</span></div>
+                      <div className="flex items-center gap-0.5 text-muted-foreground"><Button variant="ghost" size="icon-sm" className="size-6" aria-label={`${taskPhaseLabel(phase)} options`}><Ellipsis className="size-3.5" /></Button><Button render={<a href={withCompany("/tasks", companyId)} />} variant="ghost" size="icon-sm" className="size-6" aria-label="Create task"><Plus className="size-3.5" /></Button></div>
+                    </div>
+                    <KanbanColumnContent value={phase} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
+                      {taskBoard[phase].map((task) => {
+                        const project = visibleProjects.find((candidate) => candidate.id === task.projectId);
+                        return <button type="button" className="block w-full rounded-md border border-border/90 bg-card px-3 py-2.5 text-left text-xs transition-colors hover:border-muted-foreground/35 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring" key={task.id} onClick={() => selectTask(task)}>
+                          <span className="block font-medium leading-4 text-card-foreground">{task.title}</span>
+                          {task.pendingAction ? <span className="mt-1 block truncate text-[11px] leading-4 text-muted-foreground">{task.pendingAction}</span> : null}
+                          <span className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"><Layers3 className="size-3" />{project?.name ?? "Unknown project"}</span>
+                        </button>;
+                      })}
+                    </KanbanColumnContent>
+                  </KanbanColumn>;
+                })}
+              </KanbanBoard>
+            </Kanban>
+          </div>
+          {detailNotFound ? <div className="border-t border-border/70 px-4 py-3 text-xs text-muted-foreground">Task not found for this company.</div> : null}
+        </div>
+      </ApplicationFrame>
+    );
+  }
 
   return (
     <ApplicationFrame title="Tasks">
       <div className="bg-background text-foreground">
-        <div className="grid gap-px lg:grid-cols-[minmax(280px,360px)_1fr]">
-          <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">New task</span><span className="text-[11px] text-muted-foreground">Backlog first</span></div>
+        <section className="max-w-[440px] bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">New task</span><a className="text-[11px] text-muted-foreground hover:text-foreground" href={withCompany("/board", companyId)}>Open board</a></div>
             {currentCompany ? <div className="mb-3 flex items-center gap-2 pb-2 text-xs"><span className="font-medium truncate">{currentCompany.name}</span><span className="text-[11px] text-muted-foreground">{currentCompany.status}</span></div> : null}
             {currentCompany?.status === "active" ? <FieldGroup>
               <Field><FieldLabel htmlFor="task-project">Project</FieldLabel><Select value={projectId || null} onValueChange={(value) => setProjectId(value ?? "")}><SelectTrigger id="task-project"><SelectValue placeholder="Select a project">{(value) => availableProjects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Select a project")}</SelectValue></SelectTrigger><SelectContent>{availableProjects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select></Field>
@@ -861,11 +926,9 @@ function TasksView(): ReactElement {
               <Field><FieldLabel htmlFor="task-description">Task description</FieldLabel><Textarea id="task-description" placeholder="Markdown description" value={description} onChange={(event) => setDescription(event.target.value)} /></Field>
               <InlineAttachmentPicker attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} disabled={busy} />
             </FieldGroup> : currentCompany ? <p className="text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New tasks are unavailable." : "Company archived. New tasks are unavailable."}</p> : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
-            {currentCompany?.status === "active" ? <div className="mt-3"><Button onClick={() => void create()} disabled={busy || !companyId || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button></div> : null}
-            {error ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
+            {currentCompany?.status === "active" ? <Button className="mt-3 w-full" onClick={() => void create()} disabled={busy || !companyId || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button> : null}
+            {error ? <Alert variant="destructive" className="mt-3 text-xs text-rose-700"><AlertDescription>{error}</AlertDescription></Alert> : null}
           </section>
-          <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Board</span><span className="text-[11px] text-muted-foreground">Read-only state</span></div><Kanban value={taskBoard} onValueChange={() => {}} getItemValue={(task) => task.id}><KanbanBoard className="grid-cols-1 gap-3 md:grid-cols-4 xl:grid-cols-7">{taskPhases.map((phase) => <KanbanColumn disabled key={phase} value={phase}><div className="flex h-8 items-center justify-between px-3 text-[11px] font-semibold text-muted-foreground"><span>{taskPhaseLabel(phase)}</span><span>{taskBoard[phase].length}</span></div><KanbanColumnContent value={phase}>{taskBoard[phase].map((task) => <a className="block px-3 py-3 text-xs hover:bg-muted/40" href={withCompany(`/tasks/${encodeURIComponent(task.id)}`, companyId)} key={task.id}><span className="block font-medium">{task.title}</span><span className="mt-1 block text-[11px] text-muted-foreground">{task.pendingAction}</span></a>)}</KanbanColumnContent></KanbanColumn>)}</KanbanBoard></Kanban></section>
-        </div>
       </div>
     </ApplicationFrame>
   );
@@ -1099,5 +1162,5 @@ function Dashboard({ initialSnapshot }: { initialSnapshot: HealthSnapshot }): Re
 }
 
 const view = window.__FORGE_VIEW__;
-const authenticatedView = view === "admin" ? <AdminView /> : view === "projects" ? <ProjectsView /> : view === "tasks" ? <TasksView /> : view === "attention" ? <AttentionView /> : view === "company-settings" ? <CompanySettingsView /> : <Dashboard initialSnapshot={window.__FORGE_HEALTH__} />;
+const authenticatedView = view === "admin" ? <AdminView /> : view === "projects" ? <ProjectsView /> : view === "tasks" ? <TasksView /> : view === "board" ? <TasksView mode="board" /> : view === "attention" ? <AttentionView /> : view === "company-settings" ? <CompanySettingsView /> : <Dashboard initialSnapshot={window.__FORGE_HEALTH__} />;
 createRoot(document.getElementById("forge-app")!).render(view === "auth" ? <AuthView /> : <CompanyProvider>{authenticatedView}</CompanyProvider>);

@@ -1,5 +1,16 @@
 import type { HealthSnapshot } from "./health.js";
 
+export type FrontendAssetMode = "built" | "development";
+
+function frontendHead(mode: FrontendAssetMode): string {
+  return mode === "built" ? '    <link rel="stylesheet" href="/assets/forge-ui.css">\n' : "";
+}
+
+function frontendEntry(mode: FrontendAssetMode): string {
+  const source = mode === "development" ? "/src/frontend/main.tsx" : "/assets/forge-ui.js";
+  return `    <script type="module" src="${source}"></script>`;
+}
+
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
 }
@@ -8,7 +19,7 @@ function renderFallbackCheck(check: HealthSnapshot["checks"][number]): string {
   return `<article class="health-card" data-status="${escapeHtml(check.status)}"><h2>${escapeHtml(check.label)}</h2><p>${escapeHtml(check.summary)}</p></article>`;
 }
 
-export function renderHealthPage(snapshot: HealthSnapshot): string {
+export function renderHealthPage(snapshot: HealthSnapshot, assetMode: FrontendAssetMode = "built"): string {
   const serialized = JSON.stringify(snapshot).replace(/</g, "\\u003c");
   return `<!doctype html>
 <html lang="en">
@@ -17,8 +28,7 @@ export function renderHealthPage(snapshot: HealthSnapshot): string {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f8f8fa">
     <title>Forge · Host health</title>
-    <link rel="stylesheet" href="/assets/forge-ui.css">
-  </head>
+${frontendHead(assetMode)}  </head>
   <body>
     <div id="forge-app">
       <main aria-label="Forge host health">
@@ -31,26 +41,25 @@ export function renderHealthPage(snapshot: HealthSnapshot): string {
     </div>
     <noscript>Forge host health requires JavaScript for live refresh. The server-rendered checks above remain available.</noscript>
     <script>window.__FORGE_HEALTH__ = ${serialized};</script>
-    <script type="module" src="/assets/forge-ui.js"></script>
+${frontendEntry(assetMode)}
   </body>
 </html>`;
 }
 
-export function renderApplicationPage(view: "auth" | "admin" | "projects" | "tasks" | "attention" | "company-settings"): string {
+export function renderApplicationPage(view: "auth" | "admin" | "projects" | "tasks" | "board" | "attention" | "company-settings", assetMode: FrontendAssetMode = "built"): string {
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#f8f8fa">
-    <title>Forge · ${view === "auth" ? "Sign in" : view === "admin" ? "Administration" : view === "projects" ? "Projects" : view === "tasks" ? "Tasks" : view === "attention" ? "Attention" : "Company settings"}</title>
-    <link rel="stylesheet" href="/assets/forge-ui.css">
-  </head>
+    <title>Forge · ${view === "auth" ? "Sign in" : view === "admin" ? "Administration" : view === "projects" ? "Projects" : view === "tasks" ? "Tasks" : view === "board" ? "Board" : view === "attention" ? "Attention" : "Company settings"}</title>
+${frontendHead(assetMode)}  </head>
   <body>
     <div id="forge-app"></div>
     <noscript>Forge requires JavaScript for passkey authentication.</noscript>
     <script>window.__FORGE_VIEW__ = ${JSON.stringify(view)};</script>
-    <script type="module" src="/assets/forge-ui.js"></script>
+${frontendEntry(assetMode)}
   </body>
 </html>`;
 }

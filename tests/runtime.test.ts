@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 
 import { createTestConfig } from "../src/config.js";
 import type { OwnedProcess, ProcessController, ProcessInspection } from "../src/process-manager.js";
-import { healthProbeAddress, readinessProbePath, reconcileExistingRegistry, type RuntimeReconciliationController } from "../src/runtime.js";
+import { forgeProcessArguments, healthProbeAddress, readinessProbePath, reconcileExistingRegistry, type RuntimeReconciliationController } from "../src/runtime.js";
 
 function ownedProcess(name: "worker" | "server", pid: number): OwnedProcess {
   return {
@@ -43,6 +43,20 @@ function reconciliationController(process: ProcessController, overrides: Partial
 
 test("probes the actual health page for startup readiness", () => {
   expect(readinessProbePath()).toBe("/health");
+});
+
+test("development children use tsx watch without following frontend or generated files", () => {
+  expect(forgeProcessArguments("src/server.ts", true, "/workspace/node_modules/tsx/dist/cli.mjs")).toEqual([
+    "/workspace/node_modules/tsx/dist/cli.mjs",
+    "watch",
+    "--clear-screen=false",
+    "--exclude", "./dist/**/*",
+    "--exclude", "./node_modules/**/*",
+    "--exclude", "./src/frontend/**/*",
+    "--exclude", "./tests/**/*",
+    "src/server.ts",
+  ]);
+  expect(forgeProcessArguments("src/worker.ts", false)).toEqual(["--import", "tsx", "src/worker.ts"]);
 });
 
 test("probes the local backend when Tailscale Serve owns HTTPS", () => {

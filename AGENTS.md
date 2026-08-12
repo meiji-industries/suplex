@@ -34,11 +34,10 @@ with the Playwright browser proof at desktop and narrow viewport sizes.
 
 ## Dev workflow
 
-Vite does not auto-reload all frontend changes in this repo. After editing
-`src/frontend/*.tsx`, `src/app.ts`, or other server/frontend files, stop and
-restart the dev server:
+`mise run dev` embeds Vite in Fastify. Frontend changes use Vite HMR and React
+Fast Refresh; backend changes restart the affected Node development process.
+Start the development stack with:
 
 ```bash
-FORGE_TAILSCALE_ADDRESS="pro2.tail1234.ts.net" npm run forge -- stop
 mise run dev
 ```

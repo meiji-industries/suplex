@@ -86,8 +86,10 @@ type ApiInvitation = { id: string; kind: "bootstrap" | "user" | "recovery"; disp
 type ApiCredential = { id: string; userId: string; credentialId: string; createdAt: string; revokedAt?: string };
 type ApiProject = { id: string; companyId: string; name: string; repositoryPath: string; worktreeRoot: string; repository?: string; baseBranch: string; targetBranch: string; setupCommand: string; verificationCommand: string; requiredChecks: string[]; allowedProfileIds: string[]; roleDefaults: Record<string, string>; status: "draft" | "active" | "paused" | "needs-reactivation" | "archived"; configurationRevision: number; configurationIdentity?: string; baseSha?: string; targetSha?: string };
 
-type ApiAttentionItem = { id: string; companyId: string; taskId: string; taskTitle: string; category: string; summary: string; action: string; evidenceRef?: string; updatedAt: string };
-type ApiAttentionCompany = { companyId: string; companyName: string; companyStatus: string; activeIssueCount: number; phases: Record<string, number>; attentionCount: number; attention: ApiAttentionItem[]; recentOutcomes: Array<{ taskId: string; taskTitle: string; phase: string; updatedAt: string }> };
+type ApiAttentionAction = { command: string; label: string; expectedRevision: number; requiresNote: boolean; destructive: boolean };
+type ApiAttentionItem = { id: string; companyId: string; taskId: string; taskTitle: string; category: string; summary: string; sourceRevision: number; activatedAt: string; actions: ApiAttentionAction[]; evidence: { artifactId: string; sha256: string; kind: string; mimeType: string; byteSize: number; href: string } };
+type ApiAttentionCompany = { companyId: string; companyName: string; companyStatus: string; activeIssueCount: number; phases: Record<string, number>; attentionCount: number; attention: ApiAttentionItem[]; recentOutcomes: Array<{ taskId: string; taskTitle: string; phase: string; updatedAt: string }>; projectionHealth: { projectedRevision: number; sourceRevision: number; projectedAt: string; stateChangedAt: string | null; reconciledAt: string | null; status: "current" | "stale" | "unknown"; lagMs: number } };
+type ApiAttentionEvidence = { artifactId: string; sha256: string; kind: string; content: string; truncated: boolean };
 type ApiTask = TaskResponse;
 type TaskPhase = ApiTask["phase"];
 type ApiCi = NonNullable<ApiTask["ci"]>;
@@ -174,7 +176,7 @@ function AuthView(): ReactElement {
         <div className="bg-card p-4">
           <div className="mb-5 flex items-center justify-between"><span className="text-[13px] font-semibold">{enrollment ? "Passkey enrollment" : "Passkey sign-in"}</span><span className="text-xs text-muted-foreground">No password</span></div>
           {enrollment ? <FieldGroup><Field><FieldLabel htmlFor="invitation">Invitation token</FieldLabel><Input id="invitation" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} /></Field><Button onClick={() => void enroll()} disabled={busy || token.length < 16}>{busy ? "Waiting for passkey…" : "Enroll passkey"}</Button></FieldGroup> : <Button className="w-full" onClick={() => void signIn()} disabled={busy}>{busy ? "Waiting for passkey…" : "Sign in with passkey"}</Button>}
-          {error ? <Alert variant="destructive" className="mt-3 text-xs text-rose-700"><AlertDescription>{error}</AlertDescription></Alert> : null}
+          {error ? <div className="mt-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
         </div>
       </div>
     </ApplicationFrame>
@@ -363,7 +365,7 @@ function AdminView(): ReactElement {
             <div>{models.map((model) => <div className="flex min-h-10 items-center justify-between gap-3 text-xs" key={model.id}><div className="min-w-0"><div className="font-medium">{model.displayName} <code className="ml-1 text-[11px] font-normal text-muted-foreground">{model.id}</code></div><div className="truncate text-[11px] text-muted-foreground">{model.description || "No description"}</div></div><Button variant="ghost" size="sm" onClick={() => void toggleModel(model)}>{model.status === "active" ? "Retire" : "Restore"}</Button></div>)}</div>
           </section>
         </>) : null}
-        {error ? <Alert variant="destructive" className="px-4 py-3 text-xs text-rose-700"><AlertDescription>{error}</AlertDescription></Alert> : null}
+        {error ? <div className="px-4 py-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       </div>
     </SettingsLayout>
   );
@@ -436,7 +438,7 @@ function CreateProjectDialog({
               <DialogFooter className="mt-1"><DialogClose render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || !companyId || !repositoryUrl.trim()}>{busy ? "Cloning…" : "Create project"}</Button></DialogFooter>
             </form>
           )}
-          {error ? <Alert variant="destructive" className="mt-3 text-xs text-rose-700"><AlertDescription>{error}</AlertDescription></Alert> : null}
+          {error ? <div className="mt-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
           {findings.length ? <ul className="mt-3 space-y-1 text-xs text-rose-700">{findings.map((item, index) => <li key={`${item.field}-${index}`}>{item.field}: {item.message}</li>)}</ul> : null}
       </DialogContent>
     </Dialog>
@@ -624,7 +626,7 @@ function ProjectSettingsDialog({
               <DialogFooter>{missingRequirements.length ? <span className="mr-auto text-[11px] text-amber-800">Complete the missing requirements to save.</span> : null}<DialogClose render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || missingRequirements.length > 0}>{busy ? "Saving…" : "Save settings"}</Button></DialogFooter>
             </FieldGroup>
           </form> : null}
-          {error ? <Alert variant="destructive" className="mt-3 text-xs text-rose-700"><AlertDescription>{error}</AlertDescription></Alert> : null}
+          {error ? <div className="mt-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
           {findings.length ? <ul className="mt-3 space-y-1 text-xs text-rose-700">{findings.map((item, index) => <li key={`${item.field}-${index}`}>{item.field}: {item.message}</li>)}</ul> : null}
       </DialogContent>
     </Dialog>
@@ -689,7 +691,7 @@ function ProjectsView(): ReactElement {
               {!loading && loadedCompanyId === companyId && visibleProjects.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">No projects configured.</div> : null}
             </div>
           ) : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
-          {loadError ? <Alert variant="destructive" className="mt-3 text-xs text-rose-700"><AlertDescription>{loadError}</AlertDescription></Alert> : null}
+          {loadError ? <div className="mt-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{loadError}</AlertDescription></Alert></div> : null}
         </section>
         <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} companyId={companyId} companyStatus={currentCompany?.status} onCreated={reload} reloadCompanies={reloadCompanies} />
         <ProjectSettingsDialog project={settingsProject} profiles={profiles} onOpenChange={() => setSettingsProject(undefined)} onSaved={reload} />
@@ -945,7 +947,7 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
               <Field><FieldLabel htmlFor="task-description">Task description</FieldLabel><Textarea id="task-description" placeholder="Markdown description" value={description} onChange={(event) => onDescriptionChange(event.target.value)} /></Field>
               <InlineAttachmentPicker attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={onAddImages} onRemove={onRemoveImage} disabled={busy} />
             </FieldGroup>
-            {error ? <Alert variant="destructive" className="mt-3"><AlertDescription>{error}</AlertDescription></Alert> : null}
+            {error ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
             <DialogFooter>
               <DialogClose render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} />
               <Button type="submit" size="sm" disabled={busy || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button>
@@ -1223,26 +1225,98 @@ function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactEleme
 }
 
 function AttentionView(): ReactElement {
+  const { currentCompany } = useCompanyContext();
   const [companies, setCompanies] = useState<ApiAttentionCompany[]>([]);
   const [error, setError] = useState("");
+  const [status, setStatus] = useState("");
+  const [evidence, setEvidence] = useState<Record<string, ApiAttentionEvidence>>({});
+  const [evidenceLoading, setEvidenceLoading] = useState<Record<string, boolean>>({});
+  const [noteAction, setNoteAction] = useState<{ item: ApiAttentionItem; action: ApiAttentionAction }>();
+  const [cancelAction, setCancelAction] = useState<{ item: ApiAttentionItem; action: ApiAttentionAction }>();
+  const [note, setNote] = useState("");
+  const [actionBusy, setActionBusy] = useState("");
   const reload = useCallback(async (): Promise<void> => {
-    try { setCompanies((await readJson<{ companies: ApiAttentionCompany[] }>("/api/attention")).companies); }
+    try { setError(""); setCompanies((await readJson<{ companies: ApiAttentionCompany[] }>("/api/attention")).companies); }
     catch (reason) { if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth"); else setError("Unable to load attention"); }
   }, []);
   useEffect(() => { void reload(); const timer = window.setInterval(() => void reload(), 15_000); return () => window.clearInterval(timer); }, [reload]);
+
+  const loadEvidence = useCallback(async (item: ApiAttentionItem): Promise<void> => {
+    if (evidence[item.id] || evidenceLoading[item.id]) return;
+    setEvidenceLoading((current) => ({ ...current, [item.id]: true }));
+    try {
+      const result = await readJson<ApiAttentionEvidence>(item.evidence.href);
+      setEvidence((current) => ({ ...current, [item.id]: result }));
+    } catch {
+      setError("Unable to load safe evidence");
+    } finally {
+      setEvidenceLoading((current) => ({ ...current, [item.id]: false }));
+    }
+  }, [evidence, evidenceLoading]);
+
+  const performAction = useCallback(async (item: ApiAttentionItem, action: ApiAttentionAction, actionNote?: string): Promise<void> => {
+    const path = action.command === "cancel_issue" ? "cancel" : action.command.replaceAll("_", "-");
+    setActionBusy(`${item.id}:${action.command}`);
+    setError("");
+    try {
+      await readJson(`/api/tasks/${encodeURIComponent(item.taskId)}/${path}`, { method: "POST", body: JSON.stringify({ expectedRevision: action.expectedRevision, ...(actionNote ? { note: actionNote } : {}) }) });
+      setNoteAction(undefined);
+      setCancelAction(undefined);
+      setNote("");
+      setStatus("");
+      await reload();
+    } catch (reason) {
+      if (isApiError(reason, 409)) {
+        setNoteAction(undefined);
+        setCancelAction(undefined);
+        setNote("");
+        setStatus("This issue changed. Refreshing the current attention state.");
+        await reload();
+      } else {
+        setError(reason instanceof Error ? reason.message : "Unable to apply attention action");
+      }
+    } finally {
+      setActionBusy("");
+    }
+  }, [reload]);
+
+  const requestAction = (item: ApiAttentionItem, action: ApiAttentionAction): void => {
+    if (action.requiresNote) {
+      setNote("");
+      setNoteAction({ item, action });
+    } else if (action.destructive) {
+      setCancelAction({ item, action });
+    } else {
+      void performAction(item, action);
+    }
+  };
+
+  const visibleCompanies = currentCompany ? companies.filter((company) => company.companyId === currentCompany.id) : companies;
   return (
     <ApplicationFrame title="Attention">
       <div>
         <div className="flex h-9 items-center justify-between px-3 text-xs sm:px-4"><span className="font-medium">Agency attention</span><Button variant="ghost" size="sm" onClick={() => void reload()}>Refresh</Button></div>
-        {companies.map((company) => <section className="bg-background p-3 sm:p-4" key={company.companyId}>
+        {visibleCompanies.map((company) => <section className="bg-background p-3 sm:p-4" key={company.companyId}>
           <div className="flex flex-wrap items-center justify-between gap-2 pb-2"><div className="flex items-center gap-2 text-[13px] font-medium"><span className={company.attentionCount ? "size-1.5 rounded-full bg-amber-500" : "size-1.5 rounded-full bg-emerald-500"} />{company.companyName}</div><div className="text-[11px] text-muted-foreground">{company.activeIssueCount} active · {company.attentionCount} needs a person</div></div>
-          <Accordion className="text-xs" multiple>{company.attention.map((item) => <AccordionItem className="py-1" key={item.id} value={item.id}><AccordionTrigger className="py-3"><span className="min-w-0 text-left"><Badge variant="secondary" className="mr-2 align-middle text-[10px]">{item.category.replaceAll("_", " ")}</Badge><span className="font-medium">{item.taskTitle}</span><span className="mt-1 block text-muted-foreground">{item.summary}</span></span></AccordionTrigger><AccordionContent className="grid gap-2 pl-3 text-[11px] text-muted-foreground sm:grid-cols-[1fr_auto] sm:items-center"><span>{item.action}{item.evidenceRef ? ` · Evidence ${item.evidenceRef}` : ""}</span><a className="text-foreground underline underline-offset-2" href={withCompany(`/tasks/${encodeURIComponent(item.taskId)}`, item.companyId)}>Open issue</a></AccordionContent></AccordionItem>)}</Accordion>
+          <div className="mb-2 text-[11px] text-muted-foreground" data-projection-status={company.projectionHealth.status}>{company.projectionHealth.status === "stale" ? `Projection stale · r${company.projectionHealth.projectedRevision} → r${company.projectionHealth.sourceRevision}` : company.projectionHealth.status === "unknown" ? "Projection status unknown" : `Projection current · r${company.projectionHealth.projectedRevision}`}</div>
+          <Accordion className="text-xs" multiple onValueChange={(value) => { for (const id of (Array.isArray(value) ? value : [value])) { const item = company.attention.find((candidate) => candidate.id === id); if (item) void loadEvidence(item); } }}>
+            {company.attention.map((item) => <AccordionItem className="py-1" key={item.id} value={item.id}>
+              <AccordionTrigger className="py-3"><span className="min-w-0 text-left"><Badge variant="secondary" className="mr-2 align-middle text-[10px]">{item.category.replaceAll("_", " ")}</Badge><span className="font-medium">{item.taskTitle}</span><span className="mt-1 block text-muted-foreground">{item.summary}</span></span></AccordionTrigger>
+              <AccordionContent className="grid gap-3 pl-3 text-[11px] text-muted-foreground sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+                <div className="min-w-0 space-y-2"><div>Evidence · {item.evidence.kind} · {item.evidence.byteSize} bytes</div>{evidence[item.id] ? <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/30 p-2 text-[11px] text-foreground">{evidence[item.id]?.content}{evidence[item.id]?.truncated ? "\n[truncated]" : ""}</pre> : <div>{evidenceLoading[item.id] ? "Loading safe evidence…" : "Safe evidence is available."}</div>}</div>
+                <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">{item.actions.map((action) => <Button key={action.command} size="sm" variant={action.destructive ? "destructive" : "outline"} onClick={() => requestAction(item, action)} disabled={Boolean(actionBusy)}>{action.label}{action.requiresNote ? " · note" : ""}</Button>)}<a className="px-2 text-foreground underline underline-offset-2" href={withCompany(`/tasks/${encodeURIComponent(item.taskId)}`, item.companyId)}>Open issue</a></div>
+              </AccordionContent>
+            </AccordionItem>)}
+          </Accordion>
           {company.attention.length === 0 ? <div className="py-5 text-center text-xs text-muted-foreground">No decision needed.</div> : null}
           {company.recentOutcomes.length ? <div className="mt-3 pt-2 text-[11px] text-muted-foreground">Recent: {company.recentOutcomes.map((outcome) => `${outcome.taskTitle} · ${outcome.phase}`).join(" · ")}</div> : null}
         </section>)}
-        {companies.length === 0 && !error ? <div className="p-8 text-center text-xs text-muted-foreground">No companies visible.</div> : null}
-        {error ? <Alert variant="destructive" className="mx-4 my-3"><AlertDescription>{error}</AlertDescription></Alert> : null}
+        {visibleCompanies.length === 0 && !error ? <div className="p-8 text-center text-xs text-muted-foreground">No companies visible.</div> : null}
+        {status ? <div role="status" aria-live="polite" className="px-4 py-2 text-xs text-amber-700">{status}</div> : null}
+        {error ? <div className="mx-4 my-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       </div>
+      <Dialog open={Boolean(noteAction)} onOpenChange={(open) => { if (!open && !actionBusy) setNoteAction(undefined); }}><DialogContent><DialogHeader><DialogTitle>{noteAction?.action.label}</DialogTitle><DialogDescription>A note is required before this issue can be updated.</DialogDescription></DialogHeader><Textarea aria-label={`${noteAction?.action.label ?? "Action"} note`} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add a concise decision note" /><DialogFooter><DialogClose render={<Button type="button" variant="ghost" />}>Keep issue</DialogClose><Button onClick={() => { if (noteAction) void performAction(noteAction.item, noteAction.action, note); }} disabled={!note.trim() || Boolean(actionBusy)}>{noteAction?.action.label}</Button></DialogFooter></DialogContent></Dialog>
+      <AlertDialog open={Boolean(cancelAction)} onOpenChange={(open) => { if (!open && !actionBusy) setCancelAction(undefined); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Cancel {cancelAction?.item.taskTitle}?</AlertDialogTitle><AlertDialogDescription>This stops the current issue workflow and keeps its history available.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep issue</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => { if (cancelAction) void performAction(cancelAction.item, cancelAction.action); }} disabled={Boolean(actionBusy)}>Cancel issue</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     </ApplicationFrame>
   );
 }
@@ -1308,7 +1382,7 @@ function CompanySettingsView(): ReactElement {
           <span className="text-xs text-muted-foreground">{new Date(company.createdAt).toLocaleDateString()}</span>
         </SettingRow>
       </SettingsSection>
-      {error ? <Alert variant="destructive" className="mb-4 text-xs text-rose-700"><AlertDescription>{error}</AlertDescription></Alert> : null}
+      {error ? <div className="mb-4 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       <SettingsSection title="Lifecycle" description="Control workspace activity.">
         {company.status === "active" ? <SettingRow label="Pause company" description="Existing records remain available; new projects and tasks are blocked."><Button variant="outline" size="sm" onClick={() => void mutateStatus("paused")} disabled={busy !== ""}><Pause className="size-3.5" />{busy === "paused" ? "Pausing…" : "Pause company"}</Button></SettingRow> : null}
         {company.status === "paused" ? <SettingRow label="Reactivate company" description="Restore creation of new projects and tasks."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Reactivating…" : "Reactivate company"}</Button></SettingRow> : null}

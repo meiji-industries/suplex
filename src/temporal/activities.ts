@@ -12,8 +12,8 @@ import { DeveloperService } from "../codex-developer.js";
 import { cancelDeveloperExecution, reconcileDeveloperExecutions } from "../developer-recovery.js";
 import { DeveloperExecutionLeaseRepository } from "../developer-execution-leases.js";
 import { runDeveloperTurn, type DeveloperTurnRunResult } from "../developer-turn-runner.js";
-import { AcceptanceService } from "../acceptance.js";
-import { CiService, createGithubCiProvider, type CiProvider } from "../ci.js";
+import { AcceptanceFailure, AcceptanceService } from "../acceptance.js";
+import { CiFailure, CiProviderFailure, CiService, createGithubCiProvider, type CiProvider } from "../ci.js";
 import { createGithubReleasePort, GithubReleaseFailure, ReleaseService, type GithubReleaseAdapter } from "../github-release.js";
 import { ForwardMergeFailure, ForwardMergeService } from "../forward-merge.js";
 import { parseAcceptedProjectRevision, type AcceptedProjectRevision } from "../projects.js";
@@ -39,7 +39,9 @@ import {
   RevisedExecutionCoordinatesSchema,
   SafeSummarySchema,
   createInitialIssueWorkflowState,
+  normalizeSafeSummary,
   type AcceptDeliveryActivityInput,
+  type AttentionCategory,
   type DeliveryBlockerActivities,
   type DeliveryBlockerActivityInput,
   type DeliveryBlockerActivityResult,
@@ -207,6 +209,19 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
   capacity.reconcileFromLedgers();
   const agent = options.agent;
   const developer = options.developer ?? defaultDeveloper;
+  const putAttentionEvidence = async (input: { companyId: string }, category: AttentionCategory, code: string, summary: string): Promise<{ artifactId: string; sha256: string }> => {
+    const safeSummary = normalizeSafeSummary(redact(summary));
+    const artifact = await artifacts.put(input.companyId, "attention-evidence", { filename: `attention-${randomBytes(8).toString("hex")}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ code, category, summary: safeSummary }), "utf8") });
+    registerArtifact(database, artifact);
+    return { artifactId: artifact.id, sha256: artifact.sha256 };
+  };
+  const attentionFailure = async (input: { companyId: string }, category: AttentionCategory, code: string, summary: string): Promise<never> => {
+    const evidence = await putAttentionEvidence(input, category, code, summary);
+    const safeSummary = normalizeSafeSummary(redact(summary));
+    throw ApplicationFailure.nonRetryable(safeSummary, code, { code, category, summary: safeSummary, evidenceArtifactId: evidence.artifactId, evidenceSha256: evidence.sha256 });
+  };
+  const artifactSha256 = (companyId: string, artifactId: string | null | undefined): string | undefined => artifactId ? database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(artifactId, companyId) as { sha256: string } | undefined)?.sha256 : undefined;
+  const agentCategory = (error: AgentFailure): AttentionCategory => error.code === "login-expired" ? "provider_authentication" : error.code === "model-unavailable" ? "provider_ambiguity" : error.code === "rate-limited" ? "provider_connectivity_exhausted" : error.code === "malformed-output" || error.code === "invalid-output" ? "agent_contradiction" : "agent_exhausted";
   const withCapacity = async <T>(input: { taskId: string; companyId: string; workflowId: string }, turnKind: "lead" | "developer" | "review", operation: () => Promise<T>): Promise<T> => {
     const request = capacity.request({ ...input, turnKind });
     const admitted = capacity.tryAcquire(request.id);
@@ -217,7 +232,10 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     } catch (error) {
       releaseReason = "turn-failed";
       const permanentFailure = asNonRetryableApplicationFailure(error);
-      if (permanentFailure) throw permanentFailure;
+      if (permanentFailure) {
+        if (error instanceof AgentFailure) await attentionFailure(input, agentCategory(error), error.code, error.message);
+        throw permanentFailure;
+      }
       throw error;
     } finally {
       capacity.release(request.id, releaseReason);
@@ -511,14 +529,18 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     },
     async runLeadPlanning(input) {
       const result = await withCapacity(input, "lead", () => (agent?.runLeadPlanning ?? defaultAgent.runLeadPlanning.bind(defaultAgent))(input));
-      return { ...result, leadSummary: SafeSummarySchema.parse(result.leadSummary) };
+      const leadEvidenceArtifactSha256 = artifactSha256(input.companyId, result.leadEvidenceArtifactId);
+      const leadOutputArtifactSha256 = artifactSha256(input.companyId, result.leadOutputArtifactId);
+      return { ...result, ...(leadEvidenceArtifactSha256 ? { leadEvidenceArtifactSha256 } : {}), ...(leadOutputArtifactSha256 ? { leadOutputArtifactSha256 } : {}), leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) };
     },
     async runSupplementalReview(input) {
       return withCapacity(input, "review", () => (agent?.runSupplementalReview ?? defaultAgent.runSupplementalReview.bind(defaultAgent))(input));
     },
     async consolidateLeadPlan(input) {
       const result = await withCapacity(input, "lead", () => (agent?.consolidateLeadPlan ?? defaultAgent.consolidateLeadPlan.bind(defaultAgent))(input));
-      return { ...result, leadSummary: SafeSummarySchema.parse(result.leadSummary) };
+      const leadEvidenceArtifactSha256 = artifactSha256(input.companyId, result.leadEvidenceArtifactId);
+      const leadOutputArtifactSha256 = artifactSha256(input.companyId, result.leadOutputArtifactId);
+      return { ...result, ...(leadEvidenceArtifactSha256 ? { leadEvidenceArtifactSha256 } : {}), ...(leadOutputArtifactSha256 ? { leadOutputArtifactSha256 } : {}), leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) };
     },
     async reviewDelivery(input: WorkflowDeliveryReviewActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.subject.developerExecutionId);
@@ -576,7 +598,9 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       } catch (error) {
         const failure = error instanceof GithubReleaseFailure ? error : new GithubReleaseFailure("provider-unavailable", "Release context or provider state is unavailable");
         const operation = database.authQuery((db) => db.prepare("SELECT MAX(COALESCE(attempt, 0)) AS attempt FROM forge_provider_operations WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND kind IN ('push', 'create-draft-pr')").get(input.taskId, input.companyId, input.workflowId) as { attempt: number | null });
-        return PublishReleaseActivityResultSchema.parse({ outcome: "blocked", releaseId: null, ...identity, pullRequestNumber: null, pullRequestUrl: null, isDraft: true, reused: false, code: failure.code, summary: failure.summary, retryAt: failure.retryAt, attempt: operation.attempt ?? 0, evidenceArtifactId: null });
+        const category: AttentionCategory = failure.code === "authentication-required" ? "provider_authentication" : failure.code === "stale-reviewed-revision" || failure.code === "target-base-drift" ? "target_drift" : failure.code === "provider-rate-limited" || failure.code === "provider-unavailable" || failure.code === "invalid-provider-response" ? "provider_connectivity_exhausted" : failure.code === "pinned-configuration-incomplete" || failure.code === "public-projection-unsafe" ? "verification_unrecoverable" : "provider_ambiguity";
+        const evidence = await putAttentionEvidence(input, category, failure.code, failure.summary);
+        return PublishReleaseActivityResultSchema.parse({ outcome: "blocked", releaseId: null, ...identity, pullRequestNumber: null, pullRequestUrl: null, isDraft: true, reused: false, code: failure.code, summary: failure.summary, retryAt: failure.retryAt, attempt: operation.attempt ?? 0, evidenceArtifactId: evidence.artifactId, evidenceArtifactSha256: evidence.sha256 });
       }
     },
     async reconcileTargetBase(rawInput: ReconcileTargetBaseActivityInput): Promise<ReconcileTargetBaseActivityResult> {
@@ -666,9 +690,15 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     },
     async reconcileCi(input: ReconcileCiActivityInput) {
       const context = database.authQuery((db) => db.prepare("SELECT r.normalized_json AS normalizedJson FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' WHERE t.id = ? AND t.company_id = ?").get(input.taskId, input.companyId) as { normalizedJson: string } | undefined);
-      if (!context) throw new Error("CI repository context is unavailable");
-      const result = await ci.reconcile({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, expectedHeadSha: input.expectedHeadSha, attemptNumber: input.attemptNumber });
-      return { runId: result.runId, attemptId: result.attemptId, attemptNumber: result.attemptNumber, expectedHeadSha: result.expectedHeadSha, observedHeadSha: result.observedHeadSha, evidenceArtifactId: result.evidenceArtifactId, outcome: result.outcome, reason: result.reason, owner: result.owner, repairable: result.repairable, summary: result.summary, retryAt: result.retryAt, nextPollAt: result.nextPollAt, policyHash: result.policyHash, propagationDeadline: result.propagationDeadline, overallDeadline: result.overallDeadline };
+      if (!context) return attentionFailure(input, "provider_ambiguity", "ci_repository_context_unavailable", "CI repository context is unavailable.");
+      try {
+        const result = await ci.reconcile({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, expectedHeadSha: input.expectedHeadSha, attemptNumber: input.attemptNumber });
+        const evidenceArtifactSha256 = artifactSha256(input.companyId, result.evidenceArtifactId);
+        return { runId: result.runId, attemptId: result.attemptId, attemptNumber: result.attemptNumber, expectedHeadSha: result.expectedHeadSha, observedHeadSha: result.observedHeadSha, evidenceArtifactId: result.evidenceArtifactId, ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), outcome: result.outcome, reason: result.reason, owner: result.owner, repairable: result.repairable, summary: result.summary, retryAt: result.retryAt, nextPollAt: result.nextPollAt, policyHash: result.policyHash, propagationDeadline: result.propagationDeadline, overallDeadline: result.overallDeadline };
+      } catch (error) {
+        const category: AttentionCategory = error instanceof CiProviderFailure && error.code === "authentication" ? "provider_authentication" : error instanceof CiFailure && error.code === "scope" ? "provider_ambiguity" : error instanceof CiProviderFailure && (error.code === "rate_limited" || error.code === "transient") ? "provider_connectivity_exhausted" : "provider_ambiguity";
+        return attentionFailure(input, category, "ci_provider_failure", error instanceof Error ? error.message : "CI provider reconciliation failed.");
+      }
     },
     async planCiRepair(input) {
       return withCapacity(input, "lead", () => (agent?.planCiRepair ?? defaultAgent.planCiRepair.bind(defaultAgent))(input));
@@ -676,14 +706,16 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     async finalReview(input: WorkflowFinalReviewActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
       const context = database.authQuery((db) => db.prepare("SELECT r.normalized_json AS normalizedJson, rel.repository, rel.pr_number AS pullRequestNumber, rel.pr_url AS pullRequestUrl, rel.head_branch AS headBranch, rel.base_branch AS baseBranch, rel.base_sha AS baseSha, rel.head_sha AS headSha, rel.superseded_at AS supersededAt FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' JOIN forge_releases rel ON rel.id = ? AND rel.task_id = t.id AND rel.company_id = t.company_id WHERE t.id = ? AND t.company_id = ?").get(input.releaseId, input.taskId, input.companyId) as { normalizedJson: string; repository: string; pullRequestNumber: number | null; pullRequestUrl: string | null; headBranch: string; baseBranch: string; baseSha: string; headSha: string; supersededAt: string | null } | undefined);
-      const pinned = context ? pinnedProjectRevision(context.normalizedJson) : undefined;
-      if (!context || !pinned || context.supersededAt || context.pullRequestNumber === null) throw new Error("Final review release is unavailable");
-      const currentPullRequest = await githubRelease.getPullRequest({ repository: context.repository, number: context.pullRequestNumber });
-      if (currentPullRequest.state !== "open" || !currentPullRequest.isDraft || currentPullRequest.repository.toLowerCase() !== context.repository.toLowerCase() || currentPullRequest.number !== context.pullRequestNumber || currentPullRequest.url.replace(/\/$/, "").toLowerCase() !== context.pullRequestUrl?.replace(/\/$/, "").toLowerCase() || currentPullRequest.baseBranch !== context.baseBranch || currentPullRequest.baseSha.toLowerCase() !== context.baseSha.toLowerCase() || currentPullRequest.headBranch !== context.headBranch || currentPullRequest.headSha.toLowerCase() !== context.headSha.toLowerCase() || currentPullRequest.headSha.toLowerCase() !== input.subjectCommit.toLowerCase()) throw new Error("Pull request head changed before final review");
+      if (!context || context.supersededAt || context.pullRequestNumber === null) return attentionFailure(input, "provider_ambiguity", "final_review_context_unavailable", "Final review release evidence is unavailable.");
+      let pinned: ReturnType<typeof pinnedProjectRevision>;
+      try { pinned = pinnedProjectRevision(context.normalizedJson); } catch { return attentionFailure(input, "provider_ambiguity", "final_review_context_unavailable", "Final review release evidence is unavailable."); }
+      let currentPullRequest;
+      try { currentPullRequest = await githubRelease.getPullRequest({ repository: context.repository, number: context.pullRequestNumber }); } catch { return attentionFailure(input, "provider_connectivity_exhausted", "final_review_provider_unavailable", "The release provider could not confirm the pull request for final review."); }
+      if (currentPullRequest.state !== "open" || !currentPullRequest.isDraft || currentPullRequest.repository.toLowerCase() !== context.repository.toLowerCase() || currentPullRequest.number !== context.pullRequestNumber || currentPullRequest.url.replace(/\/$/, "").toLowerCase() !== context.pullRequestUrl?.replace(/\/$/, "").toLowerCase() || currentPullRequest.baseBranch !== context.baseBranch || currentPullRequest.baseSha.toLowerCase() !== context.baseSha.toLowerCase() || currentPullRequest.headBranch !== context.headBranch || currentPullRequest.headSha.toLowerCase() !== context.headSha.toLowerCase() || currentPullRequest.headSha.toLowerCase() !== input.subjectCommit.toLowerCase()) return attentionFailure(input, "target_drift", "final_review_head_drift", "The pull request head or base changed before final review.");
       {
-        const currentBaseSha = await githubRelease.getBranchHead({ repository: pinned.repository, branch: pinned.baseBranch });
-        if (currentBaseSha === null) throw new Error("Target base branch is unavailable");
-        if (currentBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new Error("Target base has drifted since CI completed; a fresh forward merge and review are required");
+        let currentBaseSha: string | null;
+        try { currentBaseSha = await githubRelease.getBranchHead({ repository: pinned.repository, branch: pinned.baseBranch }); } catch { return attentionFailure(input, "provider_connectivity_exhausted", "final_review_base_unavailable", "The release provider could not confirm the target base branch."); }
+        if (currentBaseSha === null || currentBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase()) return attentionFailure(input, "target_drift", "final_review_base_drift", "The target base changed since CI completed; a fresh forward merge and review are required.");
       }
       const developerSessionRef = database.authQuery((db) => db.prepare("SELECT session_ref AS sessionRef FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND delivery_artifact_id = ? AND evidence_artifact_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId, input.deliveryArtifactId, input.evidenceArtifactId) as { sessionRef: string } | undefined)?.sessionRef;
       if (!developerSessionRef) throw new AgentFailure("scoped-input-missing", "Final review requires the exact Developer session");
@@ -692,23 +724,30 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       const normalized = normalizeReviewResult(review, reviewInput);
       if (normalized.outcome !== "completed") throw new AgentFailure(normalized.code, normalized.summary);
       const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, normalized.review.opinionArtifactId, "delivery-review");
-      return { finalReviewId: normalized.review.reviewId, leadExecutionId: normalized.review.leadExecutionId, leadSessionRef: normalized.review.leadSessionRef, opinionArtifactId: normalized.review.opinionArtifactId, evidenceArtifactId: normalized.review.evidenceArtifactId, reviewArtifact, outcome: normalized.review.opinion, summary: SafeSummarySchema.parse(normalized.review.summary), findings: normalized.review.findings, repairPlan: normalized.review.repairPlan, repairPlanArtifactId: normalized.review.repairPlanArtifactId ?? null, repairPlanSha256: normalized.review.repairPlanSha256 ?? null };
+      const evidenceArtifactSha256 = artifactSha256(input.companyId, normalized.review.evidenceArtifactId);
+      return { finalReviewId: normalized.review.reviewId, leadExecutionId: normalized.review.leadExecutionId, leadSessionRef: normalized.review.leadSessionRef, opinionArtifactId: normalized.review.opinionArtifactId, evidenceArtifactId: normalized.review.evidenceArtifactId, ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), reviewArtifact, outcome: normalized.review.opinion, summary: SafeSummarySchema.parse(normalized.review.summary), findings: normalized.review.findings, repairPlan: normalized.review.repairPlan, repairPlanArtifactId: normalized.review.repairPlanArtifactId ?? null, repairPlanSha256: normalized.review.repairPlanSha256 ?? null };
     },
     async acceptDelivery(input: AcceptDeliveryActivityInput & { decision?: "accept" | "request_changes" | "cancel" }) {
       const context = database.authQuery((db) => db.prepare("SELECT pr.normalized_json AS normalizedJson FROM forge_tasks t JOIN forge_project_revisions pr ON pr.id = t.project_revision_id AND pr.id = ? AND pr.state = 'accepted' WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?").get(input.projectRevisionId, input.taskId, input.companyId, input.workflowId) as { normalizedJson: string } | undefined);
-      if (!context) throw new Error("Acceptance context is unavailable");
-      const pinned = pinnedProjectRevision(context.normalizedJson);
-      if (pinned.repository !== input.repository || pinned.baseBranch !== input.baseBranch || pinned.baseSha.toLowerCase() !== input.baseSha.toLowerCase()) throw new Error("Acceptance configuration does not match the pinned project revision");
-      const result = await acceptance.accept({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, releaseId: input.releaseId, deliveryReviewId: input.deliveryReviewId, finalReviewId: input.finalReviewId, ciRunId: input.ciRunId, pullRequestNumber: input.pullRequestNumber, repository: input.repository, baseBranch: input.baseBranch, baseSha: input.baseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree, leadSessionRef: input.leadSessionRef, actorUserId: input.actorUserId, ...(input.decision ? { decision: input.decision } : {}), ...(input.note !== undefined ? { reason: input.note } : {}) });
-      return { acceptanceId: result.acceptanceId, status: result.status, ...(result.outcome ? { outcome: result.outcome } : {}), ...(result.retryAt !== undefined ? { retryAt: result.retryAt } : {}), ...(result.blocker ? { blockerCode: result.blocker.code, blockerSummary: result.blocker.summary, evidenceArtifactId: result.blocker.evidenceArtifactId } : {}), pullRequestNumber: result.pullRequest?.number ?? input.pullRequestNumber, pullRequestUrl: result.pullRequest?.url ?? "", ...(result.readyAt !== undefined ? { readyAt: result.readyAt } : {}), ...(result.acceptedAt !== undefined ? { acceptedAt: result.acceptedAt } : {}), ...(result.reasonArtifactId !== undefined ? { reasonArtifactId: result.reasonArtifactId } : {}) };
+      if (!context) return attentionFailure(input, "provider_ambiguity", "acceptance_context_unavailable", "Acceptance context is unavailable for the exact reviewed delivery.");
+      let pinned: ReturnType<typeof pinnedProjectRevision>;
+      try { pinned = pinnedProjectRevision(context.normalizedJson); } catch { return attentionFailure(input, "provider_ambiguity", "acceptance_context_unavailable", "Acceptance context is unavailable for the exact reviewed delivery."); }
+      if (pinned.repository !== input.repository || pinned.baseBranch !== input.baseBranch || pinned.baseSha.toLowerCase() !== input.baseSha.toLowerCase()) return attentionFailure(input, "target_drift", "acceptance_configuration_drift", "Acceptance configuration no longer matches the pinned project revision.");
+      let result;
+      try { result = await acceptance.accept({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: input.projectRevisionId, releaseId: input.releaseId, deliveryReviewId: input.deliveryReviewId, finalReviewId: input.finalReviewId, ciRunId: input.ciRunId, pullRequestNumber: input.pullRequestNumber, repository: input.repository, baseBranch: input.baseBranch, baseSha: input.baseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree, leadSessionRef: input.leadSessionRef, actorUserId: input.actorUserId, ...(input.decision ? { decision: input.decision } : {}), ...(input.note !== undefined ? { reason: input.note } : {}) }); }
+      catch (error) { const category: AttentionCategory = error instanceof AcceptanceFailure && error.code === "stale" ? "target_drift" : error instanceof AcceptanceFailure && error.code === "provider" ? "provider_connectivity_exhausted" : "verification_unrecoverable"; return attentionFailure(input, category, "acceptance_failed", error instanceof Error ? error.message : "Delivery acceptance failed."); }
+      const evidenceArtifactSha256 = result.blocker ? artifactSha256(input.companyId, result.blocker.evidenceArtifactId) : undefined;
+      return { acceptanceId: result.acceptanceId, status: result.status, ...(result.outcome ? { outcome: result.outcome } : {}), ...(result.retryAt !== undefined ? { retryAt: result.retryAt } : {}), ...(result.blocker ? { blockerCode: result.blocker.code, blockerSummary: result.blocker.summary, evidenceArtifactId: result.blocker.evidenceArtifactId } : {}), ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), pullRequestNumber: result.pullRequest?.number ?? input.pullRequestNumber, pullRequestUrl: result.pullRequest?.url ?? "", ...(result.readyAt !== undefined ? { readyAt: result.readyAt } : {}), ...(result.acceptedAt !== undefined ? { acceptedAt: result.acceptedAt } : {}), ...(result.reasonArtifactId !== undefined ? { reasonArtifactId: result.reasonArtifactId } : {}) };
     },
     async reconcileAcceptance(input: ReconcileAcceptanceActivityInput) {
       const result = await acceptance.reconcileReady({ acceptanceId: input.acceptanceId, taskId: input.taskId, companyId: input.companyId });
-      return { acceptanceId: result.acceptanceId, status: result.status, outcome: result.outcome, retryAt: result.retryAt, readyAt: result.readyAt, acceptedAt: result.acceptedAt, ...(result.blocker ? { blockerCode: result.blocker.code, blockerSummary: result.blocker.summary, evidenceArtifactId: result.blocker.evidenceArtifactId } : {}), pullRequestNumber: result.pullRequest?.number ?? 0, pullRequestUrl: result.pullRequest?.url ?? "" };
+      const evidenceArtifactSha256 = result.blocker ? artifactSha256(input.companyId, result.blocker.evidenceArtifactId) : undefined;
+      return { acceptanceId: result.acceptanceId, status: result.status, outcome: result.outcome, retryAt: result.retryAt, readyAt: result.readyAt, acceptedAt: result.acceptedAt, ...(result.blocker ? { blockerCode: result.blocker.code, blockerSummary: result.blocker.summary, evidenceArtifactId: result.blocker.evidenceArtifactId } : {}), ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), pullRequestNumber: result.pullRequest?.number ?? 0, pullRequestUrl: result.pullRequest?.url ?? "" };
     },
     async reconcileMerge(input: ReconcileMergeActivityInput) {
       const result = await acceptance.reconcileMerge(input);
-      return { outcome: result.outcome, pullRequestNumber: result.pullRequest?.number ?? 0, pullRequestUrl: result.pullRequest?.url ?? "", mergeObservationId: result.observationId, completionReceiptId: result.completionReceiptId, observedAt: result.observedAt, mergedAt: result.mergedAt, retryAt: result.retryAt ?? result.blocker?.retryAt ?? null, ...(result.blocker ? { blockerCode: result.blocker.code, blockerSummary: result.blocker.summary, evidenceArtifactId: result.blocker.evidenceArtifactId } : {}) };
+      const evidenceArtifactSha256 = result.blocker ? artifactSha256(input.companyId, result.blocker.evidenceArtifactId) : undefined;
+      return { outcome: result.outcome, pullRequestNumber: result.pullRequest?.number ?? 0, pullRequestUrl: result.pullRequest?.url ?? "", mergeObservationId: result.observationId, completionReceiptId: result.completionReceiptId, observedAt: result.observedAt, mergedAt: result.mergedAt, retryAt: result.retryAt ?? result.blocker?.retryAt ?? null, ...(result.blocker ? { blockerCode: result.blocker.code, blockerSummary: result.blocker.summary, evidenceArtifactId: result.blocker.evidenceArtifactId } : {}), ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}) };
     },
     async planMergeConflict(input: WorkflowMergeConflictPlanActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input);
@@ -734,7 +773,10 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;
-      return { ...safeResult, deliverySummary: SafeSummarySchema.parse(safeResult.deliverySummary) };
+      const deliveryArtifactSha256 = artifactSha256(input.companyId, safeResult.deliveryArtifactId);
+      const evidenceArtifactSha256 = artifactSha256(input.companyId, safeResult.evidenceArtifactId);
+      const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, "agent_contradiction", "developer_delivery_blocked", safeResult.deliverySummary) : undefined;
+      return { ...safeResult, ...(deliveryArtifactSha256 ? { deliveryArtifactSha256 } : {}), ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) };
     },
     async runDeveloperExecutionSupervised(input) {
       return runSupervised<WorkflowDeveloperExecutionResult>(input, async (service) => {
@@ -742,7 +784,10 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         activityWorktrees.set(result.developerExecutionId, result.worktreePath);
         activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
         const { worktreePath: _worktreePath, ...safeResult } = result;
-        return { ...safeResult, deliverySummary: SafeSummarySchema.parse(safeResult.deliverySummary) };
+        const deliveryArtifactSha256 = artifactSha256(input.companyId, safeResult.deliveryArtifactId);
+        const evidenceArtifactSha256 = artifactSha256(input.companyId, safeResult.evidenceArtifactId);
+        const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, "agent_contradiction", "developer_delivery_blocked", safeResult.deliverySummary) : undefined;
+        return { ...safeResult, ...(deliveryArtifactSha256 ? { deliveryArtifactSha256 } : {}), ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) };
       });
     },
     async runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput) {
@@ -770,7 +815,8 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;
-      return { ...safeResult, summary: SafeSummarySchema.parse(safeResult.summary) };
+      const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, "verification_unrecoverable", "developer_repair_blocked", safeResult.summary) : undefined;
+      return { ...safeResult, ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), summary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.summary)) };
     },
     async runDeveloperRepairSupervised(input) {
       return runSupervised<WorkflowDeveloperRepairResult>(input, async (service) => {
@@ -788,7 +834,8 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         activityWorktrees.set(result.developerExecutionId, result.worktreePath);
         activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
         const { worktreePath: _worktreePath, ...safeResult } = result;
-        return { ...safeResult, summary: SafeSummarySchema.parse(safeResult.summary) };
+        const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, "verification_unrecoverable", "developer_repair_blocked", safeResult.summary) : undefined;
+        return { ...safeResult, ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), summary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.summary)) };
       });
     },
     async runCiRepair(input: WorkflowCiRepairActivityInput) {
@@ -798,10 +845,19 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;
+      if (safeResult.outcome === "blocked") {
+        const attention = await putAttentionEvidence(input, "verification_unrecoverable", "ci_repair_blocked", safeResult.summary);
+        return { ...safeResult, attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 };
+      }
       return safeResult;
     },
     async cancelDeveloperExecution(input) {
-      return cancelDeveloperExecution(database, input.executionId);
+      const result = await cancelDeveloperExecution(database, input.executionId);
+      if (result.status === "ownership_ambiguous") {
+        const attention = await putAttentionEvidence(input, "unsafe_recovery", "developer_ownership_ambiguous", result.summary);
+        return { ...result, attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 };
+      }
+      return result;
     },
     async observeDeveloperExecution(input) {
       const lease = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).get(input.executionId);

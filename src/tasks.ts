@@ -447,6 +447,7 @@ export interface TaskEvent {
   taskId: string;
   companyId: string;
   revision: number;
+  attentionChanged: boolean;
 }
 
 export interface TaskDeveloperDiff {
@@ -708,7 +709,7 @@ export class TaskService {
   }
 
   taskEventCursor(): number {
-    return this.database.authQuery((db) => (db.prepare("SELECT COALESCE(MAX(rowid), 0) AS cursor FROM forge_issue_timeline").get() as { cursor: number }).cursor);
+    return this.database.authQuery((db) => (db.prepare("SELECT COALESCE(MAX(rowid), 0) AS cursor FROM forge_projection_invalidations").get() as { cursor: number }).cursor);
   }
 
   subscribe(actorUserId: string, listener: (event: TaskEvent, cursor: number) => void, afterCursor = this.taskEventCursor()): () => void {
@@ -740,12 +741,12 @@ export class TaskService {
   private pollTaskEvents(): void {
     if (this.eventCursor === undefined || this.eventListeners.size === 0) return;
     try {
-      let rows: Array<{ cursor: number; task_id: string; company_id: string; revision: number }>;
+      let rows: Array<{ cursor: number; task_id: string; company_id: string; revision: number; attention_changed: number }>;
       do {
-        rows = this.database.authQuery((db) => db.prepare("SELECT rowid AS cursor, task_id, company_id, revision FROM forge_issue_timeline WHERE rowid > ? ORDER BY rowid LIMIT 100").all(this.eventCursor) as Array<{ cursor: number; task_id: string; company_id: string; revision: number }>);
+        rows = this.database.authQuery((db) => db.prepare("SELECT rowid AS cursor, task_id, company_id, revision, attention_changed FROM forge_projection_invalidations WHERE rowid > ? ORDER BY rowid LIMIT 100").all(this.eventCursor) as Array<{ cursor: number; task_id: string; company_id: string; revision: number; attention_changed: number }>);
         for (const row of rows) {
           this.eventCursor = row.cursor;
-          const event: TaskEvent = { type: "invalidate", taskId: row.task_id, companyId: row.company_id, revision: row.revision };
+          const event: TaskEvent = { type: "invalidate", taskId: row.task_id, companyId: row.company_id, revision: row.revision, attentionChanged: row.attention_changed === 1 };
           for (const subscriber of this.eventListeners) {
             if (row.cursor > subscriber.afterCursor) subscriber.send(event, row.cursor);
           }

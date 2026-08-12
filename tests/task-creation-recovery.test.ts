@@ -22,6 +22,7 @@ const input = {
   roleProfiles: { lead: "profile-lead" },
   supplementalReview: false,
   repairCycleLimit: 2,
+  stateChangedAt: "2026-08-11T00:00:00.000Z",
 };
 
 test("revision-zero state is one schema-parsed canonical value", () => {
@@ -42,6 +43,8 @@ test("revision-zero state is one schema-parsed canonical value", () => {
     continuationCount: 0,
     lastSummaryHash: null,
     repairCycle: 0,
+    blocker: null,
+    stateChangedAt: input.stateChangedAt,
   });
 
   expect(canonicalJson(fromCreation)).toBe(canonicalJson(fromWorkflow));

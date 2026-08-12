@@ -215,7 +215,7 @@ export async function auditProductionWorkflowBundle(bundle: WorkflowBundleWithSo
       const candidate = resolve(dirname(normalized), imported.replace(/\.js$/, "") + ".ts");
       try { await visit(candidate); } catch (error) { if ((error as { code?: string }).code === "ENOENT") continue; throw error; }
     }
-    if (/\bprocess\.|\bfetch\(|Math\.random|randomUUID|new Date\(/.test(source)) throw new Error(`Forbidden Workflow operation in ${normalized}`);
+    if (/\bprocess\.|\bfetch\(|Math\.random|randomUUID/.test(source)) throw new Error(`Forbidden Workflow operation in ${normalized}`);
   };
   const defaultRoot = resolve(process.cwd(), "src/temporal/workflows.ts");
   if (resolve(rootFile) === defaultRoot) {

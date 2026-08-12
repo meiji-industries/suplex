@@ -11,6 +11,7 @@ import { probeWorkflows, workerRegistrations } from "./database-schema.js";
 import { authSchema, type AuthSchema } from "./auth-schema.js";
 import { canonicalJson } from "./canonical-json.js";
 import { IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueProjectionEvent, type IssueWorkflowState } from "./temporal/issue-contracts.js";
+import { attentionPolicy } from "./attention-policy.js";
 
 export type ProbeStatus = "running" | "completed";
 
@@ -412,11 +413,11 @@ export class ForgeDatabase {
       throw new ProjectionIntegrityFailure("Projection event identity does not match its task", { taskId: parsed.issueId, revision: parsed.revision, eventId: parsed.lastEventId }, "projection_identity_conflict");
     }
     const eventById = database.prepare("SELECT workflow_id, revision, event_hash FROM forge_issue_timeline WHERE id = ?").get(parsed.lastEventId) as { workflow_id: string; revision: number; event_hash: string } | undefined;
+    const eventByRevision = database.prepare("SELECT id, event_hash FROM forge_issue_timeline WHERE workflow_id = ? AND revision = ?").get(parsed.workflowId, parsed.revision) as { id: string; event_hash: string } | undefined;
     if (eventById && (eventById.workflow_id !== parsed.workflowId || eventById.revision !== parsed.revision || (eventById.event_hash && eventById.event_hash !== stateHash))) {
       throw new ProjectionIntegrityFailure("Projection event identity was reused with a different state", { taskId: parsed.issueId, revision: parsed.revision, eventId: parsed.lastEventId }, "projection_event_conflict");
     }
     const current = database.prepare("SELECT revision, event_hash, last_event_id, authoritative_revision, authoritative_event_hash FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string; last_event_id: string; authoritative_revision: number; authoritative_event_hash: string } | undefined;
-    const eventByRevision = database.prepare("SELECT id, event_hash FROM forge_issue_timeline WHERE workflow_id = ? AND revision = ?").get(parsed.workflowId, parsed.revision) as { id: string; event_hash: string } | undefined;
     if (eventByRevision && (eventByRevision.id !== parsed.lastEventId || (eventByRevision.event_hash && eventByRevision.event_hash !== stateHash))) {
       throw new ProjectionIntegrityFailure("Projection revision was reused with a different state", { taskId: parsed.issueId, revision: parsed.revision, eventId: parsed.lastEventId }, "projection_revision_conflict");
     }
@@ -441,13 +442,29 @@ export class ForgeDatabase {
 
     const authoritativeRevision = Math.max(current?.authoritative_revision ?? 0, parsed.revision);
     const authoritativeEventHash = current && current.authoritative_revision > parsed.revision ? current.authoritative_event_hash : stateHash;
-    database.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, authoritative_event_hash, projected_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, project_id = excluded.project_id, workflow_id = excluded.workflow_id, revision = excluded.revision, phase = excluded.phase, owner = excluded.owner, allowed_commands_json = excluded.allowed_commands_json, pending_action = excluded.pending_action, updated_at = excluded.updated_at, last_event_id = excluded.last_event_id, event_hash = excluded.event_hash, authoritative_revision = excluded.authoritative_revision, authoritative_event_hash = excluded.authoritative_event_hash, projected_at = excluded.projected_at
+    const policy = attentionPolicy({ companyId: parsed.companyId, taskId: parsed.issueId, taskTitle: "", workflowId: parsed.workflowId, phase: parsed.phase, revision: parsed.revision, owner: parsed.owner, allowedCommands: parsed.allowedCommands, blocker: parsed.blocker, ...(parsed.stateChangedAt ? { stateChangedAt: parsed.stateChangedAt } : {}), projectedAt: updatedAt });
+    let projectionStatus = policy.projectionStatus;
+    const attention = policy.kind === "attention"
+      ? database.prepare("SELECT id, kind, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = ? AND sha256 = ?").get(policy.item.evidence.artifactId, parsed.companyId, policy.item.evidence.kind, policy.item.evidence.sha256) as { id: string; kind: string; sha256: string } | undefined
+      : undefined;
+    if (policy.kind === "attention" && !attention) projectionStatus = "unknown";
+    database.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, authoritative_event_hash, projected_at, blocker_json, state_changed_at, projection_status, reconciled_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, project_id = excluded.project_id, workflow_id = excluded.workflow_id, revision = excluded.revision, phase = excluded.phase, owner = excluded.owner, allowed_commands_json = excluded.allowed_commands_json, pending_action = excluded.pending_action, updated_at = excluded.updated_at, last_event_id = excluded.last_event_id, event_hash = excluded.event_hash, authoritative_revision = excluded.authoritative_revision, authoritative_event_hash = excluded.authoritative_event_hash, projected_at = excluded.projected_at, blocker_json = excluded.blocker_json, state_changed_at = excluded.state_changed_at, projection_status = excluded.projection_status, reconciled_at = excluded.reconciled_at
       WHERE forge_issue_projections.revision < excluded.revision`).run(
-      parsed.issueId, parsed.companyId, parsed.projectId, parsed.workflowId, parsed.revision, parsed.phase, parsed.owner, JSON.stringify(parsed.allowedCommands), parsed.pendingAction, updatedAt, parsed.lastEventId, stateHash, authoritativeRevision, authoritativeEventHash, updatedAt,
+      parsed.issueId, parsed.companyId, parsed.projectId, parsed.workflowId, parsed.revision, parsed.phase, parsed.owner, JSON.stringify(parsed.allowedCommands), parsed.pendingAction, updatedAt, parsed.lastEventId, stateHash, authoritativeRevision, authoritativeEventHash, updatedAt, parsed.blocker === undefined ? null : JSON.stringify(parsed.blocker), parsed.stateChangedAt ?? null, projectionStatus, updatedAt,
     );
     database.prepare("UPDATE forge_issue_projections SET last_run_id = ? WHERE task_id = ?").run(runId, parsed.issueId);
+    const hadActiveAttention = Boolean((database.prepare("SELECT 1 AS present FROM forge_attention_items WHERE task_id = ? AND company_id = ? AND active = 1 LIMIT 1").get(parsed.issueId, parsed.companyId) as { present: number } | undefined)?.present);
+    database.prepare("UPDATE forge_attention_items SET active = 0, updated_at = ? WHERE task_id = ? AND company_id = ? AND active = 1").run(updatedAt, parsed.issueId, parsed.companyId);
+    if (attention && policy.kind === "attention") {
+      database.prepare(`INSERT INTO forge_attention_items (id, company_id, task_id, category, summary, action, evidence_ref, active, created_at, updated_at, source_revision, activated_at, actions_json, evidence_artifact_id, evidence_sha256)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET summary = excluded.summary, action = excluded.action, evidence_ref = excluded.evidence_ref, active = 1, updated_at = excluded.updated_at, source_revision = excluded.source_revision, activated_at = excluded.activated_at, actions_json = excluded.actions_json, evidence_artifact_id = excluded.evidence_artifact_id, evidence_sha256 = excluded.evidence_sha256`).run(
+        policy.item.id, parsed.companyId, parsed.issueId, policy.item.category, policy.item.summary, JSON.stringify(policy.item.actions), `${policy.item.evidence.artifactId}:${policy.item.evidence.sha256}`, policy.item.activatedAt, updatedAt, policy.item.sourceRevision, policy.item.activatedAt, JSON.stringify(policy.item.actions), policy.item.evidence.artifactId, policy.item.evidence.sha256,
+      );
+    }
+    database.prepare("INSERT OR IGNORE INTO forge_projection_invalidations (id, company_id, task_id, revision, attention_changed, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(`${parsed.workflowId}:${parsed.revision}`, parsed.companyId, parsed.issueId, parsed.revision, attention || hadActiveAttention ? 1 : 0, updatedAt);
     database.prepare(`INSERT INTO forge_issue_governance (task_id, company_id, plan_revision, plan_material, material_categories_json, supplemental_review_used, supplemental_review_artifact_id, decision_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, plan_revision = excluded.plan_revision, plan_material = excluded.plan_material, material_categories_json = excluded.material_categories_json, supplemental_review_used = excluded.supplemental_review_used, supplemental_review_artifact_id = excluded.supplemental_review_artifact_id, decision_id = excluded.decision_id`).run(

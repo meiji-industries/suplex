@@ -166,7 +166,7 @@ test("concurrent identical submissions converge and conflicting submissions fail
 test("creates one durable backlog task, verifies immutable images, and starts planning with an expected revision", async () => {
   const value = await fixture();
   try {
-    const events: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number }> = [];
+    const events: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number; attentionChanged: boolean }> = [];
     const unsubscribe = value.tasks.subscribe(value.adminId, (event) => events.push(event));
     const first = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Investigate queue", description: "## Reproduce\n\nPlease inspect the queue.", idempotencyKey: "queue-task-0001", supplementalReview: true, images: [{ filename: "evidence.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] });
     await expect.poll(() => events).toHaveLength(1);
@@ -178,7 +178,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     expect(first.task.images).toHaveLength(1);
     expect(first.task.supplementalReview).toBe(true);
     expect(first.task.roleProfiles.lead).toBe(value.profileId);
-    expect(events).toEqual([{ type: "invalidate", taskId: first.task.id, companyId: value.companyId, revision: 0 }]);
+    expect(events).toEqual([{ type: "invalidate", taskId: first.task.id, companyId: value.companyId, revision: 0, attentionChanged: false }]);
     const initialSnapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(first.task.id) as { state_json: string });
     const initialState = JSON.parse(initialSnapshot.state_json) as IssueWorkflowState;
     expect(initialState).toMatchObject({ issueId: first.task.id, repairCycle: 0 });
@@ -251,8 +251,8 @@ test("streams projection changes written by the Temporal worker process", async 
   const value = await fixture();
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Synced task", description: "body", idempotencyKey: "synced-task-0001", images: [] });
-    const events: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number }> = [];
-    const deniedEvents: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number }> = [];
+    const events: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number; attentionChanged: boolean }> = [];
+    const deniedEvents: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number; attentionChanged: boolean }> = [];
     value.database.authQuery((db) => {
       db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('sync-member', 'Sync Member', 'sync@forge.local', 'member', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run();
       db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('sync-other-company', 'Other', 'active', '2026-08-11T00:00:00.000Z')").run();
@@ -263,7 +263,7 @@ test("streams projection changes written by the Temporal worker process", async 
     const workerDatabase = new ForgeDatabase(join(value.root, "forge.sqlite"));
     try {
       projectState(workerDatabase, IssueWorkflowStateSchema.parse({ ...created.task, issueId: created.task.id, projectRevisionId: created.task.projectRevisionId, revision: 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${created.task.workflowId}:1`, continuationCount: 0, lastSummaryHash: null, repairCycle: 0 }), "run-worker");
-      await expect.poll(() => events).toEqual([{ type: "invalidate", taskId: created.task.id, companyId: created.task.companyId, revision: 1 }]);
+      await expect.poll(() => events).toEqual([{ type: "invalidate", taskId: created.task.id, companyId: created.task.companyId, revision: 1, attentionChanged: false }]);
       expect(deniedEvents).toEqual([]);
     } finally {
       unsubscribe();

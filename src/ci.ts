@@ -334,6 +334,7 @@ export interface CiReconcileResult extends CiEvaluationResult {
   expectedHeadSha: string;
   observedHeadSha: string | null;
   evidenceArtifactId: string | null;
+  evidenceArtifactSha256?: string;
   policyHash: string;
   policy: CiPolicy;
   propagationDeadline: string;
@@ -412,10 +413,12 @@ export class CiService {
     const evidence = JSON.stringify({ policy: { projectRevisionId: policy.projectRevisionId, requiredChecks: policy.requiredChecks, acceptedConclusions: policy.acceptedConclusions }, expectedHeadSha: input.expectedHeadSha, observedPullRequest: observed, checks: checks.map((check) => ({ ...check, selectedForEvaluation: result.selectedChecks.some((selected) => selected.providerCheckId === check.providerCheckId && selected.selectedForEvaluation) })), outcome: result.outcome, reason: result.reason });
     let evidenceArtifact: StoredArtifact | undefined;
     let evidenceArtifactId: string | null = null;
+    let evidenceArtifactSha256: string | undefined;
     if (this.artifacts) {
       const artifact = await this.artifacts.put(input.companyId, "ci-evidence", { filename: `${run.id}-${input.attemptNumber}.json`, mimeType: "application/json", bytes: Buffer.from(evidence, "utf8") });
       evidenceArtifact = artifact;
       evidenceArtifactId = artifact.id;
+      evidenceArtifactSha256 = artifact.sha256;
       this.database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
     }
     try {
@@ -434,7 +437,7 @@ export class CiService {
       }
       throw error;
     }
-    return { runId: run.id, attemptId: newAttemptId, attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: observed?.headSha ?? null, evidenceArtifactId, policyHash, policy, propagationDeadline, overallDeadline, ...result, nextPollAt: result.retryAt };
+    return { runId: run.id, attemptId: newAttemptId, attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: observed?.headSha ?? null, evidenceArtifactId, ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), policyHash, policy, propagationDeadline, overallDeadline, ...result, nextPollAt: result.retryAt };
   }
 
   private readAttemptChecks(id: string): SelectedCheck[] {

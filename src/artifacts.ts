@@ -12,7 +12,7 @@ export interface ArtifactInput {
   bytes: Buffer;
 }
 
-export const ArtifactKinds = ["task-brief", "task-image", "agent-evidence", "lead-plan", "decision-blocker", "supplemental-review", "plan-decision", "plan-revision-reason", "continuation-reason", "developer-delivery", "delivery-review", "delivery-repair-plan", "developer-repair", "delivery-blocker", "delivery-decision", "ci-evidence", "ci-repair-plan", "ci-repair-evidence", "merge-conflict-evidence", "merge-conflict-plan", "merge-conflict-resolution", "release-public-body", "forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery"] as const;
+export const ArtifactKinds = ["task-brief", "task-image", "agent-evidence", "attention-evidence", "lead-plan", "decision-blocker", "supplemental-review", "plan-decision", "plan-revision-reason", "continuation-reason", "developer-delivery", "delivery-review", "delivery-repair-plan", "developer-repair", "delivery-blocker", "delivery-decision", "ci-evidence", "ci-repair-plan", "ci-repair-evidence", "merge-conflict-evidence", "merge-conflict-plan", "merge-conflict-resolution", "release-public-body", "forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery"] as const;
 export type ArtifactKind = (typeof ArtifactKinds)[number];
 
 export interface StoredArtifact {
@@ -38,6 +38,9 @@ export const ArtifactManifestEntrySchema = z.object({
 });
 
 export type ArtifactManifestEntry = z.infer<typeof ArtifactManifestEntrySchema>;
+
+export const SAFE_ARTIFACT_KINDS = ["attention-evidence", "lead-plan", "decision-blocker", "delivery-review", "developer-delivery", "developer-repair", "ci-evidence", "merge-conflict-plan", "merge-conflict-resolution"] as const satisfies readonly ArtifactKind[];
+export const SAFE_ARTIFACT_KINDS_SQL = SAFE_ARTIFACT_KINDS.map((kind) => `'${kind}'`).join(", ");
 
 export interface PlannedArtifact extends ArtifactManifestEntry {
   companyId: string;
@@ -352,6 +355,49 @@ export class ArtifactStore {
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     if (sha256 !== artifact.sha256) throw new ArtifactFailure("hash-mismatch", "Artifact hash verification failed");
     return bytes;
+  }
+
+  async readBounded(artifact: Pick<StoredArtifact, "companyId" | "storagePath" | "sha256">, maxBytes: number): Promise<{ bytes: Buffer; truncated: boolean }> {
+    if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0 || maxBytes > 8 * 1024 * 1024) throw new ArtifactFailure("invalid-size", "Artifact capture limit is invalid");
+    const companyId = CompanyIdSchema.parse(artifact.companyId);
+    const absolutePath = safeStoragePath(this.root, artifact.storagePath);
+    const companyRoot = resolve(this.root, companyId);
+    if (!within(companyRoot, absolutePath)) throw new ArtifactFailure("artifact-company-scope", "Artifact is outside the company root");
+    await rejectSymlinkComponents(this.root, absolutePath);
+    const rootIdentity = await directoryIdentity(resolve(this.root));
+    const companyIdentity = await directoryIdentity(companyRoot);
+    const objectDirectory = dirname(absolutePath);
+    const objectIdentity = await directoryIdentity(objectDirectory);
+    const handle = await open(absolutePath, constants.O_RDONLY | noFollowFlag());
+    const hash = createHash("sha256");
+    const captured: Buffer[] = [];
+    let totalBytes = 0;
+    try {
+      const stat = await handle.stat();
+      if (!stat.isFile()) throw new ArtifactFailure("artifact-corrupt", "Artifact content is unavailable");
+      await this.maybeFault("after_read_open", companyId, artifact.storagePath);
+      const chunk = Buffer.allocUnsafe(64 * 1024);
+      let position = 0;
+      while (true) {
+        const read = await handle.read(chunk, 0, chunk.length, position);
+        if (read.bytesRead === 0) break;
+        const portion = chunk.subarray(0, read.bytesRead);
+        hash.update(portion);
+        if (totalBytes < maxBytes) captured.push(Buffer.from(portion.subarray(0, maxBytes - totalBytes)));
+        totalBytes += read.bytesRead;
+        position += read.bytesRead;
+      }
+      const finalStat = await lstat(absolutePath);
+      if (!finalStat.isFile() || finalStat.dev !== stat.dev || finalStat.ino !== stat.ino) throw new ArtifactFailure("artifact-corrupt", "Artifact content is unavailable");
+    } finally {
+      await handle.close();
+    }
+    const finalPath = await realpath(absolutePath);
+    const realCompanyRoot = await realpath(companyRoot);
+    if (!within(realCompanyRoot, finalPath)) throw new ArtifactFailure("artifact-company-scope", "Artifact is outside the company root");
+    if (!sameIdentity(rootIdentity, await directoryIdentity(resolve(this.root))) || !sameIdentity(companyIdentity, await directoryIdentity(companyRoot)) || !sameIdentity(objectIdentity, await directoryIdentity(objectDirectory))) throw new ArtifactFailure("artifact-symlink", "Artifact directory changed during read");
+    if (hash.digest("hex") !== artifact.sha256) throw new ArtifactFailure("hash-mismatch", "Artifact hash verification failed");
+    return { bytes: Buffer.concat(captured), truncated: totalBytes > maxBytes };
   }
 
   readSync(artifact: Pick<StoredArtifact, "companyId" | "storagePath" | "sha256">): Buffer {

@@ -17,6 +17,7 @@ import { createFastifyLogger, StructuredLogger } from "./logging.js";
 import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
 import { createGithubReleasePort, ReleaseService } from "./github-release.js";
+import { ProjectionRebuildService } from "./projection-rebuild.js";
 
 export interface ForgeServer {
   app: FastifyInstance;
@@ -31,11 +32,13 @@ export async function createForgeServer(config: ForgeConfig = loadConfig()): Pro
   const projects = new ProjectService(database, auth, config);
   await seedDevelopmentData(auth, projects, config);
   const tasks = new TaskService(database, auth, projects, config);
-  const attention = new AttentionService(database, auth);
+  const artifactStore = new ArtifactStore(config.artifactRoot);
+  const attention = new AttentionService(database, auth, artifactStore);
   const githubRelease = createGithubReleasePort();
-  const release = new ReleaseService(database, new ArtifactStore(config.artifactRoot), githubRelease);
+  const release = new ReleaseService(database, artifactStore, githubRelease);
   const ci = new CiService(database, createGithubCiProvider());
   const acceptance = new AcceptanceService(database, githubRelease);
+  const rebuild = new ProjectionRebuildService(database, config);
   const dependencies = {
     config,
     health: createHostHealthDependencies(config, database),
@@ -47,6 +50,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig()): Pro
     release,
     ci,
     acceptance,
+    rebuild,
     logger: createFastifyLogger(),
   } satisfies Parameters<typeof createApp>[0];
   let app: FastifyInstance;

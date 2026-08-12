@@ -45,7 +45,7 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     typed.patch("/api/admin/models/:modelId", { schema: { params: ModelIdParamsSchema, body: ModelStatusBodySchema, response: { 200: ModelResponseSchema } } }, async (request, reply) => reply.send(projects.setModelStatus(request.forgeUser.id, request.params.modelId, request.body.status)));
   }
   if (database && attention) {
-    typed.post("/api/admin/rebuild-projections", { schema: { body: ProjectionRebuildBodySchema, response: { 200: z.object({ rebuilt: z.number(), findings: z.array(z.object({ taskId: z.string(), code: z.string(), summary: z.string() })) }), 403: ErrorResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
+    typed.post("/api/admin/rebuild-projections", { schema: { body: ProjectionRebuildBodySchema, response: { 200: z.object({ source: z.literal("temporal"), rebuilt: z.number(), findings: z.array(z.object({ taskId: z.string(), code: z.string(), summary: z.string() })) }), 403: ErrorResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
       if (request.forgeUser.role !== "admin") return reply.code(403).send({ error: "Administrator access required" });
       if (!config) return reply.code(503).send({ error: "Temporal rebuild is unavailable" });
       let result;
@@ -59,7 +59,7 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
         throw error;
       }
       for (const company of auth.listVisibleCompanies(request.forgeUser.id)) attention.rebuild(company.id);
-      return reply.send(result);
+      return reply.send({ source: "temporal" as const, ...result });
     });
   }
 };

@@ -13,6 +13,7 @@ import type { ForgeConfig } from "./config.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
 import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
+import type { ProjectionRebuildService } from "./projection-rebuild.js";
 import { HealthSnapshotSchema } from "./schemas.js";
 import {
   CSRF_COOKIE_NAME,
@@ -39,6 +40,7 @@ export interface AppDependencies {
   ci?: CiService;
   acceptance?: AcceptanceService;
   database?: ForgeDatabase;
+  rebuild?: ProjectionRebuildService;
   logger?: Logger | false;
   https?: { key: Buffer; cert: Buffer };
   frontendDevelopment?: {
@@ -76,7 +78,7 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
 export function registerAppRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
   const getHealth = dependencies.getHealth ?? (() => inspectHostHealth(dependencies.config, dependencies.health));
   const readHealth = async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth());
-  const { auth, projects: projectService, tasks: taskService, attention: attentionService, database } = dependencies;
+  const { auth, projects: projectService, tasks: taskService, attention: attentionService, database, rebuild } = dependencies;
 
   void app.register(pages, {
     readHealth,
@@ -87,7 +89,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
   void app.register(health, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config });
   if (auth) {
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
-    void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}) });
+    void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}), ...(rebuild ? { rebuild } : {}) });
   }
   if (!dependencies.frontendDevelopment) void app.register(assets, { prefix: "/assets" });
 }

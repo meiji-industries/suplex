@@ -33,7 +33,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "help") {
-    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|rebuild-projections|start|stop|restart> [--foreground]\n");
+    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|start|stop|restart> [--foreground]\n");
     return;
   }
   const config = loadConfig();
@@ -89,17 +89,6 @@ async function main(): Promise<void> {
       } finally { restoredDatabase.close(); }
       process.stdout.write(`backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"} (${result.restoreDurationMs}ms); see forge-backup/restore-handoff.json\n`);
     }
-    return;
-  }
-  if (command === "rebuild-projections") {
-    const database = new ForgeDatabase(config.databasePath);
-    try {
-      const rebuild = await new ProjectionRebuildService(database, config).rebuild();
-      const attention = new AttentionService(database, new AuthService(database, config));
-      attention.rebuildAll();
-      new CapacityManager(database, config).reconcileFromLedgers();
-      process.stdout.write(`Rebuilt ${rebuild.rebuilt} issue projections (${rebuild.findings.length} findings) and reconciled operator ledgers\n`);
-    } finally { database.close(); }
     return;
   }
   if (command === "recover") {

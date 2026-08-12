@@ -24,7 +24,7 @@ function fakeWebAuthn(): WebAuthnAdapter {
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
 const github: GithubAdapter = { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } };
 
-test("task creation and the dedicated board remain usable on desktop and narrow viewports", async () => {
+test("task creation and the dedicated board remain usable on desktop and narrow viewports", { timeout: 120_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-task-browser-test-"));
   const repositoryRoot = join(root, "repositories"); const worktreeRoot = join(root, "worktrees"); const repositoryPath = join(repositoryRoot, "repo");
   await mkdir(repositoryPath, { recursive: true }); await mkdir(worktreeRoot, { recursive: true });
@@ -179,6 +179,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await observerDetail.getByRole("heading", { name: "Browser task", exact: true, level: 2 }).waitFor();
       await taskDetail.getByRole("button", { name: "Start planning", exact: true }).click();
       await taskDetail.locator('[data-status="planning"]').waitFor();
+      await observer.waitForTimeout(1000);
       await observerDetail.locator('[data-status="planning"]').waitFor();
       database.authTransaction((db) => {
         const task = db.prepare("SELECT workflow_id AS workflowId FROM forge_tasks WHERE id = ?").get(taskId) as { workflowId: string };
@@ -193,6 +194,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await expect.poll(() => plannedState?.phase).toBe("approval");
       TaskResponseSchema.parse(tasks.getTask((enrolled.json() as { user: { id: string } }).user.id, taskId));
       await expect.poll(() => workerDatabase.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = ?").get(plannedState!.issueId))).toEqual({ revision: 2, phase: "approval" });
+      await page.waitForTimeout(1000);
       await taskDetail.locator('[data-status="approval"]').waitFor();
       await observerDetail.locator('[data-status="approval"]').waitFor();
       await taskDetail.getByText("evidence.png", { exact: true }).waitFor();
@@ -335,4 +337,4 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await narrow.close(); await observer.close(); await page.close(); await context.close();
     } finally { await browser.close(); }
   } finally { await app.close(); workerDatabase.close(); database.close(); await rm(root, { recursive: true, force: true }); }
-}, 120_000);
+});

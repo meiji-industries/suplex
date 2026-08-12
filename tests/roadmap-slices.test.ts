@@ -106,12 +106,12 @@ test("attention rebuild is deterministic, scoped, and quiet for ordinary work", 
     const auth = new AuthService(value.database, value.config);
     const attention = new AttentionService(value.database, auth);
     const first = attention.list("admin");
-    expect(first[0]).toMatchObject({ companyId: "company-a", attentionCount: 1, attention: [expect.objectContaining({ category: "member_decision", taskId: "task-a" })] });
+    expect(first[0]).toMatchObject({ companyId: "company-a", attentionCount: 0, attention: [], projectionHealth: expect.objectContaining({ status: "unknown" }) });
     value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'development', allowed_commands_json = '[]' WHERE task_id = 'task-a'").run());
     const rebuilt = attention.list("admin");
     expect(rebuilt.find((company) => company.companyId === "company-a")?.attention).toEqual([]);
     expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_attention_items WHERE company_id = 'company-a' AND active = 1").get())).toEqual({ count: 0 });
-    expect(() => attention.get("admin", "missing-task")).not.toThrow();
+    expect(() => attention.get("admin", "missing-task")).toThrow(expect.objectContaining({ statusCode: 404 }));
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

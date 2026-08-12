@@ -148,6 +148,8 @@ export const DurableArtifactKindSchema = z.enum([
   "task-brief",
   "task-image",
   "agent-evidence",
+  "attention-evidence",
+  "decision-blocker",
   "lead-plan",
   "developer-delivery",
   "delivery-review",
@@ -171,6 +173,18 @@ export const DurableArtifactReferenceSchema = z.object({
 });
 
 export type DurableArtifactReference = z.infer<typeof DurableArtifactReferenceSchema>;
+
+export function normalizeSafeSummary(value: unknown): string {
+  const normalized = String(value).replace(/[\r\n]+/g, " ").trim();
+  if (!normalized) return "The operation requires operator attention.";
+  let result = "";
+  for (const character of normalized) {
+    const candidate = result + character;
+    if (new TextEncoder().encode(candidate).byteLength > 240) break;
+    result = candidate;
+  }
+  return result || "The operation requires operator attention.";
+}
 
 export const SafeSummarySchema = z.string().min(1).superRefine((value, context) => {
   if (/\r|\n/.test(value)) context.addIssue({ code: "custom", message: "Safe summaries must be one line" });
@@ -252,10 +266,20 @@ export const MergeConflictPlanSchema = z.object({
 export type MergeConflictPlan = z.infer<typeof MergeConflictPlanSchema>;
 
 export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"]);
+export type IssuePhase = z.infer<typeof IssuePhaseSchema>;
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
 export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "revise_plan", "record_progress", "start_development", "retry_development", "cancel_development", "verify_developer_ownership", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "reconcile_acceptance", "cancel_issue", "reconcile_merge", "continue_work"]);
 export type IssueCommand = z.infer<typeof IssueCommandSchema>;
 export const IssuePlanDecisionSchema = z.enum(["approve", "reject"]);
+export const AttentionCategorySchema = z.enum(["member_authorization", "member_decision", "agent_contradiction", "agent_exhausted", "unsafe_recovery", "provider_ambiguity", "provider_authentication", "provider_connectivity_exhausted", "verification_unrecoverable", "target_drift", "capacity_exhausted"]);
+export type AttentionCategory = z.infer<typeof AttentionCategorySchema>;
+export const IssueBlockerActionSchema = z.object({ command: IssueCommandSchema, label: z.string().min(1).max(120), requiresNote: z.boolean(), destructive: z.boolean() });
+export type IssueBlockerAction = z.infer<typeof IssueBlockerActionSchema>;
+export const ArtifactPointerSchema = z.object({ artifactId: durableId, sha256: z.string().regex(/^[a-f0-9]{64}$/), kind: z.enum(["attention-evidence", "lead-plan", "decision-blocker", "delivery-review", "developer-delivery", "developer-repair", "ci-evidence", "merge-conflict-plan", "merge-conflict-resolution"]) });
+export type ArtifactPointer = z.infer<typeof ArtifactPointerSchema>;
+export const IssueBlockerRetrySchema = z.object({ attempt: z.number().int().nonnegative(), retryAt: z.string().datetime().nullable(), exhausted: z.boolean() });
+export const IssueBlockerSchema = z.object({ category: AttentionCategorySchema, summary: SafeSummarySchema, unblockOwner: z.enum(["human", "lead", "developer", "system"]), actions: z.array(IssueBlockerActionSchema).min(1).max(3), evidence: ArtifactPointerSchema, createdAt: z.string().datetime(), retry: IssueBlockerRetrySchema.nullable() });
+export type IssueBlocker = z.infer<typeof IssueBlockerSchema>;
 export const RepairAuthoritySchema = z.enum(["delivery_review", "final_review", "ci_failure", "member_requested_changes"]);
 export const IssueContinuationStateSchema = z.object({
   phase: IssuePhaseSchema,
@@ -267,6 +291,8 @@ export const IssueContinuationStateSchema = z.object({
   lastEventId: durableId,
   continuationCount: z.number().int().nonnegative(),
   lastSummaryHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  blocker: IssueBlockerSchema.nullable().optional(),
+  stateChangedAt: z.string().datetime().optional(),
   activeOperation: ActiveOperationSchema.optional(),
   processedCommandIds: z.array(durableId).max(64).optional(),
   ...DeveloperRecoveryFields,
@@ -444,6 +470,8 @@ export const IssueWorkflowStateSchema = z.object({
   lastEventId: durableId,
   continuationCount: z.number().int().nonnegative(),
   lastSummaryHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  blocker: IssueBlockerSchema.nullable().optional(),
+  stateChangedAt: z.string().datetime().optional(),
   activeOperation: ActiveOperationSchema.optional(),
   processedCommandIds: z.array(durableId).max(64).optional(),
   ...DeveloperRecoveryFields,
@@ -580,9 +608,18 @@ export const IssueWorkflowStateSchema = z.object({
   revisionRequestId: durableId.nullable().optional(),
   revisedExecutionCoordinates: RevisedExecutionCoordinatesSchema.nullable().optional(),
   successorReference: SuccessorReferenceSchema.nullable().optional(),
+}).superRefine((state, context) => {
+  if (state.blocker?.unblockOwner !== "human") return;
+  if (state.owner !== "human") context.addIssue({ code: "custom", path: ["owner"], message: "Human blockers require human ownership" });
+  if (state.blocker.retry && !state.blocker.retry.exhausted && state.blocker.retry.retryAt !== null) context.addIssue({ code: "custom", path: ["blocker", "retry"], message: "Retryable blockers cannot be surfaced as human attention" });
+  for (const action of state.blocker.actions) {
+    if (!state.allowedCommands.includes(action.command)) context.addIssue({ code: "custom", path: ["allowedCommands"], message: "Blocker actions must be legal in the current state" });
+    if (action.destructive !== (action.command === "cancel_issue")) context.addIssue({ code: "custom", path: ["blocker", "actions"], message: "Only issue cancellation is destructive" });
+    if (["reject_plan", "record_delivery_decision", "request_delivery_changes"].includes(action.command) && !action.requiresNote) context.addIssue({ code: "custom", path: ["blocker", "actions"], message: "This action requires a note" });
+  }
 });
 
-export function buildInitialIssueWorkflowState(input: IssueWorkflowInput): IssueWorkflowState {
+export function buildInitialIssueWorkflowState(input: IssueWorkflowInput & { stateChangedAt?: string }): IssueWorkflowState {
   return IssueWorkflowStateSchema.parse({
     workflowId: input.workflowId,
     companyId: input.companyId,
@@ -600,6 +637,8 @@ export function buildInitialIssueWorkflowState(input: IssueWorkflowInput): Issue
     continuationCount: 0,
     lastSummaryHash: null,
     repairCycle: 0,
+    blocker: null,
+    stateChangedAt: input.stateChangedAt ?? new Date().toISOString(),
   });
 }
 
@@ -813,7 +852,9 @@ export interface LeadPlanningResult {
   leadSessionRef: string;
   leadExecutionId: string;
   leadEvidenceArtifactId: string;
+  leadEvidenceArtifactSha256?: string;
   leadOutputArtifactId: string;
+  leadOutputArtifactSha256?: string;
   leadOutputKind: "plan" | "decision_blocker";
   leadSummary: string;
   materialCategories: PlanMaterialCategory[];
@@ -923,7 +964,11 @@ export interface DeveloperExecutionResult {
   resultTree: string | null;
   dirtyState: "clean" | "dirty";
   deliveryArtifactId: string;
+  deliveryArtifactSha256?: string;
   evidenceArtifactId: string;
+  evidenceArtifactSha256?: string;
+  attentionEvidenceArtifactId?: string;
+  attentionEvidenceSha256?: string;
   deliverySummary: string;
   outcome: "completed" | "blocked";
 }
@@ -1102,7 +1147,7 @@ const PublishReleaseIdentitySchema = z.object({
 });
 export const PublishReleaseActivityResultSchema = z.discriminatedUnion("outcome", [
   PublishReleaseIdentitySchema.extend({ outcome: z.literal("completed"), releaseId: durableId, baseBranch: z.string().min(1).max(256), pullRequestNumber: z.number().int().positive(), pullRequestUrl: z.string().url().max(2_000), isDraft: z.literal(true), targetBaseSha: sha.optional() }),
-  PublishReleaseIdentitySchema.extend({ outcome: z.literal("blocked"), releaseId: durableId.nullable(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.boolean(), code: ReleaseFailureCodeSchema, summary: z.string().max(500), retryAt: z.string().datetime().nullable(), evidenceArtifactId: durableId.nullable() }),
+  PublishReleaseIdentitySchema.extend({ outcome: z.literal("blocked"), releaseId: durableId.nullable(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.boolean(), code: ReleaseFailureCodeSchema, summary: z.string().max(500), retryAt: z.string().datetime().nullable(), evidenceArtifactId: durableId.nullable(), evidenceArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/).optional() }),
   PublishReleaseIdentitySchema.extend({ outcome: z.literal("base-drift-merged"), releaseId: z.null(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.literal(false), baseDriftMerged: z.literal(true), targetBaseSha: sha, priorHead: sha, forwardMergeId: durableId.optional(), mergeCommit: sha.optional(), tree: sha.optional() }),
   PublishReleaseIdentitySchema.extend({ outcome: z.literal("base-drift-conflict"), releaseId: z.null(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.literal(false), baseDriftConflict: z.literal(true), targetBaseSha: sha, priorHead: sha, forwardMergeId: durableId.optional(), mergeConflictEvidence: DurableArtifactReferenceSchema.optional(), conflictFiles: z.array(z.string().max(1_000)).max(128).optional(), conflictDiff: z.string().max(80_000).optional() }),
 ]);
@@ -1204,6 +1249,7 @@ export interface ReconcileCiActivityResult {
   expectedHeadSha: string;
   observedHeadSha: string | null;
   evidenceArtifactId: string | null;
+  evidenceArtifactSha256?: string;
   outcome: "waiting" | "passed" | "failed" | "missing_required" | "cancelled" | "timed_out" | "non_success" | "stale_head" | "rate_limited" | "provider_unavailable" | "invalid_provider_response";
   reason: string;
   owner: "system" | "lead" | "human" | null;
@@ -1273,6 +1319,8 @@ export interface CiRepairActivityResult {
   resultTree: string | null;
   deliveryArtifactId: string;
   evidenceArtifactId: string;
+  attentionEvidenceArtifactId?: string;
+  attentionEvidenceSha256?: string;
   summary: string;
   outcome: "completed" | "blocked";
 }
@@ -1317,6 +1365,7 @@ export interface FinalReviewActivityResult {
   leadSessionRef: string;
   opinionArtifactId: string;
   evidenceArtifactId: string;
+  evidenceArtifactSha256?: string;
   reviewArtifact: DurableArtifactReference;
   outcome: "approved" | "blocking";
   summary: string;
@@ -1356,6 +1405,7 @@ export interface AcceptDeliveryActivityResult {
   blockerCode?: string;
   blockerSummary?: string;
   evidenceArtifactId?: string | null;
+  evidenceArtifactSha256?: string;
   pullRequestNumber: number;
   pullRequestUrl: string;
   reasonArtifactId?: string | null;
@@ -1378,6 +1428,7 @@ export interface ReconcileAcceptanceActivityResult {
   blockerCode?: string;
   blockerSummary?: string;
   evidenceArtifactId?: string | null;
+  evidenceArtifactSha256?: string;
   pullRequestNumber: number;
   pullRequestUrl: string;
 }
@@ -1401,6 +1452,7 @@ export interface ReconcileMergeActivityResult {
   blockerCode?: string;
   blockerSummary?: string;
   evidenceArtifactId?: string | null;
+  evidenceArtifactSha256?: string;
 }
 
 export interface IssueActivities {

@@ -6,6 +6,32 @@ import { PlanMaterialCategorySchema, type PlanMaterialCategory } from "../plan-g
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const sha = z.string().regex(/^[a-f0-9]{40,64}$/i);
 
+export const DeliveryReviewSubjectSchema = z.object({
+  planRevision: z.number().int().nonnegative(),
+  targetBaseSha: sha,
+  subjectCommit: sha,
+  subjectTree: sha,
+  developerExecutionId: durableId,
+  deliveryArtifactId: durableId,
+  developerEvidenceArtifactId: durableId,
+  leadSessionRef: durableId,
+  developerSessionRef: durableId,
+}).strict();
+export type DeliveryReviewSubject = z.infer<typeof DeliveryReviewSubjectSchema>;
+
+export const DeliveryOperationBlockCodeSchema = z.enum([
+  "invalid-output", "correction-exhausted", "session-conflict", "authentication-required",
+  "rate-limited", "process-failed", "evidence-too-large", "subject-changed",
+  "repair-incomplete", "repair-scope", "worktree-unsafe", "repair-cap-exhausted",
+]);
+export type DeliveryOperationBlockCode = z.infer<typeof DeliveryOperationBlockCodeSchema>;
+export const DeliveryWorkflowBlockCodeSchema = z.union([
+  DeliveryOperationBlockCodeSchema,
+  z.enum(["review-infrastructure-failure", "repair-infrastructure-failure"]),
+]);
+export type DeliveryWorkflowBlockCode = z.infer<typeof DeliveryWorkflowBlockCodeSchema>;
+const blockSummary = z.string().min(1).max(500);
+
 export const TargetBaseCheckpointSchema = z.enum(["pre_release", "pre_final_review", "pre_acceptance"]);
 export type TargetBaseCheckpoint = z.infer<typeof TargetBaseCheckpointSchema>;
 
@@ -240,6 +266,11 @@ export const IssueContinuationStateSchema = z.object({
   deliverySummary: SafeSummarySchema.nullable().optional(),
   developerOutcome: z.enum(["completed", "blocked"]).nullable().optional(),
   deliveryReviewId: durableId.nullable().optional(),
+  deliveryReviewAttemptId: durableId.nullable().optional(),
+  deliveryReviewBlockerCode: DeliveryWorkflowBlockCodeSchema.nullable().optional(),
+  deliveryReviewBlockerSummary: blockSummary.nullable().optional(),
+  deliveryReviewBlockerEvidenceArtifactId: durableId.nullable().optional(),
+  deliveryReviewSupersedesId: durableId.nullable().optional(),
   deliveryReviewArtifact: DurableArtifactReferenceSchema.optional(),
   deliveryReviewOutcome: z.enum(["approved", "blocking"]).nullable().optional(),
   deliveryReviewSummary: SafeSummarySchema.nullable().optional(),
@@ -249,6 +280,10 @@ export const IssueContinuationStateSchema = z.object({
   deliveryRepairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
   deliveryRepairAuthority: RepairAuthoritySchema.nullable().optional(),
   repairCycle: z.number().int().nonnegative().optional(),
+  deliveryRepairAttemptId: durableId.nullable().optional(),
+  deliveryRepairBlockerCode: DeliveryWorkflowBlockCodeSchema.nullable().optional(),
+  deliveryRepairBlockerSummary: blockSummary.nullable().optional(),
+  deliveryRepairBlockerEvidenceArtifactId: durableId.nullable().optional(),
   deliveryDecisionArtifactId: durableId.nullable().optional(),
   forwardMergeId: durableId.nullable().optional(),
   forwardMergePriorHead: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
@@ -401,6 +436,11 @@ export const IssueWorkflowStateSchema = z.object({
   deliverySummary: SafeSummarySchema.nullable().optional(),
   developerOutcome: z.enum(["completed", "blocked"]).nullable().optional(),
   deliveryReviewId: durableId.nullable().optional(),
+  deliveryReviewAttemptId: durableId.nullable().optional(),
+  deliveryReviewBlockerCode: DeliveryWorkflowBlockCodeSchema.nullable().optional(),
+  deliveryReviewBlockerSummary: blockSummary.nullable().optional(),
+  deliveryReviewBlockerEvidenceArtifactId: durableId.nullable().optional(),
+  deliveryReviewSupersedesId: durableId.nullable().optional(),
   deliveryReviewArtifact: DurableArtifactReferenceSchema.optional(),
   deliveryReviewOutcome: z.enum(["approved", "blocking"]).nullable().optional(),
   deliveryReviewSummary: SafeSummarySchema.nullable().optional(),
@@ -410,6 +450,10 @@ export const IssueWorkflowStateSchema = z.object({
   deliveryRepairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
   deliveryRepairAuthority: RepairAuthoritySchema.nullable().optional(),
   repairCycle: z.number().int().nonnegative().optional(),
+  deliveryRepairAttemptId: durableId.nullable().optional(),
+  deliveryRepairBlockerCode: DeliveryWorkflowBlockCodeSchema.nullable().optional(),
+  deliveryRepairBlockerSummary: blockSummary.nullable().optional(),
+  deliveryRepairBlockerEvidenceArtifactId: durableId.nullable().optional(),
   deliveryDecisionArtifactId: durableId.nullable().optional(),
   forwardMergeId: durableId.nullable().optional(),
   forwardMergePriorHead: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
@@ -555,7 +599,7 @@ export type StartPlanningInput = z.input<typeof StartPlanningInputSchema>;
 export type RecordProgressInput = z.input<typeof RecordProgressInputSchema>;
 export type PlanCommandInput = z.input<typeof PlanCommandInputSchema>;
 
-export const DeliveryReviewActivityInputSchema = z.object({
+const DeliveryReviewActivityInputCoreSchema = z.object({
   taskId: durableId,
   companyId: durableId,
   workflowId: durableId,
@@ -564,23 +608,60 @@ export const DeliveryReviewActivityInputSchema = z.object({
   briefArtifactId: durableId,
   planRevision: z.number().int().nonnegative(),
   roleProfiles: z.object({ lead: durableId.optional(), developer: durableId.optional(), reviewer: durableId.optional() }),
-  leadSessionRef: durableId,
   leadOutputArtifactId: durableId,
-  developerExecutionId: durableId,
-  deliveryArtifactId: durableId,
-  evidenceArtifactId: durableId,
-  worktreePath: z.string().min(1).max(1_000).optional(),
+  subject: DeliveryReviewSubjectSchema,
+  worktreePath: z.string().min(1).max(1_000),
   branchName: z.string().min(1).max(256),
-  targetBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  subjectCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  subjectTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
   reviewKind: z.enum(["delivery", "final"]).optional(),
   releaseId: durableId.optional(),
   ciRunId: durableId.optional(),
+  supersedesReviewId: durableId.nullable().default(null),
   deliveryReviewId: durableId.optional(),
-}).superRefine((value, context) => {
+}).strict().superRefine((value, context) => {
   if (value.reviewKind === "final" && !value.deliveryReviewId) context.addIssue({ code: "custom", path: ["deliveryReviewId"], message: "Final review requires the exact delivery review" });
 });
+
+export const DeliveryReviewActivityInputSchema = DeliveryReviewActivityInputCoreSchema;
+
+type ParsedDeliveryReviewActivityInput = z.infer<typeof DeliveryReviewActivityInputSchema>;
+export type DeliveryReviewActivityInput = Omit<ParsedDeliveryReviewActivityInput, "supersedesReviewId"> & { supersedesReviewId?: string | null };
+export type DeliveryReviewServiceInput = DeliveryReviewActivityInput;
+
+export const DeliveryReviewActivityResultSchema = z.discriminatedUnion("outcome", [
+  z.object({
+    outcome: z.literal("completed"),
+    attemptId: durableId,
+    correctionAttempts: z.number().int().min(0).max(1),
+    subject: DeliveryReviewSubjectSchema,
+    review: z.object({
+      reviewId: durableId,
+      leadExecutionId: durableId,
+      leadSessionRef: durableId,
+      opinionArtifactId: durableId,
+      evidenceArtifactId: durableId,
+      opinion: z.enum(["approved", "blocking"]),
+      summary: z.string().min(1).max(2_000),
+      repairPlan: z.string().max(12_000).nullable(),
+      repairPlanArtifactId: durableId.nullable().optional(),
+      repairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
+      findings: z.array(DeliveryFindingSchema).max(64),
+      supersedesReviewId: durableId.nullable(),
+      reviewArtifact: DurableArtifactReferenceSchema.optional(),
+    }).strict(),
+  }).strict(),
+  z.object({
+    outcome: z.literal("blocked"),
+    attemptId: durableId,
+    code: DeliveryOperationBlockCodeSchema,
+    summary: blockSummary,
+    evidenceArtifactId: durableId,
+    executionId: durableId,
+    sessionRef: durableId,
+    correctionAttempts: z.number().int().min(0).max(1),
+    subject: DeliveryReviewSubjectSchema,
+  }).strict(),
+]);
+export type DeliveryReviewActivityResult = z.infer<typeof DeliveryReviewActivityResultSchema>;
 
 export const DeveloperRepairActivityInputSchema = z.object({
   taskId: durableId,
@@ -594,11 +675,11 @@ export const DeveloperRepairActivityInputSchema = z.object({
   developerSessionRef: durableId,
   developerExecutionId: durableId,
   reviewId: durableId,
-  repairAuthority: RepairAuthoritySchema,
+  repairAuthority: RepairAuthoritySchema.default("delivery_review"),
   reviewArtifact: DurableArtifactReferenceSchema.optional(),
   cycle: z.number().int().positive(),
   repairCycleLimit: z.number().int().min(0).max(5),
-  worktreePath: z.string().min(1).max(1_000).optional(),
+  worktreePath: z.string().min(1).max(1_000),
   branchName: z.string().min(1).max(256),
   targetBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
   subjectCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
@@ -611,6 +692,45 @@ export const DeveloperRepairActivityInputSchema = z.object({
   if (!value.repairPlan && !value.repairPlanArtifactId) context.addIssue({ code: "custom", path: ["repairPlanArtifactId"], message: "A verified repair-plan artifact is required" });
   if (value.repairPlanArtifactId && !value.repairPlanSha256) context.addIssue({ code: "custom", path: ["repairPlanSha256"], message: "The repair-plan artifact hash is required" });
 });
+
+const repairSubject = DeliveryReviewSubjectSchema;
+export const DeveloperRepairActivityResultSchema = z.discriminatedUnion("outcome", [
+  z.object({
+    outcome: z.literal("completed"),
+    repairAttemptId: durableId,
+    cycle: z.number().int().positive(),
+    reviewId: durableId,
+    subject: repairSubject,
+    developerExecutionId: durableId,
+    developerSessionRef: durableId,
+    worktreePath: z.string().min(1).max(1_000),
+    branchName: z.string().min(1).max(256),
+    resultCommit: sha,
+    resultTree: sha,
+    dirtyState: z.literal("clean"),
+    deliveryArtifactId: durableId,
+    evidenceArtifactId: durableId,
+    summary: z.string().min(1).max(2_000),
+  }).strict(),
+  z.object({
+    outcome: z.literal("blocked"),
+    repairAttemptId: durableId,
+    cycle: z.number().int().positive(),
+    reviewId: durableId,
+    subject: repairSubject,
+    code: DeliveryOperationBlockCodeSchema,
+    summary: blockSummary,
+    evidenceArtifactId: durableId,
+    developerExecutionId: durableId,
+    developerSessionRef: durableId,
+    worktreePath: z.string().min(1).max(1_000),
+    branchName: z.string().min(1).max(256),
+    resultCommit: sha.nullable(),
+    resultTree: sha.nullable(),
+    dirtyState: z.enum(["clean", "dirty"]).nullable(),
+  }).strict(),
+]);
+export type DeveloperRepairActivityResult = z.infer<typeof DeveloperRepairActivityResultSchema>;
 
 export const DeliveryDecisionActivityInputSchema = z.object({
   taskId: durableId,
@@ -730,50 +850,10 @@ export interface DeveloperCancellationActivityInput {
   executionId: string;
 }
 
-export interface DeliveryReviewActivityInput {
-  taskId: string;
-  companyId: string;
-  workflowId: string;
-  projectId: string;
-  projectRevisionId: string;
-  briefArtifactId: string;
-  planRevision: number;
-  roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
-  leadSessionRef: string;
-  leadOutputArtifactId: string;
-  developerExecutionId: string;
-  deliveryArtifactId: string;
-  evidenceArtifactId: string;
-  worktreePath: string;
-  branchName: string;
-  targetBaseSha: string;
-  subjectCommit: string;
-  subjectTree: string;
-  reviewKind?: "delivery" | "final" | undefined;
-  releaseId?: string | undefined;
-  ciRunId?: string | undefined;
-}
+export type DeliveryReviewResult = DeliveryReviewActivityResult;
 
 /** Workflow-safe review input. The activity resolves the worktree from durable execution state. */
 export type WorkflowDeliveryReviewActivityInput = Omit<DeliveryReviewActivityInput, "worktreePath"> & { worktreePath?: string };
-
-export interface DeliveryReviewResult {
-  reviewId: string;
-  leadExecutionId: string;
-  leadSessionRef: string;
-  opinionArtifactId: string;
-  evidenceArtifactId: string;
-  reviewArtifact?: DurableArtifactReference;
-  outcome: "approved" | "blocking";
-  summary: string;
-  repairPlan: string | null;
-  repairPlanArtifactId?: string | null;
-  repairPlanSha256?: string | null;
-  findings: DeliveryFinding[];
-  targetBaseSha: string;
-  subjectCommit: string;
-  subjectTree: string;
-}
 
 export const DeliveryRepairPlanInputSchema = z.object({
   taskId: durableId,
@@ -825,7 +905,7 @@ export interface DeveloperRepairActivityInput {
   developerSessionRef: string;
   developerExecutionId: string;
   reviewId: string;
-  repairAuthority: z.infer<typeof RepairAuthoritySchema>;
+  repairAuthority?: z.infer<typeof RepairAuthoritySchema>;
   reviewArtifact?: DurableArtifactReference;
   cycle: number;
   repairCycleLimit: number;
@@ -840,15 +920,15 @@ export interface DeveloperRepairActivityInput {
   repairPlanSha256?: string;
 }
 
-export interface DeveloperRepairResult {
+export interface LegacyDeveloperRepairResult {
   developerExecutionId: string;
   developerSessionRef: string;
   supersedesExecutionId: string;
   worktreePath: string;
   branchName: string;
   targetBaseSha: string;
-  resultCommit: string | null;
-  resultTree: string | null;
+  resultCommit: string;
+  resultTree: string;
   dirtyState: "clean" | "dirty";
   deliveryArtifactId: string;
   evidenceArtifactId: string;
@@ -857,7 +937,10 @@ export interface DeveloperRepairResult {
   cycle: number;
 }
 
-export type WorkflowDeveloperRepairResult = Omit<DeveloperRepairResult, "worktreePath">;
+export type DeveloperRepairResult = DeveloperRepairActivityResult | LegacyDeveloperRepairResult;
+export type WorkflowDeveloperRepairResult =
+  | Omit<Extract<DeveloperRepairActivityResult, { outcome: "completed" }>, "worktreePath">
+  | Omit<Extract<DeveloperRepairActivityResult, { outcome: "blocked" }>, "worktreePath">;
 
 /** Workflow-safe repair input. Findings and the worktree remain in durable artifacts/database state. */
 export type WorkflowDeveloperRepairActivityInput = Omit<DeveloperRepairActivityInput, "worktreePath" | "blockingFindings" | "repairPlan"> & {
@@ -1107,9 +1190,7 @@ export interface FinalReviewActivityInput {
 
 export type WorkflowFinalReviewActivityInput = Omit<FinalReviewActivityInput, "worktreePath"> & { worktreePath?: string };
 
-export type WorkflowDeliveryReviewResult = Omit<DeliveryReviewResult, "repairPlan" | "findings"> & {
-  reviewArtifact: DurableArtifactReference;
-};
+export type WorkflowDeliveryReviewResult = DeliveryReviewActivityResult;
 
 export interface FinalReviewActivityResult {
   finalReviewId: string;
@@ -1226,4 +1307,19 @@ export interface IssueActivities {
   reconcileMerge(input: ReconcileMergeActivityInput): Promise<ReconcileMergeActivityResult>;
   planMergeConflict(input: WorkflowMergeConflictPlanActivityInput): Promise<MergeConflictPlanActivityResult>;
   resolveMergeConflict(input: WorkflowMergeConflictResolutionActivityInput): Promise<MergeConflictResolutionActivityResult>;
+}
+
+export interface DeliveryBlockerActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  operation: "review" | "repair";
+}
+
+export interface DeliveryBlockerActivityResult {
+  artifactId: string;
+}
+
+export interface DeliveryBlockerActivities {
+  recordDeliveryBlocker(input: DeliveryBlockerActivityInput): Promise<DeliveryBlockerActivityResult>;
 }

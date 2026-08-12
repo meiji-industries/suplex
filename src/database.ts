@@ -416,7 +416,6 @@ export class ForgeDatabase {
       throw new ProjectionIntegrityFailure("Projection event identity was reused with a different state", { taskId: parsed.issueId, revision: parsed.revision, eventId: parsed.lastEventId }, "projection_event_conflict");
     }
     const current = database.prepare("SELECT revision, event_hash, last_event_id, authoritative_revision, authoritative_event_hash FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string; last_event_id: string; authoritative_revision: number; authoritative_event_hash: string } | undefined;
-    if (current && current.revision > parsed.revision) return;
     const eventByRevision = database.prepare("SELECT id, event_hash FROM forge_issue_timeline WHERE workflow_id = ? AND revision = ?").get(parsed.workflowId, parsed.revision) as { id: string; event_hash: string } | undefined;
     if (eventByRevision && (eventByRevision.id !== parsed.lastEventId || (eventByRevision.event_hash && eventByRevision.event_hash !== stateHash))) {
       throw new ProjectionIntegrityFailure("Projection revision was reused with a different state", { taskId: parsed.issueId, revision: parsed.revision, eventId: parsed.lastEventId }, "projection_revision_conflict");
@@ -438,6 +437,7 @@ export class ForgeDatabase {
     }
     if (!eventById && !eventByRevision) database.prepare(`INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, run_id, revision, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(parsed.lastEventId, parsed.issueId, parsed.companyId, parsed.workflowId, runId, parsed.revision, eventType, JSON.stringify({ revision: parsed.revision, phase: parsed.phase, stateHash }), updatedAt, stateHash);
     if (!snapshot) database.prepare(`INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, run_id, revision, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(parsed.issueId, parsed.companyId, parsed.workflowId, runId, parsed.revision, JSON.stringify(parsed), updatedAt);
+    if (current && current.revision > parsed.revision) return;
 
     const authoritativeRevision = Math.max(current?.authoritative_revision ?? 0, parsed.revision);
     const authoritativeEventHash = current && current.authoritative_revision > parsed.revision ? current.authoritative_event_hash : stateHash;

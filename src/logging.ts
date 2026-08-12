@@ -1,7 +1,7 @@
 import { Context } from "@temporalio/activity";
 import pino, { type Logger } from "pino";
 
-const sensitiveKey = /(?:authorization|cookie|credential|password|private.?key|secret|token|api.?key)/i;
+const sensitiveKey = /(?:authorization|cookie|credential|password|private.?key|secret|token|api.?key|thread[_-]?id|threadId)/i;
 const sensitiveValue = /Bearer\s+[^\s,;]+|(?:gho_|github_pat_|sk-)[A-Za-z0-9_-]+|\b(?:token|password|secret|api[_-]?key)=[^\s,;]+/gi;
 
 export function redact(value: unknown, key?: string): unknown {

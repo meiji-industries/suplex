@@ -14,7 +14,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
-import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, type IssueWorkflowInput, type IssueWorkflowState, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueWorkflowInput, type IssueWorkflowState, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
 import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 import { WorktreeManager } from "../src/worktrees.js";
 
@@ -74,6 +74,7 @@ test("task API creates an idempotent backlog card and accepts only the current p
   const invitation = auth.createRecoveryInvitation({ confirmed: true, initiationMethod: "local-cli", installationId: config.installationId });
   const options = await app.inject({ method: "POST", url: "/api/auth/recovery/options", payload: { token: invitation.token } });
   const enrolled = await app.inject({ method: "POST", url: "/api/auth/recovery/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: "api-admin", type: "public-key" } } });
+  const adminUserId = (enrolled.json() as { user: { id: string } }).user.id;
   const rawCookie = enrolled.headers["set-cookie"];
   const values = Array.isArray(rawCookie) ? rawCookie : typeof rawCookie === "string" ? [rawCookie] : [];
   const cookie = (() => {
@@ -85,6 +86,16 @@ test("task API creates an idempotent backlog card and accepts only the current p
     return "";
   })();
   const origin = config.reachableAddress;
+  const otherCompany = auth.createCompany(adminUserId, "Other API Company");
+  const memberInvitation = auth.inviteUser(adminUserId, { displayName: "Other company member" });
+  const memberUserId = memberInvitation.user?.id;
+  if (!memberUserId) throw new Error("Expected the invitation to identify the member");
+  const memberOptions = await app.inject({ method: "POST", url: "/api/auth/invitation/options", payload: { token: memberInvitation.token } });
+  const memberEnrolled = await app.inject({ method: "POST", url: "/api/auth/invitation/verify", payload: { token: memberInvitation.token, challengeId: memberOptions.json().challengeId, response: { id: "other-company-member", type: "public-key" } } });
+  const memberSetCookie = memberEnrolled.headers["set-cookie"];
+  const memberCookieValues = Array.isArray(memberSetCookie) ? memberSetCookie : typeof memberSetCookie === "string" ? [memberSetCookie] : [];
+  const memberCookie = memberCookieValues.map((setCookie) => setCookie.split(";", 1)[0] ?? "").find((pair) => pair.startsWith(`${SESSION_COOKIE_NAME}=`)) ?? "";
+  auth.addMembership(adminUserId, memberUserId, otherCompany.id);
   try {
     const created = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload: { projectId: project.id, title: "API task", description: "# Details", idempotencyKey: "api-task-0001", supplementalReview: true, images: [{ filename: "note.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] } });
     expect(created.statusCode).toBe(201);
@@ -119,6 +130,48 @@ test("task API creates an idempotent backlog card and accepts only the current p
     const approved = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: { expectedRevision: 2, note: "Self-approved" } });
     expect(approved.statusCode).toBe(200);
     expect(approved.json()).toMatchObject({ phase: "ready_for_development", owner: "lead", revision: 3 });
+    const artifactStore = new ArtifactStore(config.artifactRoot);
+    const reviewEvidence = await artifactStore.put(company.id, "agent-evidence", { filename: "review.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("review evidence\n") });
+    const reviewOpinion = await artifactStore.put(company.id, "delivery-review", { filename: "review.json", mimeType: "application/json", bytes: Buffer.from("{\"outcome\":\"approved\"}") });
+    const developerDelivery = await artifactStore.put(company.id, "developer-delivery", { filename: "developer-delivery.json", mimeType: "application/json", bytes: Buffer.from("developer delivery\n") });
+    const developerEvidence = await artifactStore.put(company.id, "agent-evidence", { filename: "developer-evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("developer evidence\n") });
+    const repairReport = await artifactStore.put(company.id, "developer-repair", { filename: "repair.json", mimeType: "application/json", bytes: Buffer.from("repair report\n") });
+    const repairEvidence = await artifactStore.put(company.id, "agent-evidence", { filename: "repair-evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("repair evidence\n") });
+    const blockerEvidence = await artifactStore.put(company.id, "delivery-blocker", { filename: "blocker.json", mimeType: "application/json", bytes: Buffer.from("delivery blocker\n") });
+    database.authQuery((db) => {
+      const now = "2026-08-11T00:00:00.000Z";
+      for (const artifact of [reviewEvidence, reviewOpinion, developerDelivery, developerEvidence, repairReport, repairEvidence, blockerEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_review_api', ?, ?, ?, 'lead', 'completed', 1, 'session_lead_api', ?, ?, ?)").run(task.id, company.id, task.workflowId, now, now, reviewEvidence.id);
+      db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, created_at) VALUES ('review_api', ?, ?, ?, 1, ?, ?, ?, 'agent_review_api', 'session_lead_api', 'approved', 'Approved API fixture.', ?, ?, ?)").run(task.id, company.id, task.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), reviewOpinion.id, reviewEvidence.id, now);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_api', ?, ?, ?, 1, 1, 'completed', 'forge/issue/api-task', '/worktree/api-task', ?, 'session_developer_api', ?, ?, ?, ?, 'clean', ?, ?)").run(task.id, company.id, task.workflowId, "a".repeat(40), now, now, "b".repeat(40), "c".repeat(40), developerDelivery.id, developerEvidence.id);
+      db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id, lead_execution_id, lead_session_ref, status, correction_attempts, evidence_artifact_id, completed_review_id, created_at, finished_at) VALUES ('attempt_api', ?, ?, ?, 1, ?, ?, ?, 'developer_api', ?, ?, 'agent_review_api', 'session_lead_api', 'completed', 0, ?, 'review_api', ?, ?)").run(task.id, company.id, task.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), developerDelivery.id, developerEvidence.id, reviewEvidence.id, now, now);
+      db.prepare("INSERT INTO forge_delivery_repairs (id, task_id, company_id, workflow_id, review_id, developer_execution_id, cycle, status, subject_commit, subject_tree, result_commit, result_tree, delivery_artifact_id, evidence_artifact_id, created_at, finished_at) VALUES ('repair_api', ?, ?, ?, 'review_api', 'developer_api', 1, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)").run(task.id, company.id, task.workflowId, "b".repeat(40), "c".repeat(40), "d".repeat(40), "e".repeat(40), repairReport.id, repairEvidence.id, now, now);
+    });
+    const stored = database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision DESC LIMIT 1").get(task.id) as { state_json: string });
+    const reviewState = IssueWorkflowStateSchema.parse({ ...JSON.parse(stored.state_json), phase: "delivery_reviewed", revision: 4, owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish draft pull request", lastEventId: `${task.workflowId}:4`, deliveryReviewId: "review_api", deliveryRepairBlockerEvidenceArtifactId: blockerEvidence.id });
+    database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: reviewState.lastEventId, state: reviewState }));
+    const lineage = await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } });
+    expect(lineage.statusCode).toBe(200);
+    expect(lineage.json().reviewLineage).toMatchObject({ currentReview: { id: "review_api", baseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40) }, reviewAttempts: [{ id: "attempt_api", completedReviewId: "review_api" }] });
+    const artifactResponse = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/review-artifacts/${reviewOpinion.id}`, headers: { cookie, origin } });
+    expect(artifactResponse.statusCode).toBe(200);
+    expect(artifactResponse.headers["cache-control"]).toBe("private, no-store");
+    expect(artifactResponse.headers["x-content-type-options"]).toBe("nosniff");
+    expect(artifactResponse.body).toContain("approved");
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/review-artifacts/${developerDelivery.id}`, headers: { cookie, origin } })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/review-artifacts/${developerEvidence.id}`, headers: { cookie, origin } })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/review-artifacts/${repairReport.id}`, headers: { cookie, origin } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/review-artifacts/${repairEvidence.id}`, headers: { cookie, origin } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/review-artifacts/${blockerEvidence.id}`, headers: { cookie, origin } })).statusCode).toBe(200);
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/review-artifacts/${reviewOpinion.id}`, headers: { origin } })).statusCode).toBe(401);
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie: memberCookie, origin } })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/review-artifacts/${reviewOpinion.id}`, headers: { cookie: memberCookie, origin } })).statusCode).toBe(404);
+    const unrelated = await artifactStore.put(company.id, "task-brief", { filename: "unrelated.md", mimeType: "text/markdown", bytes: Buffer.from("unrelated") });
+    database.authQuery((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(unrelated.id, unrelated.companyId, unrelated.kind, unrelated.filename, unrelated.mimeType, unrelated.byteSize, unrelated.sha256, unrelated.storagePath, unrelated.createdAt));
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/review-artifacts/${unrelated.id}`, headers: { cookie, origin } })).statusCode).toBe(404);
+    database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET sha256 = ? WHERE id = ?").run("f".repeat(64), reviewOpinion.id));
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/review-artifacts/${reviewOpinion.id}`, headers: { cookie, origin } })).statusCode).toBe(500);
+
     const workflowId = task.workflowId;
     const baseSha = "a".repeat(40); const headSha = "b".repeat(40); const treeSha = "c".repeat(40); const observedAt = "2026-08-11T12:00:00.000Z";
     database.authTransaction((db) => {
@@ -141,7 +194,7 @@ test("task API creates an idempotent backlog card and accepts only the current p
     const resultCommit = await git(["rev-parse", "HEAD"], delivery.worktreePath);
     const resultTree = await git(["rev-parse", "HEAD^{tree}"], delivery.worktreePath);
     const now = "2026-08-11T00:01:00.000Z";
-    database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-api-diff', ?, ?, ?, 1, 1, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, 'clean')").run(task.id, company.id, task.workflowId, delivery.branchName, delivery.worktreePath, targetBaseSha, now, now, now, resultCommit, resultTree));
+    database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-api-diff', ?, ?, ?, 1, 2, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, 'clean')").run(task.id, company.id, task.workflowId, delivery.branchName, delivery.worktreePath, targetBaseSha, now, now, now, resultCommit, resultTree));
     const developerDiff = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/developer-diff`, headers: { cookie, origin } });
     expect(developerDiff.statusCode).toBe(200);
     expect(developerDiff.json()).toMatchObject({ branchName: delivery.branchName, baseSha: targetBaseSha, headSha: resultCommit, patch: expect.stringContaining("+API delivery") });
@@ -149,8 +202,6 @@ test("task API creates an idempotent backlog card and accepts only the current p
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: { expectedRevision: 2 } })).statusCode).toBe(409);
     expect((await app.inject({ method: "GET", url: "/api/tasks", headers: { cookie, origin } })).json().tasks).toHaveLength(1);
     expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/images/does-not-exist`, headers: { cookie, origin } })).statusCode).toBe(404);
-    const artifactStore = new ArtifactStore(config.artifactRoot);
-    const otherCompany = auth.createCompany((enrolled.json() as { user: { id: string } }).user.id, "Other API Company");
     const [unlinked, crossCompany] = await Promise.all([
       artifactStore.put(company.id, "ci-evidence", { filename: "unlinked.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
       artifactStore.put(otherCompany.id, "ci-evidence", { filename: "foreign.json", mimeType: "application/json", bytes: Buffer.from("{}") }),

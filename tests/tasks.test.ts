@@ -183,7 +183,7 @@ test("retries draft publication from a typed provider-failure state", async () =
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Retry release", description: "Reviewed delivery", idempotencyKey: "retry-release-0001", images: [] });
     const initial = value.stateByTask.get(created.task.id)!;
-    const blocked: IssueWorkflowState = { ...initial, revision: 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "GitHub provider request failed", deliveryReviewId: "review-a", releaseStatus: "blocked", releaseFailureCode: "provider-unavailable", releaseFailureSummary: "GitHub provider request failed", lastEventId: `${initial.workflowId}:1` };
+    const blocked: IssueWorkflowState = { ...initial, revision: 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "GitHub provider request failed", releaseStatus: "blocked", releaseFailureCode: "provider-unavailable", releaseFailureSummary: "GitHub provider request failed", lastEventId: `${initial.workflowId}:1` };
     value.stateByTask.set(created.task.id, blocked);
     projectState(value.database, blocked);
 
@@ -297,7 +297,9 @@ test("continues terminal work as a new linked issue without rewriting the origin
   const value = await fixture();
   try {
     const original = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Finished issue", description: "Preserve this history.", idempotencyKey: "continue-task-0001", images: [] });
-    value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'done', owner = 'human', allowed_commands_json = '[]', pending_action = NULL, revision = 7 WHERE task_id = ?").run(original.task.id));
+    const initialSnapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(original.task.id) as { state_json: string });
+    const terminalState = { ...JSON.parse(initialSnapshot.state_json), phase: "done", revision: 7, owner: "human", allowedCommands: [], pendingAction: null, lastEventId: `${original.task.workflowId}:7` } as IssueWorkflowState;
+    value.database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: terminalState.lastEventId, state: terminalState }));
     const continued = await value.tasks.continueWork(value.adminId, original.task.id);
     expect(continued.original.phase).toBe("done");
     expect(continued.successor.predecessorTaskId).toBe(original.task.id);

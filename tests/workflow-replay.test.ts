@@ -13,6 +13,28 @@ import { buildProductionWorkflowBundle, productionWorkflowBundleOptions, tempora
 import { auditProductionWorkflowBundle, readReplayHistory, readReplayManifest, replayIssueHistory, replayManifest, workflowBundleSha256 } from "../src/temporal/replay.js";
 
 const manifestPath = join(process.cwd(), ".scratch/forge-mvp/replay/manifest.json");
+const deliveryReviewFixtureNames = [
+  "issue-workflow-review-approved.json",
+  "issue-workflow-review-repair-fresh-approval.json",
+  "issue-workflow-review-format-correction.json",
+  "issue-workflow-review-blocker-retry.json",
+  "issue-workflow-repair-blocker-retry-cancel.json",
+] as const;
+
+function decodedPayloadText(value: unknown, key?: string): string {
+  if (Array.isArray(value)) return value.map((entry) => decodedPayloadText(entry)).join("\n");
+  if (!value || typeof value !== "object") {
+    if (key === "data" && typeof value === "string") {
+      try { return Buffer.from(value, "base64").toString("utf8"); } catch { return ""; }
+    }
+    return "";
+  }
+  return Object.entries(value as Record<string, unknown>).map(([entryKey, entryValue]) => decodedPayloadText(entryValue, entryKey)).join("\n");
+}
+
+function activityCount(history: { events: unknown[] }, activity: string): number {
+  return JSON.stringify(history).match(new RegExp(`\\"name\\":\\"${activity}\\"`, "g"))?.length ?? 0;
+}
 
 async function mutationBundle(mode: "compatible" | "incompatible") {
   const loader = fileURLToPath(new URL("./fixtures/workflow-mutation-loader.cjs", import.meta.url));
@@ -57,6 +79,26 @@ test("the versioned manifest consumes every sanitized fixture and batch replays 
 test("the captured backlog history still replays through the exact shared bundle", async () => {
   const history = await readReplayHistory(join(process.cwd(), ".scratch/forge-mvp/replay/issue-workflow-backlog-planning.json"));
   await replayIssueHistory(history, "workflow-replay-issue-history");
+});
+
+test.each(deliveryReviewFixtureNames)("exact delivery review fixture %s replays through the production bundle", async (fixtureName) => {
+  const history = await readReplayHistory(join(process.cwd(), ".scratch/forge-mvp/replay/delivery-review", fixtureName));
+  expect(history.events.length).toBeGreaterThan(10);
+  await replayIssueHistory(history, `workflow-replay-${fixtureName.replace(/\.json$/, "")}`);
+});
+
+test("exact delivery review fixtures retain correction, blocker, repair, and supersession evidence", async () => {
+  const directory = join(process.cwd(), ".scratch/forge-mvp/replay/delivery-review");
+  const repaired = await readReplayHistory(join(directory, "issue-workflow-review-repair-fresh-approval.json"));
+  const correction = await readReplayHistory(join(directory, "issue-workflow-review-format-correction.json"));
+  const reviewBlocked = await readReplayHistory(join(directory, "issue-workflow-review-blocker-retry.json"));
+  const repairBlocked = await readReplayHistory(join(directory, "issue-workflow-repair-blocker-retry-cancel.json"));
+  expect(activityCount(repaired, "runDeveloperRepair")).toBe(1);
+  expect(decodedPayloadText(repaired)).toContain('"supersedesReviewId":"review_blocking"');
+  expect(decodedPayloadText(correction)).toContain('"correctionAttempts":1');
+  expect(decodedPayloadText(reviewBlocked)).toContain('"code":"process-failed"');
+  expect(activityCount(repairBlocked, "runDeveloperRepair")).toBe(2);
+  expect(decodedPayloadText(repairBlocked)).toContain('"code":"repair-cap-exhausted"');
 });
 
 test("an unpatched command-order mutation produces a real DeterminismViolationError", async () => {

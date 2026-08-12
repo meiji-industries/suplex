@@ -18,13 +18,13 @@ import { parseAcceptedProjectRevision, type AcceptedProjectRevision } from "../p
 import { runPinnedVerification } from "../verification.js";
 import { createGitCommandGuard } from "../worktrees.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { ArtifactReferenceSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, SafeSummarySchema, type AcceptDeliveryActivityInput, type DurableArtifactReference, type IssueActivities, type IssueProjectionEvent, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileAcceptanceActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput, type ReconcileTargetBaseActivityInput, type ReconcileTargetBaseActivityResult, type TargetBaseBlockerCode, type WorkflowCiRepairActivityInput, type WorkflowDeliveryReviewActivityInput, type WorkflowDeveloperRepairActivityInput, type WorkflowFinalReviewActivityInput, type WorkflowMergeConflictPlanActivityInput, type WorkflowMergeConflictResolutionActivityInput } from "./issue-contracts.js";
+import { ArtifactReferenceSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, SafeSummarySchema, type AcceptDeliveryActivityInput, type DeliveryBlockerActivities, type DeliveryBlockerActivityInput, type DeliveryBlockerActivityResult, type DeliveryReviewActivityResult, type DeliveryReviewServiceInput, type DeveloperRepairActivityResult, type DurableArtifactReference, type IssueActivities, type IssueProjectionEvent, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileAcceptanceActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput, type ReconcileTargetBaseActivityInput, type ReconcileTargetBaseActivityResult, type TargetBaseBlockerCode, type WorkflowCiRepairActivityInput, type WorkflowDeliveryReviewActivityInput, type WorkflowDeveloperRepairActivityInput, type WorkflowFinalReviewActivityInput, type WorkflowMergeConflictPlanActivityInput, type WorkflowMergeConflictResolutionActivityInput } from "./issue-contracts.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
 import { CapacityManager } from "../capacity.js";
 
 export interface ActivityOptions {
-  agent?: Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "planDeliveryRepair" | "planMergeConflict" | "planCiRepair">>;
-  developer?: Partial<Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">>;
+  agent?: Omit<Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "planDeliveryRepair" | "planMergeConflict" | "planCiRepair">>, "reviewDelivery"> & { reviewDelivery?: (input: DeliveryReviewServiceInput) => Promise<unknown> };
+  developer?: Omit<Partial<Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">>, "runRepair"> & { runRepair?: (input: Parameters<DeveloperService["runRepair"]>[0]) => Promise<unknown> };
   githubRelease?: GithubReleaseAdapter;
   ciProvider?: CiProvider;
 }
@@ -59,6 +59,28 @@ const DeveloperDeliverySchema = z.object({ steps: z.array(z.object({ filesChange
 function pinnedProjectRevision(raw: string): AcceptedProjectRevision {
   try { return parseAcceptedProjectRevision(raw); }
   catch { return LegacyPinnedProjectRevisionSchema.parse(JSON.parse(raw)) as AcceptedProjectRevision; }
+}
+
+function normalizeReviewResult(raw: unknown, rawInput: unknown): DeliveryReviewActivityResult {
+  const input = DeliveryReviewActivityInputSchema.parse(rawInput);
+  const result = DeliveryReviewActivityResultSchema.safeParse(raw);
+  if (result.success) return result.data;
+  const legacy = z.object({ reviewId: z.string(), leadExecutionId: z.string(), leadSessionRef: z.string(), opinionArtifactId: z.string(), evidenceArtifactId: z.string(), outcome: z.enum(["approved", "blocking"]), summary: z.string(), repairPlan: z.string().nullable().optional(), findings: z.array(z.unknown()).optional() }).safeParse(raw);
+  if (legacy.success) return DeliveryReviewActivityResultSchema.parse({
+    outcome: "completed",
+    attemptId: `delivery_review_${legacy.data.reviewId}`.slice(0, 256),
+    correctionAttempts: 0,
+    subject: input.subject,
+    review: { ...legacy.data, opinion: legacy.data.outcome, findings: legacy.data.findings ?? [], supersedesReviewId: input.supersedesReviewId },
+  });
+  throw result.error;
+}
+
+function normalizeRepairResult(raw: unknown, rawInput: unknown): DeveloperRepairActivityResult {
+  DeveloperRepairActivityInputSchema.parse(rawInput);
+  const result = DeveloperRepairActivityResultSchema.safeParse(raw);
+  if (result.success) return result.data;
+  throw result.error;
 }
 
 async function durableArtifactReference(database: ForgeDatabase, store: ArtifactStore, companyId: string, artifactId: string, kind?: DurableArtifactReference["kind"]): Promise<DurableArtifactReference> {
@@ -105,7 +127,7 @@ function reconcileBlocker(error: unknown): { code: TargetBaseBlockerCode; owner:
   return mapped[code] ?? { code: "provider_unavailable", owner: "provider", retryable: true, summary: "Target-base reconciliation could not be completed" };
 }
 
-export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): ProbeActivities & IssueActivities {
+export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): ProbeActivities & IssueActivities & DeliveryBlockerActivities {
   const logger = new StructuredLogger();
   const defaultAgent = new AgentService(database, config);
   const githubRelease = options.githubRelease ?? createGithubReleasePort();
@@ -173,6 +195,12 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       }
       return IssueWorkflowStateSchema.parse(event.state);
     },
+    async recordDeliveryBlocker(input: DeliveryBlockerActivityInput): Promise<DeliveryBlockerActivityResult> {
+      const summary = input.operation === "review" ? "The delivery review infrastructure did not complete; retry the review." : "The delivery repair infrastructure did not complete; retry the repair.";
+      const artifact = await artifacts.put(input.companyId, "delivery-blocker", { filename: `${input.workflowId}-${input.operation}-blocker.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ type: "forge.delivery-blocker", operation: input.operation, summary }), "utf8") });
+      database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
+      return { artifactId: artifact.id };
+    },
     async runLeadPlanning(input) {
       const result = await withCapacity(input, "lead", () => (agent?.runLeadPlanning ?? defaultAgent.runLeadPlanning.bind(defaultAgent))(input));
       return { ...result, leadSummary: SafeSummarySchema.parse(result.leadSummary) };
@@ -185,10 +213,12 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       return { ...result, leadSummary: SafeSummarySchema.parse(result.leadSummary) };
     },
     async reviewDelivery(input: WorkflowDeliveryReviewActivityInput) {
-      const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
-      const result = await withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))({ ...input, worktreePath }));
-      const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, result.opinionArtifactId, "delivery-review");
-      return { reviewId: result.reviewId, leadExecutionId: result.leadExecutionId, leadSessionRef: result.leadSessionRef, opinionArtifactId: result.opinionArtifactId, evidenceArtifactId: result.evidenceArtifactId, reviewArtifact, outcome: result.outcome, summary: SafeSummarySchema.parse(result.summary), targetBaseSha: result.targetBaseSha, subjectCommit: result.subjectCommit, subjectTree: result.subjectTree };
+      const worktreePath = input.worktreePath ?? latestWorktree(input, input.subject.developerExecutionId);
+      const serviceInput = { ...input, worktreePath };
+      const result = await withCapacity(input, "review", async () => normalizeReviewResult(await (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(serviceInput), serviceInput));
+      if (result.outcome === "blocked") return result;
+      const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, result.review.opinionArtifactId, "delivery-review");
+      return DeliveryReviewActivityResultSchema.parse({ ...result, review: { ...result.review, summary: SafeSummarySchema.parse(result.review.summary), reviewArtifact } });
     },
     async planDeliveryRepair(input) {
       return withCapacity(input, "lead", () => (agent?.planDeliveryRepair ?? defaultAgent.planDeliveryRepair.bind(defaultAgent))(input));
@@ -347,14 +377,14 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         if (currentBaseSha === null) throw new Error("Target base branch is unavailable");
         if (currentBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new Error("Target base has drifted since CI completed; a fresh forward merge and review are required");
       }
-      if (pinned) {
-        if (!input.pullRequestNumber || input.repository !== pinned.repository || input.baseBranch !== pinned.baseBranch || !githubRelease.getPullRequest) throw new Error("Final review requires the exact live pull request identity");
-        const pullRequest = await githubRelease.getPullRequest({ repository: pinned.repository, number: input.pullRequestNumber });
-        if (pullRequest.repository.toLowerCase() !== pinned.repository.toLowerCase() || pullRequest.number !== input.pullRequestNumber || pullRequest.baseBranch !== pinned.baseBranch || pullRequest.baseSha.toLowerCase() !== input.targetBaseSha.toLowerCase() || pullRequest.headSha.toLowerCase() !== input.subjectCommit.toLowerCase() || pullRequest.state !== "open") throw new Error("The live pull request no longer matches the exact final-review identity");
-      }
-      const review = await withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))({ ...input, worktreePath, reviewKind: "final" }));
-      const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, review.opinionArtifactId, "delivery-review");
-      return { finalReviewId: review.reviewId, leadExecutionId: review.leadExecutionId, leadSessionRef: review.leadSessionRef, opinionArtifactId: review.opinionArtifactId, evidenceArtifactId: review.evidenceArtifactId, reviewArtifact, outcome: review.outcome, summary: SafeSummarySchema.parse(review.summary), findings: review.findings, repairPlan: review.repairPlan, repairPlanArtifactId: review.repairPlanArtifactId ?? null, repairPlanSha256: review.repairPlanSha256 ?? null };
+      const developerSessionRef = database.authQuery((db) => db.prepare("SELECT session_ref AS sessionRef FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND delivery_artifact_id = ? AND evidence_artifact_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId, input.deliveryArtifactId, input.evidenceArtifactId) as { sessionRef: string } | undefined)?.sessionRef;
+      if (!developerSessionRef) throw new AgentFailure("scoped-input-missing", "Final review requires the exact Developer session");
+      const reviewInput = { ...input, worktreePath, roleProfiles: input.roleProfiles, reviewKind: "final" as const, subject: { planRevision: input.planRevision, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree, developerExecutionId: input.developerExecutionId, deliveryArtifactId: input.deliveryArtifactId, developerEvidenceArtifactId: input.evidenceArtifactId, leadSessionRef: input.leadSessionRef, developerSessionRef }, supersedesReviewId: null };
+      const review = await withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(reviewInput));
+      const normalized = normalizeReviewResult(review, reviewInput);
+      if (normalized.outcome !== "completed") throw new AgentFailure(normalized.code, normalized.summary);
+      const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, normalized.review.opinionArtifactId, "delivery-review");
+      return { finalReviewId: normalized.review.reviewId, leadExecutionId: normalized.review.leadExecutionId, leadSessionRef: normalized.review.leadSessionRef, opinionArtifactId: normalized.review.opinionArtifactId, evidenceArtifactId: normalized.review.evidenceArtifactId, reviewArtifact, outcome: normalized.review.opinion, summary: SafeSummarySchema.parse(normalized.review.summary), findings: normalized.review.findings, repairPlan: normalized.review.repairPlan, repairPlanArtifactId: normalized.review.repairPlanArtifactId ?? null, repairPlanSha256: normalized.review.repairPlanSha256 ?? null };
     },
     async acceptDelivery(input: AcceptDeliveryActivityInput & { decision?: "accept" | "request_changes" | "cancel" }) {
       const context = database.authQuery((db) => db.prepare("SELECT pr.normalized_json AS normalizedJson FROM forge_tasks t JOIN forge_project_revisions pr ON pr.id = t.project_revision_id AND pr.id = ? AND pr.state = 'accepted' WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?").get(input.projectRevisionId, input.taskId, input.companyId, input.workflowId) as { normalizedJson: string } | undefined);
@@ -412,12 +442,12 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         repairPlan = review.repairPlan;
       }
       if (!blockingFindings || !repairPlan) throw new Error("Delivery review repair evidence is unavailable");
-      const operation = developer.runRepair ? developer.runRepair.bind(developer) : defaultDeveloper.runRepair.bind(defaultDeveloper);
-      const result = await withCapacity(input, "developer", () => operation({ ...input, worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree!, blockingFindings, repairPlan }));
+      const serviceInput = { ...input, worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree!, blockingFindings, repairPlan };
+      const result = await withCapacity(input, "developer", async () => normalizeRepairResult(await (developer.runRepair ?? defaultDeveloper.runRepair.bind(defaultDeveloper))(serviceInput), serviceInput));
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;
-      return { ...safeResult, deliverySummary: SafeSummarySchema.parse(safeResult.deliverySummary) };
+      return { ...safeResult, summary: SafeSummarySchema.parse(safeResult.summary) };
     },
     async runCiRepair(input: WorkflowCiRepairActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);

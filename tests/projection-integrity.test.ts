@@ -50,12 +50,13 @@ test("stale projections do not write and conflicting events fail closed", async 
     fixture(database);
     const initial = createEvent(0, "backlog", "workflow-integrity:0");
     const planning = createEvent(1, "planning", "workflow-integrity:1");
-    database.projectIssueEvent(initial);
     database.observeIssueProjection(planning);
-    expect(database.authQuery((db) => db.prepare("SELECT authoritative_revision, length(authoritative_event_hash) AS hash_length FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ authoritative_revision: 1, hash_length: 64 });
     database.projectIssueEvent(planning);
+    database.projectIssueEvent(initial);
+    expect(database.authQuery((db) => db.prepare("SELECT authoritative_revision, length(authoritative_event_hash) AS hash_length FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ authoritative_revision: 1, hash_length: 64 });
+    expect(database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all("task-integrity"))).toEqual([{ revision: 0 }, { revision: 1 }]);
     const before = database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_issue_timeline WHERE task_id = ?").get("task-integrity"));
-    database.projectIssueEvent(createEvent(0, "backlog", "workflow-integrity:old"));
+    database.projectIssueEvent(initial);
     expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_issue_timeline WHERE task_id = ?").get("task-integrity"))).toEqual(before);
 
     const conflict = createEvent(1, "planning", "workflow-integrity:1");

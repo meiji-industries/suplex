@@ -71,7 +71,11 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
 
   typed.get("/api/tasks/:taskId/images/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
     const image = await tasks.getTaskImage(request.forgeUser.id, request.params.taskId, request.params.artifactId);
-    return reply.header("Cache-Control", "private, no-store").type(image.artifact.mimeType).send(image.bytes);
+    return reply.header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").type(image.artifact.mimeType).send(image.bytes);
+  });
+  typed.get("/api/tasks/:taskId/review-artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
+    const artifact = await tasks.getTaskReviewArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
+    return reply.header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").type(artifact.artifact.mimeType).send(artifact.bytes);
   });
   typed.get("/api/tasks/:taskId/artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
     const artifact = await tasks.getTaskArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);

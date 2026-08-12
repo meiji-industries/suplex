@@ -9,6 +9,8 @@ The health surface uses a source-owned shadcn/Rhea-style component layer with Ba
 ```sh
 mise run worktree
 mise run dev
+# From another terminal, stop every Forge development process for this checkout.
+mise run down
 ```
 
 The worktree task installs the pinned tools and dependencies and is also used by Conductor setup. The dev server signs loopback requests in as a development administrator and, when the local database is empty, seeds a Development company, default Codex profile, and draft project for the current checkout. Auto-login is never enabled for the Tailscale address.

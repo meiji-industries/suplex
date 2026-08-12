@@ -20,6 +20,10 @@ _.path = "./node_modules/.bin"
 description = "Run Temporal and Forge with Vite HMR and backend live reload"
 run = "mise exec -- node --import tsx scripts/dev.ts"
 
+[tasks.down]
+description = "Stop Forge development processes for this checkout"
+run = "mise exec -- node --import tsx scripts/down.ts"
+
 [tasks.worktree]
 description = "Install pinned tools and dependencies for a development worktree"
 run = "mise install"

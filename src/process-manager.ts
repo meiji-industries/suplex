@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { promisify } from "node:util";
 
-import { DockerContainerInspectionSchema, ProcessRegistrySchema, TailscaleServeStatusSchema } from "./schemas.js";
+import { ProcessRegistrySchema, TailscaleServeStatusSchema } from "./schemas.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -20,15 +20,6 @@ export interface OwnedProcess {
   ready?: boolean | undefined;
 }
 
-export interface TemporalContainer {
-  id: string;
-  name: string;
-  owner?: string | undefined;
-  legacy?: boolean | undefined;
-  address?: string | undefined;
-  image?: string | undefined;
-}
-
 export interface TailscaleServe {
   port: number;
   backend: string;
@@ -37,7 +28,6 @@ export interface TailscaleServe {
 export interface ProcessRegistry {
   version: 1;
   processes: OwnedProcess[];
-  temporalContainer?: TemporalContainer | undefined;
   tailscaleServe?: TailscaleServe | undefined;
 }
 
@@ -50,30 +40,18 @@ export interface ProcessInspection {
   startTime: string;
 }
 
-export interface ContainerInspection {
-  id: string;
-  name: string;
-  image: string;
-  owner: string;
-  status: string;
-}
-
 export interface ProcessController {
   inspect(pid: number): Promise<ProcessInspection | undefined>;
-  inspectContainer(name: string): Promise<ContainerInspection | undefined>;
   signal(pid: number, signal: "SIGTERM" | "SIGKILL"): Promise<void>;
   signalGroup?: (processGroup: number, signal: "SIGTERM" | "SIGKILL") => Promise<void>;
   isProcessGroupAlive?: (processGroup: number) => Promise<boolean>;
-  stopContainer(id: string): Promise<void>;
   stopServe?: (serve: TailscaleServe) => Promise<void>;
   isServeConfigured?: (serve: TailscaleServe) => Promise<boolean>;
 }
 
 export interface StopReport {
   stopped: number[];
-  containersStopped: string[];
-  skipped: Array<{ pid: number; reason: "missing" | "identity-mismatch" | "ownership-ambiguous" }>;
-  ambiguousContainers: Array<{ id: string; reason: "missing" | "identity-mismatch" | "ownership-ambiguous" }>;
+  skipped: Array<{ pid: number; reason: "missing" }>;
 }
 
 const shutdownVerificationAttempts = 10;
@@ -118,21 +96,6 @@ export const defaultProcessController: ProcessController = {
     }
     return undefined;
   },
-  async inspectContainer(name) {
-    try {
-      const result = await execFileAsync("docker", ["inspect", "--format", "{{json .}}", name]);
-      const inspection = DockerContainerInspectionSchema.parse(JSON.parse(result.stdout));
-      return {
-        id: inspection.Id,
-        name,
-        image: inspection.Config?.Image ?? "",
-        owner: inspection.Config?.Labels?.["com.forge.owner"] ?? "",
-        status: inspection.State.Status,
-      };
-    } catch {
-      return undefined;
-    }
-  },
   async signal(pid, signal) {
     process.kill(pid, signal);
   },
@@ -148,9 +111,6 @@ export const defaultProcessController: ProcessController = {
       if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
       throw error;
     }
-  },
-  async stopContainer(id) {
-    await execFileAsync("docker", ["stop", "--time", "10", id]);
   },
   async stopServe(serve) {
     await execFileAsync("tailscale", ["serve", `--https=${serve.port}`, "off"]);
@@ -218,15 +178,6 @@ async function waitForOwnedProcessToStop(owned: OwnedProcess, controller: Proces
   throw new Error(`Could not prove recorded Forge process ${owned.name} (${owned.pid}) stopped before removing its registry`);
 }
 
-async function waitForOwnedContainerToStop(container: TemporalContainer, controller: ProcessController): Promise<void> {
-  for (let attempt = 0; attempt < shutdownVerificationAttempts; attempt += 1) {
-    const inspection = await controller.inspectContainer(container.name);
-    if (!inspection || inspection.id !== container.id || inspection.status === "exited") return;
-    await new Promise((resolve) => setTimeout(resolve, shutdownVerificationDelayMs));
-  }
-  throw new Error(`Could not prove recorded Temporal container ${container.name} stopped before removing its registry`);
-}
-
 async function waitForServeToStop(serve: TailscaleServe, controller: ProcessController): Promise<void> {
   if (!controller.isServeConfigured) {
     throw new Error("Could not prove recorded Tailscale Serve route stopped because its status cannot be inspected");
@@ -239,7 +190,7 @@ async function waitForServeToStop(serve: TailscaleServe, controller: ProcessCont
 }
 
 export async function stopOwnedProcesses(registry: ProcessRegistry, controller: ProcessController = defaultProcessController): Promise<StopReport> {
-  const report: StopReport = { stopped: [], containersStopped: [], skipped: [], ambiguousContainers: [] };
+  const report: StopReport = { stopped: [], skipped: [] };
   for (const ownedProcess of registry.processes) {
     const inspection = await controller.inspect(ownedProcess.pid);
     if (!inspection) {
@@ -252,24 +203,6 @@ export async function stopOwnedProcesses(registry: ProcessRegistry, controller: 
     await signalOwnedProcess(ownedProcess, "SIGTERM", controller);
     await waitForOwnedProcessToStop(ownedProcess, controller);
     report.stopped.push(ownedProcess.pid);
-  }
-  if (registry.temporalContainer && !registry.temporalContainer.legacy) {
-    const live = await controller.inspectContainer(registry.temporalContainer.name);
-    if (!live) {
-      report.ambiguousContainers.push({ id: registry.temporalContainer.id, reason: live ? "identity-mismatch" : "missing" });
-    } else if (
-      registry.temporalContainer.owner === undefined
-      || registry.temporalContainer.image === undefined
-      || live.id !== registry.temporalContainer.id
-      || live.owner !== registry.temporalContainer.owner
-      || live.image !== registry.temporalContainer.image
-    ) {
-      throw new Error(`Could not stop recorded Temporal container ${registry.temporalContainer.name}; ownership is ambiguous`);
-    } else {
-      await controller.stopContainer(registry.temporalContainer.id);
-      await waitForOwnedContainerToStop(registry.temporalContainer, controller);
-      report.containersStopped.push(registry.temporalContainer.id);
-    }
   }
   if (registry.tailscaleServe) {
     if (!controller.stopServe || !controller.isServeConfigured) {

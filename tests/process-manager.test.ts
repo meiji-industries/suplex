@@ -21,11 +21,7 @@ function makeController(overrides: Partial<ProcessController> = {}): ProcessCont
     async inspect() {
       return undefined;
     },
-    async inspectContainer() {
-      return undefined;
-    },
     async signal() {},
-    async stopContainer() {},
     ...overrides,
   };
 }
@@ -62,12 +58,9 @@ test("shutdown signals only the recorded owned process identities", async () => 
       signalled.push(pid);
       ownedStopped = true;
     },
-    async stopContainer() {
-      throw new Error("no container should be stopped in this test");
-    },
   });
 
-  await stopOwnedProcesses({ version: 1, processes: [owned], temporalContainer: undefined }, controller);
+  await stopOwnedProcesses({ version: 1, processes: [owned] }, controller);
 
   expect(signalled).toEqual([owned.pid]);
   expect(signalled.includes(unrelated.pid)).toBe(false);
@@ -147,9 +140,6 @@ test("shutdown fails safely for a reused PID whose process identity no longer ma
     async signal(pid) {
       signalled.push(pid);
     },
-    async stopContainer() {
-      throw new Error("no container should be stopped in this test");
-    },
   });
 
   await expect(stopOwnedProcesses({
@@ -162,7 +152,6 @@ test("shutdown fails safely for a reused PID whose process identity no longer ma
       processGroup: 4101,
       startTime: "Tue 10 Aug 00:00:00 2026",
     }],
-    temporalContainer: undefined,
   }, controller)).rejects.toThrow(/ownership is ambiguous/i);
 
   expect(signalled).toEqual([]);
@@ -221,7 +210,6 @@ test("shutdown fails safely for an unrelated process with a matching command but
       processGroup: 4101,
       startTime: "Tue 10 Aug 00:00:00 2026",
     }],
-    temporalContainer: undefined,
   }, controller)).rejects.toThrow(/ownership is ambiguous/i);
 
   expect(signalled).toEqual([]);
@@ -263,74 +251,6 @@ test("shutdown passes the recorded Serve backend to cleanup", async () => {
   await stopOwnedProcesses({ version: 1, processes: [], tailscaleServe: { port: 4111, backend: "http://127.0.0.1:4111" } }, controller);
 
   expect(stoppedBackend).toBe("http://127.0.0.1:4111");
-});
-
-test("shutdown preserves an adopted legacy Temporal container", async () => {
-  const controller = makeController();
-
-  const report = await stopOwnedProcesses({
-    version: 1,
-    processes: [],
-    temporalContainer: { id: "legacy-id", name: "forge-temporal", legacy: true },
-  }, controller);
-
-  expect(report.containersStopped).toEqual([]);
-  expect(report.ambiguousContainers).toEqual([]);
-});
-
-test("shutdown does not claim a Temporal container stopped when Docker fails", async () => {
-  const controller = makeController({
-    async inspectContainer() {
-      return { id: "neutral-id", name: "forge-temporal-neutral", image: "temporalio/temporal:1.8.2", owner: "runtime-test", status: "running" };
-    },
-    async stopContainer() {
-      throw new Error("Docker is unavailable");
-    },
-  });
-
-  await expect(stopOwnedProcesses({
-    version: 1,
-    processes: [],
-    temporalContainer: { id: "neutral-id", name: "forge-temporal-neutral", owner: "runtime-test", image: "temporalio/temporal:1.8.2" },
-  }, controller)).rejects.toThrow("Docker is unavailable");
-});
-
-test("shutdown fails safely when a Temporal container's live identity does not match", async () => {
-  const controller = makeController({
-    async inspectContainer() {
-      return { id: "other-id", name: "forge-temporal-neutral", image: "temporalio/temporal:1.8.2", owner: "runtime-test", status: "running" };
-    },
-    async stopContainer() {
-      throw new Error("Docker should not be called");
-    },
-  });
-
-  await expect(stopOwnedProcesses({
-    version: 1,
-    processes: [],
-    temporalContainer: { id: "neutral-id", name: "forge-temporal-neutral", owner: "runtime-test", image: "temporalio/temporal:1.8.2" },
-  }, controller)).rejects.toThrow(/ownership is ambiguous/i);
-
-});
-
-test("shutdown refuses to stop a Temporal container without its recorded installation owner", async () => {
-  let stopCalls = 0;
-  const controller = makeController({
-    async inspectContainer() {
-      return { id: "neutral-id", name: "forge-temporal-neutral", image: "temporalio/temporal:1.8.2", owner: "runtime-test", status: "running" };
-    },
-    async stopContainer() {
-      stopCalls += 1;
-    },
-  });
-
-  await expect(stopOwnedProcesses({
-    version: 1,
-    processes: [],
-    temporalContainer: { id: "neutral-id", name: "forge-temporal-neutral", image: "temporalio/temporal:1.8.2" },
-  }, controller)).rejects.toThrow(/ownership is ambiguous/i);
-
-  expect(stopCalls).toBe(0);
 });
 
 test("rejects a tampered process registry", async () => {

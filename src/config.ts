@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 import { ForgeConfigSchema, ForgeEnvironmentSchema } from "./schemas.js";
-import { isLegacyDurableIdentifier, runtimeIdentifiers } from "./runtime-identifiers.js";
+import { runtimeIdentifiers } from "./runtime-identifiers.js";
 
 export type AccessMode = "tailscale";
 export type TailscaleExposure = "direct" | "serve";
@@ -22,10 +22,10 @@ export interface ForgeConfig {
   runtimeRoot: string;
   repositoryRoot: string;
   worktreeRoot: string;
-  temporalMode: "managed" | "external";
+  temporalTarget: "local" | "cloud";
   temporalAddress: string;
   temporalNamespace: string;
-  temporalImage: string;
+  temporalApiKey?: string | undefined;
   taskQueue: string;
   deliveryRepairCycleLimit: number;
   externalTurnCapacity: number;
@@ -43,13 +43,6 @@ export class UnsupportedRuntimeError extends Error {
   constructor(supportedVersion: string, foundVersion: string) {
     super(`Forge requires Node.js ${supportedVersion}; found ${foundVersion}`);
     this.name = "UnsupportedRuntimeError";
-  }
-}
-
-export class TemporalInfrastructureError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "TemporalInfrastructureError";
   }
 }
 
@@ -177,14 +170,20 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
   const scheme = tailscaleExposure === "serve" ? "https" : "http";
   const stableInstallationId = installationId(dataRoot, parsedEnvironment.data, environment === process.env);
   const identifiers = runtimeIdentifiers(stableInstallationId);
-  const temporalNamespace = parsedEnvironment.data.FORGE_TEMPORAL_NAMESPACE ?? identifiers.namespace;
+  const temporalTarget = parsedEnvironment.data.FORGE_TEMPORAL_TARGET;
+  const temporalAddress = parsedEnvironment.data.FORGE_TEMPORAL_ADDRESS;
+  const temporalNamespace = parsedEnvironment.data.FORGE_TEMPORAL_NAMESPACE;
+  if (!temporalTarget || !temporalAddress || !temporalNamespace) {
+    throw new UnsafeBindingError("FORGE_TEMPORAL_TARGET, FORGE_TEMPORAL_ADDRESS, and FORGE_TEMPORAL_NAMESPACE are required");
+  }
+  const temporalApiKey = temporalTarget === "cloud" ? parsedEnvironment.data.FORGE_TEMPORAL_API_KEY : undefined;
+  if (temporalTarget === "cloud" && !temporalApiKey) throw new UnsafeBindingError("FORGE_TEMPORAL_API_KEY is required for Temporal Cloud");
+  const localTemporalAddress = /^(?:localhost|127\.0\.0\.1):\d+$/.test(temporalAddress);
+  if (temporalTarget === "local" && !localTemporalAddress) throw new UnsafeBindingError("Local Temporal must use a loopback address");
+  if (temporalTarget === "cloud" && localTemporalAddress) throw new UnsafeBindingError("Temporal Cloud must not use a loopback address");
   const taskQueue = parsedEnvironment.data.FORGE_TASK_QUEUE ?? identifiers.taskQueue;
-  const temporalImage = parsedEnvironment.data.FORGE_TEMPORAL_IMAGE ?? "temporalio/temporal:1.8.2@sha256:cf86707827fac99e4d1c4a47dc11b105382d796199c7bd41fb3213fb0471628e";
   const deliveryRepairCycleLimit = Number(parsedEnvironment.data.FORGE_DELIVERY_REPAIR_LIMIT ?? "2");
   const externalTurnCapacity = Number(parsedEnvironment.data.FORGE_CODEX_CAPACITY ?? "2");
-  if ((isLegacyDurableIdentifier(temporalNamespace) || isLegacyDurableIdentifier(taskQueue)) && parsedEnvironment.data.FORGE_LEGACY_RUNTIME !== "1") {
-    throw new UnsafeBindingError("Refusing legacy Forge namespace or task queue; preserve the legacy runtime and migrate explicitly");
-  }
   return ForgeConfigSchema.parse({
     accessMode,
     tailscaleExposure,
@@ -197,10 +196,10 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
     runtimeRoot: parsedEnvironment.data.FORGE_RUNTIME_ROOT ? resolve(parsedEnvironment.data.FORGE_RUNTIME_ROOT) : resolve(dataRoot, "runtime"),
     repositoryRoot: resolve(parsedEnvironment.data.FORGE_REPOSITORY_ROOT ?? resolve(homedir(), "forge", "repos")),
     worktreeRoot: resolve(parsedEnvironment.data.FORGE_WORKTREE_ROOT ?? resolve(homedir(), "forge", "worktrees")),
-    temporalMode: parsedEnvironment.data.FORGE_TEMPORAL_MODE ?? "managed",
-    temporalAddress: parsedEnvironment.data.FORGE_TEMPORAL_ADDRESS ?? "127.0.0.1:7233",
+    temporalTarget,
+    temporalAddress,
     temporalNamespace,
-    temporalImage,
+    temporalApiKey,
     taskQueue,
     deliveryRepairCycleLimit,
     externalTurnCapacity,
@@ -224,13 +223,20 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     runtimeRoot: overrides.runtimeRoot ?? resolve(dataRoot, "runtime"),
     repositoryRoot: overrides.repositoryRoot ?? resolve(dataRoot, "repositories"),
     worktreeRoot: overrides.worktreeRoot ?? resolve(dataRoot, "worktrees"),
-    temporalMode: overrides.temporalMode ?? "managed",
+    temporalTarget: overrides.temporalTarget ?? "local",
     temporalAddress: overrides.temporalAddress ?? "127.0.0.1:7233",
     temporalNamespace: overrides.temporalNamespace ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").namespace,
-    temporalImage: overrides.temporalImage ?? "temporalio/temporal:1.8.2@sha256:cf86707827fac99e4d1c4a47dc11b105382d796199c7bd41fb3213fb0471628e",
+    temporalApiKey: overrides.temporalApiKey,
     taskQueue: overrides.taskQueue ?? runtimeIdentifiers(overrides.installationId ?? "test-installation").taskQueue,
     deliveryRepairCycleLimit: overrides.deliveryRepairCycleLimit ?? 2,
     externalTurnCapacity: overrides.externalTurnCapacity ?? 2,
     installationId: overrides.installationId ?? "test-installation",
+  };
+}
+
+export function temporalConnectionOptions(config: Pick<ForgeConfig, "temporalTarget" | "temporalAddress" | "temporalApiKey">): { address: string; tls?: true; apiKey?: string } {
+  return {
+    address: config.temporalAddress,
+    ...(config.temporalTarget === "cloud" ? { tls: true as const, apiKey: config.temporalApiKey! } : {}),
   };
 }

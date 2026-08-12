@@ -1,7 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { NativeConnection, Worker, type WorkerStatus } from "@temporalio/worker";
 
-import { loadConfig, type ForgeConfig } from "./config.js";
+import { loadConfig, temporalConnectionOptions, type ForgeConfig } from "./config.js";
 import { ForgeDatabase } from "./database.js";
 import { createActivities } from "./temporal/activities.js";
 import { StructuredLogger } from "./logging.js";
@@ -39,7 +39,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   let shutdown: (() => void) | undefined;
   try {
     await reconcileDeveloperExecutions(database);
-    connection = await NativeConnection.connect({ address: config.temporalAddress });
+    connection = await NativeConnection.connect(temporalConnectionOptions(config));
     worker = await Worker.create({
       connection,
       namespace: config.temporalNamespace,

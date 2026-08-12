@@ -23,7 +23,7 @@ async function stopForge(config: ReturnType<typeof loadConfig>): Promise<void> {
   const registry = await readProcessRegistry(registryPath);
   const report = await stopOwnedProcesses(registry);
   await rm(registryPath, { force: true });
-  process.stdout.write(`${JSON.stringify({ stopped: report.stopped.length, containersStopped: report.containersStopped.length, skipped: report.skipped })}\n`);
+  process.stdout.write(`${JSON.stringify({ stopped: report.stopped.length, skipped: report.skipped })}\n`);
 }
 
 async function main(): Promise<void> {
@@ -40,9 +40,8 @@ async function main(): Promise<void> {
     const service = new BackupService(config);
     const archive = process.argv[3];
     if (command === "backup") {
-      const temporalPath = process.env.FORGE_TEMPORAL_DATA_PATH;
-      if (!archive || !temporalPath) throw new Error("backup requires an archive path and FORGE_TEMPORAL_DATA_PATH");
-      const result = await service.create({ destination: archive, temporalPersistencePath: temporalPath });
+      if (!archive) throw new Error("backup requires an archive path");
+      const result = await service.create({ destination: archive });
       process.stdout.write(`Backup created at ${result.archivePath} (${result.manifest.entries.length} files, ${result.archiveBytes} bytes, ${result.durationMs}ms)\n`);
     } else if (command === "verify-backup") {
       if (!archive) throw new Error("verify-backup requires an archive path");
@@ -72,7 +71,7 @@ async function main(): Promise<void> {
           companiesRebuilt: companies,
           reconciliation,
           requiresReauthentication: true,
-          nextSteps: ["Recreate the restored installation configuration without copying secrets; preserve installationId, temporalNamespace, and taskQueue", "Set FORGE_TEMPORAL_RESTORE_PATH to the restored Temporal persistence directory before the first start", "Reauthenticate the restored host integrations", "Start Forge against the restored installation", "Inspect interrupted Developer turns before explicitly retrying or cancelling them"],
+          nextSteps: ["Recreate the restored Cloud configuration without copying secrets; preserve installationId, temporalNamespace, and taskQueue", "Create a new Temporal Cloud API key for the restored host", "Reauthenticate the restored host integrations", "Start Forge against the existing Temporal Cloud namespace", "Inspect interrupted Developer turns before explicitly retrying or cancelling them"],
         };
         await writeFile(join(destination, "forge-backup", "restore-handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`, { mode: 0o600 });
         process.stdout.write(`Restored projection state (${rebuilt} issue snapshots, ${companies} companies); `);

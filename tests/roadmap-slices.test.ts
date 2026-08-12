@@ -147,17 +147,14 @@ test("acceptance records a decision, changes draft visibility only, and reconcil
 
 test("backup archive verifies hashes and restores only into a separate clean location", async () => {
   const value = await fixture();
-  const temporal = join(value.root, "temporal");
   const restored = join(value.root, "restored");
   const archive = join(value.root, "backup.tar.gz");
   try {
-    await mkdir(temporal, { recursive: true });
     await mkdir(join(value.config.artifactRoot, "company-a"), { recursive: true });
     await writeFile(join(value.config.artifactRoot, "company-a", "brief-a"), "body");
-    await writeFile(temporal + "/history.db", "temporal");
     value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET byte_size = 4, sha256 = ? WHERE id = 'brief-a'").run(createHash("sha256").update("body").digest("hex")));
     const service = new BackupService(value.config);
-    const created = await service.create({ destination: archive, temporalPersistencePath: temporal });
+    const created = await service.create({ destination: archive });
     expect(created.manifest.secretsExcluded).toContain("provider tokens");
     expect(created.archiveBytes).toBeGreaterThan(0);
     const verification = await service.verify(archive);
@@ -175,8 +172,8 @@ test("backup archive verifies hashes and restores only into a separate clean loc
     expect((await service.verify(tampered)).errors).toContain("hash mismatch: app/artifacts/company-a/brief-a");
 
     const missingComponent = join(value.root, "missing-component.tar.gz");
-    await rewriteArchive(archive, missingComponent, async (root) => rm(join(root, "temporal", "persistence", "history.db")));
-    expect((await service.verify(missingComponent)).errors).toContain("missing entry: temporal/persistence/history.db");
+    await rewriteArchive(archive, missingComponent, async (root) => rm(join(root, "app", "artifacts", "company-a", "brief-a")));
+    expect((await service.verify(missingComponent)).errors).toContain("missing entry: app/artifacts/company-a/brief-a");
 
     const wrongVersion = join(value.root, "wrong-version.tar.gz");
     await rewriteArchive(archive, wrongVersion, async (root) => {
@@ -194,14 +191,11 @@ test("backup archive verifies hashes and restores only into a separate clean loc
 
 test("restore drill preserves users, completed work, artifacts, and draft releases while interrupting in-flight work", async () => {
   const value = await fixture();
-  const temporal = join(value.root, "temporal");
   const archive = join(value.root, "restore-drill.tar.gz");
   const restored = join(value.root, "restore-drill");
   try {
     await mkdir(join(value.config.artifactRoot, "company-a"), { recursive: true });
-    await mkdir(join(temporal, "persistence"), { recursive: true });
     await writeFile(join(value.config.artifactRoot, "company-a", "brief-a"), "brief body");
-    await writeFile(join(temporal, "persistence", "temporal.db"), "temporal persistence");
 
     const additionalArtifacts = [
       ["completed-delivery", "developer-delivery", "completed.json", "completed delivery"],
@@ -237,7 +231,7 @@ test("restore drill preserves users, completed work, artifacts, and draft releas
     });
 
     const service = new BackupService(value.config);
-    const created = await service.create({ destination: archive, temporalPersistencePath: temporal });
+    const created = await service.create({ destination: archive });
     expect(created.archiveBytes).toBe((await stat(archive)).size);
     expect(created.durationMs).toBeGreaterThanOrEqual(0);
     const restoredResult = await service.restore(archive, restored);

@@ -47,7 +47,6 @@ export interface BackupRestoreResult extends BackupVerification {
 
 export interface BackupCreateInput {
   destination: string;
-  temporalPersistencePath: string;
 }
 
 export interface RestoredProviderReconciliation {
@@ -67,7 +66,7 @@ export interface RestoredStateReconciliation {
 }
 
 export class BackupFailure extends Error {
-  constructor(readonly code: "exists" | "invalid" | "unsafe" | "missing-temporal" | "verification") {
+  constructor(readonly code: "exists" | "invalid" | "unsafe" | "verification") {
     super(`Forge backup ${code}`);
     this.name = "BackupFailure";
   }
@@ -125,6 +124,7 @@ function configuration(config: ForgeConfig): Record<string, string | number | bo
     runtimeRoot: config.runtimeRoot,
     repositoryRoot: config.repositoryRoot,
     worktreeRoot: config.worktreeRoot,
+    temporalTarget: config.temporalTarget,
     temporalAddress: config.temporalAddress,
     temporalNamespace: config.temporalNamespace,
     taskQueue: config.taskQueue,
@@ -160,7 +160,6 @@ export class BackupService {
     const started = Date.now();
     const destination = resolve(input.destination);
     if (await exists(destination)) throw new BackupFailure("exists");
-    if (!input.temporalPersistencePath.trim() || !(await exists(input.temporalPersistencePath))) throw new BackupFailure("missing-temporal");
     if (!(await exists(this.config.databasePath)) || !(await exists(this.config.artifactRoot))) throw new BackupFailure("invalid");
     await mkdir(dirname(destination), { recursive: true });
 
@@ -169,15 +168,11 @@ export class BackupService {
     try {
       await mkdir(join(root, "app"), { recursive: true });
       await mkdir(join(root, "config"), { recursive: true });
-      await mkdir(join(root, "temporal"), { recursive: true });
       const snapshotPath = join(root, "app", "forge.sqlite");
       const database = new Database(this.config.databasePath, { readonly: true });
       try { await database.backup(snapshotPath); } finally { database.close(); }
       removeAuthenticationState(snapshotPath);
       await cp(this.config.artifactRoot, join(root, "app", "artifacts"), { recursive: true, force: false });
-      const temporalStats = await stat(input.temporalPersistencePath);
-      if (temporalStats.isDirectory()) await cp(input.temporalPersistencePath, join(root, "temporal", "persistence"), { recursive: true, force: false });
-      else await cp(input.temporalPersistencePath, join(root, "temporal", "persistence"), { force: false });
       await writeFile(join(root, "config", "config.json"), JSON.stringify({ version: backupVersion, config: configuration(this.config), requiresReauthentication: true }, null, 2), { mode: 0o600 });
 
       const entries = await filesUnder(root);
@@ -187,13 +182,12 @@ export class BackupService {
         components: {
           application: component(entries, "app/"),
           artifacts: component(entries, "app/artifacts/"),
-          temporal: component(entries, "temporal/"),
           configuration: component(entries, "config/"),
         },
         entries,
         database: { path: "app/forge.sqlite", integrity: "ok" },
-        secretsExcluded: ["credential registrations", "passkeys", "sessions", "challenges", "invitation tokens", "cookies", "private keys", "provider tokens", "generated environment files"],
-        requiredConfiguration: ["accessMode", "reachableAddress", "databasePath", "artifactRoot", "temporalAddress", "temporalNamespace", "taskQueue", "installationId"],
+        secretsExcluded: ["credential registrations", "passkeys", "sessions", "challenges", "invitation tokens", "cookies", "private keys", "provider tokens", "Temporal API keys", "generated environment files"],
+        requiredConfiguration: ["accessMode", "reachableAddress", "databasePath", "artifactRoot", "temporalTarget", "temporalAddress", "temporalNamespace", "taskQueue", "installationId"],
       };
       await writeFile(join(root, "manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });
       await execFileAsync("tar", ["-czf", destination, "-C", staging, backupRoot], { timeout: 60_000, maxBuffer: 64 * 1024 });

@@ -108,6 +108,7 @@ export const cancelIssueUpdate = defineUpdate<IssueWorkflowState, [StartPlanning
 export const reconcileMergeUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("reconcileMerge");
 const leadPlanningPatch = "forge-lead-planning-v1";
 const planGovernancePatch = "forge-plan-governance-v1";
+const planningProjectionIntegrityPatch = "forge-planning-projection-integrity-v1";
 
 function permanentActivityFailure(error: unknown): { code: string; summary: string } | undefined {
   if (!(error instanceof ActivityFailure) || !(error.cause instanceof ApplicationFailure) || !error.cause.nonRetryable) return undefined;
@@ -163,7 +164,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     });
     state = next;
     assertPayloadWithinLimit("Issue Workflow result", next);
-    await projectIssueState(next);
+    if (!patched(planningProjectionIntegrityPatch)) await projectIssueState(next);
     if (patched(leadPlanningPatch)) {
       let leadResult;
       try {

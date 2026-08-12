@@ -1,27 +1,19 @@
 import { Client, Connection, type WorkflowHandle } from "@temporalio/client";
-import proto from "@temporalio/proto";
-import Long from "long";
 import { randomUUID } from "node:crypto";
 
-import type { ForgeConfig } from "../config.js";
+import { temporalConnectionOptions, type ForgeConfig } from "../config.js";
 import type { HealthCheck } from "../health.js";
-import { isLegacyDurableIdentifier, runtimeIdentifiers } from "../runtime-identifiers.js";
+import { runtimeIdentifiers } from "../runtime-identifiers.js";
 import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, finalReviewUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, publishDraftUpdate, reconcileCIUpdate, reconcileMergeUpdate, recordDeliveryDecisionUpdate, recordProgressUpdate, rejectPlanUpdate, repairCIUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, requestSupplementalReviewUpdate, resolveMergeConflictUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, startDevelopmentUpdate, startPlanningUpdate } from "./workflows.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
 
 export const REQUIRED_SEARCH_ATTRIBUTES = ["CompanyId", "ProjectId", "IssueId"] as const;
-export const LEGACY_SEARCH_ATTRIBUTES = ["ForgeCompanyId", "ForgeProjectId", "ForgeIssueId"] as const;
 
 export interface TemporalClientConnection {
   connection: Connection;
   client: Client;
-}
-
-function isAlreadyExists(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /already.?exists|already registered/i.test(message);
 }
 
 function isNotFound(error: unknown): boolean {
@@ -42,67 +34,17 @@ export class IssueWorkflowStartFailure extends Error {
 }
 
 export async function connectTemporal(config: ForgeConfig): Promise<TemporalClientConnection> {
-  const connection = await Connection.connect({ address: config.temporalAddress, connectTimeout: "3 seconds" });
+  const connection = await Connection.connect({ ...temporalConnectionOptions(config), connectTimeout: "3 seconds" });
   return { connection, client: new Client({ connection, namespace: config.temporalNamespace }) };
 }
 
 export async function ensureTemporalFoundation(connection: Connection, config: ForgeConfig): Promise<void> {
-  try {
-    await connection.workflowService.describeNamespace({ namespace: config.temporalNamespace });
-  } catch (error) {
-    if (!isNotFound(error)) {
-      throw error;
-    }
-    try {
-      await connection.workflowService.registerNamespace({
-        namespace: config.temporalNamespace,
-        description: "Forge local-first workflow namespace",
-        workflowExecutionRetentionPeriod: { seconds: Long.fromNumber(7 * 24 * 60 * 60) },
-      });
-    } catch (registerError) {
-      if (!isAlreadyExists(registerError)) {
-        throw registerError;
-      }
-    }
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      try {
-        await connection.workflowService.describeNamespace({ namespace: config.temporalNamespace });
-        break;
-      } catch (describeError) {
-        if (attempt === 9) {
-          throw describeError;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 100));
-      }
-    }
-  }
-
-  for (const attribute of REQUIRED_SEARCH_ATTRIBUTES) {
-    try {
-      await connection.operatorService.addSearchAttributes({
-        namespace: config.temporalNamespace,
-        searchAttributes: {
-          [attribute]: proto.temporal.api.enums.v1.IndexedValueType.INDEXED_VALUE_TYPE_KEYWORD,
-        },
-      });
-    } catch (error) {
-      if (!isAlreadyExists(error)) {
-        throw error;
-      }
-    }
-  }
-}
-
-export async function assertLegacyNamespaceProbeOnly(client: Client): Promise<void> {
-  let inspected = 0;
-  for await (const execution of client.workflow.list()) {
-    inspected += 1;
-    if (inspected > 1_000) {
-      throw new Error("Refusing legacy Temporal migration with more than 1000 executions to inspect");
-    }
-    if (execution.type !== "probeWorkflow") {
-      throw new Error(`Refusing legacy Temporal migration with non-probe workflow type ${execution.type}`);
-    }
+  const namespace = await connection.workflowService.describeNamespace({ namespace: config.temporalNamespace });
+  const searchAttributes = await connection.workflowService.getSearchAttributes({ namespace: config.temporalNamespace });
+  const aliases = Object.values(namespace.config?.customSearchAttributeAliases ?? {});
+  const missing = REQUIRED_SEARCH_ATTRIBUTES.filter((attribute) => searchAttributes.keys[attribute] === undefined && !aliases.includes(attribute));
+  if (missing.length > 0) {
+    throw new Error(`Temporal namespace ${config.temporalNamespace} is missing custom Search Attributes: ${missing.join(", ")}`);
   }
 }
 
@@ -112,7 +54,7 @@ export class TemporalHealthProbe {
   async check(): Promise<HealthCheck> {
     let connection: Connection | undefined;
     try {
-      connection = await Connection.connect({ address: this.config.temporalAddress, connectTimeout: "3 seconds" });
+      connection = await Connection.connect({ ...temporalConnectionOptions(this.config), connectTimeout: "3 seconds" });
       const namespace = await connection.workflowService.describeNamespace({ namespace: this.config.temporalNamespace });
       const searchAttributes = await connection.workflowService.getSearchAttributes({ namespace: this.config.temporalNamespace });
       const aliases = Object.values(namespace.config?.customSearchAttributeAliases ?? {});
@@ -150,8 +92,8 @@ export class TemporalHealthProbe {
 export async function startProbeWorkflow(config: ForgeConfig, input: Omit<ProbeWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string }> {
   const identifiers = runtimeIdentifiers(config.installationId);
   const workflowId = input.workflowId ?? `${identifiers.workflowPrefix}-${randomUUID()}`;
-  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-`)) {
-    throw new Error(`Refusing workflow ID outside this neutral installation scope: ${workflowId}`);
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-`)) {
+    throw new Error(`Refusing workflow ID outside this installation scope: ${workflowId}`);
   }
   const validatedInput = ProbeWorkflowInputSchema.parse({ ...input, workflowId });
   const temporalClient = await connectTemporal(config);
@@ -181,8 +123,8 @@ export async function queryProbeWorkflow(config: ForgeConfig, workflowId: string
 export async function startIssueWorkflow(config: ForgeConfig, input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string; existing?: boolean }> {
   const identifiers = runtimeIdentifiers(config.installationId);
   const workflowId = input.workflowId ?? `${identifiers.workflowPrefix}-issue-${input.issueId}`;
-  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) {
-    throw new Error(`Refusing issue workflow ID outside this neutral installation scope: ${workflowId}`);
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) {
+    throw new Error(`Refusing issue workflow ID outside this installation scope: ${workflowId}`);
   }
   const validatedInput = IssueWorkflowInputSchema.parse({ ...input, workflowId });
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);
@@ -233,7 +175,7 @@ export async function startIssueWorkflow(config: ForgeConfig, input: Omit<IssueW
 
 export async function startIssuePlanning(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
-  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
   const validatedInput = StartPlanningInputSchema.parse(input);
   assertPayloadWithinLimit("startPlanning command", validatedInput);
   const temporalClient = await connectTemporal(config);
@@ -247,7 +189,7 @@ export async function startIssuePlanning(config: ForgeConfig, workflowId: string
 
 async function issuePlanUpdate(config: ForgeConfig, workflowId: string, input: PlanCommandInput, update: typeof requestSupplementalReviewUpdate | typeof approvePlanUpdate | typeof rejectPlanUpdate | typeof recordDeliveryDecisionUpdate): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
-  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
   const validatedInput = PlanCommandInputSchema.parse(input);
   assertPayloadWithinLimit("plan command", validatedInput);
   const temporalClient = await connectTemporal(config);
@@ -271,7 +213,7 @@ export function rejectIssuePlan(config: ForgeConfig, workflowId: string, input: 
 
 export async function startIssueDevelopment(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
-  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
   const validatedInput = StartPlanningInputSchema.parse(input);
   assertPayloadWithinLimit("start development command", validatedInput);
   const temporalClient = await connectTemporal(config);
@@ -283,7 +225,7 @@ export async function startIssueDevelopment(config: ForgeConfig, workflowId: str
 
 export async function retryIssueDevelopment(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
-  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
   const validatedInput = StartPlanningInputSchema.parse(input);
   assertPayloadWithinLimit("retry development command", validatedInput);
   const temporalClient = await connectTemporal(config);
@@ -295,7 +237,7 @@ export async function retryIssueDevelopment(config: ForgeConfig, workflowId: str
 
 export async function cancelIssueDevelopment(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
-  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
   const validatedInput = StartPlanningInputSchema.parse(input);
   assertPayloadWithinLimit("cancel development command", validatedInput);
   const temporalClient = await connectTemporal(config);
@@ -355,7 +297,7 @@ export function reconcileIssueMerge(config: ForgeConfig, workflowId: string, inp
 
 async function issueStartUpdate(config: ForgeConfig, workflowId: string, input: StartPlanningInput, update: typeof startDevelopmentUpdate | typeof retryDevelopmentUpdate | typeof cancelDevelopmentUpdate | typeof reviewDeliveryUpdate | typeof repairDeliveryUpdate | typeof publishDraftUpdate | typeof resolveMergeConflictUpdate | typeof reconcileCIUpdate | typeof repairCIUpdate | typeof finalReviewUpdate | typeof cancelIssueUpdate | typeof reconcileMergeUpdate, label: string): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
-  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
   const validatedInput = StartPlanningInputSchema.parse(input);
   assertPayloadWithinLimit(label, validatedInput);
   const temporalClient = await connectTemporal(config);
@@ -367,7 +309,7 @@ async function issueStartUpdate(config: ForgeConfig, workflowId: string, input: 
 
 export async function queryIssueWorkflow(config: ForgeConfig, workflowId: string): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
-  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
   const temporalClient = await connectTemporal(config);
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
@@ -379,7 +321,7 @@ export async function queryIssueWorkflow(config: ForgeConfig, workflowId: string
 
 export async function recordIssueProgress(config: ForgeConfig, workflowId: string, input: RecordProgressInput): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
-  if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this neutral installation scope");
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
   const validatedInput = RecordProgressInputSchema.parse(input);
   assertPayloadWithinLimit("recordProgress command", validatedInput);
   const temporalClient = await connectTemporal(config);

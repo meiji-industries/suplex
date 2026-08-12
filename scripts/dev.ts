@@ -15,9 +15,9 @@ interface DevService {
 const tscCli = fileURLToPath(new URL("../node_modules/typescript/bin/tsc", import.meta.url));
 const viteCli = fileURLToPath(new URL("../node_modules/vite/bin/vite.js", import.meta.url));
 
-function startService(name: string, args: string[], environment: NodeJS.ProcessEnv = {}): DevService {
+function startService(name: string, command: string, args: string[], environment: NodeJS.ProcessEnv = {}): DevService {
   process.stdout.write(`[dev] starting ${name}\n`);
-  const child = spawn(process.execPath, args, {
+  const child = spawn(command, args, {
     cwd: process.cwd(),
     env: { ...process.env, ...environment },
     stdio: "inherit",
@@ -106,10 +106,11 @@ async function acquireDevLock(runtimeRoot: string): Promise<(() => Promise<void>
 }
 
 async function superviseDevStack(): Promise<number> {
+  await mkdir(join(".forge", "dev"), { recursive: true });
   const services = [
-    startService("Temporal", ["--import", "tsx", "scripts/compose-temporal.ts", "up"]),
-    startService("Forge", ["--import", "tsx", "src/cli.ts", "start", "--foreground"], { FORGE_TEMPORAL_MODE: "external" }),
-    startService("frontend watcher", [viteCli, "build", "--watch"]),
+    startService("Temporal", "temporal", ["server", "start-dev", "--db-filename", ".forge/dev/temporal.db", "--namespace", "forge-dev", "--search-attribute", "CompanyId=Keyword", "--search-attribute", "ProjectId=Keyword", "--search-attribute", "IssueId=Keyword"]),
+    startService("Forge", process.execPath, ["--import", "tsx", "src/cli.ts", "start", "--foreground"], { FORGE_TEMPORAL_TARGET: "local", FORGE_TEMPORAL_ADDRESS: "127.0.0.1:7233", FORGE_TEMPORAL_NAMESPACE: "forge-dev" }),
+    startService("frontend watcher", process.execPath, [viteCli, "build", "--watch"]),
   ];
   let shuttingDown = false;
   let requestedExitCode = 0;

@@ -10,8 +10,9 @@ import { InlineAttachmentPicker } from "./components/ui/inline-attachment-picker
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./components/ui/select.js";
 import { Textarea } from "./components/ui/textarea.js";
 import { Skeleton } from "./components/ui/skeleton.js";
-import { ScrollArea } from "./components/ui/scroll-area.js";
 import { Separator } from "./components/ui/separator.js";
+import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "./components/ui/breadcrumb.js";
+import { Timeline, TimelineContent, TimelineDate, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "./components/ui/timeline.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "./components/ui/alert-dialog.js";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./components/ui/dialog.js";
 import { CreateButton } from "./components/ui/create-button.js";
@@ -688,44 +689,61 @@ function TaskActions({ task, busy, onStartPlanning, onPlanAction }: { task: ApiT
   );
 }
 
-function TaskDetailsDialog({ task, project, busy, onClose, onStartPlanning, onPlanAction }: { task: ApiTask | undefined; project: ApiProject | undefined; busy: boolean; onClose: () => void; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void> }): ReactElement {
+function TaskDetailsPage({ task, project, companyId, busy, error, onStartPlanning, onPlanAction }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void> }): ReactElement {
   return (
-    <Dialog open={Boolean(task)} onOpenChange={(open) => { if (!open) onClose(); }}>
-      {task ? <DialogContent className="h-[min(820px,calc(100vh-2rem))] max-w-[min(1120px,calc(100vw-2rem))] grid-rows-[auto_auto_minmax(0,1fr)] gap-0 overflow-hidden p-0 sm:max-w-[min(1120px,calc(100vw-2rem))]" showCloseButton>
-        <DialogHeader className="gap-3 px-5 py-4 pr-14">
-          <div className="flex flex-wrap items-center gap-2"><DialogTitle className="text-base">{task.title}</DialogTitle><Badge variant="secondary" data-status={task.phase}>{taskPhaseLabel(task.phase)}</Badge></div>
-          <DialogDescription>{project?.name ?? "Unknown project"} · {task.phase} · revision {task.revision}</DialogDescription>
+    <ApplicationFrame title={task.title}>
+      <article data-task-detail className="min-w-0">
+        <header className="space-y-4 px-4 py-4 sm:px-6 lg:px-10">
+          <Breadcrumb>
+            <BreadcrumbList>
+              <BreadcrumbItem><BreadcrumbLink href={withCompany("/tasks", companyId)}>Tasks</BreadcrumbLink></BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem><BreadcrumbPage>{project?.name ?? "Unknown project"}</BreadcrumbPage></BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
+          <div className="flex flex-wrap items-center gap-2"><h2 className="text-xl font-semibold tracking-tight">{task.title}</h2><Badge variant="secondary" data-status={task.phase}>{taskPhaseLabel(task.phase)}</Badge></div>
+          <p className="text-xs text-muted-foreground">{project?.name ?? "Unknown project"} · {task.phase} · revision {task.revision}</p>
           <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} />
-        </DialogHeader>
+          {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+        </header>
         <Separator />
-        <ScrollArea className="min-h-0">
-          <div className="grid min-h-full lg:grid-cols-[minmax(0,1fr)_260px]">
-            <div className="min-w-0 space-y-5 px-5 py-5">
-              <section className="space-y-2"><h2 className="text-xs font-semibold">Description</h2><pre className="whitespace-pre-wrap font-sans text-[13px] leading-5">{task.description || "No description."}</pre></section>
-              {task.images.length ? <section className="space-y-2"><h2 className="text-xs font-semibold">Attachments</h2><div className="flex flex-wrap gap-2">{task.images.map((image) => <Button key={image.artifactId} variant="outline" size="sm" render={<a href={`/api/tasks/${task.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer" />}>{image.filename}</Button>)}</div></section> : null}
-              {task.agentInvocations.length ? <section className="space-y-2"><div className="flex items-center justify-between"><h2 className="text-xs font-semibold">Invocations</h2><span className="text-[11px] text-muted-foreground">{task.agentInvocations.length} transactions</span></div><div className="space-y-1">{task.agentInvocations.map((invocation) => <div className="grid gap-1 py-2 text-[11px] sm:grid-cols-[88px_80px_minmax(0,1fr)_auto] sm:items-start sm:gap-3" key={invocation.id} title={invocation.id}><div className="font-medium">{invocation.role} · {invocation.attempt}</div><Badge variant={invocation.status === "failed" ? "destructive" : "secondary"}>{invocation.status}</Badge><div className="min-w-0"><div className="break-words">{invocation.failureSummary ?? "Invocation completed"}</div><div className="mt-0.5 truncate text-muted-foreground">{invocation.failureCode ?? invocation.evidenceArtifactId ?? invocation.id}</div></div><time className="text-muted-foreground" dateTime={invocation.startedAt}>{adminDate(invocation.startedAt)}</time></div>)}</div></section> : null}
-              {task.leadOutput ? <section className="space-y-2"><div className="flex items-center justify-between gap-3"><h2 className="text-xs font-semibold">{task.leadOutput.kind === "plan" ? "Lead plan" : "Decision blocker"}</h2><span className="text-[11px] text-muted-foreground">{task.leadOutput.summary}</span></div>{task.leadOutput.content.kind === "plan" ? <><p className="whitespace-pre-wrap text-[13px]">{task.leadOutput.content.compatibilityAnalysis}</p><ol className="list-decimal space-y-2 pl-5 text-[13px]">{task.leadOutput.content.steps.map((step) => <li key={step.number}><div>{step.instruction}</div><div className="text-[11px] text-muted-foreground">Verify: {step.verification}</div></li>)}</ol><p className="whitespace-pre-wrap text-[13px]">{task.leadOutput.content.verificationStrategy}</p></> : <div className="space-y-2 text-[13px]"><p className="whitespace-pre-wrap">{task.leadOutput.content.evidence}</p><div><span className="font-medium">Question: </span>{task.leadOutput.content.question}</div><div><span className="font-medium">Next: </span>{task.leadOutput.content.nextAction}</div></div>}</section> : null}
-              {task.developerExecution ? <section className="space-y-2"><div className="flex items-center justify-between gap-3"><h2 className="text-xs font-semibold">Developer delivery</h2><Badge variant="secondary">{task.developerExecution.status}</Badge></div><div className="text-[13px]">{task.developerExecution.deliverySummary ?? task.pendingAction}</div><div className="text-[11px] text-muted-foreground">{task.developerExecution.branchName} · {task.developerExecution.resultCommit ?? "no commit yet"}</div></section> : null}
-              {task.deliveryReview ? <section className="space-y-2"><div className="flex items-center justify-between gap-3"><h2 className="text-xs font-semibold">Delivery review</h2><Badge variant={task.deliveryReview.outcome === "blocking" ? "destructive" : "secondary"}>{task.deliveryReview.outcome}</Badge></div><div className="text-[13px]">{task.deliveryReview.summary}</div><div className="space-y-2">{task.deliveryReview.findings.map((finding) => <div className="pl-2 text-[13px]" key={finding.id}><div className="font-medium">{finding.severity} · {finding.disposition}</div><div className="text-[11px] text-muted-foreground">{finding.rationale}</div></div>)}</div></section> : null}
-              <section className="space-y-2"><h2 className="text-xs font-semibold">Activity</h2><div className="space-y-2">{task.timeline.map((entry) => <div className="flex items-start justify-between gap-3 text-[13px]" key={entry.id}><div><div>{entry.eventType}</div><div className="text-[11px] text-muted-foreground">revision {entry.revision}</div></div><time className="text-[11px] text-muted-foreground" dateTime={entry.createdAt}>{adminDate(entry.createdAt)}</time></div>)}</div></section>
+        <div data-task-body className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_260px]">
+          <div data-task-content className="min-w-0 px-4 py-6 sm:px-6 lg:px-10">
+            <div className="mx-auto max-w-4xl space-y-7">
+              <section className="space-y-2"><h3 className="text-xs font-semibold">Description</h3><pre className="whitespace-pre-wrap font-sans text-[13px] leading-5">{task.description || "No description."}</pre></section>
+              {task.images.length ? <section className="space-y-2"><h3 className="text-xs font-semibold">Attachments</h3><div className="flex flex-wrap gap-3">{task.images.map((image) => <a className="text-xs underline underline-offset-2" href={`/api/tasks/${task.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer" key={image.artifactId}>{image.filename}</a>)}</div></section> : null}
+              {task.agentInvocations.length ? <section className="space-y-2"><div className="flex items-center justify-between"><h3 className="text-xs font-semibold">Invocations</h3><span className="text-[11px] text-muted-foreground">{task.agentInvocations.length} transactions</span></div><div className="space-y-1">{task.agentInvocations.map((invocation) => <div className="grid gap-1 py-2 text-[11px] sm:grid-cols-[88px_80px_minmax(0,1fr)_auto] sm:items-start sm:gap-3" key={invocation.id} title={invocation.id}><div className="font-medium">{invocation.role} · {invocation.attempt}</div><Badge variant={invocation.status === "failed" ? "destructive" : "secondary"}>{invocation.status}</Badge><div className="min-w-0"><div className="break-words">{invocation.failureSummary ?? "Invocation completed"}</div><div className="mt-0.5 truncate text-muted-foreground">{invocation.failureCode ?? invocation.evidenceArtifactId ?? invocation.id}</div></div><time className="text-muted-foreground" dateTime={invocation.startedAt}>{adminDate(invocation.startedAt)}</time></div>)}</div></section> : null}
+              {task.leadOutput ? <section className="space-y-2"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">{task.leadOutput.kind === "plan" ? "Lead plan" : "Decision blocker"}</h3><span className="text-[11px] text-muted-foreground">{task.leadOutput.summary}</span></div>{task.leadOutput.content.kind === "plan" ? <><p className="whitespace-pre-wrap text-[13px]">{task.leadOutput.content.compatibilityAnalysis}</p><ol className="list-decimal space-y-2 pl-5 text-[13px]">{task.leadOutput.content.steps.map((step) => <li key={step.number}><div>{step.instruction}</div><div className="text-[11px] text-muted-foreground">Verify: {step.verification}</div></li>)}</ol><p className="whitespace-pre-wrap text-[13px]">{task.leadOutput.content.verificationStrategy}</p></> : <div className="space-y-2 text-[13px]"><p className="whitespace-pre-wrap">{task.leadOutput.content.evidence}</p><div><span className="font-medium">Question: </span>{task.leadOutput.content.question}</div><div><span className="font-medium">Next: </span>{task.leadOutput.content.nextAction}</div></div>}</section> : null}
+              {task.developerExecution ? <section className="space-y-2"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">Developer delivery</h3><Badge variant="secondary">{task.developerExecution.status}</Badge></div><div className="text-[13px]">{task.developerExecution.deliverySummary ?? task.pendingAction}</div><div className="text-[11px] text-muted-foreground">{task.developerExecution.branchName} · {task.developerExecution.resultCommit ?? "no commit yet"}</div></section> : null}
+              {task.deliveryReview ? <section className="space-y-2"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">Delivery review</h3><Badge variant={task.deliveryReview.outcome === "blocking" ? "destructive" : "secondary"}>{task.deliveryReview.outcome}</Badge></div><div className="text-[13px]">{task.deliveryReview.summary}</div><div className="space-y-2">{task.deliveryReview.findings.map((finding) => <div className="pl-2 text-[13px]" key={finding.id}><div className="font-medium">{finding.severity} · {finding.disposition}</div><div className="text-[11px] text-muted-foreground">{finding.rationale}</div></div>)}</div></section> : null}
+              <section className="space-y-3"><h3 className="text-xs font-semibold">Activity</h3><div data-task-activity-scroll className="overflow-x-auto pb-2"><div className="min-w-[48rem]"><Timeline orientation="horizontal" value={task.timeline.length}>{task.timeline.map((entry, index) => <TimelineItem key={entry.id} step={index + 1}><TimelineHeader><TimelineDate dateTime={entry.createdAt}>{adminDate(entry.createdAt)}</TimelineDate><TimelineTitle>{entry.eventType}</TimelineTitle></TimelineHeader><TimelineIndicator /><TimelineSeparator /><TimelineContent>revision {entry.revision}</TimelineContent></TimelineItem>)}</Timeline></div></div></section>
             </div>
-            <aside className="space-y-5 bg-muted/20 px-5 py-5">
-              <dl className="space-y-4 text-xs">
-                <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary">{taskPhaseLabel(task.phase)}</Badge></dd></div>
-                <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
-                <div className="space-y-1"><dt className="text-muted-foreground">Owner</dt><dd>{task.owner}</dd></div>
-                <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd>{task.pendingAction ?? "None"}</dd></div>
-                <div className="space-y-1"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>
-                <div className="space-y-1"><dt className="text-muted-foreground">Updated</dt><dd>{adminDate(task.updatedAt)}</dd></div>
-                <div className="space-y-1"><dt className="text-muted-foreground">Task ID</dt><dd><code className="break-all text-[11px]">{task.id}</code></dd></div>
-                <div className="space-y-1"><dt className="text-muted-foreground">Workflow</dt><dd><code className="break-all text-[11px]">{task.workflowId}</code></dd></div>
-              </dl>
-            </aside>
           </div>
-        </ScrollArea>
-      </DialogContent> : null}
-    </Dialog>
+          <aside data-task-properties className="border-border border-t bg-muted/20 px-4 py-6 sm:px-6 lg:sticky lg:top-0 lg:h-fit lg:border-t-0 lg:border-l">
+            <h3 className="mb-5 text-xs font-semibold">Properties</h3>
+            <dl className="space-y-4 text-xs">
+              <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary">{taskPhaseLabel(task.phase)}</Badge></dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Owner</dt><dd>{task.owner}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd>{task.pendingAction ?? "None"}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Updated</dt><dd>{adminDate(task.updatedAt)}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Task ID</dt><dd><code className="break-all text-[11px]">{task.id}</code></dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Workflow</dt><dd><code className="break-all text-[11px]">{task.workflowId}</code></dd></div>
+            </dl>
+          </aside>
+        </div>
+      </article>
+    </ApplicationFrame>
   );
+}
+
+function TaskDetailsSkeleton(): ReactElement {
+  return <ApplicationFrame title="Task"><div data-task-detail-loading className="grid gap-8 px-4 py-6 sm:px-6 lg:grid-cols-[minmax(0,1fr)_260px] lg:px-10" aria-busy="true" aria-label="Loading task"><div className="space-y-4"><Skeleton className="h-4 w-40" /><Skeleton className="h-8 w-3/4" /><Skeleton className="h-24 w-full" /><Skeleton className="h-40 w-full" /></div><div className="space-y-3"><Skeleton className="h-4 w-24" /><Skeleton className="h-6 w-full" /><Skeleton className="h-6 w-3/4" /></div></div></ApplicationFrame>;
+}
+
+function TaskDetailsNotFound({ companyId }: { companyId: string }): ReactElement {
+  return <ApplicationFrame title="Task not found"><div className="space-y-3 px-4 py-8 sm:px-6 lg:px-10"><p className="text-xs text-muted-foreground">Task not found for this company.</p><a className="text-xs underline underline-offset-2" href={withCompany("/tasks", companyId)}>Back to Tasks</a></div></ApplicationFrame>;
 }
 
 function TasksView(): ReactElement {
@@ -783,14 +801,13 @@ function TasksView(): ReactElement {
     return () => events.close();
   }, [reload]);
 
-  const scopeLoaded = loadedCompanyId === companyId;
+  const scopeLoaded = Boolean(companyId) && loadedCompanyId === companyId;
+  const routeTaskId = window.location.pathname.startsWith("/tasks/") ? decodeURIComponent(window.location.pathname.slice("/tasks/".length)) : "";
   const visibleProjects = scopeLoaded ? projects : [];
   const visibleTasks = scopeLoaded ? tasks : [];
   const taskBoard = Object.fromEntries(taskPhases.map((phase) => [phase, visibleTasks.filter((task) => task.phase === phase)])) as Record<(typeof taskPhases)[number], ApiTask[]>;
   const selected = scopeLoaded ? selectedState : undefined;
   const availableProjects = visibleProjects.filter((project) => project.companyId === companyId && project.status === "active");
-  const selectTask = (task: ApiTask): void => { setSelected(task); selectedRef.current = task; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`/tasks/${encodeURIComponent(task.id)}`, companyId)); };
-  const closeTask = (): void => { setSelected(undefined); selectedRef.current = undefined; setDetailNotFound(false); window.history.pushState({}, "", withCompany("/tasks", companyId)); };
   const addImages = async (files: File[]): Promise<void> => {
     setError("");
     if (images.length + files.length > 8) { setError("At most eight images may be attached"); return; }
@@ -804,7 +821,7 @@ function TasksView(): ReactElement {
     setBusy(true); setError("");
     try {
       const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, idempotencyKey: crypto.randomUUID() }) });
-      setTitle(""); setDescription(""); setImages([]); selectTask(result); await reload();
+      window.location.assign(withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId));
     } catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to create task"); }
     finally { setBusy(false); }
   };
@@ -825,6 +842,13 @@ function TasksView(): ReactElement {
     finally { setBusy(false); }
   };
 
+  if (routeTaskId && loading) return <TaskDetailsSkeleton />;
+  if (routeTaskId && !companyId) return <TaskDetailsNotFound companyId="" />;
+  if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
+  if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
+  if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} />;
+  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} onStartPlanning={startPlanning} onPlanAction={planAction} />;
+
   return (
     <ApplicationFrame title="Tasks">
       <div className="bg-background text-foreground">
@@ -837,21 +861,11 @@ function TasksView(): ReactElement {
               <Field><FieldLabel htmlFor="task-description">Task description</FieldLabel><Textarea id="task-description" placeholder="Markdown description" value={description} onChange={(event) => setDescription(event.target.value)} /></Field>
               <InlineAttachmentPicker attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} disabled={busy} />
             </FieldGroup> : currentCompany ? <p className="text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New tasks are unavailable." : "Company archived. New tasks are unavailable."}</p> : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}
-            {currentCompany?.status === "active" ? <Button className="mt-3 w-full" onClick={() => void create()} disabled={busy || !companyId || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button> : null}
-            {error ? <Alert variant="destructive" className="mt-3 text-xs text-rose-700"><AlertDescription>{error}</AlertDescription></Alert> : null}
+            {currentCompany?.status === "active" ? <div className="mt-3"><Button onClick={() => void create()} disabled={busy || !companyId || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button></div> : null}
+            {error ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
           </section>
-          <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Board</span><span className="text-[11px] text-muted-foreground">Read-only state</span></div><Kanban value={taskBoard} onValueChange={() => {}} getItemValue={(task) => task.id}><KanbanBoard className="grid-cols-1 gap-3 md:grid-cols-4 xl:grid-cols-7">{taskPhases.map((phase) => <KanbanColumn disabled key={phase} value={phase}><div className="flex h-8 items-center justify-between px-3 text-[11px] font-semibold text-muted-foreground"><span>{taskPhaseLabel(phase)}</span><span>{taskBoard[phase].length}</span></div><KanbanColumnContent value={phase}>{taskBoard[phase].map((task) => <Button variant="ghost" className="block h-auto w-full justify-start rounded-none px-3 py-3 text-left text-xs font-normal hover:bg-muted/40" key={task.id} onClick={() => selectTask(task)}><span className="block font-medium">{task.title}</span><span className="mt-1 block text-[11px] text-muted-foreground">{task.pendingAction}</span></Button>)}</KanbanColumnContent></KanbanColumn>)}</KanbanBoard></Kanban>
-            {detailNotFound ? <div className="mt-4 p-4 text-xs text-muted-foreground">Task not found for this company.</div> : null}
-          </section>
+          <section className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Board</span><span className="text-[11px] text-muted-foreground">Read-only state</span></div><Kanban value={taskBoard} onValueChange={() => {}} getItemValue={(task) => task.id}><KanbanBoard className="grid-cols-1 gap-3 md:grid-cols-4 xl:grid-cols-7">{taskPhases.map((phase) => <KanbanColumn disabled key={phase} value={phase}><div className="flex h-8 items-center justify-between px-3 text-[11px] font-semibold text-muted-foreground"><span>{taskPhaseLabel(phase)}</span><span>{taskBoard[phase].length}</span></div><KanbanColumnContent value={phase}>{taskBoard[phase].map((task) => <a className="block px-3 py-3 text-xs hover:bg-muted/40" href={withCompany(`/tasks/${encodeURIComponent(task.id)}`, companyId)} key={task.id}><span className="block font-medium">{task.title}</span><span className="mt-1 block text-[11px] text-muted-foreground">{task.pendingAction}</span></a>)}</KanbanColumnContent></KanbanColumn>)}</KanbanBoard></Kanban></section>
         </div>
-        <TaskDetailsDialog
-          task={selected}
-          project={visibleProjects.find((project) => project.id === selected?.projectId)}
-          busy={busy}
-          onClose={closeTask}
-          onStartPlanning={startPlanning}
-          onPlanAction={planAction}
-        />
       </div>
     </ApplicationFrame>
   );

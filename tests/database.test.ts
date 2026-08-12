@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import Database from "better-sqlite3";
 
-import { ForgeDatabase } from "../src/database.js";
+import { DatabaseMigrationFailure, ForgeDatabase } from "../src/database.js";
 
 test("initializes migrations in WAL mode and preserves probe state after reopening", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-db-test-"));
@@ -208,5 +208,34 @@ test("retains exact readable schema health when writes are disabled", () => {
     database.close();
   } finally {
     rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("reports normalized repository identity collisions before the unique index migration", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-db-collision-test-"));
+  const filename = join(root, "forge.sqlite");
+
+  try {
+    const database = new ForgeDatabase(filename);
+    database.close();
+
+    const legacy = new Database(filename);
+    legacy.exec("DROP INDEX forge_projects_repository_identity_unique");
+    legacy.exec("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-a', 'Company A', 'active', '2026-08-11T00:00:00.000Z'), ('company-b', 'Company B', 'active', '2026-08-11T00:00:00.000Z')");
+    const insert = legacy.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'main', 'main', 'pnpm install', 'pnpm test', '[]', '[]', '{}', 'draft', NULL, ?, ?)");
+    insert.run("project-a", "company-a", "Project A", "/repositories/a", "/worktrees/a", " Acme/Forge ", "2026-08-11T00:00:00.000Z", "2026-08-11T00:00:00.000Z");
+    insert.run("project-b", "company-b", "Project B", "/repositories/b", "/worktrees/b", "acme/forge", "2026-08-11T00:00:00.000Z", "2026-08-11T00:00:00.000Z");
+    legacy.close();
+
+    expect(() => new ForgeDatabase(filename)).toThrowError(expect.objectContaining({
+      name: "DatabaseMigrationFailure",
+      code: "repository_identity_collision",
+      collisions: [
+        { projectId: "project-a", companyId: "company-a", repositoryIdentity: "acme/forge" },
+        { projectId: "project-b", companyId: "company-b", repositoryIdentity: "acme/forge" },
+      ],
+    } satisfies Partial<DatabaseMigrationFailure>));
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });

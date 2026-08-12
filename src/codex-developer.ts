@@ -8,7 +8,7 @@ import { z } from "zod";
 
 import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
-import { AgentFailure, FileSessionStore, runCodexProcess, type LeadProcessResult, type LeadProcessRunner, type SessionStore } from "./codex-lead.js";
+import { AgentFailure, agentProcessFailure, FileSessionStore, runCodexProcess, type LeadProcessRunner, type SessionStore } from "./codex-lead.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import { createGitCommandGuard, WorktreeManager } from "./worktrees.js";
@@ -16,7 +16,13 @@ import { DeveloperRepairActivityInputSchema, type DeliveryFinding, type Develope
 
 const execFileAsync = promisify(execFile);
 
-const ProjectRevisionSchema = z.object({ repositoryPath: z.string().min(1), worktreeRoot: z.string().min(1), targetBranch: z.string().min(1) });
+const ProjectRevisionSchema = z.object({
+  repositoryPath: z.string().min(1),
+  worktreeRoot: z.string().min(1),
+  targetBranch: z.string().min(1),
+  baseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  targetSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
+});
 const DeveloperDeliveryStepSchema = z.object({
   number: z.number().int().positive(),
   status: z.enum(["completed", "not_completed", "blocked"]),
@@ -64,7 +70,6 @@ export type DeveloperDeliveryReport = z.infer<typeof DeveloperDeliveryReportSche
 
 interface DeveloperContext {
   title: string;
-  repositoryPath: string;
   normalizedJson: string;
   briefStoragePath: string;
   briefSha256: string;
@@ -140,13 +145,6 @@ function parseMergeConflictResolutionReport(lines: string[]): z.infer<typeof Dev
   return result.data;
 }
 
-function processFailure(result: LeadProcessResult): string {
-  if (/not logged in|login required|authentication required|unauthenticated|oauth authorization required/i.test(result.stderr)) return "login-expired";
-  if (/rate[ -]?limit|too many requests|\b429\b/i.test(result.stderr)) return "rate-limited";
-  if (/model .*not supported|unsupported model|invalid model/i.test(result.stderr)) return "model-unavailable";
-  return result.exitCode === 0 ? "process-output-failed" : "process-exited";
-}
-
 function scopedRepository(root: string, candidate: string): Promise<string> {
   return Promise.all([realpath(root), realpath(candidate)]).then(([absoluteRoot, absoluteCandidate]) => {
     const path = relative(absoluteRoot, absoluteCandidate);
@@ -182,15 +180,15 @@ export class DeveloperService {
 
   async run(rawInput: DeveloperExecutionActivityInput): Promise<DeveloperExecutionResult> {
     const input = rawInput;
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.repository_path AS repositoryPath, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256
-      FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id JOIN forge_project_revisions r ON r.id = t.project_revision_id
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256
+      FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_issue_outputs io ON io.output_artifact_id = ? AND io.task_id = t.id AND io.workflow_id = t.workflow_id
       JOIN forge_artifacts pa ON pa.id = io.output_artifact_id JOIN forge_artifacts ea ON ea.id = io.evidence_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId) as DeveloperContext | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Authorized Lead delivery evidence is unavailable");
     const projectRevision = ProjectRevisionSchema.safeParse(JSON.parse(context.normalizedJson));
     if (!projectRevision.success) throw new AgentFailure("scoped-input-missing", "Pinned project execution configuration is unavailable");
-    const repositoryPath = await scopedRepository(this.config.repositoryRoot, context.repositoryPath);
+    const repositoryPath = await scopedRepository(this.config.repositoryRoot, projectRevision.data.repositoryPath);
     const [brief, planText, leadEvidence] = await Promise.all([
       this.artifacts.read({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
       this.artifacts.read({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
@@ -202,7 +200,8 @@ export class DeveloperService {
     if (!profile || profile.provider !== "codex") throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
     const prior = input.supersedesExecutionId ? this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.supersedesExecutionId, input.taskId, input.companyId, input.workflowId) as PriorDeveloperExecution | undefined) : undefined;
     if (input.supersedesExecutionId && (!prior || !["interrupted", "cancelled", "failed"].includes(prior.status))) throw new AgentFailure("retry-not-available", "Only an interrupted or cancelled Developer attempt can be retried");
-    const targetBaseSha = prior?.target_base_sha ?? (await execFileAsync("git", ["rev-parse", "--verify", `refs/heads/${projectRevision.data.targetBranch}`], { cwd: repositoryPath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
+    const targetBaseSha = prior?.target_base_sha ?? projectRevision.data.targetSha;
+    if (!/^[a-f0-9]{40,64}$/i.test(targetBaseSha)) throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain an exact target SHA");
     const branchName = `forge/issue/${input.taskId}`;
     const worktreeRoot = await scopedRepository(this.config.worktreeRoot, projectRevision.data.worktreeRoot);
     const attempt = Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
@@ -221,6 +220,7 @@ export class DeveloperService {
     this.database.authTransaction((db) => db.prepare(`INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, 1)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, wrapperId, guard!.directory, prior?.id ?? null, startedAt, startedAt));
     const prompt = this.prompt(context.title, brief, planText, leadEvidence, worktree);
     const evidenceLines = [JSON.stringify({ type: "forge.prompt", text: redact(prompt) })];
+    const outputLines: string[] = [];
     let sessionRef: string | undefined;
     let rawSessionId: string | undefined;
     try {
@@ -236,12 +236,13 @@ export class DeveloperService {
           onLine: async (line) => {
             const sanitized = safeJsonLine(line);
             evidenceLines.push(sanitized);
+            outputLines.push(line);
             const event = eventValue(line);
             if (event.threadId && !sessionRef) { rawSessionId = event.threadId; sessionRef = await this.sessionStore.create(rawSessionId); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET session_ref = ?, heartbeat_at = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), executionId)); }
             await this.heartbeat(executionId);
           },
         });
-        if (result.exitCode !== 0) throw new AgentFailure(processFailure(result), "Codex Developer did not complete");
+        if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines, profile.model);
         if (!sessionRef || !rawSessionId || sessionRef === input.leadSessionRef) throw new AgentFailure("session-identity-conflict", "Developer session must be distinct from the Lead session");
         const report = parseDeliveryReport(evidenceLines);
         const gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
@@ -303,7 +304,7 @@ export class DeveloperService {
           await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET heartbeat_at = ? WHERE id = ?").run(this.now().toISOString(), executionId));
         },
       });
-      if (result.exitCode !== 0) throw new AgentFailure(processFailure(result), "Codex Developer merge-conflict resolution did not complete");
+      if (result.exitCode !== 0) throw agentProcessFailure(result, evidenceLines);
       const report = parseMergeConflictResolutionReport(evidenceLines);
       const missingFiles = input.conflictFiles.filter((file) => !report.resolvedFiles.includes(file));
       if (missingFiles.length || report.blocker !== null) throw new AgentFailure("merge-resolution-incomplete", missingFiles.length ? `The Developer did not resolve: ${missingFiles.join(", ")}` : report.blocker ?? "Merge-conflict resolution is blocked");
@@ -387,7 +388,7 @@ export class DeveloperService {
         });
         if (result.exitCode !== 0) {
           evidenceLines.push(JSON.stringify({ type: "forge.process-failure", exitCode: result.exitCode, stderr: redact(result.stderr) }));
-          throw new AgentFailure(processFailure(result), "Codex Developer repair did not complete");
+          throw agentProcessFailure(result, outputLines);
         }
         const report = parseRepairReport(outputLines);
         if (report.addressedFindingIds.some((id) => !input.blockingFindings.some((finding) => finding.findingId === id))) throw new AgentFailure("repair-scope-violation", "Developer repair reported a finding outside the bounded blocking set");

@@ -99,7 +99,7 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       expect(new URL(adminPage.url()).searchParams.get("company")).toBe(secondCompany.body.id);
       expect(await adminPage.evaluate(() => window.localStorage.getItem("forge.activeCompanyId"))).toBe(secondCompany.body.id);
 
-      await adminPage.getByPlaceholder("Display name").fill("Browser Member");
+      await adminPage.getByLabel("Display name", { exact: true }).fill("Browser Member");
       await adminPage.getByRole("button", { name: "Invite", exact: true }).click();
       await adminPage.locator("code").waitFor();
       const invitationToken = await adminPage.locator("code").innerText();

@@ -1,7 +1,6 @@
 {
   "$schema": "https://ui.shadcn.com/schema.json",
-  "style": "base-nova",
-  "base": "base",
+  "style": "base-vega",
   "rsc": false,
   "tsx": true,
   "tailwind": {
@@ -11,6 +10,10 @@
     "cssVariables": true,
     "prefix": ""
   },
+  "iconLibrary": "lucide",
+  "rtl": false,
+  "menuColor": "default",
+  "menuAccent": "subtle",
   "aliases": {
     "components": "@/components",
     "utils": "@/lib/utils",
@@ -18,5 +21,7 @@
     "lib": "@/lib",
     "hooks": "@/hooks"
   },
-  "iconLibrary": "lucide"
+  "registries": {
+    "@reui": "https://reui.io/r/{style}/{name}.json"
+  }
 }

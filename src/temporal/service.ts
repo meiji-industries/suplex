@@ -29,9 +29,16 @@ function isNotFound(error: unknown): boolean {
   return /not.?found|namespace.*does not exist/i.test(message);
 }
 
-function isAlreadyStarted(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /already started|already exists/i.test(message);
+export class IssueWorkflowStartFailure extends Error {
+  readonly code: "workflow_not_started" | "workflow_start_ambiguous" | "workflow_identity_conflict";
+  readonly provenAbsent: boolean;
+
+  constructor(code: IssueWorkflowStartFailure["code"], provenAbsent: boolean) {
+    super(code);
+    this.name = "IssueWorkflowStartFailure";
+    this.code = code;
+    this.provenAbsent = provenAbsent;
+  }
 }
 
 export async function connectTemporal(config: ForgeConfig): Promise<TemporalClientConnection> {
@@ -171,7 +178,7 @@ export async function queryProbeWorkflow(config: ForgeConfig, workflowId: string
   }
 }
 
-export async function startIssueWorkflow(config: ForgeConfig, input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string }> {
+export async function startIssueWorkflow(config: ForgeConfig, input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string; existing?: boolean }> {
   const identifiers = runtimeIdentifiers(config.installationId);
   const workflowId = input.workflowId ?? `${identifiers.workflowPrefix}-issue-${input.issueId}`;
   if (isLegacyDurableIdentifier(workflowId) || !workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) {
@@ -195,9 +202,29 @@ export async function startIssueWorkflow(config: ForgeConfig, input: Omit<IssueW
         searchAttributes,
       });
       return { workflowId: handle.workflowId, runId: handle.firstExecutionRunId };
-    } catch (error) {
-      if (!isAlreadyStarted(error)) throw error;
-      return { workflowId, runId: "" };
+    } catch {
+      // A client timeout can happen after Temporal accepted StartWorkflowExecution.
+      // Describe first, then query the compact identity marker. Deletion is only
+      // safe after Temporal proves that this workflow ID does not exist.
+      const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
+      try {
+        await handle.describe();
+        const state = IssueWorkflowStateSchema.parse(await handle.query(issueStateQuery));
+        const sameIdentity = state.workflowId === workflowId
+          && state.companyId === validatedInput.companyId
+          && state.projectId === validatedInput.projectId
+          && state.issueId === validatedInput.issueId
+          && state.projectRevisionId === validatedInput.projectRevisionId
+          && (validatedInput.requestHash === undefined || state.requestHash === validatedInput.requestHash);
+        if (!sameIdentity) throw new IssueWorkflowStartFailure("workflow_identity_conflict", false);
+        return { workflowId, runId: "", existing: true };
+      } catch (reconciliationError) {
+        if (reconciliationError instanceof IssueWorkflowStartFailure) throw reconciliationError;
+        if (isNotFound(reconciliationError)) throw new IssueWorkflowStartFailure("workflow_not_started", true);
+        // Preserve the fact that the original start may have been accepted.
+        // The caller must retain its durable task and retry this exact ID.
+        throw new IssueWorkflowStartFailure("workflow_start_ambiguous", false);
+      }
     }
   } finally {
     temporalClient.connection.close();

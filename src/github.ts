@@ -8,9 +8,16 @@ export interface GithubRepository {
   url: string;
 }
 
+export interface GithubCheck {
+  name: string;
+  status: string;
+  conclusion?: string;
+}
+
 export interface GithubAdapter {
   checkAuthentication(): Promise<void>;
   getRepository(input: { cwd: string; nameWithOwner: string }): Promise<GithubRepository>;
+  listChecks?(input: { cwd: string; nameWithOwner: string; ref: string }): Promise<GithubCheck[]>;
 }
 
 export class GithubFailure extends Error {
@@ -36,7 +43,9 @@ async function runGh(command: string, args: string[], cwd?: string): Promise<{ s
     return await execFileAsync(command, args, { cwd, timeout: 8_000, maxBuffer: 64 * 1024 });
   } catch (error) {
     const message = error instanceof Error ? redactOutput(error.message) : "command failed";
-    throw new GithubFailure(message.includes("auth") ? "authentication" : "command");
+    if (/auth|not logged in|login required|oauth|credential/i.test(message)) throw new GithubFailure("authentication");
+    if (args[0] === "repo" && args[1] === "view") throw new GithubFailure("repository");
+    throw new GithubFailure("command");
   }
 }
 
@@ -56,6 +65,19 @@ export function createGithubAdapter(command = process.env.FORGE_GH_COMMAND ?? "g
       } catch (error) {
         if (error instanceof GithubFailure) throw error;
         throw new GithubFailure("repository");
+      }
+    },
+    async listChecks(input) {
+      const path = `repos/${input.nameWithOwner}/commits/${encodeURIComponent(input.ref)}/check-runs?per_page=100`;
+      const result = await runGh(command, ["api", "-H", "Accept: application/vnd.github+json", path], input.cwd);
+      try {
+        const parsed = JSON.parse(result.stdout) as { check_runs?: Array<{ name?: unknown; status?: unknown; conclusion?: unknown }> };
+        const checks = (parsed.check_runs ?? []).flatMap((check) => typeof check.name === "string" && typeof check.status === "string"
+          ? [{ name: check.name, status: check.status, ...(typeof check.conclusion === "string" ? { conclusion: check.conclusion } : {}) }]
+          : []);
+        return [...new Map(checks.map((check) => [check.name, check])).values()].sort((left, right) => left.name.localeCompare(right.name));
+      } catch {
+        throw new GithubFailure("command");
       }
     },
   };

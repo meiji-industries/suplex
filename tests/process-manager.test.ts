@@ -73,6 +73,71 @@ test("shutdown signals only the recorded owned process identities", async () => 
   expect(signalled.includes(unrelated.pid)).toBe(false);
 });
 
+test("shutdown signals and verifies the detached process group", async () => {
+  const owned: OwnedProcess = {
+    name: "forge-worker",
+    pid: 4101,
+    command: "/usr/local/bin/node worker.js",
+    startedAt: "2026-08-10T00:00:00.000Z",
+    processGroup: 5101,
+    startTime: "Tue 10 Aug 00:00:00 2026",
+    executable: "node",
+    argv: ["/usr/local/bin/node", "worker.js"],
+  };
+  let leaderRunning = true;
+  let groupRunning = true;
+  const signalledGroups: number[] = [];
+  const controller = makeController({
+    async inspect(pid) {
+      return pid === owned.pid && leaderRunning ? makeInspection(owned) : undefined;
+    },
+    async signal() {
+      throw new Error("the leader PID must not be signalled by itself");
+    },
+    async signalGroup(processGroup) {
+      signalledGroups.push(processGroup);
+      leaderRunning = false;
+      groupRunning = false;
+    },
+    async isProcessGroupAlive(processGroup) {
+      expect(processGroup).toBe(owned.processGroup);
+      return groupRunning;
+    },
+  });
+
+  await stopOwnedProcesses({ version: 1, processes: [owned] }, controller);
+
+  expect(signalledGroups).toEqual([owned.processGroup]);
+});
+
+test("shutdown preserves the registry when a detached process-group child survives", async () => {
+  const owned: OwnedProcess = {
+    name: "forge-worker",
+    pid: 4101,
+    command: "/usr/local/bin/node worker.js",
+    startedAt: "2026-08-10T00:00:00.000Z",
+    processGroup: 5101,
+    startTime: "Tue 10 Aug 00:00:00 2026",
+    executable: "node",
+    argv: ["/usr/local/bin/node", "worker.js"],
+  };
+  let leaderRunning = true;
+  const controller = makeController({
+    async inspect() {
+      return leaderRunning ? makeInspection(owned) : undefined;
+    },
+    async signalGroup() {
+      leaderRunning = false;
+    },
+    async isProcessGroupAlive() {
+      return true;
+    },
+  });
+
+  await expect(stopOwnedProcesses({ version: 1, processes: [owned] }, controller))
+    .rejects.toThrow(/could not prove.*stopped/i);
+});
+
 test("shutdown fails safely for a reused PID whose process identity no longer matches", async () => {
   const signalled: number[] = [];
   const controller = makeController({

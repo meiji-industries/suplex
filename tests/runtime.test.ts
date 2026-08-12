@@ -111,8 +111,60 @@ test("a registry without Temporal is reconciled even when both ready Forge child
     async stopContainer() {},
   });
 
-  await expect(reconcileExistingRegistry({ version: 1, processes: [worker, server] }, createTestConfig("/tmp/forge-runtime-test"), controller)).resolves.toBe(false);
+  await expect(reconcileExistingRegistry(
+    { version: 1, processes: [worker, server] },
+    createTestConfig("/tmp/forge-runtime-test", { temporalMode: "managed" }),
+    controller,
+  )).resolves.toBe(false);
   expect(signalled).toEqual([worker.pid, server.pid]);
+});
+
+test("a complete external-Temporal registry is already running when both Forge children are live", async () => {
+  const worker = ownedProcess("worker", 4101);
+  const server = ownedProcess("server", 4102);
+  const controller = reconciliationController({
+    async inspect(pid) {
+      if (pid === worker.pid) return inspection(worker);
+      if (pid === server.pid) return inspection(server);
+      return undefined;
+    },
+    async inspectContainer() {
+      return undefined;
+    },
+    async signal() {
+      throw new Error("an already-running external runtime must not be signalled");
+    },
+    async stopContainer() {},
+  });
+
+  await expect(reconcileExistingRegistry(
+    { version: 1, processes: [worker, server] },
+    createTestConfig("/tmp/forge-runtime-test", { temporalMode: "external", tailscaleExposure: "direct" }),
+    controller,
+  )).resolves.toBe(true);
+});
+
+test("reconciliation ignores a reused PID when the recorded identity is complete", async () => {
+  const worker = ownedProcess("worker", 4101);
+  const controller = reconciliationController({
+    async inspect(pid) {
+      if (pid !== worker.pid) return undefined;
+      return { ...inspection(worker), command: "/usr/local/bin/node unrelated.js", argv: ["/usr/local/bin/node", "unrelated.js"] };
+    },
+    async inspectContainer() {
+      return undefined;
+    },
+    async signal() {
+      throw new Error("a reused PID must not be signalled");
+    },
+    async stopContainer() {},
+  });
+
+  await expect(reconcileExistingRegistry(
+    { version: 1, processes: [worker] },
+    createTestConfig("/tmp/forge-runtime-test", { temporalMode: "external", tailscaleExposure: "direct" }),
+    controller,
+  )).resolves.toBe(false);
 });
 
 test("reconciliation blocks replacement startup when a matching recorded process remains live after SIGTERM", async () => {

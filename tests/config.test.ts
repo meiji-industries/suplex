@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 import { expect, test } from "vitest";
 
 import { UnsafeBindingError, UnsupportedRuntimeError, loadConfig } from "../src/config.js";
@@ -13,6 +16,8 @@ test("loads a Tailscale-only configuration and exposes the reachable address", (
   expect(config.accessMode).toBe("tailscale");
   expect(config.bindAddress).toBe("forge.tailnet.ts.net");
   expect(config.reachableAddress).toBe("http://forge.tailnet.ts.net:4111");
+  expect(config.repositoryRoot).toBe(join(homedir(), "forge", "repos"));
+  expect(config.worktreeRoot).toBe(join(homedir(), "forge", "worktrees"));
   expect(config.temporalNamespace).toBe("runtime-test-installation");
   expect(config.taskQueue).toBe("tasks-test-installation");
 });

@@ -4,17 +4,18 @@ node = "26.7.0"
 
 [env]
 NODE_ENV = "development"
-FORGE_TAILSCALE_ADDRESS = "pro2.tail1234.ts.net"
+FORGE_TAILSCALE_ADDRESS = "{{ exec(command='sh scripts/resolve-magicdns.sh') | trim }}"
+FORGE_TAILSCALE_EXPOSURE = "serve"
+FORGE_BIND_ADDRESS = "127.0.0.1"
 _.path = "./node_modules/.bin"
 
 [tasks.dev]
 description = "Run Temporal, Forge, and the frontend watcher in the foreground"
-depends = "build"
-run = [{ tasks = ["temporal", "server", "watch"] }]
+run = "mise exec -- node --import tsx scripts/dev.ts"
 
 [tasks.temporal]
 description = "Run the pinned Temporal development service through Compose"
-run = "pnpm run docker:up"
+run = [{ task = "docker:up" }]
 
 [tasks."docker:up"]
 description = "Start the Compose-managed Temporal development service"

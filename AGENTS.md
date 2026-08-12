@@ -41,3 +41,9 @@ Start the development stack with:
 ```bash
 mise run dev
 ```
+
+## Database migrations
+
+Before creating or modifying database migrations, read
+`docs/database-migrations.md`. Create migrations with
+`pnpm migration:new <name>`; timestamped SQL files are the canonical format.

@@ -20,6 +20,7 @@
     "forge": "tsx src/cli.ts",
     "build": "tsc && cp src/temporal/payload-converter.cjs dist/src/temporal/payload-converter.cjs && node dist/scripts/build-workflow-bundle.js && vite build",
     "dev": "tsx src/cli.ts start --foreground",
+    "migration:new": "tsx scripts/create-migration.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --exclude 'tests/temporal.integration.test.ts' --exclude 'tests/**/*.browser.test.ts'",
     "test:replay": "vitest run tests/workflow-replay.test.ts",

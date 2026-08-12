@@ -1,11 +1,10 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
-import { migrate } from "drizzle-orm/better-sqlite3/migrator";
 import { desc, eq } from "drizzle-orm";
 
 import { probeWorkflows, workerRegistrations } from "./database-schema.js";
@@ -64,6 +63,7 @@ export interface ExpectedMigration {
   index: number;
   tag: string;
   hash: string;
+  createdAt: number;
 }
 
 export interface AppliedMigration {
@@ -113,7 +113,7 @@ function migrationFolder(): string {
   ];
   const folder = candidates.find((candidate) => {
     try {
-      return existsSync(`${candidate}/meta/_journal.json`);
+      return existsSync(candidate) && readdirSync(candidate, { withFileTypes: true }).some((entry) => entry.isFile() && entry.name.endsWith(".sql"));
     } catch {
       return false;
     }
@@ -124,23 +124,84 @@ function migrationFolder(): string {
   return folder;
 }
 
-interface JournalFile {
-  version: string;
-  dialect: string;
-  entries: Array<{ idx: number; tag: string }>;
-}
-
 function fileSha256(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function expectedMigrationsFromJournal(folder: string): ExpectedMigration[] {
-  const journal: JournalFile = JSON.parse(readFileSync(`${folder}/meta/_journal.json`, "utf8")) as JournalFile;
-  return journal.entries.map((entry) => ({
-    index: entry.idx,
-    tag: entry.tag,
-    hash: fileSha256(`${folder}/${entry.tag}.sql`),
-  }));
+const TIMESTAMPED_MIGRATION = /^(\d{14}(?:\d{3})?)_([a-z0-9][a-z0-9_]*)\.sql$/;
+
+function migrationTimestamp(value: string): number {
+  const milliseconds = value.length === 17 ? Number(value.slice(14, 17)) : 0;
+  const timestamp = Date.UTC(
+    Number(value.slice(0, 4)),
+    Number(value.slice(4, 6)) - 1,
+    Number(value.slice(6, 8)),
+    Number(value.slice(8, 10)),
+    Number(value.slice(10, 12)),
+    Number(value.slice(12, 14)),
+    milliseconds,
+  );
+  const normalized = new Date(timestamp).toISOString().replace(/\D/g, "").slice(0, value.length);
+  if (normalized !== value) throw new Error(`Invalid migration timestamp: ${value}`);
+  return timestamp;
+}
+
+export function readMigrations(folder: string): ExpectedMigration[] {
+  const migrations = readdirSync(folder, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".sql"))
+    .map((entry) => {
+      const match = TIMESTAMPED_MIGRATION.exec(entry.name);
+      if (!match) throw new Error(`Migration filenames must start with a UTC timestamp: ${entry.name}`);
+      return {
+        tag: entry.name.slice(0, -4),
+        hash: fileSha256(`${folder}/${entry.name}`),
+        createdAt: migrationTimestamp(match[1]!),
+      };
+    })
+    .sort((left, right) => left.createdAt - right.createdAt || left.tag.localeCompare(right.tag));
+
+  for (let index = 1; index < migrations.length; index += 1) {
+    if (migrations[index - 1]!.createdAt === migrations[index]!.createdAt) {
+      throw new Error(`Migration timestamps must be unique: ${migrations[index]!.tag}`);
+    }
+  }
+
+  return migrations.map((migration, index) => ({ index, ...migration }));
+}
+
+export function applyMigrations(db: Database.Database, folder: string): void {
+  const migrations = readMigrations(folder);
+  db.exec(`CREATE TABLE IF NOT EXISTS __drizzle_migrations (
+    id SERIAL PRIMARY KEY,
+    hash text NOT NULL,
+    created_at numeric
+  )`);
+  const applied = db.prepare("SELECT hash, created_at FROM __drizzle_migrations").all() as Array<{ hash: string; created_at: number }>;
+  const appliedByTimestamp = new Map(applied.map((migration) => [migration.created_at, migration.hash]));
+  const appliedByHash = new Map(applied.map((migration) => [migration.hash, migration.created_at]));
+
+  for (const migration of migrations) {
+    const hashAtTimestamp = appliedByTimestamp.get(migration.createdAt);
+    const timestampForHash = appliedByHash.get(migration.hash);
+    if (hashAtTimestamp !== undefined && hashAtTimestamp !== migration.hash) {
+      throw new Error(`Applied migration timestamp has different SQL: ${migration.tag}`);
+    }
+    if (timestampForHash !== undefined && timestampForHash !== migration.createdAt) {
+      throw new Error(`Applied migration hash has a different timestamp: ${migration.tag}`);
+    }
+  }
+
+  const insert = db.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
+  db.transaction(() => {
+    for (const migration of migrations) {
+      if (appliedByTimestamp.get(migration.createdAt) === migration.hash) continue;
+      const sql = readFileSync(`${folder}/${migration.tag}.sql`, "utf8");
+      for (const statement of sql.split("--> statement-breakpoint")) {
+        if (statement.trim()) db.exec(statement);
+      }
+      insert.run(migration.hash, migration.createdAt);
+    }
+  })();
 }
 
 function isCleanPrefix(expected: ExpectedMigration[], applied: AppliedMigration[]): boolean {
@@ -185,7 +246,7 @@ export class ForgeDatabase {
     this.orm = drizzle(this.db, { schema: { ...authSchema, probeWorkflows, workerRegistrations } });
     try {
       this.preflightProjectRepositoryIdentities();
-      migrate(this.orm, { migrationsFolder: migrationFolder() });
+      applyMigrations(this.db, migrationFolder());
       this.ensureModelCatalog();
     } catch (error) {
       this.db.close();
@@ -459,7 +520,7 @@ export class ForgeDatabase {
 
   schemaStatus(): SchemaStatus {
     const folder = migrationFolder();
-    const expected = expectedMigrationsFromJournal(folder);
+    const expected = readMigrations(folder);
     const journalMode = String(this.db.pragma("journal_mode", { simple: true })).toLowerCase();
     const walMode = journalMode === "wal";
 

@@ -1,6 +1,7 @@
 import { isIP } from "node:net";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
+import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 import { ForgeConfigSchema, ForgeEnvironmentSchema } from "./schemas.js";
@@ -193,8 +194,8 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeC
     databasePath: parsedEnvironment.data.FORGE_DATABASE_PATH ? resolve(parsedEnvironment.data.FORGE_DATABASE_PATH) : resolve(dataRoot, "forge.sqlite"),
     artifactRoot: parsedEnvironment.data.FORGE_ARTIFACT_ROOT ? resolve(parsedEnvironment.data.FORGE_ARTIFACT_ROOT) : resolve(dataRoot, "artifacts"),
     runtimeRoot: parsedEnvironment.data.FORGE_RUNTIME_ROOT ? resolve(parsedEnvironment.data.FORGE_RUNTIME_ROOT) : resolve(dataRoot, "runtime"),
-    repositoryRoot: resolve(parsedEnvironment.data.FORGE_REPOSITORY_ROOT ?? process.cwd()),
-    worktreeRoot: resolve(parsedEnvironment.data.FORGE_WORKTREE_ROOT ?? resolve(dataRoot, "worktrees")),
+    repositoryRoot: resolve(parsedEnvironment.data.FORGE_REPOSITORY_ROOT ?? resolve(homedir(), "forge", "repos")),
+    worktreeRoot: resolve(parsedEnvironment.data.FORGE_WORKTREE_ROOT ?? resolve(homedir(), "forge", "worktrees")),
     temporalTarget,
     temporalAddress,
     temporalNamespace,

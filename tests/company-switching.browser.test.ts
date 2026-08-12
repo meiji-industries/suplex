@@ -77,7 +77,7 @@ test("switching company never renders the previous company's projects under the 
   const admin = (await auth.getUserBySession(cookie.value))!;
   const alpha = auth.createCompany(admin.id, "Alpha Company");
   const beta = auth.createCompany(admin.id, "Beta Company");
-  const profile = projects.createProfile(admin.id, { name: "Switch profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
+  const profile = projects.createProfile(admin.id, { name: "Switch profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const projectInput = (name: string, repositoryPath: string, projectWorktreeRoot: string, repository: string) => ({ name, repositoryPath, worktreeRoot: projectWorktreeRoot, repository, baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
   await projects.createProject(admin.id, alpha.id, projectInput("Alpha-only project", alphaRepository, alphaWorktrees, "acme/alpha"));
   await projects.createProject(admin.id, beta.id, projectInput("Beta-only project", betaRepository, betaWorktrees, "acme/beta"));
@@ -145,7 +145,7 @@ test("a scoped not-found after membership removal selects another authorized com
   const admin = (await auth.getUserBySession(adminCookie.value))!;
   const alpha = auth.createCompany(admin.id, "Alpha Company");
   const beta = auth.createCompany(admin.id, "Beta Company");
-  const profile = projects.createProfile(admin.id, { name: "Reconcile profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
+  const profile = projects.createProfile(admin.id, { name: "Reconcile profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const projectInput = (name: string, repositoryPath: string, projectWorktreeRoot: string, repository: string) => ({ name, repositoryPath, worktreeRoot: projectWorktreeRoot, repository, baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
   await projects.createProject(admin.id, alpha.id, projectInput("Alpha member project", alphaRepository, alphaWorktrees, "acme/member-alpha"));
   await projects.createProject(admin.id, beta.id, projectInput("Beta member project", betaRepository, betaWorktrees, "acme/member-beta"));

@@ -20,21 +20,21 @@ function fakeWebAuthn(): WebAuthnAdapter {
   return { async generateRegistrationOptions(input) { return { rp: { name: "Forge", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: "browser-task", pubKeyCredParams: [{ type: "public-key", alg: -7 }], attestation: "none" }; }, async verifyRegistrationResponse(input) { return { verified: true, credential: { id: input.response.id, publicKey: Uint8Array.from([1, 2, 3]), counter: 0 } }; }, async generateAuthenticationOptions(input) { return { challenge: "browser-auth", rpId: input.rpId, allowCredentials: input.allowCredentials.map((credential) => ({ type: "public-key" as const, ...credential })), userVerification: "required" }; }, async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; } };
 }
 
-const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "base", targetSha: "target" }; } };
+const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
 const github: GithubAdapter = { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } };
 
 test("task desktop flow attaches an image, shows Backlog, starts planning, and remains usable on narrow viewports", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-task-browser-test-"));
   const repositoryRoot = join(root, "repositories"); const worktreeRoot = join(root, "worktrees"); const repositoryPath = join(repositoryRoot, "repo");
   await mkdir(repositoryPath, { recursive: true }); await mkdir(worktreeRoot, { recursive: true });
-  const imagePath = join(root, "evidence.png"); await writeFile(imagePath, "browser-image");
+  const imagePath = join(root, "evidence.png"); await writeFile(imagePath, Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin-1', 'Admin', 'admin@forge.local', 'admin', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run());
   const config = createTestConfig(root, { repositoryRoot, worktreeRoot, reachableAddress: "http://127.0.0.1:4111" });
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
   const projects = new ProjectService(database, auth, config, { localRepository, github });
   const company = auth.createCompany("admin-1", "Browser Tasks");
-  const profile = projects.createProfile("admin-1", { name: "Browser task profile", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
+  const profile = projects.createProfile("admin-1", { name: "Browser task profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const project = await projects.createProject("admin-1", company.id, { name: "Browser task project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
   await projects.activateProject("admin-1", project.id);
   let plannedState: IssueWorkflowState | undefined;
@@ -84,23 +84,42 @@ test("task desktop flow attaches an image, shows Backlog, starts planning, and r
       const page = await context.newPage();
       await page.goto(`${baseUrl}/tasks`);
       await page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();
-      await page.locator("#task-project").selectOption(project.id);
+      await page.getByRole("combobox", { name: "Project" }).click();
+      await page.getByRole("option", { name: "Browser task project" }).click();
+      expect(await page.locator("#task-project").innerText()).toBe("Browser task project");
       await page.getByLabel("Task title", { exact: true }).fill("Browser task");
       await page.getByLabel("Task description", { exact: true }).fill("## Browser brief\n\nImage attached.");
+      await page.getByRole("button", { name: "Add images", exact: true }).waitFor();
       await page.getByLabel("Task images", { exact: true }).setInputFiles(imagePath);
+      await page.getByRole("button", { name: "Remove evidence.png", exact: true }).waitFor();
       await page.getByRole("button", { name: "Create task" }).click();
-      await page.getByRole("button", { name: /Browser task/ }).waitFor();
-      await page.getByRole("button", { name: "Start planning", exact: true }).waitFor();
-      await page.getByRole("button", { name: "Start planning", exact: true }).click();
-      await page.getByText(/approval · revision 1/).waitFor();
-      await page.getByText("evidence.png", { exact: true }).waitFor();
-      await page.getByText("Lead plan", { exact: true }).waitFor();
-      await page.getByText("Inspect repository", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "Request review", exact: true }).click();
-      await page.getByText(/approval · revision 2/).waitFor();
-      await page.getByRole("button", { name: "Approve plan", exact: true }).click();
-      await page.getByText(/ready_for_development · revision 3/).waitFor();
-      const narrow = await context.newPage(); await narrow.setViewportSize({ width: 390, height: 844 }); await narrow.goto(`${baseUrl}/tasks`); expect(await narrow.getByRole("button", { name: "Open navigation" }).isVisible()).toBe(true); await narrow.close(); await page.close(); await context.close();
+      const taskDialog = page.getByRole("dialog");
+      await taskDialog.waitFor();
+      expect(await taskDialog.getByRole("heading", { name: "Browser task", exact: true }).isVisible()).toBe(true);
+      expect(new URL(page.url()).pathname).toMatch(/^\/tasks\//);
+      await taskDialog.getByRole("button", { name: "Start planning", exact: true }).click();
+      await taskDialog.getByText(/approval · revision 1/).waitFor();
+      await taskDialog.getByText("evidence.png", { exact: true }).waitFor();
+      await taskDialog.getByText("Lead plan", { exact: true }).waitFor();
+      await taskDialog.getByText("Inspect repository", { exact: true }).waitFor();
+      await taskDialog.getByRole("button", { name: "Request review", exact: true }).click();
+      await taskDialog.getByText(/approval · revision 2/).waitFor();
+      await taskDialog.getByRole("button", { name: "Approve plan", exact: true }).click();
+      await taskDialog.getByText(/ready_for_development · revision 3/).waitFor();
+      await taskDialog.getByRole("button", { name: "Close", exact: true }).click();
+      await expect.poll(async () => taskDialog.count()).toBe(0);
+      expect(new URL(page.url()).pathname).toBe("/tasks");
+
+      const narrow = await context.newPage();
+      await narrow.setViewportSize({ width: 390, height: 844 });
+      await narrow.goto(`${baseUrl}/tasks`);
+      expect(await narrow.getByRole("button", { name: "Open navigation" }).isVisible()).toBe(true);
+      await narrow.getByRole("button", { name: /Browser task/ }).click();
+      const narrowDialog = narrow.getByRole("dialog");
+      await narrowDialog.waitFor();
+      expect(await narrowDialog.getByRole("heading", { name: "Browser task", exact: true }).isVisible()).toBe(true);
+      expect(await narrowDialog.getByText("Description", { exact: true }).isVisible()).toBe(true);
+      await narrow.close(); await page.close(); await context.close();
     } finally { await browser.close(); }
   } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }
 });

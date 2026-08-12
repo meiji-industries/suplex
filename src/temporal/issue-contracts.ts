@@ -132,6 +132,9 @@ export const IssueWorkflowInputSchema = z.object({
   briefArtifactId: durableId,
   briefSha256: z.string().regex(/^[a-f0-9]{64}$/),
   imageArtifactIds: z.array(durableId).max(32),
+  // A compact identity marker lets a start retry prove it refers to the same
+  // creation request without putting task content in Temporal history.
+  requestHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   roleProfiles: z.object({ lead: durableId.optional(), developer: durableId.optional(), reviewer: durableId.optional() }),
   supplementalReview: z.boolean(),
   repairCycleLimit: z.number().int().min(0).max(5).default(2),
@@ -143,6 +146,7 @@ export const IssueWorkflowStateSchema = z.object({
   projectId: durableId,
   issueId: durableId,
   projectRevisionId: durableId,
+  requestHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   phase: IssuePhaseSchema,
   revision: z.number().int().nonnegative(),
   owner: z.enum(["human", "lead"]),

@@ -1,4 +1,4 @@
-import { allHandlersFinished, condition, continueAsNew, defineQuery, defineUpdate, patched, proxyActivities, setHandler, sleep, workflowInfo } from "@temporalio/workflow";
+import { ActivityFailure, allHandlersFinished, ApplicationFailure, condition, continueAsNew, defineQuery, defineUpdate, patched, proxyActivities, setHandler, sleep, workflowInfo } from "@temporalio/workflow";
 
 import { ProbeWorkflowInputSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueActivities, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
@@ -108,6 +108,17 @@ export const cancelIssueUpdate = defineUpdate<IssueWorkflowState, [StartPlanning
 export const reconcileMergeUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("reconcileMerge");
 const leadPlanningPatch = "forge-lead-planning-v1";
 const planGovernancePatch = "forge-plan-governance-v1";
+const planningProjectionIntegrityPatch = "forge-planning-projection-integrity-v1";
+
+function permanentActivityFailure(error: unknown): { code: string; summary: string } | undefined {
+  if (!(error instanceof ActivityFailure) || !(error.cause instanceof ApplicationFailure) || !error.cause.nonRetryable) return undefined;
+  const detail = error.cause.details?.[0];
+  if (detail && typeof detail === "object") {
+    const record = detail as Record<string, unknown>;
+    if (typeof record.code === "string" && typeof record.summary === "string") return { code: record.code, summary: record.summary };
+  }
+  return { code: error.cause.type ?? "permanent-activity-failure", summary: error.cause.message || "The invocation cannot complete without a configuration change." };
+}
 
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
@@ -120,6 +131,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     projectId: validatedInput.projectId,
     issueId: validatedInput.issueId,
     projectRevisionId: validatedInput.projectRevisionId,
+    ...(validatedInput.requestHash ? { requestHash: validatedInput.requestHash } : {}),
     phase: "backlog",
     revision: 0,
     owner: "human",
@@ -152,19 +164,36 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     });
     state = next;
     assertPayloadWithinLimit("Issue Workflow result", next);
-    await projectIssueState(next);
+    if (!patched(planningProjectionIntegrityPatch)) await projectIssueState(next);
     if (patched(leadPlanningPatch)) {
-      const leadResult = await runLeadPlanning({
-        taskId: validatedInput.issueId,
-        companyId: validatedInput.companyId,
-        workflowId: validatedInput.workflowId,
-        projectId: validatedInput.projectId,
-        projectRevisionId: validatedInput.projectRevisionId,
-        briefArtifactId: validatedInput.briefArtifactId,
-        imageArtifactIds: validatedInput.imageArtifactIds,
-        roleProfiles: validatedInput.roleProfiles,
-        revision: next.revision,
-      });
+      let leadResult;
+      try {
+        leadResult = await runLeadPlanning({
+          taskId: validatedInput.issueId,
+          companyId: validatedInput.companyId,
+          workflowId: validatedInput.workflowId,
+          projectId: validatedInput.projectId,
+          projectRevisionId: validatedInput.projectRevisionId,
+          briefArtifactId: validatedInput.briefArtifactId,
+          imageArtifactIds: validatedInput.imageArtifactIds,
+          roleProfiles: validatedInput.roleProfiles,
+          revision: next.revision,
+        });
+      } catch (error) {
+        const failure = permanentActivityFailure(error);
+        if (!failure) throw error;
+        state = IssueWorkflowStateSchema.parse({
+          ...next,
+          phase: "failed",
+          revision: next.revision + 1,
+          owner: "human",
+          allowedCommands: ["start_planning", "cancel_issue"],
+          pendingAction: failure.summary,
+          lastEventId: `${state.workflowId}:${next.revision + 1}`,
+        });
+        await projectIssueState(state);
+        return state;
+      }
       state = IssueWorkflowStateSchema.parse({ ...next, ...leadResult, planRevision: next.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, supplementalReviewUsed: false });
       if (patched(planGovernancePatch)) {
         state = leadResult.material
@@ -179,7 +208,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     validator(rawInput) {
       const command = StartPlanningInputSchema.parse(rawInput);
       if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
-      if (state.phase !== "backlog" && state.phase !== "planning") throw new Error("Planning can only start from Backlog or Planning");
+      if (state.phase !== "backlog" && state.phase !== "planning" && state.phase !== "failed") throw new Error("Planning can only start from Backlog, Planning, or Failed");
     },
   });
   const validatePlanCommand = (rawInput: PlanCommandInput): PlanCommandInput => {

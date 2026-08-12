@@ -96,11 +96,13 @@ export type LeadProcessRunner = (invocation: LeadInvocation) => Promise<LeadProc
 
 export class AgentFailure extends Error {
   readonly code: string;
+  readonly nonRetryable: boolean;
 
-  constructor(code: string, message: string) {
+  constructor(code: string, message: string, options: { nonRetryable?: boolean } = {}) {
     super(message);
     this.name = "AgentFailure";
     this.code = code;
+    this.nonRetryable = options.nonRetryable ?? false;
   }
 }
 
@@ -319,11 +321,19 @@ async function readDeliveryGitEvidence(worktreePath: string, targetBaseSha: stri
   };
 }
 
-function failureCode(result: LeadProcessResult): string {
-  if (/not logged in|login required|authentication required|unauthenticated|oauth authorization required/i.test(result.stderr)) return "login-expired";
-  if (/rate[ -]?limit|too many requests|\b429\b/i.test(result.stderr)) return "rate-limited";
-  if (/model .*not supported|unsupported model|invalid model/i.test(result.stderr)) return "model-unavailable";
-  return result.exitCode === 0 ? "process-output-failed" : "process-exited";
+export function agentProcessFailure(result: LeadProcessResult, outputLines: string[] = [], model?: string): AgentFailure {
+  const diagnosticText = `${result.stderr}\n${outputLines.join("\n")}`;
+  if (/not logged in|login required|authentication required|unauthenticated|oauth authorization required/i.test(diagnosticText)) {
+    return new AgentFailure("login-expired", "Agent provider authentication is unavailable. Sign in again, then retry.", { nonRetryable: true });
+  }
+  if (/rate[ -]?limit|too many requests|\b429\b/i.test(diagnosticText)) {
+    return new AgentFailure("rate-limited", "Agent provider rate limiting prevented this invocation from completing.");
+  }
+  if (/model .*not supported|unsupported model|invalid model|unknown model|model_not_found|model metadata .*not found|model .*does not exist/i.test(diagnosticText)) {
+    const configuredModel = model ? ` “${model}”` : "";
+    return new AgentFailure("model-unavailable", `The configured model${configuredModel} is unavailable for the active provider account. Select a supported model, then retry.`, { nonRetryable: true });
+  }
+  return new AgentFailure(result.exitCode === 0 ? "process-output-failed" : "process-exited", "The agent invocation did not complete.");
 }
 
 async function taskScopedPath(root: string, candidate: string): Promise<string> {
@@ -334,9 +344,18 @@ async function taskScopedPath(root: string, candidate: string): Promise<string> 
   return absoluteCandidate;
 }
 
+function pinnedRepositoryPath(normalizedJson: string): string {
+  try {
+    const parsed = JSON.parse(normalizedJson) as { repositoryPath?: unknown };
+    if (typeof parsed.repositoryPath === "string" && parsed.repositoryPath.length > 0) return parsed.repositoryPath;
+  } catch {
+    // Keep revision failures redacted at the activity boundary.
+  }
+  throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain a repository path");
+}
+
 interface PlanningRow {
   title: string;
-  repository_path: string;
   normalized_json: string;
   brief_storage_path: string;
   brief_sha256: string;
@@ -360,7 +379,6 @@ interface ImageRow {
 
 interface DeliveryReviewContext {
   title: string;
-  repositoryPath: string;
   normalizedJson: string;
   briefStoragePath: string;
   briefSha256: string;
@@ -397,12 +415,12 @@ export class AgentService {
 
   async runLeadPlanning(rawInput: LeadPlanningActivityInput): Promise<LeadPlanningResult> {
     const input = LeadPlanningActivityInputSchema.parse(rawInput);
-    const row = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.repository_path, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256
-      FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id JOIN forge_project_revisions r ON r.id = t.project_revision_id
+    const row = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256
+      FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId, input.projectRevisionId, input.briefArtifactId) as PlanningRow | undefined);
     if (!row) throw new AgentFailure("scoped-input-missing", "Lead planning evidence is unavailable");
-    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(row.repository_path));
+    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
     const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
     const images = this.database.authQuery((db) => {
       if (!input.imageArtifactIds.length) return [] as ImageRow[];
@@ -481,7 +499,7 @@ export class AgentService {
           },
         }).finally(() => clearInterval(heartbeat));
         if (result.exitCode !== 0) {
-          lastFailure = new AgentFailure(failureCode(result), "Codex Lead execution did not complete");
+          lastFailure = agentProcessFailure(result, lines, leadProfile.model);
           break;
         }
         try {
@@ -539,7 +557,7 @@ export class AgentService {
           await this.databaseHeartbeat(executionId, "running");
         },
       });
-      if (result.exitCode !== 0) throw new AgentFailure(failureCode(result), "Codex Lead merge-conflict planning did not complete");
+      if (result.exitCode !== 0) throw agentProcessFailure(result, evidenceLines);
       const output = parseMergeConflictPlan(evidenceLines);
       const plannedFiles = new Set(output.resolutions.map((resolution) => resolution.file));
       const missingFiles = input.conflictFiles.filter((file) => !plannedFiles.has(file));
@@ -578,15 +596,14 @@ export class AgentService {
       const findings = this.database.authQuery((db) => db.prepare("SELECT id AS findingId, severity, rationale, evidence_ref AS evidenceRef, disposition, repair_instruction AS repairInstruction FROM forge_final_review_findings WHERE review_id = ? ORDER BY id").all(existingFinal.id) as DeliveryReview["findings"]);
       return { reviewId: existingFinal.id, leadExecutionId: existingFinal.leadExecutionId, leadSessionRef: existingFinal.sessionRef, opinionArtifactId: existingFinal.opinionArtifactId, evidenceArtifactId: existingFinal.evidenceArtifactId, outcome: existingFinal.outcome, summary: existingFinal.summary, repairPlan: null, findings, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree };
     }
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.repository_path AS repositoryPath, r.normalized_json AS normalizedJson,
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson,
       b.storage_path AS briefStoragePath, b.sha256 AS briefSha256,
       pa.storage_path AS planStoragePath, pa.sha256 AS planSha256,
       da.storage_path AS deliveryStoragePath, da.sha256 AS deliverySha256,
       ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256,
       de.session_ref AS developerSessionRef
       FROM forge_tasks t
-      JOIN forge_projects p ON p.id = t.project_id
-      JOIN forge_project_revisions r ON r.id = t.project_revision_id
+      JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id
       JOIN forge_issue_outputs io ON io.task_id = t.id AND io.workflow_id = t.workflow_id AND io.output_artifact_id = ? AND io.revision = ?
       JOIN forge_artifacts pa ON pa.id = io.output_artifact_id
@@ -607,7 +624,7 @@ export class AgentService {
     ) as DeliveryReviewContext | undefined);
     if (!context || !context.developerSessionRef) throw new AgentFailure("scoped-input-missing", "Exact Developer delivery evidence is unavailable");
     if (context.developerSessionRef === input.leadSessionRef) throw new AgentFailure("session-identity-conflict", "Lead review must reuse the Lead session and remain distinct from Developer");
-    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(context.repositoryPath));
+    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(context.normalizedJson)));
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
     const [brief, plan, delivery, developerEvidence, gitEvidence] = await Promise.all([
       this.artifacts.read({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
@@ -645,7 +662,7 @@ export class AgentService {
           await this.databaseHeartbeat(executionId, "running");
         },
       });
-      if (result.exitCode !== 0) throw new AgentFailure(failureCode(result), "Codex Lead delivery review did not complete");
+      if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines, leadProfile.model);
       const review = DeliveryReviewSchema.parse(parseDeliveryReview(outputLines));
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const opinion = await this.artifacts.put(input.companyId, "delivery-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
@@ -677,13 +694,13 @@ export class AgentService {
     const input = rawInput;
     const profile = this.database.authQuery((db) => db.prepare("SELECT id, model, provider FROM forge_profiles WHERE id = ?").get(input.roleProfiles.reviewer) as { id: string; model: string; provider: string } | undefined);
     if (!profile || profile.provider !== "codex") throw new AgentFailure("reviewer-profile-unavailable", "Supplemental review requires an allowed profile");
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, p.repository_path, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256, oa.storage_path AS output_storage_path, oa.sha256 AS output_sha256, e.storage_path AS evidence_storage_path, e.sha256 AS evidence_sha256
-      FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id JOIN forge_project_revisions r ON r.id = t.project_revision_id
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256, oa.storage_path AS output_storage_path, oa.sha256 AS output_sha256, e.storage_path AS evidence_storage_path, e.sha256 AS evidence_sha256
+      FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_issue_outputs io ON io.task_id = t.id AND io.output_artifact_id = ?
       JOIN forge_artifacts oa ON oa.id = io.output_artifact_id JOIN forge_artifacts e ON e.id = io.evidence_artifact_id
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId, input.briefArtifactId) as { title: string; repository_path: string; normalized_json: string; brief_storage_path: string; brief_sha256: string; output_storage_path: string; output_sha256: string; evidence_storage_path: string; evidence_sha256: string } | undefined);
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId, input.briefArtifactId) as { title: string; normalized_json: string; brief_storage_path: string; brief_sha256: string; output_storage_path: string; output_sha256: string; evidence_storage_path: string; evidence_sha256: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Supplemental review evidence is unavailable");
-    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(context.repository_path));
+    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(context.normalized_json)));
     const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
     const draft = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
     const priorEvidence = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.evidence_storage_path, sha256: context.evidence_sha256 })).toString("utf8");
@@ -708,7 +725,7 @@ export class AgentService {
           await this.databaseHeartbeat(executionId, "running");
         },
       });
-      if (result.exitCode !== 0) throw new AgentFailure(failureCode(result), "Supplemental review did not complete");
+      if (result.exitCode !== 0) throw agentProcessFailure(result, lines, profile.model);
       const review = parseSupplementalReview(lines);
       if (!sessionRef) throw new AgentFailure("missing-session", "Supplemental review did not return a session reference");
       const evidence = await this.persistEvidence(input.companyId, executionId, lines);
@@ -748,7 +765,7 @@ export class AgentService {
     const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
     try {
       const result = await this.processRunner({ command: this.command, args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.consolidationPrompt(draftText, reviewText)], cwd: repositoryPath, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { lines.push(safeJsonLine(line)); await this.databaseHeartbeat(executionId, "running"); } });
-      if (result.exitCode !== 0) throw new AgentFailure(failureCode(result), "Lead consolidation did not complete");
+      if (result.exitCode !== 0) throw agentProcessFailure(result, lines, lead.model);
       const output = parseLeadOutput(lines);
       const persisted = await this.persistOutput({ taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, projectId: rawInput.projectId, projectRevisionId: rawInput.projectRevisionId, briefArtifactId: rawInput.briefArtifactId, imageArtifactIds: rawInput.imageArtifactIds, roleProfiles: rawInput.roleProfiles, revision: rawInput.revision }, executionId, rawInput.leadSessionRef, lines, output);
       await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), persisted.evidence.id, executionId));
@@ -797,9 +814,9 @@ export class AgentService {
   }
 
   private async consolidationRepositoryPath(input: ConsolidateLeadPlanActivityInput): Promise<string> {
-    const row = this.database.authQuery((db) => db.prepare("SELECT p.repository_path FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?").get(input.taskId, input.companyId, input.projectId, input.projectRevisionId) as { repository_path: string } | undefined);
+    const row = this.database.authQuery((db) => db.prepare("SELECT r.normalized_json FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?").get(input.taskId, input.companyId, input.projectId, input.projectRevisionId) as { normalized_json: string } | undefined);
     if (!row) throw new AgentFailure("scoped-input-missing", "Consolidation repository is unavailable");
-    return taskScopedPath(this.config.repositoryRoot, await realpath(row.repository_path));
+    return taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
   }
 
   private async databaseHeartbeat(executionId: string, status: "running"): Promise<void> {

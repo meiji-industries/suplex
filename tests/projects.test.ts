@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 import { AuthService } from "../src/auth.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
+import { ProjectService, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
 
 interface Fixture {
@@ -25,13 +25,14 @@ interface Fixture {
 const localRepository: LocalRepositoryAdapter = {
   async inspect(input) {
     const identity = input.repositoryPath.includes("unavailable") ? "acme/unavailable" : input.repositoryPath.includes("cross") ? "acme/cross" : "acme/forge";
-    return { canonicalPath: input.repositoryPath, remoteRepository: identity, clean: true, baseSha: "base-sha", targetSha: "target-sha" };
+    return { canonicalPath: input.repositoryPath, remoteRepository: identity, clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) };
   },
 };
 
 const github: GithubAdapter = {
   async checkAuthentication() {},
   async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; },
+  async listChecks() { return [{ name: "Tests / unit", status: "completed", conclusion: "success" }]; },
 };
 
 async function fixture(): Promise<Fixture> {
@@ -47,7 +48,7 @@ async function fixture(): Promise<Fixture> {
   const auth = new AuthService(database, config);
   const projects = new ProjectService(database, auth, config, { localRepository, github });
   const company = auth.createCompany("admin-1", "Acme");
-  const profile = projects.createProfile("admin-1", { name: "Default", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
+  const profile = projects.createProfile("admin-1", { name: "Default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   return { root, database, auth, projects, adminId: "admin-1", companyId: company.id, profileId: profile.id, repositoryPath, worktreeRoot };
 }
 
@@ -73,6 +74,69 @@ function input(value: Fixture, overrides: Record<string, unknown> = {}) {
   };
 }
 
+test("normalizes supported GitHub repository URLs", () => {
+  for (const repositoryUrl of [
+    "https://github.com/meiji-industries/sampler",
+    "https://github.com/meiji-industries/sampler.git",
+    "git@github.com:meiji-industries/sampler.git",
+  ]) {
+    expect(parseGithubRepositoryUrl(repositoryUrl)).toMatchObject({ repository: "meiji-industries/sampler", name: "sampler" });
+  }
+  expect(parseGithubRepositoryUrl("git@github.com:meiji-industries/sampler.git").cloneUrl).toBe("git@github.com:meiji-industries/sampler.git");
+  expect(() => parseGithubRepositoryUrl("https://token@github.com/meiji-industries/sampler.git")).toThrowError("GitHub repository URL is invalid");
+  expect(() => parseGithubRepositoryUrl("https://gitlab.com/meiji-industries/sampler.git")).toThrowError("GitHub repository URL is invalid");
+});
+
+test("maintains the model catalog and only creates profiles from active models", async () => {
+  const value = await fixture();
+  try {
+    expect(value.projects.listModels(value.adminId).map((model) => model.id)).toContain("gpt-5.6-sol");
+    const custom = value.projects.createModel(value.adminId, { id: "acme-codex-1", displayName: "Acme Codex 1" });
+    expect(custom).toMatchObject({ id: "acme-codex-1", status: "active" });
+    expect(value.projects.createProfile(value.adminId, { name: "Custom", model: custom.id, reasoningLevel: "high", servicePriority: "priority", capacity: 1 })).toMatchObject({ model: custom.id });
+    value.projects.setModelStatus(value.adminId, custom.id, "retired");
+    expect(value.projects.listModels(value.adminId).map((model) => model.id)).not.toContain(custom.id);
+    expect(value.projects.listModels(value.adminId, true)).toEqual(expect.arrayContaining([expect.objectContaining({ id: custom.id, status: "retired" })]));
+    expect(() => value.projects.createProfile(value.adminId, { name: "Retired", model: custom.id, reasoningLevel: "medium", servicePriority: "standard", capacity: 1 })).toThrowError("Profile configuration is invalid");
+  } finally {
+    await close(value);
+  }
+});
+
+test("creates a minimal draft from a GitHub URL under the configured Forge roots", async () => {
+  const value = await fixture();
+  const provisioned: Array<{ cloneUrl: string; repository: string; repositoryPath: string; worktreeRoot: string }> = [];
+  const projects = new ProjectService(value.database, value.auth, createTestConfig(value.root, {
+    reachableAddress: "https://forge.tailnet.ts.net:4111",
+    repositoryRoot: join(value.root, "repositories"),
+    worktreeRoot: value.worktreeRoot,
+  }), {
+    localRepository,
+    github,
+    repositoryProvisioner: { async ensure(coordinate) { provisioned.push(coordinate); await mkdir(coordinate.repositoryPath, { recursive: true }); await mkdir(coordinate.worktreeRoot, { recursive: true }); await writeFile(join(coordinate.repositoryPath, "mise.toml"), "[tasks.setup]\nrun = \"cargo fetch --locked\"\n[tasks.test]\nrun = \"cargo test\"\n"); } },
+  });
+  try {
+    const project = await projects.createProjectFromRepository(value.adminId, value.companyId, "https://github.com/meiji-industries/sampler.git");
+    expect(project).toMatchObject({
+      name: "sampler",
+      repository: "meiji-industries/sampler",
+      repositoryPath: await realpath(join(value.root, "repositories", "meiji-industries", "sampler")),
+      worktreeRoot: await realpath(join(value.worktreeRoot, "meiji-industries", "sampler")),
+      baseBranch: "main",
+      targetBranch: "main",
+      setupCommand: "mise run setup",
+      verificationCommand: "mise run test",
+      status: "draft",
+      requiredChecks: ["Tests / unit"],
+      allowedProfileIds: [value.profileId],
+      roleDefaults: { lead: value.profileId, developer: value.profileId },
+    });
+    expect(provisioned).toEqual([expect.objectContaining({ cloneUrl: "https://github.com/meiji-industries/sampler.git", repository: "meiji-industries/sampler" })]);
+  } finally {
+    await close(value);
+  }
+});
+
 test("activates a validated project and records an immutable normalized revision", async () => {
   const value = await fixture();
   try {
@@ -80,20 +144,22 @@ test("activates a validated project and records an immutable normalized revision
     expect(draft.status).toBe("draft");
     const active = await value.projects.activateProject(value.adminId, draft.id);
     expect(active.status).toBe("active");
-    expect(active.configurationRevision).toBe(2);
+    expect(active.configurationRevision).toBe(1);
     expect(active.configurationIdentity).toMatch(/^[a-f0-9]{64}$/);
-    expect(active.baseSha).toBe("base-sha");
-    expect(active.targetSha).toBe("target-sha");
+    expect(active.baseSha).toBe("a".repeat(40));
+    expect(active.targetSha).toBe("b".repeat(40));
     const unchanged = await value.projects.updateProject(value.adminId, draft.id, input(value));
-    expect(unchanged.configurationRevision).toBe(2);
+    expect(unchanged.status).toBe("draft");
+    expect(unchanged.configurationRevision).toBe(1);
+    const reactivated = await value.projects.activateProject(value.adminId, draft.id);
+    expect(reactivated.configurationRevision).toBe(1);
     const changed = await value.projects.updateProject(value.adminId, draft.id, input(value, { targetBranch: "release" }));
-    expect(changed.configurationRevision).toBe(3);
+    expect(changed.configurationRevision).toBe(1);
+    await value.projects.activateProject(value.adminId, draft.id);
     const revisions = value.database.authQuery((db) => db.prepare("SELECT revision, identity, normalized_json FROM forge_project_revisions WHERE project_id = ? ORDER BY revision").all(draft.id) as Array<{ revision: number; identity: string; normalized_json: string }>);
-    expect(revisions).toHaveLength(3);
-    expect(revisions[0]?.identity).not.toBe(revisions[1]?.identity);
-    expect(revisions[2]?.identity).not.toBe(revisions[1]?.identity);
+    expect(revisions).toHaveLength(2);
     expect(revisions[0]?.normalized_json).not.toContain("token");
-    expect(JSON.parse(revisions[1]?.normalized_json ?? "{}")).toMatchObject({ baseSha: "base-sha", targetSha: "target-sha" });
+    expect(JSON.parse(revisions[0]?.normalized_json ?? "{}")).toMatchObject({ baseSha: "a".repeat(40), targetSha: "b".repeat(40) });
   } finally {
     await close(value);
   }
@@ -112,7 +178,7 @@ test("rejects traversal, symlink ambiguity, unsafe commands, and invalid branche
     await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { targetBranch: "feature..token" }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "unsafe-branch" })]) });
     await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { requiredChecks: [] }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "invalid-check" })]) });
     expect(() => value.projects.createProfile(value.adminId, { name: "Secret profile", model: "ghp_should-not-persist", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 })).toThrowError("Profile configuration is invalid");
-    expect(() => value.projects.createProfile(value.adminId, { name: "Invalid capacity", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard", capacity: 0 })).toThrowError("Profile configuration is invalid");
+    expect(() => value.projects.createProfile(value.adminId, { name: "Invalid capacity", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 0 })).toThrowError("Profile configuration is invalid");
   } finally {
     await close(value);
   }
@@ -123,7 +189,7 @@ test("fails closed for provider mismatch, unavailable profiles, and cross-compan
   try {
     const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
     const mismatched = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
-      localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "other/repo", clean: true, baseSha: "base-sha", targetSha: "target-sha" }; } },
+      localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "other/repo", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } },
       github,
     });
     await expect(mismatched.activateProject(value.adminId, project.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "repository-mismatch" })]) });
@@ -156,8 +222,8 @@ test("rejects duplicate repository identity across companies and preserves exact
   try {
     const first = await value.projects.createProject(value.adminId, value.companyId, input(value, { repository: "acme/forge" }));
     const firstActive = await value.projects.activateProject(value.adminId, first.id);
-    expect(firstActive.baseSha).toBe("base-sha");
-    expect(firstActive.targetSha).toBe("target-sha");
+    expect(firstActive.baseSha).toBe("a".repeat(40));
+    expect(firstActive.targetSha).toBe("b".repeat(40));
 
     value.database.authQuery((db) => {
       db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-b', 'Other', 'active', '2026-08-11T00:00:00.000Z')").run();
@@ -169,9 +235,9 @@ test("rejects duplicate repository identity across companies and preserves exact
     await mkdir(secondWorktree, { recursive: true });
     await expect(value.projects.createProject(value.adminId, "company-b", input(value, { name: "Second", repositoryPath: secondPath, worktreeRoot: secondWorktree, repository: "acme/forge" }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "already-assigned", field: "repository" })]) });
 
-    const updatedSha = "updated-sha";
+    const updatedSha = "c".repeat(40);
     const sameBranches = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
-      localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: updatedSha, targetSha: "target-sha" }; } },
+      localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: updatedSha, targetSha: "b".repeat(40) }; } },
       github,
     });
     const reactivated = await sameBranches.activateProject(value.adminId, first.id);

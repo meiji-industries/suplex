@@ -83,6 +83,25 @@ test("a registry is current when both ready Forge children are live", async () =
   expect(signalled).toEqual([]);
 });
 
+test("reconciliation ignores a reused PID when the recorded identity is complete", async () => {
+  const worker = ownedProcess("worker", 4101);
+  const controller = reconciliationController({
+    async inspect(pid) {
+      if (pid !== worker.pid) return undefined;
+      return { ...inspection(worker), command: "/usr/local/bin/node unrelated.js", argv: ["/usr/local/bin/node", "unrelated.js"] };
+    },
+    async signal() {
+      throw new Error("a reused PID must not be signalled");
+    },
+  });
+
+  await expect(reconcileExistingRegistry(
+    { version: 1, processes: [worker] },
+    createTestConfig("/tmp/forge-runtime-test", { tailscaleExposure: "direct" }),
+    controller,
+  )).resolves.toBe(false);
+});
+
 test("reconciliation blocks replacement startup when a matching recorded process remains live after SIGTERM", async () => {
   const worker = ownedProcess("worker", 4101);
   const controller = reconciliationController({

@@ -5,13 +5,19 @@ node = "26.7.0"
 
 [env]
 NODE_ENV = "development"
-FORGE_TAILSCALE_ADDRESS = "pro2.tail1234.ts.net"
+FORGE_TAILSCALE_ADDRESS = "{{ exec(command='sh scripts/resolve-magicdns.sh') | trim }}"
+FORGE_TAILSCALE_EXPOSURE = "serve"
+FORGE_BIND_ADDRESS = "127.0.0.1"
 _.path = "./node_modules/.bin"
 
 [tasks.dev]
-description = "Run Forge with a local Temporal dev server and frontend watcher"
-depends = "build"
-run = [{ tasks = ["temporal", "server", "watch"] }]
+description = "Run Temporal, Forge, and the frontend watcher in the foreground"
+run = "mise exec -- node --import tsx scripts/dev.ts"
+
+[tasks.dev.env]
+FORGE_TEMPORAL_TARGET = "local"
+FORGE_TEMPORAL_ADDRESS = "127.0.0.1:7233"
+FORGE_TEMPORAL_NAMESPACE = "forge-dev"
 
 [tasks.temporal]
 description = "Start the local Temporal development server"

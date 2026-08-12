@@ -8,7 +8,7 @@ import type { ForgeDatabase } from "../../database.js";
 import type { ProjectService } from "../../projects.js";
 import { AuditEventListResponseSchema, CredentialIdParamsSchema, CredentialListResponseSchema, ErrorResponseSchema, InvitationResponseSchema, InvitationSummaryListResponseSchema, UserIdParamsSchema, UserListResponseSchema } from "../contracts/common.js";
 import { DisplayNameBodySchema } from "../contracts/auth.js";
-import { ProfileBodySchema, ProfileResponseSchema } from "../contracts/projects.js";
+import { ModelBodySchema, ModelIdParamsSchema, ModelListResponseSchema, ModelResponseSchema, ModelStatusBodySchema, ProfileBodySchema, ProfileResponseSchema } from "../contracts/projects.js";
 
 export interface AdministrationRoutesOptions {
   auth: AuthService;
@@ -35,6 +35,9 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
   typed.get("/api/admin/audit", { schema: { response: { 200: AuditEventListResponseSchema } } }, async (request, reply) => reply.send({ events: auth.listAuditEvents(request.forgeUser.id) }));
   if (projects) {
     typed.post("/api/admin/profiles", { schema: { body: ProfileBodySchema, response: { 201: ProfileResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.createProfile(request.forgeUser.id, request.body)));
+    typed.get("/api/admin/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: projects.listModels(request.forgeUser.id, true) }));
+    typed.post("/api/admin/models", { schema: { body: ModelBodySchema, response: { 201: ModelResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.createModel(request.forgeUser.id, request.body)));
+    typed.patch("/api/admin/models/:modelId", { schema: { params: ModelIdParamsSchema, body: ModelStatusBodySchema, response: { 200: ModelResponseSchema } } }, async (request, reply) => reply.send(projects.setModelStatus(request.forgeUser.id, request.params.modelId, request.body.status)));
   }
   if (database && attention) {
     typed.post("/api/admin/rebuild-projections", { schema: { response: { 200: z.object({ rebuilt: z.number() }), 403: ErrorResponseSchema } } }, async (request, reply) => {

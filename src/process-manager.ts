@@ -43,6 +43,8 @@ export interface ProcessInspection {
 export interface ProcessController {
   inspect(pid: number): Promise<ProcessInspection | undefined>;
   signal(pid: number, signal: "SIGTERM" | "SIGKILL"): Promise<void>;
+  signalGroup?: (processGroup: number, signal: "SIGTERM" | "SIGKILL") => Promise<void>;
+  isProcessGroupAlive?: (processGroup: number) => Promise<boolean>;
   stopServe?: (serve: TailscaleServe) => Promise<void>;
   isServeConfigured?: (serve: TailscaleServe) => Promise<boolean>;
 }
@@ -54,6 +56,8 @@ export interface StopReport {
 
 const shutdownVerificationAttempts = 10;
 const shutdownVerificationDelayMs = 100;
+const processInspectionAttempts = 3;
+const processInspectionRetryDelayMs = 10;
 
 function normalizeArgv(command: string): string[] {
   return command.split(/\s+/).filter(Boolean);
@@ -68,18 +72,45 @@ async function processField(pid: number, field: string): Promise<string | undefi
   }
 }
 
+async function inspectProcessOnce(pid: number): Promise<ProcessInspection | undefined> {
+  const [command, pgidValue, startTime, executable] = await Promise.all([
+    processField(pid, "command="),
+    processField(pid, "pgid="),
+    processField(pid, "lstart="),
+    processField(pid, "comm="),
+  ]);
+  if (!command || !pgidValue || !startTime || !executable) return undefined;
+  const processGroup = Number(pgidValue);
+  if (!Number.isSafeInteger(processGroup) || processGroup <= 0) return undefined;
+  return { pid, command, executable, argv: normalizeArgv(command), processGroup, startTime };
+}
+
 export const defaultProcessController: ProcessController = {
   async inspect(pid) {
-    const command = await processField(pid, "command=");
-    if (!command) return undefined;
-    const pgid = Number(await processField(pid, "pgid=") ?? "0");
-    const startTime = await processField(pid, "lstart=") ?? "";
-    const comm = await processField(pid, "comm=") ?? "";
-    const argv = normalizeArgv(command);
-    return { pid, command, executable: comm, argv, processGroup: pgid, startTime };
+    for (let attempt = 0; attempt < processInspectionAttempts; attempt += 1) {
+      const inspection = await inspectProcessOnce(pid);
+      if (inspection) return inspection;
+      if (attempt + 1 < processInspectionAttempts) {
+        await new Promise((resolve) => setTimeout(resolve, processInspectionRetryDelayMs));
+      }
+    }
+    return undefined;
   },
   async signal(pid, signal) {
     process.kill(pid, signal);
+  },
+  async signalGroup(processGroup, signal) {
+    process.kill(-processGroup, signal);
+  },
+  async isProcessGroupAlive(processGroup) {
+    try {
+      process.kill(-processGroup, 0);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+      if ((error as NodeJS.ErrnoException).code === "EPERM") return true;
+      throw error;
+    }
   },
   async stopServe(serve) {
     await execFileAsync("tailscale", ["serve", `--https=${serve.port}`, "off"]);
@@ -111,10 +142,37 @@ export function processIdentityMatches(owned: OwnedProcess, inspection: ProcessI
     && inspection.argv.every((argument, index) => argument === owned.argv![index]);
 }
 
+export function hasCompleteProcessIdentity(owned: OwnedProcess): boolean {
+  return owned.processGroup !== undefined
+    && owned.startTime !== undefined
+    && owned.executable !== undefined
+    && owned.argv !== undefined;
+}
+
+export async function signalOwnedProcess(
+  owned: OwnedProcess,
+  signal: "SIGTERM" | "SIGKILL",
+  controller: ProcessController,
+): Promise<void> {
+  if (owned.processGroup !== undefined && controller.signalGroup) {
+    await controller.signalGroup(owned.processGroup, signal);
+    return;
+  }
+  await controller.signal(owned.pid, signal);
+}
+
+export async function ownedProcessIsRunning(owned: OwnedProcess, controller: ProcessController): Promise<boolean> {
+  const inspection = await controller.inspect(owned.pid);
+  if (inspection && processIdentityMatches(owned, inspection)) return true;
+  if (owned.processGroup !== undefined && controller.isProcessGroupAlive) {
+    return controller.isProcessGroupAlive(owned.processGroup);
+  }
+  return false;
+}
+
 async function waitForOwnedProcessToStop(owned: OwnedProcess, controller: ProcessController): Promise<void> {
   for (let attempt = 0; attempt < shutdownVerificationAttempts; attempt += 1) {
-    const inspection = await controller.inspect(owned.pid);
-    if (!inspection || !processIdentityMatches(owned, inspection)) return;
+    if (!await ownedProcessIsRunning(owned, controller)) return;
     await new Promise((resolve) => setTimeout(resolve, shutdownVerificationDelayMs));
   }
   throw new Error(`Could not prove recorded Forge process ${owned.name} (${owned.pid}) stopped before removing its registry`);
@@ -142,7 +200,7 @@ export async function stopOwnedProcesses(registry: ProcessRegistry, controller: 
     if (!processIdentityMatches(ownedProcess, inspection)) {
       throw new Error(`Could not stop recorded Forge process ${ownedProcess.name}; ownership is ambiguous`);
     }
-    await controller.signal(ownedProcess.pid, "SIGTERM");
+    await signalOwnedProcess(ownedProcess, "SIGTERM", controller);
     await waitForOwnedProcessToStop(ownedProcess, controller);
     report.stopped.push(ownedProcess.pid);
   }

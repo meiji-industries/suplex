@@ -241,6 +241,26 @@ export type StartPlanningInput = z.infer<typeof StartPlanningInputSchema>;
 export type RecordProgressInput = z.infer<typeof RecordProgressInputSchema>;
 export type PlanCommandInput = z.infer<typeof PlanCommandInputSchema>;
 
+export function createInitialIssueWorkflowState(input: Pick<IssueWorkflowInput, "workflowId" | "companyId" | "projectId" | "issueId" | "projectRevisionId" | "requestHash">): IssueWorkflowState {
+  return IssueWorkflowStateSchema.parse({
+    workflowId: input.workflowId,
+    companyId: input.companyId,
+    projectId: input.projectId,
+    issueId: input.issueId,
+    projectRevisionId: input.projectRevisionId,
+    ...(input.requestHash ? { requestHash: input.requestHash } : {}),
+    phase: "backlog",
+    revision: 0,
+    owner: "human",
+    allowedCommands: ["start_planning"],
+    pendingAction: "Start planning",
+    lastEventId: `${input.workflowId}:0`,
+    continuationCount: 0,
+    lastSummaryHash: null,
+    repairCycle: 0,
+  });
+}
+
 export const DeliveryReviewActivityInputSchema = z.object({
   taskId: durableId,
   companyId: durableId,

@@ -1,7 +1,7 @@
 import { ActivityFailure, allHandlersFinished, ApplicationFailure, condition, continueAsNew, defineQuery, defineUpdate, patched, proxyActivities, setHandler, sleep, workflowInfo } from "@temporalio/workflow";
 
 import { ProbeWorkflowInputSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueActivities, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
+import { createInitialIssueWorkflowState, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueActivities, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertContinuationStateWithinLimit, assertPayloadWithinLimit, WORKFLOW_HISTORY_EVENT_LIMIT } from "./policy.js";
 
 const { recordProbeStarted } = proxyActivities<ProbeActivities>({
@@ -126,24 +126,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);
   const continuation = validatedInput.continuationState;
   const continueAfter = validatedInput.continueAsNewAfter ?? 0;
-  let state: IssueWorkflowState = IssueWorkflowStateSchema.parse({
-    workflowId: validatedInput.workflowId,
-    companyId: validatedInput.companyId,
-    projectId: validatedInput.projectId,
-    issueId: validatedInput.issueId,
-    projectRevisionId: validatedInput.projectRevisionId,
-    ...(validatedInput.requestHash ? { requestHash: validatedInput.requestHash } : {}),
-    phase: "backlog",
-    revision: 0,
-    owner: "human",
-    allowedCommands: ["start_planning"],
-    pendingAction: "Start planning",
-    lastEventId: `${validatedInput.workflowId}:0`,
-    lastSummaryHash: null,
-    repairCycle: 0,
-    ...(continuation ?? {}),
-    continuationCount: continuation ? continuation.continuationCount + 1 : 0,
-  });
+  let state: IssueWorkflowState = createInitialIssueWorkflowState(validatedInput);
+  if (continuation) state = IssueWorkflowStateSchema.parse({ ...state, ...continuation, continuationCount: continuation.continuationCount + 1 });
   let continuationRequested = false;
   const shouldContinueAsNew = (revision: number): boolean => {
     return (continueAfter > 0 && revision >= continueAfter) || workflowInfo().historyLength >= WORKFLOW_HISTORY_EVENT_LIMIT;

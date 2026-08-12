@@ -8,6 +8,7 @@ import { LeadOutputSchema, type LeadOutput } from "./codex-lead.js";
 import { ForgeDatabase, projectionStateHash } from "./database.js";
 import { ProjectFailure, ProjectService, type ProjectRole } from "./projects.js";
 import { acceptIssueDelivery, approveIssuePlan, cancelIssue, cancelIssueDevelopment, finalReviewIssue, IssueWorkflowStartFailure, publishIssueDraft, recordIssueDeliveryDecision, reconcileIssueCI, reconcileIssueMerge, rejectIssuePlan, repairIssueCI, repairIssueDelivery, requestIssueDeliveryChanges, requestIssueSupplementalReview, resolveIssueMergeConflict, retryIssueDevelopment, reviewIssueDelivery, startIssueDevelopment, startIssuePlanning, startIssueWorkflow } from "./temporal/service.js";
+import { createInitialIssueWorkflowState } from "./temporal/issue-contracts.js";
 import type { IssueWorkflowInput, IssueWorkflowState, PlanCommandInput, StartPlanningInput } from "./temporal/issue-contracts.js";
 
 export type TaskPhase = "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "ci_waiting" | "ci_repair_required" | "final_review" | "accepted" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
@@ -515,7 +516,7 @@ export class TaskService {
         this.updateCreationIntent(reserved.intent.id, { artifactIds: [briefArtifact, ...imageArtifacts].map((entry) => entry.id) });
       }
       const now = this.now().toISOString();
-      const initialState = { taskId, companyId, projectId: input.projectId, workflowId, projectRevisionId: project.activeRevisionId, requestHash, phase: "backlog" as const, revision: 0, owner: "human" as const, allowedCommands: ["start_planning" as const], pendingAction: "Start planning", lastEventId: `${workflowId}:0`, continuationCount: 0, lastSummaryHash: null };
+      const initialState = createInitialIssueWorkflowState({ issueId: taskId, companyId, projectId: input.projectId, workflowId, projectRevisionId: project.activeRevisionId, requestHash });
       const eventHash = projectionStateHash(initialState);
       this.database.authTransaction((db) => {
         db.prepare(`INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(briefArtifact!.id, companyId, briefArtifact!.kind, briefArtifact!.filename, briefArtifact!.mimeType, briefArtifact!.byteSize, briefArtifact!.sha256, briefArtifact!.storagePath, briefArtifact!.createdAt);

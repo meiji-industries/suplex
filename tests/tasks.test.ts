@@ -6,7 +6,7 @@ import { expect, test } from "vitest";
 
 import { AuthService } from "../src/auth.js";
 import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
+import { ForgeDatabase, projectionStateHash } from "../src/database.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
@@ -65,6 +65,11 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     expect(first.task.supplementalReview).toBe(true);
     expect(first.task.roleProfiles.lead).toBe(value.profileId);
     expect(events).toEqual([{ type: "invalidate", taskId: first.task.id, companyId: value.companyId, revision: 0 }]);
+    const initialSnapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(first.task.id) as { state_json: string });
+    const initialState = JSON.parse(initialSnapshot.state_json) as IssueWorkflowState;
+    expect(initialState).toMatchObject({ issueId: first.task.id, repairCycle: 0 });
+    expect(initialState).not.toHaveProperty("taskId");
+    expect(() => value.database.projectIssueState({ taskId: initialState.issueId, companyId: initialState.companyId, projectId: initialState.projectId, workflowId: initialState.workflowId, revision: initialState.revision, phase: initialState.phase, owner: initialState.owner, allowedCommands: initialState.allowedCommands, pendingAction: initialState.pendingAction, lastEventId: initialState.lastEventId, state: initialState })).not.toThrow();
     const duplicate = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Investigate queue", description: "## Reproduce\n\nPlease inspect the queue.", idempotencyKey: "queue-task-0001", supplementalReview: true, images: [{ filename: "evidence.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] });
     expect(duplicate.created).toBe(false);
     expect(duplicate.task.id).toBe(first.task.id);
@@ -74,6 +79,39 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     expect(planning.timeline.map((entry) => entry.eventType)).toEqual(["task_created", "planning_started"]);
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'lead', 'failed', 1, '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId));
     expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "lead", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry." })]);
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("repairs the legacy revision-zero seed before applying the Temporal initial projection", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Legacy seed", description: "body", idempotencyKey: "legacy-seed-0001", images: [] });
+    const snapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(created.task.id) as { state_json: string });
+    const canonical = JSON.parse(snapshot.state_json) as IssueWorkflowState;
+    const planning = { ...canonical, revision: 1, phase: "planning" as const, owner: "lead" as const, allowedCommands: [] as const, pendingAction: "Lead planning", lastEventId: `${canonical.workflowId}:1` };
+    const approval = { ...planning, revision: 2, phase: "approval" as const, owner: "human" as const, allowedCommands: ["approve_plan" as const, "reject_plan" as const, "cancel_issue" as const], pendingAction: "Approve final plan", lastEventId: `${canonical.workflowId}:2` };
+    value.database.projectIssueState({ taskId: planning.issueId, companyId: planning.companyId, projectId: planning.projectId, workflowId: planning.workflowId, revision: planning.revision, phase: planning.phase, owner: planning.owner, allowedCommands: [...planning.allowedCommands], pendingAction: planning.pendingAction, lastEventId: planning.lastEventId, state: planning });
+    value.database.projectIssueState({ taskId: approval.issueId, companyId: approval.companyId, projectId: approval.projectId, workflowId: approval.workflowId, revision: approval.revision, phase: approval.phase, owner: approval.owner, allowedCommands: [...approval.allowedCommands], pendingAction: approval.pendingAction, lastEventId: approval.lastEventId, state: approval });
+    const { issueId, repairCycle: _repairCycle, ...seed } = canonical;
+    const legacy = { ...seed, taskId: issueId };
+    const legacyHash = projectionStateHash(legacy);
+    value.database.authTransaction((db) => {
+      db.prepare("UPDATE forge_workflow_snapshots SET state_json = ? WHERE task_id = ? AND revision = 0").run(JSON.stringify(legacy), issueId);
+      db.prepare("UPDATE forge_issue_timeline SET event_hash = ?, metadata_json = ? WHERE task_id = ? AND revision = 0").run(legacyHash, JSON.stringify({ revision: 0, stateHash: legacyHash }), issueId);
+      db.prepare("UPDATE forge_issue_projections SET event_hash = ? WHERE task_id = ? AND revision = 0").run(legacyHash, issueId);
+    });
+
+    expect(() => value.database.projectIssueState({ taskId: canonical.issueId, companyId: canonical.companyId, projectId: canonical.projectId, workflowId: canonical.workflowId, revision: canonical.revision, phase: canonical.phase, owner: canonical.owner, allowedCommands: canonical.allowedCommands, pendingAction: canonical.pendingAction, lastEventId: canonical.lastEventId, state: canonical })).not.toThrow();
+    const repaired = value.database.authQuery((db) => ({
+      snapshot: db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(issueId) as { state_json: string },
+      timeline: db.prepare("SELECT event_hash FROM forge_issue_timeline WHERE task_id = ? AND revision = 0").get(issueId) as { event_hash: string },
+      projection: db.prepare("SELECT revision, event_hash FROM forge_issue_projections WHERE task_id = ?").get(issueId) as { revision: number; event_hash: string },
+    }));
+    expect(JSON.parse(repaired.snapshot.state_json)).toEqual(canonical);
+    expect(repaired.timeline.event_hash).toBe(projectionStateHash(canonical));
+    expect(repaired.projection).toEqual({ revision: 2, event_hash: projectionStateHash(approval) });
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }

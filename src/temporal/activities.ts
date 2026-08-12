@@ -3,7 +3,7 @@ import { randomBytes } from "node:crypto";
 import { ApplicationFailure } from "@temporalio/activity";
 import { z } from "zod";
 
-import type { ForgeDatabase } from "../database.js";
+import { ProjectionIntegrityFailure, type ForgeDatabase } from "../database.js";
 import type { ForgeConfig } from "../config.js";
 import { ArtifactStore } from "../artifacts.js";
 import { redact } from "../logging.js";
@@ -33,8 +33,9 @@ export class CapacityWaitError extends Error {
 }
 
 export function asNonRetryableApplicationFailure(error: unknown): ApplicationFailure | undefined {
-  if (!(error instanceof AgentFailure) || !error.nonRetryable) return undefined;
-  return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
+  if (error instanceof AgentFailure && error.nonRetryable) return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
+  if (error instanceof ProjectionIntegrityFailure) return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message, taskId: error.taskId, revision: error.revision });
+  return undefined;
 }
 
 const PinnedProjectRevisionSchema = z.object({
@@ -102,45 +103,51 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     },
     async projectIssueState(input: IssueWorkflowState): Promise<IssueWorkflowState> {
       const state = IssueWorkflowStateSchema.parse(input);
-      database.projectIssueState({
-        taskId: state.issueId,
-        companyId: state.companyId,
-        projectId: state.projectId,
-        workflowId: state.workflowId,
-        revision: state.revision,
-        phase: state.phase,
-        owner: state.owner,
-        allowedCommands: state.allowedCommands,
-        pendingAction: state.pendingAction,
-        lastEventId: state.lastEventId,
-        state,
-        ...(state.planRevision !== undefined ? { planRevision: state.planRevision } : {}),
-        ...(state.planMaterial !== undefined ? { planMaterial: state.planMaterial } : {}),
-        ...(state.materialCategories !== undefined ? { materialCategories: state.materialCategories } : {}),
-        ...(state.supplementalReviewUsed !== undefined ? { supplementalReviewUsed: state.supplementalReviewUsed } : {}),
-        ...(state.supplementalReviewArtifactId !== undefined ? { supplementalReviewArtifactId: state.supplementalReviewArtifactId } : {}),
-        ...(state.decisionId !== undefined ? { decisionId: state.decisionId } : {}),
-        ...(state.developerExecutionId !== undefined ? { developerExecutionId: state.developerExecutionId } : {}),
-        ...(state.developerSessionRef !== undefined ? { developerSessionRef: state.developerSessionRef } : {}),
-        ...(state.worktreePath !== undefined ? { worktreePath: state.worktreePath } : {}),
-        ...(state.branchName !== undefined ? { branchName: state.branchName } : {}),
-        ...(state.targetBaseSha !== undefined ? { targetBaseSha: state.targetBaseSha } : {}),
-        ...(state.currentStep !== undefined ? { currentStep: state.currentStep } : {}),
-        ...(state.resultCommit !== undefined ? { resultCommit: state.resultCommit } : {}),
-        ...(state.resultTree !== undefined ? { resultTree: state.resultTree } : {}),
-        ...(state.dirtyState !== undefined ? { dirtyState: state.dirtyState } : {}),
-        ...(state.deliveryArtifactId !== undefined ? { deliveryArtifactId: state.deliveryArtifactId } : {}),
-        ...(state.developerEvidenceArtifactId !== undefined ? { developerEvidenceArtifactId: state.developerEvidenceArtifactId } : {}),
-        ...(state.deliverySummary !== undefined ? { deliverySummary: state.deliverySummary } : {}),
-        ...(state.developerOutcome !== undefined ? { developerOutcome: state.developerOutcome } : {}),
-        ...(state.deliveryReviewId !== undefined ? { deliveryReviewId: state.deliveryReviewId } : {}),
-        ...(state.deliveryReviewOutcome !== undefined ? { deliveryReviewOutcome: state.deliveryReviewOutcome } : {}),
-        ...(state.deliveryReviewSummary !== undefined ? { deliveryReviewSummary: state.deliveryReviewSummary } : {}),
-        ...(state.deliveryBlockingFindings !== undefined ? { deliveryBlockingFindings: state.deliveryBlockingFindings } : {}),
-        ...(state.deliveryRepairPlan !== undefined ? { deliveryRepairPlan: state.deliveryRepairPlan } : {}),
-        ...(state.repairCycle !== undefined ? { repairCycle: state.repairCycle } : {}),
-        ...(state.deliveryDecisionArtifactId !== undefined ? { deliveryDecisionArtifactId: state.deliveryDecisionArtifactId } : {}),
-      });
+      try {
+        database.projectIssueState({
+          taskId: state.issueId,
+          companyId: state.companyId,
+          projectId: state.projectId,
+          workflowId: state.workflowId,
+          revision: state.revision,
+          phase: state.phase,
+          owner: state.owner,
+          allowedCommands: state.allowedCommands,
+          pendingAction: state.pendingAction,
+          lastEventId: state.lastEventId,
+          state,
+          ...(state.planRevision !== undefined ? { planRevision: state.planRevision } : {}),
+          ...(state.planMaterial !== undefined ? { planMaterial: state.planMaterial } : {}),
+          ...(state.materialCategories !== undefined ? { materialCategories: state.materialCategories } : {}),
+          ...(state.supplementalReviewUsed !== undefined ? { supplementalReviewUsed: state.supplementalReviewUsed } : {}),
+          ...(state.supplementalReviewArtifactId !== undefined ? { supplementalReviewArtifactId: state.supplementalReviewArtifactId } : {}),
+          ...(state.decisionId !== undefined ? { decisionId: state.decisionId } : {}),
+          ...(state.developerExecutionId !== undefined ? { developerExecutionId: state.developerExecutionId } : {}),
+          ...(state.developerSessionRef !== undefined ? { developerSessionRef: state.developerSessionRef } : {}),
+          ...(state.worktreePath !== undefined ? { worktreePath: state.worktreePath } : {}),
+          ...(state.branchName !== undefined ? { branchName: state.branchName } : {}),
+          ...(state.targetBaseSha !== undefined ? { targetBaseSha: state.targetBaseSha } : {}),
+          ...(state.currentStep !== undefined ? { currentStep: state.currentStep } : {}),
+          ...(state.resultCommit !== undefined ? { resultCommit: state.resultCommit } : {}),
+          ...(state.resultTree !== undefined ? { resultTree: state.resultTree } : {}),
+          ...(state.dirtyState !== undefined ? { dirtyState: state.dirtyState } : {}),
+          ...(state.deliveryArtifactId !== undefined ? { deliveryArtifactId: state.deliveryArtifactId } : {}),
+          ...(state.developerEvidenceArtifactId !== undefined ? { developerEvidenceArtifactId: state.developerEvidenceArtifactId } : {}),
+          ...(state.deliverySummary !== undefined ? { deliverySummary: state.deliverySummary } : {}),
+          ...(state.developerOutcome !== undefined ? { developerOutcome: state.developerOutcome } : {}),
+          ...(state.deliveryReviewId !== undefined ? { deliveryReviewId: state.deliveryReviewId } : {}),
+          ...(state.deliveryReviewOutcome !== undefined ? { deliveryReviewOutcome: state.deliveryReviewOutcome } : {}),
+          ...(state.deliveryReviewSummary !== undefined ? { deliveryReviewSummary: state.deliveryReviewSummary } : {}),
+          ...(state.deliveryBlockingFindings !== undefined ? { deliveryBlockingFindings: state.deliveryBlockingFindings } : {}),
+          ...(state.deliveryRepairPlan !== undefined ? { deliveryRepairPlan: state.deliveryRepairPlan } : {}),
+          ...(state.repairCycle !== undefined ? { repairCycle: state.repairCycle } : {}),
+          ...(state.deliveryDecisionArtifactId !== undefined ? { deliveryDecisionArtifactId: state.deliveryDecisionArtifactId } : {}),
+        });
+      } catch (error) {
+        const permanentFailure = asNonRetryableApplicationFailure(error);
+        if (permanentFailure) throw permanentFailure;
+        throw error;
+      }
       return state;
     },
     async runLeadPlanning(input) {

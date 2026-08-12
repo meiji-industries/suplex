@@ -11,7 +11,7 @@ import { ArtifactStore } from "../src/artifacts.js";
 import { AgentFailure, AgentService, LeadOutputSchema, runCodexProcess, type LeadProcessRunner, type SessionStore } from "../src/codex-lead.js";
 import { DeveloperService } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase } from "../src/database.js";
+import { ForgeDatabase, ProjectionIntegrityFailure } from "../src/database.js";
 import { asNonRetryableApplicationFailure } from "../src/temporal/activities.js";
 import { DeliveryReviewSchema } from "../src/temporal/issue-contracts.js";
 
@@ -198,6 +198,7 @@ test("permanent agent failures become non-retryable Temporal application failure
   const actual = asNonRetryableApplicationFailure(new AgentFailure("model-unavailable", "Choose a supported model", { nonRetryable: true }));
   expect(actual).toBeInstanceOf(ApplicationFailure);
   expect(actual).toMatchObject({ type: "model-unavailable", nonRetryable: true, message: "Choose a supported model", details: [{ code: "model-unavailable", summary: "Choose a supported model" }] });
+  expect(asNonRetryableApplicationFailure(new ProjectionIntegrityFailure("Projection identity conflict", { taskId: "task_1", revision: 0 }))).toMatchObject({ type: "projection_integrity_failure", nonRetryable: true, message: "Projection identity conflict" });
 });
 
 test("supplemental review uses a fresh session and primary Lead consolidation resumes its session", async () => {

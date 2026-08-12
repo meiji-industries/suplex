@@ -392,6 +392,7 @@ export class ForgeDatabase {
 
   private applyIssueProjection(database: Database.Database, parsed: IssueWorkflowState, updatedAt: string): void {
     const stateHash = projectionStateHash(parsed);
+    this.normalizeLegacyInitialProjection(database, parsed, stateHash);
     const eventType = parsed.phase === "backlog" ? "task_created" : parsed.phase === "planning" ? "planning_started" : `phase_${parsed.phase}`;
     const eventById = database.prepare("SELECT revision, event_hash FROM forge_issue_timeline WHERE id = ? AND workflow_id = ?").get(parsed.lastEventId, parsed.workflowId) as { revision: number; event_hash: string } | undefined;
     if (eventById && eventById.event_hash && eventById.event_hash !== stateHash) throw new ProjectionIntegrityFailure("Projection event identity was reused with a different state", { taskId: parsed.issueId, revision: parsed.revision });
@@ -427,6 +428,29 @@ export class ForgeDatabase {
       ON CONFLICT(task_id) DO UPDATE SET company_id = excluded.company_id, plan_revision = excluded.plan_revision, plan_material = excluded.plan_material, material_categories_json = excluded.material_categories_json, supplemental_review_used = excluded.supplemental_review_used, supplemental_review_artifact_id = excluded.supplemental_review_artifact_id, decision_id = excluded.decision_id`).run(
       parsed.issueId, parsed.companyId, parsed.planRevision ?? null, parsed.planMaterial === undefined || parsed.planMaterial === null ? null : parsed.planMaterial ? 1 : 0, JSON.stringify(parsed.materialCategories ?? []), parsed.supplementalReviewUsed ? 1 : 0, parsed.supplementalReviewArtifactId ?? null, parsed.decisionId ?? null,
     );
+  }
+
+  private normalizeLegacyInitialProjection(database: Database.Database, parsed: IssueWorkflowState, stateHash: string): void {
+    if (parsed.revision !== 0 || parsed.phase !== "backlog" || parsed.repairCycle !== 0) return;
+    const snapshot = database.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(parsed.issueId) as { state_json: string } | undefined;
+    if (!snapshot) return;
+    let stored: unknown;
+    try { stored = JSON.parse(snapshot.state_json); } catch { return; }
+    if (!stored || typeof stored !== "object") return;
+    const legacy = stored as Record<string, unknown>;
+    if (legacy.issueId !== undefined || legacy.taskId !== parsed.issueId || legacy.repairCycle !== undefined) return;
+    const normalized = IssueWorkflowStateSchema.safeParse({ ...legacy, taskId: undefined, issueId: parsed.issueId, repairCycle: 0 });
+    if (!normalized.success || projectionStateHash(normalized.data) !== stateHash) return;
+
+    const legacyHash = projectionStateHash(legacy);
+    const timeline = database.prepare("SELECT event_hash FROM forge_issue_timeline WHERE id = ? AND workflow_id = ? AND revision = 0").get(parsed.lastEventId, parsed.workflowId) as { event_hash: string } | undefined;
+    if (!timeline || timeline.event_hash !== legacyHash) return;
+    const current = database.prepare("SELECT revision, event_hash FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string } | undefined;
+    if (current?.revision === 0 && current.event_hash !== legacyHash && current.event_hash !== stateHash) return;
+
+    database.prepare("UPDATE forge_workflow_snapshots SET state_json = ? WHERE task_id = ? AND revision = 0 AND state_json = ?").run(JSON.stringify(parsed), parsed.issueId, snapshot.state_json);
+    database.prepare("UPDATE forge_issue_timeline SET event_hash = ?, metadata_json = ? WHERE id = ? AND workflow_id = ? AND revision = 0 AND event_hash = ?").run(stateHash, JSON.stringify({ revision: 0, phase: parsed.phase, stateHash }), parsed.lastEventId, parsed.workflowId, legacyHash);
+    if (current?.revision === 0 && current.event_hash === legacyHash) database.prepare("UPDATE forge_issue_projections SET event_hash = ? WHERE task_id = ? AND revision = 0 AND event_hash = ?").run(stateHash, parsed.issueId, legacyHash);
   }
 
   projectIssueState(state: IssueProjectionRecord): void {

@@ -11,14 +11,19 @@ Before implementing or modifying UI, read:
 
 Canonical UI stack:
 
-- Tailwind CSS v4
-- source-owned shadcn/Rhea-style components in `src/frontend/components/ui`
+- Tailwind CSS v4 for layout
+- shadcn and ReUI components in `src/frontend/components/ui`
 - Base UI primitives
 - Lucide icons
 
-Prefer application primitives and dense lists, toolbars, split panes, inline
-interaction, keyboard-accessible controls, and contextual actions. Reuse
-existing components before creating new ones.
+Prefer an existing shadcn or ReUI component and use it as shipped. Add missing
+components through the registries configured in `components.json`. Keep their
+default visual styling: do not edit component styles or override them at call
+sites with `className`, `style`, or Tailwind utilities. Use Tailwind only for
+page-level layout and necessary sizing around components.
+
+Prefer dense lists, toolbars, split panes, inline interaction,
+keyboard-accessible controls, and contextual actions.
 
 Do not add oversized headlines, marketing copy, gradients, decorative shadows,
 large rounded containers, excessive whitespace, or a separate card for every

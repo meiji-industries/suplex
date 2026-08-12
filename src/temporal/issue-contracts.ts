@@ -3,6 +3,7 @@ import { ReleaseFailureCodeSchema } from "../release-failures.js";
 
 import { DecisionIdempotencyKeySchema, MaterialityEvidenceSubjectSchema, PlanBlockerSubjectSchema, PlanDecisionSubjectSchema, PlanMaterialCategorySchema, PlanSubjectSchema, SupplementalReviewSubjectSchema, type MaterialityEvidenceSubject, type PlanBlockerSubject, type PlanDecisionSubject, type PlanMaterialCategory, type PlanSubject, type SupplementalReviewSubject } from "../plan-governance.js";
 import { CapacityBlockerSchema, WorkflowCapacityStateSchema } from "../capacity-contracts.js";
+import type { AuthorizedPlanSubject } from "../developer-contracts.js";
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const sha = z.string().regex(/^[a-f0-9]{40,64}$/i);
@@ -322,6 +323,10 @@ export const IssueContinuationStateSchema = z.object({
   supplementalReviewUsed: z.boolean().optional(),
   supplementalReviewArtifactId: durableId.nullable().optional(),
   decisionId: durableId.nullable().optional(),
+  planAuthorizationId: durableId.nullable().optional(),
+  planArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
+  planAuthorizationKind: z.enum(["routine_auto", "human_approval"]).nullable().optional(),
+  planAuthorizedAt: z.string().datetime().nullable().optional(),
   developerExecutionId: durableId.nullable().optional(),
   developerSessionRef: durableId.nullable().optional(),
   worktreePath: z.string().max(1_000).nullable().optional(),
@@ -513,6 +518,10 @@ export const IssueWorkflowStateSchema = z.object({
   supplementalReviewUsed: z.boolean().optional(),
   supplementalReviewArtifactId: durableId.nullable().optional(),
   decisionId: durableId.nullable().optional(),
+  planAuthorizationId: durableId.nullable().optional(),
+  planArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
+  planAuthorizationKind: z.enum(["routine_auto", "human_approval"]).nullable().optional(),
+  planAuthorizedAt: z.string().datetime().nullable().optional(),
   developerExecutionId: durableId.nullable().optional(),
   developerSessionRef: durableId.nullable().optional(),
   worktreePath: z.string().max(1_000).nullable().optional(),
@@ -686,6 +695,8 @@ export const StartPlanningInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   actorUserId: durableId,
   commandId: durableId.optional().default("legacy-command"),
+  planAuthorizationId: durableId.optional(),
+  planArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
 });
 
 export const RecordProgressInputSchema = z.object({
@@ -711,6 +722,8 @@ export const PlanCommandInputSchema = z.object({
   expectedWorkflowRevision: z.number().int().nonnegative().optional(),
   answerStagingRef: durableId.optional(),
   answerSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  planAuthorizationId: durableId.optional(),
+  planArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
 });
 
 const RevisionCommandBaseSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000) }).strict();
@@ -1030,6 +1043,28 @@ export type CreateSuccessorActivityInput = z.infer<typeof CreateSuccessorActivit
 export const CreateSuccessorActivityResultSchema = SuccessorReferenceSchema;
 export type CreateSuccessorActivityResult = z.infer<typeof CreateSuccessorActivityResultSchema>;
 
+export interface AuthorizeFinalPlanActivityInput {
+  taskId: string;
+  companyId: string;
+  projectId: string;
+  projectRevisionId: string;
+  workflowId: string;
+  planRevision: number;
+  planArtifactId: string;
+  authorizationKind: "routine_auto" | "human_approval";
+  approvalDecisionId?: string | null;
+}
+
+export interface AuthorizeFinalPlanActivityResult {
+  authorizationId: string;
+  planRevision: number;
+  planArtifactId: string;
+  planArtifactSha256: string;
+  authorizationKind: "routine_auto" | "human_approval";
+  approvalDecisionId: string | null;
+  authorizedAt: string;
+}
+
 export interface DeveloperExecutionActivityInput {
   taskId: string;
   companyId: string;
@@ -1051,6 +1086,7 @@ export interface DeveloperExecutionActivityInput {
   supersedesExecutionId?: string | undefined;
   reuseWorktree?: boolean | undefined;
   capacityRequestId?: string;
+  authorization?: AuthorizedPlanSubject;
 }
 
 export interface DeveloperExecutionResult {
@@ -1071,6 +1107,8 @@ export interface DeveloperExecutionResult {
   attentionEvidenceSha256?: string;
   deliverySummary: string;
   outcome: "completed" | "blocked";
+  reconciliationArtifactId?: string;
+  providerObservationArtifactId?: string;
 }
 
 export type WorkflowDeveloperExecutionResult = Omit<DeveloperExecutionResult, "worktreePath">;
@@ -1581,6 +1619,7 @@ export interface IssueActivities {
   runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput): Promise<WorkflowDeveloperRepairResult>;
   runDeveloperRepairSupervised(input: SupervisedDeveloperRepairActivityInput): Promise<DeveloperTurnActivityOutcome<WorkflowDeveloperRepairResult>>;
   recordPlanDecision(input: PlanDecisionActivityInput): Promise<{ decisionId: string; subjectHash?: string; duplicate?: boolean; noteArtifactId?: string; noteArtifactSha256?: string }>;
+  authorizeFinalPlan(input: AuthorizeFinalPlanActivityInput): Promise<AuthorizeFinalPlanActivityResult>;
   recordPlanBlockerResponse(input: PlanBlockerResponseActivityInput): Promise<{ responseId: string; subjectHash: string; duplicate?: boolean; answerArtifactId?: string; answerArtifactSha256?: string }>;
   recordDeliveryDecision(input: DeliveryDecisionActivityInput): Promise<{ artifactId: string }>;
   cancelCapacityExecution(input: { requestId: string }): Promise<{ status: "cancelled" | "ownership_ambiguous"; executionId?: string | undefined; reason?: string | undefined }>;

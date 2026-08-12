@@ -92,6 +92,91 @@ function lastAppliedHash(database: ForgeDatabase): string {
   return database.authQuery((db) => (db.prepare("SELECT hash FROM __drizzle_migrations ORDER BY created_at DESC LIMIT 1").get() as { hash: string }).hash);
 }
 
+function seedDeveloperExecution(database: ForgeDatabase, root: string): void {
+  const now = "2026-08-12T00:00:00.000Z";
+  database.authQuery((db) => {
+    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-developer', 'Developer Company', 'active', ?)").run(now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, created_at, updated_at) VALUES ('project-developer', 'company-developer', 'Developer Project', ?, ?, 'example/developer', 'main', 'main', 'pnpm install', 'pnpm test', '[]', '[]', '{}', 'active', ?, ?)").run(join(root, "repo"), join(root, "worktrees"), now, now);
+    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-developer', 'company-developer', 'task-brief', 'task.md', 'text/markdown', 1, ?, 'company-developer/brief.bin', ?)").run("0".repeat(64), now);
+    db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-developer', 'company-developer', 'project-developer', 'Developer task', 'brief-developer', '[]', '{}', 0, 'workflow-developer', 'revision-developer', 'developer-key', ?, ?)").run(now, now);
+    db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES ('execution-developer', 'task-developer', 'company-developer', 'workflow-developer', 1, 1, 'running', 'work/issue/task-developer', ?, ?, ?, ?)").run(join(root, "worktrees", "task-developer"), "a".repeat(40), now, now);
+  });
+}
+
+test("Developer execution receipts are append-only", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-db-developer-events-test-"));
+  try {
+    const database = new ForgeDatabase(join(root, "forge.sqlite"));
+    seedDeveloperExecution(database, root);
+    database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, occurred_at, summary, idempotency_key) VALUES ('event-1', 'execution-developer', 1, 1, 'step_started', 1, '2026-08-12T00:00:00.000Z', 'step 1', 'step-1')").run());
+
+    expect(() => database.authQuery((db) => db.prepare("UPDATE forge_developer_execution_events SET summary = 'changed' WHERE event_id = 'event-1'").run())).toThrow(/append-only/i);
+    expect(() => database.authQuery((db) => db.prepare("DELETE FROM forge_developer_execution_events WHERE event_id = 'event-1'").run())).toThrow(/append-only/i);
+    expect(() => database.authQuery((db) => db.prepare("INSERT OR REPLACE INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, occurred_at, summary, idempotency_key) VALUES ('event-1', 'execution-developer', 1, 1, 'step_started', 1, '2026-08-12T00:00:00.000Z', 'replaced', 'step-1')").run())).toThrow(/append-only/i);
+    database.close();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("Developer truth constraints reject invalid authorization, duplicate leases, and duplicate receipts", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-db-developer-constraints-test-"));
+  try {
+    const database = new ForgeDatabase(join(root, "forge.sqlite"));
+    seedDeveloperExecution(database, root);
+    const now = "2026-08-12T00:00:00.000Z";
+    database.authQuery((db) => {
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('plan-developer', 'company-developer', 'lead-plan', 'plan.json', 'application/json', 1, ?, 'company-developer/plan.bin', ?)").run("1".repeat(64), now);
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-developer-2', 'company-developer', 'task-brief', 'task-2.md', 'text/markdown', 1, ?, 'company-developer/brief-2.bin', ?)").run("2".repeat(64), now);
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-developer-2', 'company-developer', 'project-developer', 'Developer task 2', 'brief-developer-2', '[]', '{}', 0, 'workflow-developer-2', 'revision-developer', 'developer-key-2', ?, ?)").run(now, now);
+    });
+
+    expect(() => database.authQuery((db) => db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES ('authorization-invalid', 'task-developer', 'company-developer', 'project-developer', 'workflow-developer', 1, 'plan-developer', ?, 'human_approval', NULL, ?)").run("1".repeat(64), now))).toThrow();
+
+    database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, status, reserved_at) VALUES ('lease-1', 'task-developer', 'company-developer', 'project-developer', 'workflow-developer', ?, ?, ?, 'work/issue/task-developer', ?, ?, 0, 'active', ?)").run(join(root, "repo"), join(root, "worktrees"), join(root, "worktrees", "task-developer"), "a".repeat(40), "b".repeat(64), now));
+    const insertLease = (id: string, taskId: string, workflowId: string, path: string, branch: string) => database.authQuery((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, status, reserved_at) VALUES (?, ?, 'company-developer', 'project-developer', ?, ?, ?, ?, ?, ?, ?, 0, 'reserved', ?)").run(id, taskId, workflowId, join(root, "repo"), join(root, "worktrees"), path, branch, "a".repeat(40), "c".repeat(64), now));
+    expect(() => insertLease("lease-task-duplicate", "task-developer", "workflow-developer", join(root, "worktrees", "other"), "work/issue/other")).toThrow();
+    expect(() => insertLease("lease-branch-duplicate", "task-developer-2", "workflow-developer-2", join(root, "worktrees", "other"), "work/issue/task-developer")).toThrow();
+    expect(() => insertLease("lease-path-duplicate", "task-developer-2", "workflow-developer-2", join(root, "worktrees", "task-developer"), "work/issue/other")).toThrow();
+
+    database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, occurred_at, summary, idempotency_key) VALUES ('event-1', 'execution-developer', 1, 1, 'turn_started', ?, 'started', 'turn-started')").run(now));
+    expect(() => database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, occurred_at, summary, idempotency_key) VALUES ('event-2', 'execution-developer', 1, 2, 'turn_started', ?, 'duplicate', 'turn-started')").run(now))).toThrow();
+    database.close();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("0019 upgrades legacy Developer executions without inventing verification truth and is idempotent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-db-developer-upgrade-test-"));
+  const filename = join(root, "forge.sqlite");
+  try {
+    const current = new ForgeDatabase(filename);
+    seedDeveloperExecution(current, root);
+    current.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, result_commit = ?, result_tree = ? WHERE id = 'execution-developer'").run("2026-08-12T00:01:00.000Z", "b".repeat(40), "c".repeat(40)));
+    const migrationCount = current.health().expectedMigrations;
+    current.close();
+
+    const legacy = new Database(filename);
+    legacy.pragma("foreign_keys = OFF");
+    legacy.exec(`
+      DROP TABLE forge_developer_execution_events;
+      DROP TABLE forge_developer_execution_truth;
+      DROP TABLE forge_issue_worktrees;
+      DROP TABLE forge_plan_authorizations;
+      DELETE FROM __drizzle_migrations WHERE created_at = (SELECT MAX(created_at) FROM __drizzle_migrations);
+    `);
+    legacy.close();
+
+    const upgraded = new ForgeDatabase(filename);
+    expect(upgraded.health()).toMatchObject({ schemaState: "current", appliedMigrations: migrationCount });
+    expect(upgraded.authQuery((db) => db.prepare("SELECT status, result_commit, result_tree FROM forge_developer_executions WHERE id = 'execution-developer'").get())).toEqual({ status: "completed", result_commit: "b".repeat(40), result_tree: "c".repeat(40) });
+    expect(upgraded.authQuery((db) => db.prepare("SELECT execution_id FROM forge_developer_execution_truth WHERE execution_id = 'execution-developer'").get())).toBeUndefined();
+    upgraded.close();
+
+    const reopened = new ForgeDatabase(filename);
+    expect(reopened.health()).toMatchObject({ schemaState: "current", appliedMigrations: migrationCount });
+    expect(reopened.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_developer_executions WHERE id = 'execution-developer'").get())).toEqual({ count: 1 });
+    reopened.close();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("schema health distinguishes empty, current, behind, ahead, partial, and corrupt migration states", () => {
   const root = mkdtempSync(join(tmpdir(), "forge-db-schema-test-"));
   const filename = join(root, "forge.sqlite");

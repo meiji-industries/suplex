@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -14,10 +15,19 @@ export interface GithubCheck {
   conclusion?: string;
 }
 
+export interface GithubMutationSurface {
+  repository: string;
+  observedAt: string;
+  branches: Array<{ name: string; sha: string }>;
+  pullRequests: Array<{ number: number; state: string; draft: boolean; headRef: string; headSha: string; baseRef: string; updatedAt: string }>;
+  sha256: string;
+}
+
 export interface GithubAdapter {
   checkAuthentication(): Promise<void>;
   getRepository(input: { cwd: string; nameWithOwner: string }): Promise<GithubRepository>;
   listChecks?(input: { cwd: string; nameWithOwner: string; ref: string }): Promise<GithubCheck[]>;
+  observeMutationSurface?(input: { cwd: string; nameWithOwner: string }): Promise<GithubMutationSurface>;
 }
 
 export class GithubFailure extends Error {
@@ -40,13 +50,18 @@ function redactOutput(value: string): string {
 
 async function runGh(command: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string }> {
   try {
-    return await execFileAsync(command, args, { cwd, timeout: 8_000, maxBuffer: 64 * 1024 });
+    return await execFileAsync(command, args, { cwd, timeout: 30_000, maxBuffer: 8 * 1024 * 1024 });
   } catch (error) {
     const message = error instanceof Error ? redactOutput(error.message) : "command failed";
     if (/auth|not logged in|login required|oauth|credential/i.test(message)) throw new GithubFailure("authentication");
     if (args[0] === "repo" && args[1] === "view") throw new GithubFailure("repository");
     throw new GithubFailure("command");
   }
+}
+
+function flattenPages(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((page) => Array.isArray(page) ? page : [page]);
 }
 
 export function createGithubAdapter(command = process.env.FORGE_GH_COMMAND ?? "gh"): GithubAdapter {
@@ -77,6 +92,31 @@ export function createGithubAdapter(command = process.env.FORGE_GH_COMMAND ?? "g
           : []);
         return [...new Map(checks.map((check) => [check.name, check])).values()].sort((left, right) => left.name.localeCompare(right.name));
       } catch {
+        throw new GithubFailure("command");
+      }
+    },
+    async observeMutationSurface(input) {
+      const [branchesResult, pullsResult] = await Promise.all([
+        runGh(command, ["api", "--paginate", "--slurp", "-H", "Accept: application/vnd.github+json", `repos/${input.nameWithOwner}/git/refs/heads?per_page=100`], input.cwd),
+        runGh(command, ["api", "--paginate", "--slurp", "-H", "Accept: application/vnd.github+json", `repos/${input.nameWithOwner}/pulls?state=all&per_page=100`], input.cwd),
+      ]);
+      try {
+        const branches = flattenPages(JSON.parse(branchesResult.stdout)).flatMap((entry) => {
+          const record = entry as { ref?: unknown; object?: { sha?: unknown } };
+          return typeof record.ref === "string" && typeof record.object?.sha === "string" ? [{ name: record.ref.replace(/^refs\/heads\//, ""), sha: record.object.sha }] : [];
+        }).sort((left, right) => left.name.localeCompare(right.name));
+        const pullRequests = flattenPages(JSON.parse(pullsResult.stdout)).flatMap((entry) => {
+          const record = entry as { number?: unknown; state?: unknown; draft?: unknown; head?: { ref?: unknown; sha?: unknown }; base?: { ref?: unknown }; updated_at?: unknown };
+          return typeof record.number === "number" && typeof record.state === "string" && typeof record.draft === "boolean" && typeof record.head?.ref === "string" && typeof record.head?.sha === "string" && typeof record.base?.ref === "string" && typeof record.updated_at === "string"
+            ? [{ number: record.number, state: record.state, draft: record.draft, headRef: record.head.ref, headSha: record.head.sha, baseRef: record.base.ref, updatedAt: record.updated_at }]
+            : [];
+        }).sort((left, right) => left.number - right.number);
+        const canonical = { repository: normalizeRepository(input.nameWithOwner), branches, pullRequests };
+        const serialized = JSON.stringify(canonical);
+        if (Buffer.byteLength(serialized, "utf8") > 8 * 1024 * 1024) throw new GithubFailure("command");
+        return { ...canonical, observedAt: new Date().toISOString(), sha256: createHash("sha256").update(serialized).digest("hex") };
+      } catch (error) {
+        if (error instanceof GithubFailure) throw error;
         throw new GithubFailure("command");
       }
     },

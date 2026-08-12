@@ -31,6 +31,7 @@ import { PlanBlockerResponseForm } from "./components/app/plan-blocker-response-
 import { PlanDecisionForm } from "./components/app/plan-decision-form.js";
 import { PlanSubjectSummary } from "./components/app/plan-subject-summary.js";
 import { SupplementalReviewPanel } from "./components/app/supplemental-review-panel.js";
+import { DeveloperEvidence, type DeveloperExecutionEventView } from "./components/tasks/developer-evidence.js";
 import { companySettingsPath, isApiError, readJson, withCompany, type ApiUser, type CompanyStatus } from "./lib/api.js";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import type { HealthCheck, HealthSnapshot } from "../health.js";
@@ -853,6 +854,13 @@ function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onSta
   const blockerCommand = task.commands.find((command) => command.name === "respond_plan_blocker" && command.subject?.kind === "plan_blocker");
   const [decisionName, setDecisionName] = useState<"approve_plan" | "request_plan_revision">("approve_plan");
   const decisionCommand = decisionName === "request_plan_revision" ? revisionCommand ?? approveCommand : approveCommand ?? revisionCommand;
+  const [developerEvents, setDeveloperEvents] = useState<DeveloperExecutionEventView[]>([]);
+  useEffect(() => {
+    let active = true;
+    if (!task.developerExecution) { setDeveloperEvents([]); return () => { active = false; }; }
+    void readJson<{ events: DeveloperExecutionEventView[] }>(`/api/tasks/${encodeURIComponent(task.id)}/developer-executions/${encodeURIComponent(task.developerExecution.id)}/events`).then((result) => { if (active) setDeveloperEvents(result.events); }).catch(() => { if (active) setDeveloperEvents([]); });
+    return () => { active = false; };
+  }, [task.id, task.developerExecution?.id, task.developerExecution?.currentStep, task.developerExecution?.status]);
   return (
     <ApplicationFrame title={task.title} headerActions={<TaskOptions />}>
       <article data-task-detail className="min-w-0">
@@ -883,7 +891,7 @@ function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onSta
                 {task.governance.supplementalReview ? <SupplementalReviewPanel value={{ reviewerProfileId: task.governance.supplementalReview.reviewerProfile.name, opinion: task.governance.supplementalReview.opinion, concerns: task.governance.supplementalReview.concerns, requiredChanges: task.governance.supplementalReview.requiredChanges, leadResponse: task.governance.supplementalReview.leadResponse.text }} /> : null}
                 {task.governance.decision ? <section className="space-y-1" data-plan-decision><h3 className="text-xs font-semibold">Member decision</h3><div className="text-[13px]">{task.governance.decision.decision} · {task.governance.decision.actor.displayName}</div><p className="whitespace-pre-wrap text-[12px]">{task.governance.decision.note}</p></section> : null}
                 {task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">Decision blocker</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}
-                {task.developerExecution ? <section className="space-y-3"><div className="flex items-center justify-between gap-3"><h3 className="text-xs font-semibold">Developer delivery</h3><Badge variant="secondary">{task.developerExecution.status}</Badge></div><div className="text-[13px]">{task.developerExecution.deliverySummary ?? task.developerExecution.failureSummary ?? task.pendingAction}</div><div className="text-[11px] text-muted-foreground">{task.developerExecution.branchName} · {task.developerExecution.resultCommit ?? "no commit yet"}</div>{task.developerExecution.status === "completed" ? <Suspense fallback={<Skeleton className="h-40 w-full" />}><DeveloperDiff taskId={task.id} executionId={task.developerExecution.id} /></Suspense> : null}</section> : null}
+                {task.developerExecution ? <div className="space-y-4"><DeveloperEvidence taskId={task.id} execution={task.developerExecution} events={developerEvents} />{task.developerExecution.status === "completed" ? <Suspense fallback={<Skeleton className="h-40 w-full" />}><DeveloperDiff taskId={task.id} executionId={task.developerExecution.id} /></Suspense> : null}</div> : null}
                 <DeliveryReviewPanel task={task} />
                 {task.ci ? <CiPanel task={task} ci={task.ci} /> : null}
                 {task.release ? <ReleasePanel release={task.release} /> : null}

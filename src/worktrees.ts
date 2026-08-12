@@ -1,7 +1,11 @@
 import { execFile, execFileSync } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
 import { access, chmod, constants, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+
+import type { ForgeDatabase } from "./database.js";
+import { OwnedWorktreeSchema, type OwnedWorktree } from "./developer-contracts.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -70,6 +74,30 @@ export interface ExactBaseValidationInput {
   acceptedTargetSha: string;
 }
 
+export interface OwnedWorktreeCoordinates {
+  taskId: string;
+  companyId: string;
+  projectId: string;
+  workflowId: string;
+  repositoryRoot: string;
+  worktreeRoot: string;
+  worktreePath: string;
+  branchName: string;
+  startingSha: string;
+  legacy?: boolean;
+}
+
+export interface OwnedWorktreeInspection {
+  owned: OwnedWorktree;
+  repositoryRegistered: boolean;
+  pathExists: boolean;
+  pathIsSymlink: boolean;
+  branchHead: string | null;
+  head: string | null;
+  branch: string | null;
+  dirtyState: "clean" | "dirty" | "unknown";
+}
+
 interface GitAdapter {
   run(args: string[], cwd: string): Promise<string>;
 }
@@ -82,6 +110,16 @@ const pathSegmentPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 function withinRoot(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
   return path === "" || (!path.startsWith(`..${sep}`) && path !== "..");
+}
+
+function exactRegisteredWorktree(output: string, worktreePath: string, branchName: string, head: string | null): boolean {
+  return output.split(/\n(?=worktree )/).some((block) => {
+    const lines = block.split(/\r?\n/);
+    const path = lines.find((line) => line.startsWith("worktree "))?.slice(9);
+    const actualHead = lines.find((line) => line.startsWith("HEAD "))?.slice(5);
+    const branch = lines.find((line) => line.startsWith("branch "))?.slice(7).replace(/^refs\/heads\//, "");
+    return path === worktreePath && branch === branchName && (!head || actualHead?.toLowerCase() === head.toLowerCase());
+  });
 }
 
 const defaultGit: GitAdapter = {
@@ -271,20 +309,96 @@ export class WorktreeManager {
       throw new WorktreeFailure("worktree-reuse-mismatch", "Preserved worktree ownership or target base could not be proven");
     }
   }
+
+  async materialize(owned: OwnedWorktree): Promise<OwnedWorktreeInspection> {
+    const validated = OwnedWorktreeSchema.parse(owned);
+    const repositoryPath = await canonicalDirectory(validated.repositoryRoot, "repository-unavailable");
+    const worktreeRoot = await canonicalDirectory(validated.worktreeRoot, "worktree-root-unavailable");
+    if (withinRoot(repositoryPath, worktreeRoot) || withinRoot(worktreeRoot, repositoryPath) || !withinRoot(worktreeRoot, validated.worktreePath)) throw new WorktreeFailure("worktree-separation", "Owned worktree paths overlap or escape configured roots");
+    if (!shaPattern.test(validated.startingSha)) throw new WorktreeFailure("invalid-base-commit", "Owned worktree starting SHA is invalid");
+    try {
+      const resolvedBase = await this.git.run(["rev-parse", "--verify", `${validated.startingSha}^{commit}`], repositoryPath);
+      if (resolvedBase.toLowerCase() !== validated.startingSha.toLowerCase()) throw new WorktreeFailure("base-commit-mismatch", "Owned worktree starting SHA does not resolve exactly");
+    } catch (error) {
+      if (error instanceof WorktreeFailure) throw error;
+      throw new WorktreeFailure("base-commit-mismatch", "Owned worktree starting SHA is unavailable");
+    }
+    const before = await this.inspectOwned(validated, repositoryPath).catch(() => undefined);
+    if (before?.pathIsSymlink || before?.pathExists && before.head === null) throw new WorktreeFailure("worktree-registry-ambiguous", "Owned worktree path exists but its Git identity is ambiguous");
+    if (before?.repositoryRegistered && before.head && before.branch === validated.branchName && before.head.toLowerCase() === validated.startingSha.toLowerCase() && before.dirtyState === "clean") return before;
+    if (!before?.pathExists && !before?.branchHead) {
+      try { await this.git.run(["worktree", "add", "-b", validated.branchName, validated.worktreePath, validated.startingSha], repositoryPath); } catch {
+        const afterFailure = await this.inspectOwned(validated, repositoryPath).catch(() => undefined);
+        if (!afterFailure?.head || afterFailure.branch !== validated.branchName || afterFailure.head.toLowerCase() !== validated.startingSha.toLowerCase()) throw new WorktreeFailure("worktree-registry-ambiguous", "Git worktree creation failed with an unresolved registry state");
+      }
+      const created = await this.inspectOwned(validated, repositoryPath);
+      if (!created.repositoryRegistered || !created.head || created.branch !== validated.branchName || created.head.toLowerCase() !== validated.startingSha.toLowerCase() || created.dirtyState !== "clean") throw new WorktreeFailure("worktree-registry-ambiguous", "Created worktree did not match its reserved identity");
+      return created;
+    }
+    throw new WorktreeFailure("worktree-registry-ambiguous", "Existing branch or path does not exactly match the reserved worktree");
+  }
+
+  async inspectOwned(owned: OwnedWorktree, repositoryPath = owned.repositoryRoot): Promise<OwnedWorktreeInspection> {
+    const validated = OwnedWorktreeSchema.parse(owned);
+    let pathExists = false;
+    let pathIsSymlink = false;
+    try { const stat = await lstat(validated.worktreePath); pathExists = true; pathIsSymlink = stat.isSymbolicLink(); } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new WorktreeFailure("worktree-unavailable", "Owned worktree path cannot be inspected"); }
+    let branchHead: string | null = null;
+    try { branchHead = await this.git.run(["rev-parse", "--verify", `refs/heads/${validated.branchName}`], repositoryPath); } catch { /* branch absent */ }
+    let repositoryRegistered = false;
+    try { repositoryRegistered = exactRegisteredWorktree(await this.git.run(["worktree", "list", "--porcelain"], repositoryPath), resolve(validated.worktreePath), validated.branchName, branchHead); } catch { /* ambiguous registry */ }
+    if (!pathExists || pathIsSymlink) return { owned: validated, repositoryRegistered, pathExists, pathIsSymlink, branchHead, head: null, branch: null, dirtyState: pathIsSymlink ? "unknown" : "clean" };
+    try {
+      const [head, branch, status] = await Promise.all([
+        this.git.run(["rev-parse", "HEAD"], validated.worktreePath),
+        this.git.run(["symbolic-ref", "--short", "HEAD"], validated.worktreePath),
+        this.git.run(["status", "--porcelain=v1", "--untracked-files=all"], validated.worktreePath),
+      ]);
+      return { owned: validated, repositoryRegistered, pathExists, pathIsSymlink, branchHead, head, branch, dirtyState: status ? "dirty" : "clean" };
+    } catch { return { owned: validated, repositoryRegistered, pathExists, pathIsSymlink, branchHead, head: null, branch: null, dirtyState: "unknown" }; }
+  }
+}
+
+export function reserveOwnedWorktree(database: ForgeDatabase, input: OwnedWorktreeCoordinates): OwnedWorktree {
+  const existing = database.authQuery((db) => db.prepare("SELECT id AS leaseId, lease_token_hash AS leaseTokenHash, task_id AS taskId, company_id AS companyId, project_id AS projectId, workflow_id AS workflowId, repository_path AS repositoryRoot, worktree_root AS worktreeRoot, worktree_path AS worktreePath, branch_name AS branchName, starting_sha AS startingSha, legacy, status FROM forge_issue_worktrees WHERE task_id = ? AND status <> 'released'").get(input.taskId) as (Omit<OwnedWorktree, "legacy"> & { legacy: number }) | undefined);
+  if (existing) {
+    const exact = existing.repositoryRoot === input.repositoryRoot && existing.worktreeRoot === input.worktreeRoot && existing.worktreePath === input.worktreePath && existing.branchName === input.branchName && existing.startingSha.toLowerCase() === input.startingSha.toLowerCase() && existing.companyId === input.companyId && existing.projectId === input.projectId && existing.workflowId === input.workflowId;
+    if (!exact) throw new WorktreeFailure("worktree-lease-conflict", "The issue already owns a different worktree identity");
+    return OwnedWorktreeSchema.parse({ ...existing, legacy: existing.legacy === 1 });
+  }
+  const owned = OwnedWorktreeSchema.parse({ ...input, leaseId: `worktree_${randomBytes(12).toString("hex")}`, leaseTokenHash: createHash("sha256").update(randomBytes(32)).digest("hex"), legacy: input.legacy ?? false, status: "reserved" });
+  try {
+    database.authTransaction((db) => db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, status, reserved_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?)").run(owned.leaseId, owned.taskId, owned.companyId, owned.projectId, owned.workflowId, owned.repositoryRoot, owned.worktreeRoot, owned.worktreePath, owned.branchName, owned.startingSha, owned.leaseTokenHash, owned.legacy ? 1 : 0, new Date().toISOString()));
+  } catch (error) {
+    if (error instanceof Error && /UNIQUE|active/i.test(error.message)) throw new WorktreeFailure("worktree-lease-conflict", "The issue, branch, or path already has an active worktree lease");
+    throw error;
+  }
+  return owned;
+}
+
+export function activateOwnedWorktree(database: ForgeDatabase, inspection: OwnedWorktreeInspection): OwnedWorktree {
+  if (!inspection.repositoryRegistered || inspection.dirtyState !== "clean" || inspection.head?.toLowerCase() !== inspection.owned.startingSha.toLowerCase() || inspection.branch !== inspection.owned.branchName || inspection.pathIsSymlink) throw new WorktreeFailure("worktree-verification", "Owned worktree activation did not match the reserved identity");
+  database.authTransaction((db) => {
+    const result = db.prepare("UPDATE forge_issue_worktrees SET status = 'active', activated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND project_id = ? AND workflow_id = ? AND worktree_path = ? AND branch_name = ? AND starting_sha = ? AND status = 'reserved'").run(new Date().toISOString(), inspection.owned.leaseId, inspection.owned.taskId, inspection.owned.companyId, inspection.owned.projectId, inspection.owned.workflowId, inspection.owned.worktreePath, inspection.owned.branchName, inspection.owned.startingSha);
+    if (result.changes !== 1) throw new WorktreeFailure("worktree-lease-conflict", "Owned worktree activation lost its compare-and-set lease");
+  });
+  return { ...inspection.owned, status: "active" };
 }
 
 export interface GitCommandGuard {
   directory: string;
+  gitRealBin?: string;
   env: NodeJS.ProcessEnv;
   cleanup(): Promise<void>;
 }
 
-export async function createGitCommandGuard(runtimeRoot: string, guardParent = runtimeRoot): Promise<GitCommandGuard> {
+export async function createGitCommandGuard(runtimeRoot: string, optionsOrParent: { authorizedStepNumbers?: number[] } | string = {}): Promise<GitCommandGuard> {
+  const options = typeof optionsOrParent === "string" ? {} : optionsOrParent;
+  const guardParent = typeof optionsOrParent === "string" ? optionsOrParent : runtimeRoot;
   const directory = join(resolve(guardParent), `developer-guard-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const gitBin = process.env.FORGE_GIT_BIN?.trim() || execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   if (!gitBin) throw new WorktreeFailure("git-unavailable", "Git is unavailable for guarded Developer execution");
-  const quotedGitBin = `'${gitBin.replaceAll("'", `'"'"'`)}'`;
   const gitGuard = `#!/bin/sh
 for arg in "$@"; do
   case "$arg" in
@@ -292,7 +406,7 @@ for arg in "$@"; do
     --amend|-D|-d|--force|-f) echo "Forge Developer policy blocked destructive git option $arg" >&2; exit 125 ;;
   esac
 done
-exec ${quotedGitBin} "$@"
+exec "$FORGE_GIT_REAL_BIN" "$@"
 `;
   const ghGuard = `#!/bin/sh
 echo "Forge Developer policy blocks provider-side GitHub mutation" >&2
@@ -300,11 +414,28 @@ exit 125
 `;
   await writeFile(join(directory, "git"), gitGuard, { encoding: "utf8", mode: 0o700 });
   await writeFile(join(directory, "gh"), ghGuard, { encoding: "utf8", mode: 0o700 });
+  const allowedSteps = options.authorizedStepNumbers?.length ? options.authorizedStepNumbers.join("|") : "*[!0-9]*";
+  const forgeStep = `#!/bin/sh
+case "$1" in
+  start|complete|block) ;;
+  *) echo "Forge Developer policy rejected forge-step marker" >&2; exit 125 ;;
+esac
+case "$2" in
+  ${allowedSteps}) ;;
+  *) echo "Forge Developer policy rejected unauthorized forge-step number" >&2; exit 125 ;;
+esac
+echo "{\"type\":\"forge.step\",\"kind\":\"$1\",\"step\":$2}"
+`;
+  await writeFile(join(directory, "forge-step"), forgeStep, { encoding: "utf8", mode: 0o700 });
   await chmod(join(directory, "git"), 0o700);
   await chmod(join(directory, "gh"), 0o700);
+  await chmod(join(directory, "forge-step"), 0o700);
   return {
     directory,
+    gitRealBin: gitBin,
     env: { ...process.env, PATH: `${directory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`, FORGE_GIT_REAL_BIN: gitBin, FORGE_GIT_GUARD_DIR: directory },
     async cleanup() { await rm(directory, { recursive: true, force: true }); },
   };
 }
+
+export const createCommandGuard = createGitCommandGuard;

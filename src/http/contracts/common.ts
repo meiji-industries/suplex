@@ -8,6 +8,7 @@ export const TaskIdParamsSchema = z.object({ taskId: IdSchema });
 export const UserIdParamsSchema = z.object({ userId: IdSchema });
 export const CredentialIdParamsSchema = z.object({ credentialId: IdSchema });
 export const TaskArtifactParamsSchema = z.object({ taskId: IdSchema, artifactId: IdSchema });
+export const TaskExecutionParamsSchema = z.object({ taskId: IdSchema, executionId: IdSchema });
 export const AttentionIdParamsSchema = z.object({ attentionId: IdSchema });
 export const CompanyStatusParamsSchema = z.object({ companyId: IdSchema, status: z.enum(["active", "paused", "archived"]) });
 

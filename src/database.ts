@@ -265,6 +265,7 @@ export class ForgeDatabase {
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = FULL");
     this.db.pragma("foreign_keys = ON");
+    this.db.pragma("recursive_triggers = ON");
     this.orm = drizzle(this.db, { schema: { ...authSchema, probeWorkflows, workerRegistrations } });
     try {
       this.preflightProjectRepositoryIdentities();

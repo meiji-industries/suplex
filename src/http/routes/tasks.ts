@@ -7,8 +7,8 @@ import type { TaskService } from "../../tasks.js";
 import type { ProjectRole } from "../../projects.js";
 import type { PlanCommandInput } from "../../temporal/issue-contracts.js";
 import type { PlanBlockerSubject } from "../../plan-governance.js";
-import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, ExpectedRevisionNoteBodySchema, HttpPlanBlockerResponseBodySchema, HttpPlanDecisionBodySchema, HttpSupplementalReviewBodySchema, RequiredRevisionNoteBodySchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
-import { ContinueWorkBodySchema, ContinueWorkResponseSchema, PlanRevisionBodySchema, TaskBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, ExpectedRevisionNoteBodySchema, HttpPlanBlockerResponseBodySchema, HttpPlanDecisionBodySchema, HttpSupplementalReviewBodySchema, RequiredRevisionNoteBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
+import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, PlanRevisionBodySchema, TaskBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;
@@ -85,6 +85,14 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   typed.get("/api/tasks/:taskId/images/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
     const image = await tasks.getTaskImage(request.forgeUser.id, request.params.taskId, request.params.artifactId);
     return reply.header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").type(image.artifact.mimeType).send(image.bytes);
+  });
+  typed.get("/api/tasks/:taskId/developer-artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
+    const artifact = await tasks.getDeveloperArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
+    return reply.header("Cache-Control", "private, no-store").header("X-Content-Type-Options", "nosniff").type(artifact.artifact.mimeType).send(artifact.bytes);
+  });
+  typed.get("/api/tasks/:taskId/developer-executions/:executionId/events", { schema: { params: TaskExecutionParamsSchema, response: { 200: DeveloperExecutionEventsResponseSchema } } }, async (request, reply) => {
+    const events = tasks.getDeveloperExecutionEvents(request.forgeUser.id, request.params.taskId, request.params.executionId);
+    return reply.header("Cache-Control", "private, no-store").send(events);
   });
   typed.get("/api/tasks/:taskId/review-artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
     const artifact = await tasks.getTaskReviewArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);

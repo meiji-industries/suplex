@@ -12,7 +12,7 @@ export interface ArtifactInput {
   bytes: Buffer;
 }
 
-export const ArtifactKinds = ["task-brief", "task-image", "agent-evidence", "attention-evidence", "lead-plan", "decision-blocker", "supplemental-review", "plan-decision", "plan-blocker-response", "plan-revision-reason", "continuation-reason", "developer-delivery", "delivery-review", "delivery-repair-plan", "developer-repair", "delivery-blocker", "delivery-decision", "ci-evidence", "ci-repair-plan", "ci-repair-evidence", "merge-conflict-evidence", "merge-conflict-plan", "merge-conflict-resolution", "planning-evidence-manifest", "repository-evidence", "materiality-evidence", "lead-review-response", "release-public-body", "forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery"] as const;
+export const ArtifactKinds = ["task-brief", "task-image", "agent-evidence", "attention-evidence", "lead-plan", "decision-blocker", "supplemental-review", "plan-decision", "plan-blocker-response", "plan-revision-reason", "continuation-reason", "developer-delivery", "delivery-review", "delivery-repair-plan", "developer-repair", "delivery-blocker", "delivery-decision", "ci-evidence", "ci-repair-plan", "ci-repair-evidence", "merge-conflict-evidence", "merge-conflict-plan", "merge-conflict-resolution", "planning-evidence-manifest", "repository-evidence", "materiality-evidence", "lead-review-response", "release-public-body", "forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery", "developer-evidence-manifest", "developer-command-output", "developer-git-snapshot", "developer-provider-observation", "developer-delivery-raw", "developer-reconciliation"] as const;
 export type ArtifactKind = (typeof ArtifactKinds)[number];
 
 export interface StoredArtifact {

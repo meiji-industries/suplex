@@ -114,6 +114,9 @@ const { cancelCapacityExecution } = proxyActivities<IssueActivities>({
 const { recordPlanDecision } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
 });
+const { authorizeFinalPlan } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "1 minute",
+});
 const { authorizePlanRevision } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
 });
@@ -280,6 +283,7 @@ const exactAcceptanceReceiptPatch = "forge-exact-acceptance-receipt-v1";
 const reviseContinuePatch = "forge-revise-continue-v1";
 const developerSupervisorPatch = "forge-developer-supervisor-v1";
 const exactPlanAuthorityPatch = "forge-exact-plan-authority-v2";
+const isolatedDeveloperExecutionPatch = "forge-isolated-developer-execution-v1";
 const initialProjectionBarrierPatch = "forge-initial-projection-barrier-v1";
 
 function compactStateForContinuation(state: IssueWorkflowState): IssueWorkflowState {
@@ -476,6 +480,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     continuationCount: continuation ? continuation.continuationCount + 1 : 0,
   });
   const exactPlanAuthorityEnabled = patched(exactPlanAuthorityPatch);
+  const isolatedDeveloperExecutionEnabled = patched(isolatedDeveloperExecutionPatch);
   const initialProjectionBarrierEnabled = patched(initialProjectionBarrierPatch);
   const initialProjection = continuation || !exactPlanAuthorityEnabled ? Promise.resolve(state) : projectIssueState(state);
   let continuationRequested = false;
@@ -770,6 +775,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       if (patched(planGovernancePatch)) {
         const route = routeLeadResult({ kind: leadResult.leadOutputKind, material: leadResult.material });
         state = IssueWorkflowStateSchema.parse({ ...state, phase: route.phase, owner: route.owner, allowedCommands: route.phase === "approval" && validatedInput.supplementalReview ? [...route.allowedCommands, "request_supplemental_review"] : route.allowedCommands, pendingAction: route.pendingAction, blocker: null, stateChangedAt: new Date().toISOString() });
+        if (isolatedDeveloperExecutionEnabled && route.phase === "ready_for_development" && state.finalPlanSubject) {
+          const authorization = await authorizeFinalPlan({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, workflowId: validatedInput.workflowId, planRevision: state.finalPlanSubject.outputRevision, planArtifactId: state.finalPlanSubject.artifactId, authorizationKind: "routine_auto" });
+          state = IssueWorkflowStateSchema.parse({ ...state, planRevision: authorization.planRevision, planAuthorizationId: authorization.authorizationId, planArtifactSha256: authorization.planArtifactSha256, planAuthorizationKind: authorization.authorizationKind, planAuthorizedAt: authorization.authorizedAt });
+        }
       }
       assertPayloadWithinLimit("Issue Workflow result", state);
       await projectIssueState(state);
@@ -797,6 +806,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const acceptedRevision = state.revision + 1;
     const route = routeLeadResult({ kind: leadResult.leadOutputKind, material: leadResult.material });
     state = IssueWorkflowStateSchema.parse({ ...state, ...leadResult, revision: acceptedRevision, phase: route.phase, owner: route.owner, allowedCommands: route.phase === "approval" && validatedInput.supplementalReview ? [...route.allowedCommands, "request_supplemental_review"] : route.allowedCommands, pendingAction: route.pendingAction, lastEventId: `${state.workflowId}:${acceptedRevision}`, planRevision: state.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, supplementalReviewUsed: false, originalPlanSubject: leadResult.planSubject ?? null, finalPlanSubject: leadResult.planSubject ?? null, materialityEvidence: leadResult.materialityEvidence ?? null, planBlockerSubject: leadResult.blockerSubject ?? null });
+    if (isolatedDeveloperExecutionEnabled && route.phase === "ready_for_development" && state.finalPlanSubject) {
+      const authorization = await authorizeFinalPlan({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, workflowId: validatedInput.workflowId, planRevision: state.finalPlanSubject.outputRevision, planArtifactId: state.finalPlanSubject.artifactId, authorizationKind: "routine_auto" });
+      state = IssueWorkflowStateSchema.parse({ ...state, planRevision: authorization.planRevision, planAuthorizationId: authorization.authorizationId, planArtifactSha256: authorization.planArtifactSha256, planAuthorizationKind: authorization.authorizationKind, planAuthorizedAt: authorization.authorizedAt });
+    }
     await projectIssueState(state);
     return state;
   };
@@ -820,6 +833,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     );
     const route = routeLeadResult({ kind: consolidated.leadOutputKind, material: consolidated.material });
     state = IssueWorkflowStateSchema.parse({ ...state, ...consolidated, revision: state.revision + 1, phase: route.phase, owner: route.owner, allowedCommands: route.phase === "approval" ? ["approve_plan", "request_plan_revision", "cancel_issue"] : route.allowedCommands, pendingAction: route.pendingAction, lastEventId: `${state.workflowId}:${state.revision + 1}`, finalPlanSubject: consolidated.planSubject ?? null, originalPlanSubject: state.originalPlanSubject, materialityEvidence: consolidated.materialityEvidence ?? null, planBlockerSubject: consolidated.blockerSubject ?? null, planMaterial: consolidated.material, materialCategories: consolidated.materialCategories, planRevision: state.planRevision ?? state.revision });
+    if (isolatedDeveloperExecutionEnabled && route.phase === "ready_for_development" && state.finalPlanSubject) {
+      const authorization = await authorizeFinalPlan({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, workflowId: validatedInput.workflowId, planRevision: state.finalPlanSubject.outputRevision, planArtifactId: state.finalPlanSubject.artifactId, authorizationKind: "routine_auto" });
+      state = IssueWorkflowStateSchema.parse({ ...state, planRevision: authorization.planRevision, planAuthorizationId: authorization.authorizationId, planArtifactSha256: authorization.planArtifactSha256, planAuthorizationKind: authorization.authorizationKind, planAuthorizedAt: authorization.authorizedAt });
+    }
     await projectIssueState(state);
     void command;
     return state;
@@ -840,7 +857,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       const planRevision = state.planRevision ?? state.revision;
       if (state.revisionRequestId) await authorizePlanRevision({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, revisionRequestId: state.revisionRequestId, planRevision });
       const decision = await recordPlanDecision({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, planRevision, actorUserId: command.actorUserId, decision: "approve", ...(command.note !== undefined ? { note: command.note } : {}), ...(decisionSubject ? { subject: decisionSubject } : {}), ...(command.noteStagingRef ? { noteStagingRef: command.noteStagingRef } : {}), ...(command.noteSha256 ? { noteSha256: command.noteSha256 } : {}), ...(command.idempotencyKey ? { idempotencyKey: command.idempotencyKey } : {}), ...(state.revisionRequestId ? { revisionRequestId: state.revisionRequestId } : {}) });
-      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: state.planMaterial && state.finalPlanSubject ? ["start_development", "request_plan_revision", "cancel_issue"] : addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: "Start development", lastEventId: `${state.workflowId}:${state.revision + 1}`, decisionId: decision.decisionId, blocker: null, stateChangedAt: new Date().toISOString(), ...(command.subject && command.idempotencyKey ? { planDecisionReceipt: { idempotencyKey: command.idempotencyKey, decisionId: decision.decisionId, decision: "approve" as const, subjectHash: decision.subjectHash ?? "0".repeat(64) } } : {}) });
+      const authorization = isolatedDeveloperExecutionEnabled && state.finalPlanSubject ? await authorizeFinalPlan({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, workflowId: validatedInput.workflowId, planRevision: state.finalPlanSubject.outputRevision, planArtifactId: state.finalPlanSubject.artifactId, authorizationKind: "human_approval", approvalDecisionId: decision.decisionId }) : undefined;
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: state.planMaterial && state.finalPlanSubject ? ["start_development", "request_plan_revision", "cancel_issue"] : addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: "Start development", lastEventId: `${state.workflowId}:${state.revision + 1}`, decisionId: decision.decisionId, ...(authorization ? { planRevision: authorization.planRevision, planAuthorizationId: authorization.authorizationId, planArtifactSha256: authorization.planArtifactSha256, planAuthorizationKind: authorization.authorizationKind, planAuthorizedAt: authorization.authorizedAt } : {}), blocker: null, stateChangedAt: new Date().toISOString(), ...(command.subject && command.idempotencyKey ? { planDecisionReceipt: { idempotencyKey: command.idempotencyKey, decisionId: decision.decisionId, decision: "approve" as const, subjectHash: decision.subjectHash ?? "0".repeat(64) } } : {}) });
       if (shouldContinueAsNew(state.revision)) continuationRequested = true;
       await projectIssueState(state);
       return state;
@@ -902,7 +920,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       markCommandProcessed(command.commandId);
     });
     await projectIssueState(state);
-    const legacyInput = { taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, ...(state.revisionRequestId ? { revisionRequestId: state.revisionRequestId } : {}), ...(state.finalPlanSubject ? { finalPlanSubject: state.finalPlanSubject } : {}), ...(state.materialityEvidence ? { materialityEvidence: state.materialityEvidence } : {}), ...(state.planDecisionReceipt ? { approvalDecisionId: state.planDecisionReceipt.decisionId } : {}) };
+    const authorization = state.planAuthorizationId && state.planArtifactSha256 && state.planAuthorizationKind && state.planAuthorizedAt ? { authorizationId: state.planAuthorizationId, taskId: validatedInput.issueId, companyId: validatedInput.companyId, projectId: validatedInput.projectId, workflowId: validatedInput.workflowId, planRevision, planArtifactId: state.leadOutputArtifactId!, planSha256: state.planArtifactSha256, authorizationKind: state.planAuthorizationKind, approvalDecisionId: state.planAuthorizationKind === "human_approval" ? state.decisionId ?? null : null, authorizedAt: state.planAuthorizedAt } : undefined;
+    const legacyInput = { taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, ...(state.revisionRequestId ? { revisionRequestId: state.revisionRequestId } : {}), ...(state.finalPlanSubject ? { finalPlanSubject: state.finalPlanSubject } : {}), ...(state.materialityEvidence ? { materialityEvidence: state.materialityEvidence } : {}), ...(state.planDecisionReceipt ? { approvalDecisionId: state.planDecisionReceipt.decisionId } : {}), ...(authorization ? { authorization } : {}) };
     const recoverDeveloperFailures = supervisedDeveloperTurns ? false : patched(developerFailureRecoveryPatch);
     let outcome: Awaited<ReturnType<typeof runDeveloperExecutionSupervised>> | { status: "completed"; result: Awaited<ReturnType<typeof runDeveloperExecution>>; resultHash: string };
     try {
@@ -946,6 +965,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
     if (state.phase !== "ready_for_development") throw new Error("Development can only start after plan approval");
     if (state.planMaterial === null || state.planMaterial === undefined || !state.leadOutputArtifactId || !state.leadSessionRef) throw new Error("A validated Lead plan is required before development");
+    if (isolatedDeveloperExecutionEnabled && state.finalPlanSubject && (!state.planAuthorizationId || !state.planArtifactSha256 || !state.planAuthorizationKind || !state.planAuthorizedAt)) throw new Error("An exact authorized final plan is required before development");
+    if (isolatedDeveloperExecutionEnabled && state.finalPlanSubject && (command.planAuthorizationId !== state.planAuthorizationId || command.planArtifactSha256 !== state.planArtifactSha256)) throw new Error("The start command does not match the authorized final plan");
     if (exactPlanAuthorityEnabled && state.planMaterial && (!state.finalPlanSubject || !state.materialityEvidence || !state.planDecisionReceipt || state.planDecisionReceipt.decision !== "approve")) throw new Error("An approved exact final Lead plan is required before development");
   } });
   setHandler(retryDevelopmentUpdate, async (rawInput) => {

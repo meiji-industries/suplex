@@ -940,6 +940,34 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       if (outcome.status === "active") return { executionId: input.executionId, status: "active", reasonCode: null, summary: "Forge confirmed the recorded Developer supervisor and child.", lastHeartbeatAt: lease?.heartbeatAt ?? null };
       return { executionId: input.executionId, status: outcome.status, reasonCode: outcome.reason ?? null, summary: outcome.status === "interrupted" ? "The recorded Developer process is no longer running." : "Forge cannot prove ownership of the previous Developer process.", lastHeartbeatAt: lease?.heartbeatAt ?? null };
     },
+    async authorizeFinalPlan(input) {
+      const plan = database.authQuery((db) => db.prepare(`SELECT a.id, a.sha256, a.storage_path
+        FROM forge_issue_outputs io
+        JOIN forge_artifacts a ON a.id = io.output_artifact_id AND a.company_id = io.company_id
+        JOIN forge_tasks t ON t.id = io.task_id AND t.company_id = io.company_id AND t.project_id = ? AND t.project_revision_id = ? AND t.workflow_id = io.workflow_id
+        JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.project_id = t.project_id AND r.state = 'accepted'
+        JOIN forge_issue_governance g ON g.task_id = t.id AND g.company_id = t.company_id AND g.plan_revision = io.revision
+        WHERE io.task_id = ? AND io.company_id = ? AND io.workflow_id = ? AND io.revision = ? AND io.output_artifact_id = ? AND io.kind = 'plan'
+          AND ((? = 'routine_auto' AND g.plan_material = 0) OR (? = 'human_approval' AND g.plan_material = 1))`).get(input.projectId, input.projectRevisionId, input.taskId, input.companyId, input.workflowId, input.planRevision, input.planArtifactId, input.authorizationKind, input.authorizationKind) as { id: string; sha256: string; storage_path: string } | undefined);
+      if (!plan) throw ApplicationFailure.nonRetryable("The exact final plan artifact is unavailable", "plan-authorization-mismatch");
+      const bytes = await new ArtifactStore(config.artifactRoot).read({ companyId: input.companyId, storagePath: plan.storage_path, sha256: plan.sha256 });
+      if (createHash("sha256").update(bytes).digest("hex") !== plan.sha256) throw new Error("The final plan artifact failed hash verification");
+      if (input.authorizationKind === "routine_auto" && input.approvalDecisionId) throw new Error("Routine plan authorization cannot include an approval decision");
+      if (input.authorizationKind === "human_approval" && !input.approvalDecisionId) throw new Error("Human plan authorization requires an approval decision");
+      if (input.approvalDecisionId) {
+        const decision = database.authQuery((db) => db.prepare("SELECT id FROM forge_plan_decisions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND decision = 'approve' AND legacy_unverified = 0").get(input.approvalDecisionId, input.taskId, input.companyId, input.workflowId) as { id: string } | undefined);
+        if (!decision) throw new Error("The exact plan approval decision is unavailable");
+      }
+      const existing = database.authQuery((db) => db.prepare("SELECT id, plan_artifact_id AS planArtifactId, plan_sha256 AS planSha256, authorization_kind AS authorizationKind, approval_decision_id AS approvalDecisionId, authorized_at AS authorizedAt FROM forge_plan_authorizations WHERE task_id = ? AND company_id = ? AND project_id = ? AND workflow_id = ? AND plan_revision = ?").get(input.taskId, input.companyId, input.projectId, input.workflowId, input.planRevision) as { id: string; planArtifactId: string; planSha256: string; authorizationKind: "routine_auto" | "human_approval"; approvalDecisionId: string | null; authorizedAt: string } | undefined);
+      if (existing) {
+        if (existing.planArtifactId !== plan.id || existing.planSha256 !== plan.sha256 || existing.authorizationKind !== input.authorizationKind || existing.approvalDecisionId !== (input.approvalDecisionId ?? null)) throw new Error("The plan authorization identity conflicts with an existing authorization");
+        return { authorizationId: existing.id, planRevision: input.planRevision, planArtifactId: plan.id, planArtifactSha256: plan.sha256, authorizationKind: existing.authorizationKind, approvalDecisionId: existing.approvalDecisionId, authorizedAt: existing.authorizedAt };
+      }
+      const authorizationId = `plan_auth_${randomBytes(12).toString("hex")}`;
+      const authorizedAt = new Date().toISOString();
+      database.authTransaction((db) => db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(authorizationId, input.taskId, input.companyId, input.projectId, input.workflowId, input.planRevision, plan.id, plan.sha256, input.authorizationKind, input.approvalDecisionId ?? null, authorizedAt));
+      return { authorizationId, planRevision: input.planRevision, planArtifactId: plan.id, planArtifactSha256: plan.sha256, authorizationKind: input.authorizationKind, approvalDecisionId: input.approvalDecisionId ?? null, authorizedAt };
+    },
     async recordPlanDecision(input) {
       const actor = database.authQuery((db) => db.prepare("SELECT id, role, status FROM forge_users WHERE id = ?").get(input.actorUserId) as { id: string; role: string; status: string } | undefined);
       if (!actor || actor.status !== "active") throw new Error("Plan decision actor is unavailable");

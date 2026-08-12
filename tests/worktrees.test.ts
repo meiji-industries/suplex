@@ -123,3 +123,13 @@ test("reads the current delivery diff from the recorded base through committed a
     await expect(manager.currentDiff({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_diff", targetBaseSha: value.baseSha, branchName: record.branchName, worktreePath: value.repositoryPath })).rejects.toMatchObject({ code: "worktree-reuse-mismatch" });
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
+
+test("inspects the exact owned worktree registry tuple before activation", async () => {
+  const value = await fixture();
+  try {
+    const manager = new WorktreeManager();
+    const record = await manager.create({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_registry", targetBaseSha: value.baseSha, branchName: "work/issue/task_registry" });
+    const inspection = await manager.inspectOwned({ leaseId: "lease_registry", leaseTokenHash: "a".repeat(64), taskId: "task_registry", companyId: "company_1", projectId: "project_1", workflowId: "workflow_1", repositoryRoot: value.repositoryPath, worktreeRoot: value.worktreeRoot, worktreePath: record.worktreePath, branchName: record.branchName, startingSha: value.baseSha, legacy: false, status: "reserved" });
+    expect(inspection).toMatchObject({ repositoryRegistered: true, head: value.baseSha, branch: record.branchName, dirtyState: "clean" });
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});

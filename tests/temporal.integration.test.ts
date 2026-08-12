@@ -1,39 +1,26 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { fileURLToPath } from "node:url";
 
 import { Connection } from "@temporalio/client";
-import proto from "@temporalio/proto";
 import { NativeConnection, Worker } from "@temporalio/worker";
 
 import { createTestConfig } from "../src/config.js";
 import { createForgeServer, type ForgeServer } from "../src/server.js";
 import { ForgeDatabase } from "../src/database.js";
+import { ArtifactStore } from "../src/artifacts.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 import { createActivities } from "../src/temporal/activities.js";
 import { AgentFailure } from "../src/codex-lead.js";
 import { approveIssuePlan, connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, rejectIssuePlan, repairIssueDelivery, reviewIssueDelivery, startIssueDevelopment, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
-
-const replayDurationKeys = new Set(["firstWorkflowTaskBackoff", "workflowTaskTimeout", "startToCloseTimeout", "scheduleToCloseTimeout", "scheduleToStartTimeout", "heartbeatTimeout", "initialInterval", "maximumInterval"]);
-
-function sanitizeReplayValue(value: unknown, key?: string): unknown {
-  if (Array.isArray(value)) return value.map((item) => sanitizeReplayValue(item));
-  if (!value || typeof value !== "object") return value;
-  const record = value as Record<string, unknown>;
-  if (replayDurationKeys.has(key ?? "") && Object.keys(record).length === 0) return "0s";
-  if ((typeof record.seconds === "string" || typeof record.seconds === "number") && (record.nanos === undefined || typeof record.nanos === "number")) {
-    const nanos = typeof record.nanos === "number" ? record.nanos : 0;
-    if (key === "eventTime") return new Date(Number(record.seconds) * 1000 + nanos / 1_000_000).toISOString();
-    const fraction = nanos === 0 ? "" : `.${String(nanos).padStart(9, "0").replace(/0+$/, "")}`;
-    return `${record.seconds}${fraction}s`;
-  }
-  return Object.fromEntries(Object.entries(record).map(([entryKey, entryValue]) => [entryKey, sanitizeReplayValue(entryValue, entryKey)]));
-}
+import { activityPayloadInterceptors } from "../src/temporal/payload-boundary-interceptors.js";
+import { buildProductionWorkflowBundle, temporalDataConverter } from "../src/temporal/workflow-bundle.js";
+import { runReplayScenarioCorpus } from "./replay-scenario-driver.js";
+import { captureWorkflowHistory } from "../scripts/capture-workflow-history.js";
 
 async function availablePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -88,6 +75,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     }
     await ensureTemporalFoundation(temporalConnection, config);
     temporalConnection.close();
+    const workflowBundle = await buildProductionWorkflowBundle();
 
     database = new ForgeDatabase(config.databasePath);
     let permanentPlanningFailure = false;
@@ -104,18 +92,25 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
         }
         return { leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: "artifact_integration_evidence", leadOutputArtifactId: "artifact_integration_output", leadOutputKind: "plan" as const, leadSummary: "Integration plan", materialCategories: ["security_permissions" as const], material: true };
       },
-      reviewDelivery: async () => ({ reviewId: "delivery_review_integration", leadExecutionId: "agent_review_integration", leadSessionRef: "session_integration", opinionArtifactId: "artifact_review_opinion", evidenceArtifactId: "artifact_review_evidence", outcome: "blocking" as const, summary: "Integration delivery needs one bounded repair.", repairPlan: "Apply the controlled repair.", findings: [{ findingId: "finding_integration", severity: "blocking" as const, rationale: "Controlled fixture defect.", evidenceRef: "fixture", disposition: "open" as const, repairInstruction: "Apply the controlled repair." }], targetBaseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40) }),
+      reviewDelivery: async (input: { companyId: string }) => {
+        const review = { kind: "delivery_review", summary: "Integration delivery needs one bounded repair.", outcome: "blocking", repairPlan: "Apply the controlled repair.", findings: [{ findingId: "finding_integration", severity: "blocking", rationale: "Controlled fixture defect.", evidenceRef: "fixture", disposition: "open", repairInstruction: "Apply the controlled repair." }] };
+        const artifact = await new ArtifactStore(config.artifactRoot).put(input.companyId, "delivery-review", { filename: "integration-review.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review), "utf8") });
+        database!.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
+        return { reviewId: "delivery_review_integration", leadExecutionId: "agent_review_integration", leadSessionRef: "session_integration", opinionArtifactId: artifact.id, evidenceArtifactId: "artifact_review_evidence", outcome: "blocking" as const, summary: review.summary, repairPlan: review.repairPlan, findings: [{ findingId: "finding_integration", severity: "blocking" as const, rationale: "Controlled fixture defect.", evidenceRef: "fixture", disposition: "open" as const, repairInstruction: "Apply the controlled repair." }], targetBaseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40) };
+      },
     };
     const integrationDeveloper = {
-      run: async () => ({ developerExecutionId: "developer_integration", developerSessionRef: "session_developer_integration", worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), currentStep: 1, resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_developer_evidence", deliverySummary: "Developer delivery", outcome: "completed" as const }),
-      runRepair: async () => ({ developerExecutionId: "developer_repair_integration", developerSessionRef: "session_developer_integration", supersedesExecutionId: "developer_integration", worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "d".repeat(40), resultTree: "e".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_repaired_delivery", evidenceArtifactId: "artifact_repaired_evidence", deliverySummary: "Developer repair", outcome: "completed" as const, cycle: 1 }),
+      run: async (input: { executionId?: string }) => ({ developerExecutionId: input.executionId ?? "developer_integration", developerSessionRef: "session_developer_integration", worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), currentStep: 1, resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_developer_evidence", deliverySummary: "Developer delivery", outcome: "completed" as const }),
+      runRepair: async (input: { developerExecutionId: string }) => ({ developerExecutionId: "developer_repair_integration", developerSessionRef: "session_developer_integration", supersedesExecutionId: input.developerExecutionId, worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "d".repeat(40), resultTree: "e".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_repaired_delivery", evidenceArtifactId: "artifact_repaired_evidence", deliverySummary: "Developer repair", outcome: "completed" as const, cycle: 1 }),
     };
     workerConnection = await NativeConnection.connect({ address: config.temporalAddress });
     worker = await Worker.create({
       connection: workerConnection,
       namespace: config.temporalNamespace,
       taskQueue: config.taskQueue,
-      workflowsPath: fileURLToPath(new URL("../src/temporal/workflows.ts", import.meta.url)),
+      workflowBundle,
+      dataConverter: temporalDataConverter,
+      interceptors: { activity: activityPayloadInterceptors },
       activities: createActivities(database, config, { agent: integrationAgent, developer: integrationDeveloper }),
     });
     workerRun = worker.run();
@@ -176,7 +171,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     const approvedIssue = await approveIssuePlan(config, startedIssue.workflowId, { expectedRevision: 5, actorUserId: "issue-admin", note: "Approve revised plan" });
     expect(approvedIssue).toMatchObject({ phase: "ready_for_development", revision: 6, allowedCommands: ["start_development", "cancel_issue"] });
     const deliveredIssue = await startIssueDevelopment(config, startedIssue.workflowId, { expectedRevision: 6, actorUserId: "issue-admin" });
-    expect(deliveredIssue).toMatchObject({ phase: "delivery_ready", revision: 8, allowedCommands: ["review_delivery", "cancel_issue"], developerExecutionId: "developer_integration", developerSessionRef: "session_developer_integration", branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40) });
+    expect(deliveredIssue).toMatchObject({ phase: "delivery_ready", revision: 8, allowedCommands: ["review_delivery", "cancel_issue"], developerExecutionId: expect.stringMatching(`^developer_${startedIssue.workflowId}_command_`), developerSessionRef: "session_developer_integration", branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40) });
     const repairRequired = await reviewIssueDelivery(config, startedIssue.workflowId, { expectedRevision: 8, actorUserId: "issue-admin" });
     expect(repairRequired).toMatchObject({ phase: "repair_required", revision: 10, allowedCommands: ["repair_delivery", "cancel_issue"], deliveryReviewId: "delivery_review_integration", deliveryReviewOutcome: "blocking", repairCycle: 0 });
     const repairedIssue = await repairIssueDelivery(config, startedIssue.workflowId, { expectedRevision: 10, actorUserId: "issue-admin" });
@@ -211,16 +206,22 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     expect(continuationState.decisionId).toMatch(/^decision_/);
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-continuation'").get())).toEqual({ revision: 3, phase: "ready_for_development" });
     expect(database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = 'issue-continuation' ORDER BY revision").all())).toEqual([{ revision: 0 }, { revision: 1 }, { revision: 2 }, { revision: 3 }]);
-    if (process.env.FORGE_REPLAY_CAPTURE_PATH) {
-      const replayClient = await connectTemporal(config);
-      try {
-        const history = await replayClient.client.workflow.getHandle(startedIssue.workflowId).fetchHistory();
-        const replayHistory = proto.temporal.api.history.v1.History.create(history);
-        const replayJson = proto.temporal.api.history.v1.History.toObject(replayHistory, { longs: String, enums: String, bytes: String, defaults: false, arrays: true, objects: true });
-        await writeFile(process.env.FORGE_REPLAY_CAPTURE_PATH, JSON.stringify(sanitizeReplayValue(replayJson), null, 2));
-      } finally {
-        replayClient.connection.close();
+    const scenarioClient = await connectTemporal(config);
+    try {
+      const executions = await runReplayScenarioCorpus({ client: scenarioClient.client.workflow, connection: workerConnection, namespace: config.temporalNamespace, taskQueue: `${config.taskQueue}-replay-scenarios` });
+      expect(executions.map(({ scenario }) => scenario)).toEqual(["normal_success", "implementation_repair", "active_cancellation", "blocked_authentication_resume", "continue_as_new", "release_base_drift_merged", "release_base_drift_conflict", "ci_wait_retry"]);
+      expect(executions.find(({ scenario }) => scenario === "normal_success")?.currentPhase).toBe("done");
+      expect(executions.find(({ scenario }) => scenario === "continue_as_new")?.finalState.continuationCount).toBe(2);
+      for (const execution of executions) {
+        const revisions = execution.projections.map(({ revision }) => revision);
+        expect(new Set(revisions).size).toBe(revisions.length);
       }
+      if (process.env.FORGE_REPLAY_CAPTURE_PATH) {
+        const replacementIds = { normal_success: "normal-success-v1", implementation_repair: "implementation-repair-v1", active_cancellation: "active-cancellation-v1", blocked_authentication_resume: "blocked-authentication-resume-v1", continue_as_new: "continue-as-new-run-0-v1", release_base_drift_merged: "release-base-drift-merged-v1", release_base_drift_conflict: "release-base-drift-conflict-v1", ci_wait_retry: "ci-wait-retry-v1" } as const;
+        for (const execution of executions) await captureWorkflowHistory({ address: config.temporalAddress, namespace: config.temporalNamespace, workflowId: execution.workflowId, firstRunId: execution.firstRunId, scenario: execution.scenario, currentPhase: execution.currentPhase, outputDir: process.env.FORGE_REPLAY_CAPTURE_PATH, replace: replacementIds[execution.scenario] });
+      }
+    } finally {
+      scenarioClient.connection.close();
     }
 
     worker.shutdown();
@@ -242,7 +243,9 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       connection: workerConnection,
       namespace: config.temporalNamespace,
       taskQueue: config.taskQueue,
-      workflowsPath: fileURLToPath(new URL("../src/temporal/workflows.ts", import.meta.url)),
+      workflowBundle,
+      dataConverter: temporalDataConverter,
+      interceptors: { activity: activityPayloadInterceptors },
       activities: createActivities(reopenedDatabase, config, { agent: integrationAgent }),
     });
     workerRun = worker.run();
@@ -277,4 +280,4 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     }
     await rm(root, { recursive: true, force: true });
   }
-});
+}, 120_000);

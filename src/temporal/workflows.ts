@@ -110,6 +110,14 @@ const leadPlanningPatch = "forge-lead-planning-v1";
 const planGovernancePatch = "forge-plan-governance-v1";
 const planningProjectionIntegrityPatch = "forge-planning-projection-integrity-v1";
 const distinctPlanningStatesPatch = "forge-distinct-planning-states-v1";
+const artifactBackedConflictPatch = "forge-artifact-backed-conflict-evidence-v1";
+const artifactBackedReviewPatch = "forge-artifact-backed-review-evidence-v1";
+
+function compactStateForContinuation(state: IssueWorkflowState): IssueWorkflowState {
+  const compact = { ...state, activeOperation: null } as Record<string, unknown>;
+  for (const key of ["worktreePath", "deliveryBlockingFindings", "deliveryRepairPlan", "forwardMergeConflictFiles", "forwardMergeConflictDiff", "conflictFiles", "conflictDiff"]) delete compact[key];
+  return IssueWorkflowStateSchema.parse(compact);
+}
 
 function permanentActivityFailure(error: unknown): { code: string; summary: string } | undefined {
   if (!(error instanceof ActivityFailure) || !(error.cause instanceof ApplicationFailure) || !error.cause.nonRetryable) return undefined;
@@ -126,11 +134,27 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);
   const continuation = validatedInput.continuationState;
   const continueAfter = validatedInput.continueAsNewAfter ?? 0;
-  let state: IssueWorkflowState = createInitialIssueWorkflowState(validatedInput);
-  if (continuation) state = IssueWorkflowStateSchema.parse({ ...state, ...continuation, continuationCount: continuation.continuationCount + 1 });
+  let state = IssueWorkflowStateSchema.parse({
+    ...createInitialIssueWorkflowState(validatedInput),
+    activeOperation: null,
+    processedCommandIds: [],
+    ...(continuation ?? {}),
+    continuationCount: continuation ? continuation.continuationCount + 1 : 0,
+  });
   let continuationRequested = false;
   const shouldContinueAsNew = (revision: number): boolean => {
-    return (continueAfter > 0 && revision >= continueAfter) || workflowInfo().historyLength >= WORKFLOW_HISTORY_EVENT_LIMIT;
+    return workflowInfo().continueAsNewSuggested || (continueAfter > 0 && revision >= continueAfter) || workflowInfo().historyLength >= WORKFLOW_HISTORY_EVENT_LIMIT;
+  };
+  let stateMutationLocked = false;
+  const withStateMutation = async <T>(operation: () => T): Promise<T> => {
+    await condition(() => !stateMutationLocked);
+    stateMutationLocked = true;
+    try { return operation(); } finally { stateMutationLocked = false; }
+  };
+  const commandAlreadyProcessed = (commandId: string): boolean => commandId !== "legacy-command" && (state.processedCommandIds ?? []).includes(commandId);
+  const markCommandProcessed = (commandId: string): void => {
+    const processed = state.processedCommandIds ?? [];
+    if (commandId !== "legacy-command" && !processed.includes(commandId)) state = IssueWorkflowStateSchema.parse({ ...state, processedCommandIds: [...processed, commandId].slice(-64) });
   };
   setHandler(issueStateQuery, () => state);
   setHandler(startPlanningUpdate, async (rawInput) => {
@@ -230,16 +254,27 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(startDevelopmentUpdate, async (rawInput) => {
     assertPayloadWithinLimit("start development command", rawInput);
     const command = StartPlanningInputSchema.parse(rawInput);
-    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "development", owner: "lead", allowedCommands: ["cancel_development", "reject_plan", "cancel_issue"], pendingAction: "Developer execution", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    if (commandAlreadyProcessed(command.commandId)) return state;
+    const executionId = `developer_${state.workflowId}_${command.commandId}`.slice(0, 256);
+    await withStateMutation(() => {
+      if (state.revision !== command.expectedRevision || state.phase !== "ready_for_development") throw new Error("Development start was superseded by another command");
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "development", owner: "lead", allowedCommands: ["cancel_development", "reject_plan", "cancel_issue"], pendingAction: "Developer execution", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerExecutionId: executionId, activeOperation: { commandId: command.commandId, kind: "development", startedRevision: state.revision + 1 } });
+      markCommandProcessed(command.commandId);
+    });
     await projectIssueState(state);
-    const result = await runDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId! });
-    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], pendingAction: result.outcome === "completed" ? "Lead delivery review" : "Resolve Developer blocker", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, worktreePath: result.worktreePath, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome });
-    if (shouldContinueAsNew(state.revision)) continuationRequested = true;
-    await projectIssueState(state);
+    const result = await runDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, executionId });
+    const applied = await withStateMutation(() => {
+      if (state.activeOperation?.commandId !== command.commandId || state.phase !== "development") return false;
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], pendingAction: result.outcome === "completed" ? "Lead delivery review" : "Resolve Developer blocker", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, activeOperation: null });
+      if (shouldContinueAsNew(state.revision)) continuationRequested = true;
+      return true;
+    });
+    if (applied) await projectIssueState(state);
     void command;
     return state;
   }, { validator(rawInput) {
     const command = StartPlanningInputSchema.parse(rawInput);
+    if (commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
     if (state.phase !== "ready_for_development") throw new Error("Development can only start after plan approval");
     if (!state.planMaterial || !state.leadOutputArtifactId || !state.leadSessionRef) throw new Error("An approved material Lead plan is required before development");
@@ -247,15 +282,27 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(retryDevelopmentUpdate, async (rawInput) => {
     assertPayloadWithinLimit("retry development command", rawInput);
     const command = StartPlanningInputSchema.parse(rawInput);
-    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "development", owner: "lead", allowedCommands: ["cancel_development", "reject_plan", "cancel_issue"], pendingAction: "Developer retry", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    if (commandAlreadyProcessed(command.commandId)) return state;
+    const executionId = `developer_${state.workflowId}_${command.commandId}`.slice(0, 256);
+    await withStateMutation(() => {
+      if (state.revision !== command.expectedRevision || (state.phase !== "development" && state.phase !== "delivery_blocked")) throw new Error("Developer retry was superseded by another command");
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "development", owner: "lead", allowedCommands: ["cancel_development", "reject_plan", "cancel_issue"], pendingAction: "Developer retry", lastEventId: `${state.workflowId}:${state.revision + 1}`, activeOperation: { commandId: command.commandId, kind: "development", startedRevision: state.revision + 1 } });
+      markCommandProcessed(command.commandId);
+    });
     await projectIssueState(state);
-    const result = await runDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, supersedesExecutionId: state.developerExecutionId!, reuseWorktree: true });
-    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["retry_development", "cancel_issue"], pendingAction: result.outcome === "completed" ? "Lead delivery review" : "Developer retry is available", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, worktreePath: result.worktreePath, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome });
-    await projectIssueState(state);
+    const result = await runDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, supersedesExecutionId: state.developerExecutionId!, reuseWorktree: true, executionId });
+    const applied = await withStateMutation(() => {
+      if (state.activeOperation?.commandId !== command.commandId || state.phase !== "development") return false;
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["retry_development", "cancel_issue"], pendingAction: result.outcome === "completed" ? "Lead delivery review" : "Developer retry is available", lastEventId: `${state.workflowId}:${state.revision + 1}`, activeOperation: null, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome });
+      if (shouldContinueAsNew(state.revision)) continuationRequested = true;
+      return true;
+    });
+    if (applied) await projectIssueState(state);
     void command;
     return state;
   }, { validator(rawInput) {
     const command = StartPlanningInputSchema.parse(rawInput);
+    if (commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
     if (state.phase !== "development" && state.phase !== "delivery_blocked") throw new Error("Developer retry is not available in the current phase");
     if (!state.developerExecutionId || !state.planMaterial || !state.leadOutputArtifactId || !state.leadSessionRef) throw new Error("A preserved Developer attempt and approved plan are required before retry");
@@ -280,14 +327,17 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       developerExecutionId: state.developerExecutionId!,
       deliveryArtifactId: state.deliveryArtifactId!,
       evidenceArtifactId: state.developerEvidenceArtifactId!,
-      worktreePath: state.worktreePath!,
       branchName: state.branchName!,
       targetBaseSha: state.targetBaseSha!,
       subjectCommit: state.resultCommit!,
       subjectTree: state.resultTree!,
     });
-    const openBlocking = result.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
-    const canRepair = result.outcome === "blocking" && result.repairPlan !== null && openBlocking.length > 0 && (state.repairCycle ?? 0) < validatedInput.repairCycleLimit;
+    const legacyReview = !patched(artifactBackedReviewPatch);
+    const legacyResult = result as typeof result & { findings?: Array<{ severity: "blocking" | "advisory"; disposition: "open" | "accepted" | "repaired" }>; repairPlan?: string | null; reviewArtifact?: typeof result.reviewArtifact };
+    if (!legacyReview && !legacyResult.reviewArtifact) throw ApplicationFailure.nonRetryable("Delivery review artifact is missing", "delivery_review_artifact_missing");
+    const legacyFindings = legacyResult.findings ?? [];
+    const openBlocking = legacyFindings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
+    const canRepair = result.outcome === "blocking" && (!legacyReview || (legacyResult.repairPlan !== null && openBlocking.length > 0)) && (state.repairCycle ?? 0) < validatedInput.repairCycleLimit;
     const nextPhase = result.outcome === "approved" ? "delivery_reviewed" : canRepair ? "repair_required" : "delivery_blocked";
     state = IssueWorkflowStateSchema.parse({
       ...state,
@@ -300,10 +350,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       deliveryReviewId: result.reviewId,
       deliveryReviewOutcome: result.outcome,
       deliveryReviewSummary: result.summary,
-      deliveryBlockingFindings: openBlocking,
-      deliveryRepairPlan: result.repairPlan,
+      ...(!legacyReview ? { deliveryReviewArtifact: legacyResult.reviewArtifact } : { deliveryBlockingFindings: openBlocking, deliveryRepairPlan: legacyResult.repairPlan }),
       repairCycle: state.repairCycle ?? 0,
     });
+    if (legacyReview) continuationRequested = true;
     if (shouldContinueAsNew(state.revision)) continuationRequested = true;
     await projectIssueState(state);
     void command;
@@ -312,7 +362,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const command = StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
     if (state.phase !== "delivery_ready") throw new Error("Delivery review is not available in the current phase");
-    if (!state.developerExecutionId || !state.developerSessionRef || !state.worktreePath || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree || !state.deliveryArtifactId || !state.developerEvidenceArtifactId || !state.leadSessionRef || !state.leadOutputArtifactId) throw new Error("An exact Developer delivery and Lead session are required before review");
+    if (!state.developerExecutionId || !state.developerSessionRef || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree || !state.deliveryArtifactId || !state.developerEvidenceArtifactId || !state.leadSessionRef || !state.leadOutputArtifactId) throw new Error("An exact Developer delivery and Lead session are required before review");
   } });
   setHandler(repairDeliveryUpdate, async (rawInput) => {
     assertPayloadWithinLimit("delivery repair command", rawInput);
@@ -335,13 +385,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       reviewId: state.deliveryReviewId!,
       cycle,
       repairCycleLimit: validatedInput.repairCycleLimit,
-      worktreePath: state.worktreePath!,
       branchName: state.branchName!,
       targetBaseSha: state.targetBaseSha!,
       subjectCommit: state.resultCommit!,
       subjectTree: state.resultTree!,
-      blockingFindings: state.deliveryBlockingFindings ?? [],
-      repairPlan: state.deliveryRepairPlan!,
+      ...(state.deliveryReviewArtifact ? { reviewArtifact: state.deliveryReviewArtifact } : { blockingFindings: state.deliveryBlockingFindings ?? [], repairPlan: state.deliveryRepairPlan! }),
     });
     const nextPhase = result.outcome === "completed" ? "delivery_ready" : "delivery_blocked";
     state = IssueWorkflowStateSchema.parse({
@@ -354,7 +402,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       lastEventId: `${state.workflowId}:${state.revision + 1}`,
       developerExecutionId: result.developerExecutionId,
       developerSessionRef: result.developerSessionRef,
-      worktreePath: result.worktreePath,
       branchName: result.branchName,
       targetBaseSha: result.targetBaseSha,
       resultCommit: result.resultCommit,
@@ -368,8 +415,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       deliveryReviewId: result.outcome === "completed" ? null : state.deliveryReviewId,
       deliveryReviewOutcome: result.outcome === "completed" ? null : state.deliveryReviewOutcome,
       deliveryReviewSummary: result.outcome === "completed" ? null : state.deliveryReviewSummary,
-      deliveryBlockingFindings: result.outcome === "completed" ? [] : state.deliveryBlockingFindings,
-      deliveryRepairPlan: result.outcome === "completed" ? null : state.deliveryRepairPlan,
+      ...(result.outcome === "completed" ? { deliveryBlockingFindings: [], deliveryRepairPlan: null } : {}),
     });
     if (shouldContinueAsNew(state.revision)) continuationRequested = true;
     await projectIssueState(state);
@@ -379,9 +425,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const command = StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
     if (state.phase !== "repair_required") throw new Error("Delivery repair is not available in the current phase");
-    if (!state.deliveryReviewId || !state.deliveryRepairPlan || !(state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open")) throw new Error("Open blocking findings and a bounded repair plan are required");
+    if (!state.deliveryReviewId || (!state.deliveryReviewArtifact && (!state.deliveryRepairPlan || !(state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open")))) throw new Error("Open blocking findings and a bounded repair plan are required");
     if ((state.repairCycle ?? 0) >= validatedInput.repairCycleLimit) throw new Error("Delivery repair limit is exhausted");
-    if (!state.developerExecutionId || !state.developerSessionRef || !state.worktreePath || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree || !state.leadSessionRef) throw new Error("The prior Developer delivery must be preserved before repair");
+    if (!state.developerExecutionId || !state.developerSessionRef || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree || !state.leadSessionRef) throw new Error("The prior Developer delivery must be preserved before repair");
   } });
   setHandler(recordDeliveryDecisionUpdate, async (rawInput) => {
     assertPayloadWithinLimit("delivery decision command", rawInput);
@@ -397,10 +443,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (state.phase !== "delivery_blocked" || !state.allowedCommands.includes("record_delivery_decision")) throw new Error("A member decision is not available in the current phase");
   } });
   const runFinalReviewTurn = async (): Promise<IssueWorkflowState> => {
-    if (!state.releaseId || !state.ciRunId || !state.leadSessionRef || !state.leadOutputArtifactId || !state.developerExecutionId || !state.deliveryArtifactId || !state.developerEvidenceArtifactId || !state.worktreePath || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree) throw new Error("Exact release, CI, Lead, and Developer evidence is required for final review");
+    if (!state.releaseId || !state.ciRunId || !state.leadSessionRef || !state.leadOutputArtifactId || !state.developerExecutionId || !state.deliveryArtifactId || !state.developerEvidenceArtifactId || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree) throw new Error("Exact release, CI, Lead, and Developer evidence is required for final review");
     let result;
     try {
-      result = await finalReview({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, roleProfiles: validatedInput.roleProfiles, releaseId: state.releaseId, ciRunId: state.ciRunId, planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef, leadOutputArtifactId: state.leadOutputArtifactId, developerExecutionId: state.developerExecutionId, deliveryArtifactId: state.deliveryArtifactId, evidenceArtifactId: state.developerEvidenceArtifactId, worktreePath: state.worktreePath, branchName: state.branchName, targetBaseSha: state.targetBaseSha, subjectCommit: state.resultCommit, subjectTree: state.resultTree });
+      result = await finalReview({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, roleProfiles: validatedInput.roleProfiles, releaseId: state.releaseId, ciRunId: state.ciRunId, planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef, leadOutputArtifactId: state.leadOutputArtifactId, developerExecutionId: state.developerExecutionId, deliveryArtifactId: state.deliveryArtifactId, evidenceArtifactId: state.developerEvidenceArtifactId, branchName: state.branchName, targetBaseSha: state.targetBaseSha, subjectCommit: state.resultCommit, subjectTree: state.resultTree });
     } catch {
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_repair_required", owner: "human", allowedCommands: ["request_delivery_changes", "cancel_issue"], pendingAction: "Final review could not be completed", lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
@@ -464,14 +510,17 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       return state;
     }
     if (result.baseDriftConflict) {
-      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_reviewing", owner: "lead", allowedCommands: [], pendingAction: "Lead conflict-resolution plan", targetBaseSha: result.targetBaseSha ?? state.targetBaseSha, forwardMergeId: result.forwardMergeId ?? null, forwardMergePriorHead: result.priorHead ?? state.resultCommit, forwardMergeTargetBaseSha: result.targetBaseSha ?? state.targetBaseSha, forwardMergeConflictFiles: result.conflictFiles ?? [], forwardMergeConflictDiff: result.conflictDiff ?? null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      const legacyConflict = !patched(artifactBackedConflictPatch);
+      if (!legacyConflict && !result.mergeConflictEvidence) throw ApplicationFailure.nonRetryable("Merge-conflict evidence is missing", "merge_conflict_evidence_missing");
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_reviewing", owner: "lead", allowedCommands: [], pendingAction: "Lead conflict-resolution plan", targetBaseSha: result.targetBaseSha ?? state.targetBaseSha, forwardMergeId: result.forwardMergeId ?? null, forwardMergePriorHead: result.priorHead ?? state.resultCommit, forwardMergeTargetBaseSha: result.targetBaseSha ?? state.targetBaseSha, ...(result.mergeConflictEvidence ? { mergeConflictEvidence: result.mergeConflictEvidence } : {}), ...(legacyConflict ? { forwardMergeConflictFiles: result.conflictFiles ?? [], forwardMergeConflictDiff: result.conflictDiff ?? null } : {}), lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
       try {
-        const plan = await planMergeConflict({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, worktreePath: state.worktreePath!, branchName: state.branchName!, priorHead: state.forwardMergePriorHead!, targetBaseSha: state.forwardMergeTargetBaseSha!, conflictFiles: state.forwardMergeConflictFiles ?? [], conflictDiff: state.forwardMergeConflictDiff ?? "", ...(state.forwardMergeId ? { forwardMergeId: state.forwardMergeId } : {}) });
+        const plan = await planMergeConflict({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, branchName: state.branchName!, priorHead: state.forwardMergePriorHead!, targetBaseSha: state.forwardMergeTargetBaseSha!, ...(state.mergeConflictEvidence ? { conflictEvidence: state.mergeConflictEvidence } : { conflictFiles: state.forwardMergeConflictFiles ?? [], conflictDiff: state.forwardMergeConflictDiff ?? "" }), ...(state.forwardMergeId ? { forwardMergeId: state.forwardMergeId } : {}) });
         state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_required", owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, lastEventId: `${state.workflowId}:${state.revision + 1}` });
       } catch {
         state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["cancel_issue"], pendingAction: "Lead conflict-resolution planning failed; inspect the recorded evidence", lastEventId: `${state.workflowId}:${state.revision + 1}` });
       }
+      if (legacyConflict) continuationRequested = true;
       await projectIssueState(state);
       void command;
       return state;
@@ -489,11 +538,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(resolveMergeConflictUpdate, async (rawInput) => {
     const command = StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== state.revision || state.phase !== "merge_conflict_required") throw new Error("Merge-conflict resolution is not available in the current phase");
-    if (!state.mergeResolutionPlanArtifactId || !state.developerExecutionId || !state.developerSessionRef || !state.worktreePath || !state.branchName || !state.forwardMergePriorHead || !state.forwardMergeTargetBaseSha) throw new Error("A Lead conflict plan and owned Developer worktree are required");
+    if (!state.mergeResolutionPlanArtifactId || !state.developerExecutionId || !state.developerSessionRef || !state.branchName || !state.forwardMergePriorHead || !state.forwardMergeTargetBaseSha) throw new Error("A Lead conflict plan and owned Developer execution are required");
     state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_resolving", owner: "lead", allowedCommands: [], pendingAction: "Developer resolving forward-merge conflicts", lastEventId: `${state.workflowId}:${state.revision + 1}` });
     await projectIssueState(state);
     try {
-      const result = await resolveMergeConflict({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, planRevision: state.planRevision ?? state.revision, developerExecutionId: state.developerExecutionId!, developerSessionRef: state.developerSessionRef!, worktreePath: state.worktreePath!, branchName: state.branchName!, priorHead: state.forwardMergePriorHead!, targetBaseSha: state.forwardMergeTargetBaseSha!, conflictFiles: state.forwardMergeConflictFiles ?? [], planArtifactId: state.mergeResolutionPlanArtifactId! });
+      const result = await resolveMergeConflict({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, planRevision: state.planRevision ?? state.revision, developerExecutionId: state.developerExecutionId!, developerSessionRef: state.developerSessionRef!, branchName: state.branchName!, priorHead: state.forwardMergePriorHead!, targetBaseSha: state.forwardMergeTargetBaseSha!, planArtifactId: state.mergeResolutionPlanArtifactId! });
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Fresh Lead delivery review required after conflict resolution", targetBaseSha: state.forwardMergeTargetBaseSha, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: "clean", deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.summary, developerOutcome: "completed", deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, acceptanceId: null, mergeResolutionDeveloperExecutionId: result.developerExecutionId, mergeResolutionDeveloperSessionRef: result.developerSessionRef, lastEventId: `${state.workflowId}:${state.revision + 1}` });
     } catch {
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution is incomplete; retry the same owned turn", lastEventId: `${state.workflowId}:${state.revision + 1}` });
@@ -514,15 +563,15 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(repairCIUpdate, async (rawInput) => {
     const command = StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== state.revision || state.phase !== "ci_repair_required") throw new Error("CI repair is not available in the current phase");
-    if (!state.deliveryReviewId || !state.developerExecutionId || !state.developerSessionRef || !state.worktreePath || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree || !state.leadSessionRef) throw new Error("The exact prior Developer delivery is required for CI repair");
+    if (!state.deliveryReviewId || !state.developerExecutionId || !state.developerSessionRef || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree || !state.leadSessionRef) throw new Error("The exact prior Developer delivery is required for CI repair");
     const cycle = (state.repairCycle ?? 0) + 1;
     if (cycle > validatedInput.repairCycleLimit) throw new Error("CI repair limit is exhausted");
-    const priorDelivery = { leadSessionRef: state.leadSessionRef, developerSessionRef: state.developerSessionRef, developerExecutionId: state.developerExecutionId, reviewId: state.deliveryReviewId, worktreePath: state.worktreePath, branchName: state.branchName, targetBaseSha: state.targetBaseSha, subjectCommit: state.resultCommit, subjectTree: state.resultTree, ciOutcome: state.ciOutcome };
+    const priorDelivery = { leadSessionRef: state.leadSessionRef, developerSessionRef: state.developerSessionRef, developerExecutionId: state.developerExecutionId, reviewId: state.deliveryReviewId, branchName: state.branchName, targetBaseSha: state.targetBaseSha, subjectCommit: state.resultCommit, subjectTree: state.resultTree, ciOutcome: state.ciOutcome };
     state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: `Developer CI repair cycle ${cycle}`, lastEventId: `${state.workflowId}:${state.revision + 1}` });
     await projectIssueState(state);
-    const result = await runDeveloperRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: priorDelivery.leadSessionRef, developerSessionRef: priorDelivery.developerSessionRef, developerExecutionId: priorDelivery.developerExecutionId, reviewId: priorDelivery.reviewId, cycle, repairCycleLimit: validatedInput.repairCycleLimit, worktreePath: priorDelivery.worktreePath, branchName: priorDelivery.branchName, targetBaseSha: priorDelivery.targetBaseSha, subjectCommit: priorDelivery.subjectCommit, subjectTree: priorDelivery.subjectTree, blockingFindings: state.deliveryBlockingFindings ?? [], repairPlan: `Repair the exact-head verification outcome ${priorDelivery.ciOutcome ?? "failed"}; preserve the branch and create a new normal commit.` });
+    const result = await runDeveloperRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: priorDelivery.leadSessionRef, developerSessionRef: priorDelivery.developerSessionRef, developerExecutionId: priorDelivery.developerExecutionId, reviewId: priorDelivery.reviewId, cycle, repairCycleLimit: validatedInput.repairCycleLimit, branchName: priorDelivery.branchName, targetBaseSha: priorDelivery.targetBaseSha, subjectCommit: priorDelivery.subjectCommit, subjectTree: priorDelivery.subjectTree, ...(state.deliveryReviewArtifact ? { reviewArtifact: state.deliveryReviewArtifact } : { blockingFindings: state.deliveryBlockingFindings ?? [], repairPlan: `Repair the exact-head verification outcome ${priorDelivery.ciOutcome ?? "failed"}; preserve the branch and create a new normal commit.` }) });
     const nextPhase = result.outcome === "completed" ? "delivery_ready" : "delivery_blocked";
-    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: nextPhase, owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], pendingAction: result.outcome === "completed" ? "Fresh Lead delivery review required" : "Member decision required", developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, worktreePath: result.worktreePath, branchName: result.branchName, targetBaseSha: result.targetBaseSha, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, repairCycle: result.cycle, deliveryReviewId: result.outcome === "completed" ? null : state.deliveryReviewId, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: nextPhase, owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], pendingAction: result.outcome === "completed" ? "Fresh Lead delivery review required" : "Member decision required", developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, repairCycle: result.cycle, activeOperation: null, deliveryReviewId: result.outcome === "completed" ? null : state.deliveryReviewId, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
     await projectIssueState(state);
     return state;
   }, { validator(rawInput) { const command = StartPlanningInputSchema.parse(rawInput); if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision"); if (state.phase !== "ci_repair_required" || !state.developerExecutionId) throw new Error("CI repair is not available in the current phase"); } });
@@ -564,13 +613,25 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(cancelDevelopmentUpdate, async (rawInput) => {
     assertPayloadWithinLimit("cancel development command", rawInput);
     const command = StartPlanningInputSchema.parse(rawInput);
-    const result = await cancelDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, executionId: state.developerExecutionId! });
-    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: result.status === "cancelled" ? ["retry_development"] : [], pendingAction: result.status === "cancelled" ? "Developer turn cancelled; retry or continue" : "Operator must verify Developer ownership", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerOutcome: null });
+    if (commandAlreadyProcessed(command.commandId)) return state;
+    const executionId = state.developerExecutionId!;
+    await withStateMutation(() => {
+      if (state.revision !== command.expectedRevision || state.phase !== "development") throw new Error("Developer cancellation was superseded by another command");
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: [], pendingAction: "Cancelling Developer turn", lastEventId: `${state.workflowId}:${state.revision + 1}`, activeOperation: null });
+      markCommandProcessed(command.commandId);
+    });
+    await projectIssueState(state);
+    const result = await cancelDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, executionId });
+    await withStateMutation(() => {
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: result.status === "cancelled" ? ["retry_development"] : [], pendingAction: result.status === "cancelled" ? "Developer turn cancelled; retry or continue" : "Operator must verify Developer ownership", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerOutcome: null, activeOperation: null });
+      if (shouldContinueAsNew(state.revision)) continuationRequested = true;
+    });
     await projectIssueState(state);
     void command;
     return state;
   }, { validator(rawInput) {
     const command = StartPlanningInputSchema.parse(rawInput);
+    if (commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
     if (state.phase !== "development" || !state.developerExecutionId) throw new Error("Developer cancellation is not available in the current phase");
   } });
@@ -619,7 +680,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     },
   });
   assertPayloadWithinLimit("Issue Workflow result", state);
-  await projectIssueState(state);
+  if (!continuation) await projectIssueState(state);
   while (true) {
     if (state.phase === "ci_waiting") {
       const pollAt = state.ciNextPollAt ? Date.parse(state.ciNextPollAt) : Date.now();
@@ -635,8 +696,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     }
     await condition(() => (continuationRequested && allHandlersFinished()) || state.phase === "ci_waiting" || state.phase === "manual_merge");
     if (continuationRequested && allHandlersFinished()) {
-      assertContinuationStateWithinLimit(state);
-      await continueAsNew<typeof issueWorkflow>({ ...validatedInput, continuationState: state, continueAsNewAfter: 0 });
+      if (stateMutationLocked || state.activeOperation !== null) continue;
+      const compact = compactStateForContinuation(state);
+      assertContinuationStateWithinLimit(compact);
+      await continueAsNew<typeof issueWorkflow>({ ...validatedInput, continuationState: compact, continueAsNewAfter: continueAfter });
     }
   }
 }

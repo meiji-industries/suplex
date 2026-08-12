@@ -14,7 +14,7 @@ export interface ArtifactInput {
 export interface StoredArtifact {
   id: string;
   companyId: string;
-  kind: "task-brief" | "task-image" | "agent-evidence" | "lead-plan" | "decision-blocker" | "supplemental-review" | "plan-decision" | "developer-delivery" | "delivery-review" | "developer-repair" | "delivery-decision" | "ci-evidence" | "merge-conflict-plan" | "merge-conflict-resolution";
+  kind: "task-brief" | "task-image" | "agent-evidence" | "lead-plan" | "decision-blocker" | "supplemental-review" | "plan-decision" | "developer-delivery" | "delivery-review" | "developer-repair" | "delivery-decision" | "ci-evidence" | "merge-conflict-evidence" | "merge-conflict-plan" | "merge-conflict-resolution";
   filename: string;
   mimeType: string;
   byteSize: number;

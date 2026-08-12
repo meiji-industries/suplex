@@ -11,11 +11,11 @@ import { AgentFailure, AgentService } from "../codex-lead.js";
 import { DeveloperService } from "../codex-developer.js";
 import { cancelDeveloperExecution } from "../developer-recovery.js";
 import { AcceptanceService } from "../acceptance.js";
-import { CiService, createGithubCiProvider } from "../ci.js";
+import { CiService, createGithubCiProvider, type CiProvider } from "../ci.js";
 import { createGithubReleasePort, ReleaseService, type GithubReleasePort } from "../github-release.js";
 import { ForwardMergeService } from "../forward-merge.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { DeliveryDecisionActivityInputSchema, IssueWorkflowStateSchema, type AcceptDeliveryActivityInput, type FinalReviewActivityInput, type IssueActivities, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput } from "./issue-contracts.js";
+import { DeliveryDecisionActivityInputSchema, DeliveryReviewSchema, DurableArtifactReferenceSchema, IssueWorkflowStateSchema, SafeSummarySchema, type AcceptDeliveryActivityInput, type DurableArtifactReference, type IssueActivities, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput, type WorkflowDeliveryReviewActivityInput, type WorkflowDeveloperRepairActivityInput, type WorkflowFinalReviewActivityInput, type WorkflowMergeConflictPlanActivityInput, type WorkflowMergeConflictResolutionActivityInput } from "./issue-contracts.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
 import { CapacityManager } from "../capacity.js";
 
@@ -23,6 +23,7 @@ export interface ActivityOptions {
   agent?: Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "planMergeConflict">>;
   developer?: Partial<Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution">>;
   githubRelease?: GithubReleasePort;
+  ciProvider?: CiProvider;
 }
 
 export class CapacityWaitError extends Error {
@@ -57,16 +58,52 @@ function pinnedProjectRevision(raw: string): z.infer<typeof PinnedProjectRevisio
   }
 }
 
+async function durableArtifactReference(database: ForgeDatabase, store: ArtifactStore, companyId: string, artifactId: string, kind?: DurableArtifactReference["kind"]): Promise<DurableArtifactReference> {
+  const row = database.authQuery((db) => db.prepare("SELECT id AS artifactId, company_id AS companyId, kind, sha256, byte_size AS byteSize, mime_type AS mimeType, storage_path AS storagePath FROM forge_artifacts WHERE id = ? AND company_id = ?").get(artifactId, companyId) as ({ artifactId: string; companyId: string; kind: string; sha256: string; byteSize: number; mimeType: string; storagePath: string } | undefined));
+  if (!row || (kind && row.kind !== kind)) throw new Error("Scoped artifact reference is unavailable");
+  const reference = DurableArtifactReferenceSchema.parse({ artifactId: row.artifactId, companyId: row.companyId, kind: row.kind, sha256: row.sha256, byteSize: row.byteSize, mimeType: row.mimeType });
+  const bytes = await store.read({ companyId: row.companyId, storagePath: row.storagePath, sha256: row.sha256 });
+  if (bytes.byteLength !== reference.byteSize) throw new Error("Scoped artifact size verification failed");
+  return reference;
+}
+
+async function verifiedArtifactBytes(database: ForgeDatabase, store: ArtifactStore, companyId: string, expected: DurableArtifactReference, kind: DurableArtifactReference["kind"]): Promise<Buffer> {
+  const actual = await durableArtifactReference(database, store, companyId, expected.artifactId, kind);
+  for (const field of ["artifactId", "companyId", "kind", "sha256", "byteSize", "mimeType"] as const) {
+    if (actual[field] !== expected[field]) throw new Error("Scoped artifact metadata verification failed");
+  }
+  const row = database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = ?").get(actual.artifactId, companyId, kind) as { storagePath: string } | undefined);
+  if (!row) throw new Error("Scoped artifact storage is unavailable");
+  return store.read({ companyId, storagePath: row.storagePath, sha256: actual.sha256 });
+}
+
+const MergeConflictEvidenceSchema = z.object({
+  version: z.literal(1),
+  priorHead: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  targetBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  conflictFiles: z.array(z.string().min(1).max(1_000)).min(1).max(128),
+  combinedDiff: z.string().max(8 * 1024 * 1024),
+});
+
+function compactWorkflowState(input: IssueWorkflowState): IssueWorkflowState {
+  const state = { ...input } as Record<string, unknown>;
+  for (const key of ["worktreePath", "deliveryBlockingFindings", "deliveryRepairPlan", "forwardMergeConflictFiles", "forwardMergeConflictDiff", "conflictFiles", "conflictDiff"]) delete state[key];
+  return IssueWorkflowStateSchema.parse(state);
+}
+
 export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): ProbeActivities & IssueActivities {
   const logger = new StructuredLogger();
   const defaultAgent = new AgentService(database, config);
   const defaultDeveloper = new DeveloperService(database, config);
   const githubRelease = options.githubRelease ?? createGithubReleasePort();
-  const release = new ReleaseService(database, new ArtifactStore(config.artifactRoot), githubRelease);
-  const ci = new CiService(database, createGithubCiProvider(), new ArtifactStore(config.artifactRoot));
+  const artifacts = new ArtifactStore(config.artifactRoot);
+  const release = new ReleaseService(database, artifacts, githubRelease);
+  const ci = new CiService(database, options.ciProvider ?? createGithubCiProvider(), artifacts);
   const acceptance = new AcceptanceService(database, githubRelease);
   const forwardMerge = new ForwardMergeService(database);
   const capacity = new CapacityManager(database, config);
+  const activityWorktrees = new Map<string, string>();
+  const activityWorktreesByBranch = new Map<string, string>();
   capacity.reconcileFromLedgers();
   const agent = options.agent;
   const developer = options.developer ?? defaultDeveloper;
@@ -83,6 +120,13 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     } finally {
       capacity.release(request.id, "turn-completed");
     }
+  };
+  const latestWorktree = (input: { taskId: string; companyId: string; workflowId: string; branchName?: string }, executionId?: string): string => {
+    const inMemory = executionId ? activityWorktrees.get(executionId) : input.branchName ? activityWorktreesByBranch.get(`${input.workflowId}:${input.branchName}`) : undefined;
+    if (inMemory) return inMemory;
+    const row = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND (? IS NULL OR branch_name = ?) ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.branchName ?? null, input.branchName ?? null) as { worktreePath: string } | undefined);
+    if (!row?.worktreePath) throw new Error("Developer worktree context is unavailable");
+    return row.worktreePath;
   };
   return {
     async recordProbeStarted(input: ProbeWorkflowInput): Promise<ProbeWorkflowState> {
@@ -102,7 +146,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       });
     },
     async projectIssueState(input: IssueWorkflowState): Promise<IssueWorkflowState> {
-      const state = IssueWorkflowStateSchema.parse(input);
+      const state = compactWorkflowState(IssueWorkflowStateSchema.parse(input));
       try {
         database.projectIssueState({
           taskId: state.issueId,
@@ -151,16 +195,21 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       return state;
     },
     async runLeadPlanning(input) {
-      return withCapacity(input, "lead", () => (agent?.runLeadPlanning ?? defaultAgent.runLeadPlanning.bind(defaultAgent))(input));
+      const result = await withCapacity(input, "lead", () => (agent?.runLeadPlanning ?? defaultAgent.runLeadPlanning.bind(defaultAgent))(input));
+      return { ...result, leadSummary: SafeSummarySchema.parse(result.leadSummary) };
     },
     async runSupplementalReview(input) {
       return withCapacity(input, "review", () => (agent?.runSupplementalReview ?? defaultAgent.runSupplementalReview.bind(defaultAgent))(input));
     },
     async consolidateLeadPlan(input) {
-      return withCapacity(input, "lead", () => (agent?.consolidateLeadPlan ?? defaultAgent.consolidateLeadPlan.bind(defaultAgent))(input));
+      const result = await withCapacity(input, "lead", () => (agent?.consolidateLeadPlan ?? defaultAgent.consolidateLeadPlan.bind(defaultAgent))(input));
+      return { ...result, leadSummary: SafeSummarySchema.parse(result.leadSummary) };
     },
-    async reviewDelivery(input) {
-      return withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(input));
+    async reviewDelivery(input: WorkflowDeliveryReviewActivityInput) {
+      const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
+      const result = await withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))({ ...input, worktreePath }));
+      const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, result.opinionArtifactId, "delivery-review");
+      return { reviewId: result.reviewId, leadExecutionId: result.leadExecutionId, leadSessionRef: result.leadSessionRef, opinionArtifactId: result.opinionArtifactId, evidenceArtifactId: result.evidenceArtifactId, reviewArtifact, outcome: result.outcome, summary: SafeSummarySchema.parse(result.summary), targetBaseSha: result.targetBaseSha, subjectCommit: result.subjectCommit, subjectTree: result.subjectTree };
     },
     async publishRelease(input: PublishReleaseActivityInput) {
       const context = database.authQuery((db) => db.prepare(`SELECT r.normalized_json AS normalizedJson, d.worktree_path AS worktreePath, d.branch_name AS branchName, d.target_base_sha AS targetBaseSha, d.result_commit AS subjectCommit, d.result_tree AS subjectTree, r2.summary AS deliverySummary, t.title
@@ -179,7 +228,10 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         if (currentBaseSha.toLowerCase() !== expectedBaseSha.toLowerCase()) {
           const merged = await forwardMerge.reconcile({ worktreePath: context.worktreePath, repositoryPath, branchName: input.branchName || context.branchName, expectedBaseSha, currentBaseSha, taskId: input.taskId, companyId: input.companyId });
           if (merged.status === "conflict") {
-            return { releaseId: "", repository, branchName: input.branchName || context.branchName, headSha: context.subjectCommit, headTree: context.subjectTree, pullRequestNumber: 0, pullRequestUrl: "", isDraft: false, reused: false, baseDriftConflict: true, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), priorHead: merged.priorHead, conflictFiles: merged.conflictFiles, ...(merged.conflictDiff !== undefined ? { conflictDiff: merged.conflictDiff } : {}), targetBaseSha: currentBaseSha };
+            const evidence = await artifacts.put(input.companyId, "merge-conflict-evidence", { filename: `${input.taskId}-${merged.forwardMergeId ?? "forward-merge"}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, priorHead: merged.priorHead, targetBaseSha: currentBaseSha, conflictFiles: merged.conflictFiles, combinedDiff: merged.conflictDiff ?? "" }), "utf8") });
+            database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt));
+            const reference = await durableArtifactReference(database, artifacts, input.companyId, evidence.id, "merge-conflict-evidence");
+            return { releaseId: "", repository, branchName: input.branchName || context.branchName, headSha: context.subjectCommit, headTree: context.subjectTree, pullRequestNumber: 0, pullRequestUrl: "", isDraft: false, reused: false, baseDriftConflict: true, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), priorHead: merged.priorHead, mergeConflictEvidence: reference, targetBaseSha: currentBaseSha };
           }
           const headSha = merged.mergeCommit ?? context.subjectCommit;
           const headTree = merged.tree ?? context.subjectTree;
@@ -196,15 +248,17 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       const result = await ci.reconcile({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, repository: pinned.repository, expectedHeadSha: input.expectedHeadSha, requiredChecks: pinned.requiredChecks, ...(input.attempt !== undefined ? { attempt: input.attempt } : {}) });
       return { runId: result.runId, outcome: result.outcome, summary: result.summary, nextPollAt: result.nextPollAt };
     },
-    async finalReview(input: FinalReviewActivityInput) {
+    async finalReview(input: WorkflowFinalReviewActivityInput) {
+      const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
       const context = database.authQuery((db) => db.prepare("SELECT r.normalized_json AS normalizedJson FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' WHERE t.id = ? AND t.company_id = ?").get(input.taskId, input.companyId) as { normalizedJson: string } | undefined);
       const pinned = context ? pinnedProjectRevision(context.normalizedJson) : undefined;
       if (pinned && githubRelease.getBranchHead) {
         const currentBaseSha = await githubRelease.getBranchHead({ repository: pinned.repository, branch: pinned.baseBranch });
         if (currentBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new Error("Target base has drifted since CI completed; a fresh forward merge and review are required");
       }
-      const review = await withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))({ ...input, reviewKind: "final" }));
-      return { finalReviewId: review.reviewId, leadExecutionId: review.leadExecutionId, leadSessionRef: review.leadSessionRef, opinionArtifactId: review.opinionArtifactId, evidenceArtifactId: review.evidenceArtifactId, outcome: review.outcome, summary: review.summary, findings: review.findings };
+      const review = await withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))({ ...input, worktreePath, reviewKind: "final" }));
+      const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, review.opinionArtifactId, "delivery-review");
+      return { finalReviewId: review.reviewId, leadExecutionId: review.leadExecutionId, leadSessionRef: review.leadSessionRef, opinionArtifactId: review.opinionArtifactId, evidenceArtifactId: review.evidenceArtifactId, reviewArtifact, outcome: review.outcome, summary: SafeSummarySchema.parse(review.summary) };
     },
     async acceptDelivery(input: AcceptDeliveryActivityInput & { decision?: "accept" | "request_changes" | "cancel" }) {
       const context = database.authQuery((db) => db.prepare(`SELECT pr.normalized_json AS normalizedJson, r.id AS reviewId, r.subject_commit AS subjectCommit, r.subject_tree AS subjectTree, rel.pr_number AS pullRequestNumber
@@ -223,17 +277,57 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       const result = await acceptance.reconcile({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, repository: pinned.repository, number: context.pullRequestNumber, expectedHeadSha: input.expectedHeadSha, expectedBaseBranch: pinned.baseBranch });
       return { outcome: result.outcome, pullRequestNumber: result.pullRequest?.number ?? context.pullRequestNumber, pullRequestUrl: result.pullRequest?.url ?? "" };
     },
-    async planMergeConflict(input: MergeConflictPlanActivityInput) {
-      return withCapacity(input, "lead", () => (agent?.planMergeConflict ?? defaultAgent.planMergeConflict.bind(defaultAgent))(input));
+    async planMergeConflict(input: WorkflowMergeConflictPlanActivityInput) {
+      const worktreePath = input.worktreePath ?? latestWorktree(input);
+      let conflictFiles = input.conflictFiles ?? [];
+      let conflictDiff = input.conflictDiff ?? "";
+      const conflictEvidence = input.conflictEvidence;
+      if (conflictEvidence) {
+        const evidence = MergeConflictEvidenceSchema.parse(JSON.parse((await verifiedArtifactBytes(database, artifacts, input.companyId, conflictEvidence, "merge-conflict-evidence")).toString("utf8")));
+        if (evidence.priorHead.toLowerCase() !== input.priorHead.toLowerCase() || evidence.targetBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new Error("Merge-conflict evidence identity is invalid");
+        conflictFiles = evidence.conflictFiles;
+        conflictDiff = evidence.combinedDiff;
+      }
+      if (!conflictFiles.length) throw new Error("Merge-conflict files are unavailable");
+      const rawInput: MergeConflictPlanActivityInput = { ...input, worktreePath, conflictFiles, conflictDiff };
+      return withCapacity(input, "lead", () => (agent?.planMergeConflict ?? defaultAgent.planMergeConflict.bind(defaultAgent))(rawInput));
     },
-    async resolveMergeConflict(input: MergeConflictResolutionActivityInput) {
-      return withCapacity(input, "developer", () => (developer?.runMergeConflictResolution ?? defaultDeveloper.runMergeConflictResolution.bind(defaultDeveloper))(input));
+    async resolveMergeConflict(input: WorkflowMergeConflictResolutionActivityInput) {
+      const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
+      let conflictFiles = input.conflictFiles;
+      if (!conflictFiles) {
+        const row = database.authQuery((db) => db.prepare("SELECT conflict_files_json AS conflictFiles FROM forge_merge_conflict_resolutions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ? ORDER BY updated_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha) as { conflictFiles: string } | undefined);
+        conflictFiles = row ? JSON.parse(row.conflictFiles) as string[] : [];
+      }
+      if (!conflictFiles.length) throw new Error("Merge-conflict files are unavailable");
+      const rawInput: MergeConflictResolutionActivityInput = { ...input, worktreePath, conflictFiles };
+      return withCapacity(input, "developer", () => (developer?.runMergeConflictResolution ?? defaultDeveloper.runMergeConflictResolution.bind(defaultDeveloper))(rawInput));
     },
     async runDeveloperExecution(input) {
-      return withCapacity(input, "developer", () => (developer.run ?? defaultDeveloper.run.bind(defaultDeveloper))(input));
+      const result = await withCapacity(input, "developer", () => (developer.run ?? defaultDeveloper.run.bind(defaultDeveloper))(input));
+      if (input.executionId && result.developerExecutionId !== input.executionId) throw new Error("Developer execution identity did not match the durable Workflow operation");
+      activityWorktrees.set(result.developerExecutionId, result.worktreePath);
+      activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
+      const { worktreePath: _worktreePath, ...safeResult } = result;
+      return { ...safeResult, deliverySummary: SafeSummarySchema.parse(safeResult.deliverySummary) };
     },
-    async runDeveloperRepair(input) {
-      return withCapacity(input, "developer", () => (developer.runRepair ?? defaultDeveloper.runRepair.bind(defaultDeveloper))(input));
+    async runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput) {
+      const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null } | undefined) ?? { worktreePath: latestWorktree(input, input.developerExecutionId), branchName: input.branchName, targetBaseSha: input.targetBaseSha, resultCommit: input.subjectCommit, resultTree: input.subjectTree };
+      if (!execution) throw new Error("Developer execution context is unavailable");
+      let blockingFindings = input.blockingFindings;
+      let repairPlan = input.repairPlan;
+      if (input.reviewArtifact) {
+        const review = DeliveryReviewSchema.parse(JSON.parse((await verifiedArtifactBytes(database, artifacts, input.companyId, input.reviewArtifact, "delivery-review")).toString("utf8")));
+        if (typeof review.repairPlan !== "string") throw new Error("Delivery review artifact is not repairable");
+        blockingFindings = review.findings;
+        repairPlan = review.repairPlan;
+      }
+      if (!blockingFindings || !repairPlan) throw new Error("Delivery review repair evidence is unavailable");
+      const result = await withCapacity(input, "developer", () => (developer.runRepair ?? defaultDeveloper.runRepair.bind(defaultDeveloper))({ ...input, worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree!, blockingFindings, repairPlan }));
+      activityWorktrees.set(result.developerExecutionId, result.worktreePath);
+      activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
+      const { worktreePath: _worktreePath, ...safeResult } = result;
+      return { ...safeResult, deliverySummary: SafeSummarySchema.parse(safeResult.deliverySummary) };
     },
     async cancelDeveloperExecution(input) {
       return cancelDeveloperExecution(database, input.executionId);

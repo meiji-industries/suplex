@@ -205,7 +205,7 @@ export class DeveloperService {
     const branchName = `forge/issue/${input.taskId}`;
     const worktreeRoot = await scopedRepository(this.config.worktreeRoot, projectRevision.data.worktreeRoot);
     const attempt = Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
-    const executionId = `developer_${randomBytes(12).toString("hex")}`;
+    const executionId = input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
     let worktree;
     try {
       worktree = input.reuseWorktree ? await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName }) : await this.worktrees.create({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName });

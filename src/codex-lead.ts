@@ -623,6 +623,7 @@ export class AgentService {
       input.briefArtifactId,
     ) as DeliveryReviewContext | undefined);
     if (!context || !context.developerSessionRef) throw new AgentFailure("scoped-input-missing", "Exact Developer delivery evidence is unavailable");
+    if (!input.worktreePath) throw new AgentFailure("scoped-input-missing", "Exact Developer worktree is unavailable");
     if (context.developerSessionRef === input.leadSessionRef) throw new AgentFailure("session-identity-conflict", "Lead review must reuse the Lead session and remain distinct from Developer");
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(context.normalizedJson)));
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);

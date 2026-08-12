@@ -7,6 +7,8 @@ import { createActivities } from "./temporal/activities.js";
 import { StructuredLogger } from "./logging.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { reconcileDeveloperExecutions } from "./developer-recovery.js";
+import { activityPayloadInterceptors } from "./temporal/payload-boundary-interceptors.js";
+import { buildProductionWorkflowBundle, temporalDataConverter } from "./temporal/workflow-bundle.js";
 
 export function workerHasLivePollers(status: Pick<WorkerStatus, "runState" | "workflowPollerState" | "activityPollerState">): boolean {
   return status.runState === "RUNNING"
@@ -46,7 +48,9 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       taskQueue: config.taskQueue,
       identity: workerId,
       buildId,
-      workflowsPath: fileURLToPath(new URL("./temporal/workflows.ts", import.meta.url)),
+      workflowBundle: await buildProductionWorkflowBundle(),
+      dataConverter: temporalDataConverter,
+      interceptors: { activity: activityPayloadInterceptors },
       activities: createActivities(database, config),
       shutdownGraceTime: "10 seconds",
       shutdownForceTime: "20 seconds",

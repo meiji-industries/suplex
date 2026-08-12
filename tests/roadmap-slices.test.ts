@@ -331,6 +331,48 @@ test("forward merge leaves a guarded conflict for Lead planning instead of rewri
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("merge-conflict evidence stays in a verified company artifact before Lead planning", async () => {
+  const value = await fixture();
+  try {
+    const priorHead = "1".repeat(40);
+    const targetBaseSha = "2".repeat(40);
+    const combinedDiff = `diff --git a/shared.txt b/shared.txt\n${"x".repeat(80 * 1024)}`;
+    const artifacts = new ArtifactStore(value.config.artifactRoot);
+    const stored = await artifacts.put("company-a", "merge-conflict-evidence", {
+      filename: "conflict.json",
+      mimeType: "application/json",
+      bytes: Buffer.from(JSON.stringify({ version: 1, priorHead, targetBaseSha, conflictFiles: ["shared.txt"], combinedDiff })),
+    });
+    value.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(stored.id, stored.companyId, stored.kind, stored.filename, stored.mimeType, stored.byteSize, stored.sha256, stored.storagePath, stored.createdAt);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-conflict', 'task-a', 'company-a', 'workflow-a', 1, 1, 'completed', 'issue/task-a', ?, ?, 'developer-session', ?, ?, ?, ?, 'clean')").run(value.root, targetBaseSha, now, now, priorHead, treeSha);
+    });
+    const reference = { artifactId: stored.id, companyId: stored.companyId, kind: "merge-conflict-evidence" as const, sha256: stored.sha256, byteSize: stored.byteSize, mimeType: stored.mimeType };
+    let receivedDiff = "";
+    let planningCalls = 0;
+    const activities = createActivities(value.database, value.config, { agent: { async planMergeConflict(input) {
+      planningCalls += 1;
+      receivedDiff = input.conflictDiff;
+      return { planId: "plan-conflict", planArtifactId: "plan-artifact", evidenceArtifactId: "plan-evidence", leadExecutionId: "lead-execution", leadSessionRef: input.leadSessionRef, summary: "Verified conflict plan" };
+    } } });
+    const input = { taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", projectId: "project-a", projectRevisionId: "revision-a", briefArtifactId: "brief-a", planRevision: 1, leadSessionRef: "lead-session", leadOutputArtifactId: "lead-plan", conflictEvidence: reference, branchName: "issue/task-a", priorHead, targetBaseSha };
+    await expect(activities.planMergeConflict(input)).resolves.toMatchObject({ planId: "plan-conflict" });
+    expect(receivedDiff).toBe(combinedDiff);
+    expect(planningCalls).toBe(1);
+    for (const invalid of [
+      { ...reference, companyId: "company-b" },
+      { ...reference, kind: "delivery-review" as const },
+      { ...reference, sha256: "f".repeat(64) },
+      { ...reference, byteSize: reference.byteSize + 1 },
+      { ...reference, mimeType: "text/plain" },
+      { ...reference, artifactId: "missing-artifact" },
+    ]) {
+      await expect(activities.planMergeConflict({ ...input, conflictEvidence: invalid })).rejects.toThrow(/artifact/i);
+    }
+    expect(planningCalls).toBe(1);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("forward merge reports no drift without mutating the issue branch", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-forward-merge-no-drift-"));
   try {

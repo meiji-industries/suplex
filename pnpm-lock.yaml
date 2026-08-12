@@ -33,19 +33,22 @@ importers:
         specifier: ^13.3.2
         version: 13.3.2
       '@temporalio/activity':
-        specifier: ^1.22.0
+        specifier: 1.22.0
         version: 1.22.0
       '@temporalio/client':
-        specifier: ^1.14.0
+        specifier: 1.22.0
+        version: 1.22.0
+      '@temporalio/common':
+        specifier: 1.22.0
         version: 1.22.0
       '@temporalio/proto':
-        specifier: ^1.22.0
+        specifier: 1.22.0
         version: 1.22.0
       '@temporalio/worker':
-        specifier: ^1.14.0
+        specifier: 1.22.0
         version: 1.22.0(esbuild@0.28.2)
       '@temporalio/workflow':
-        specifier: ^1.14.0
+        specifier: 1.22.0
         version: 1.22.0
       better-sqlite3:
         specifier: ^12.6.2

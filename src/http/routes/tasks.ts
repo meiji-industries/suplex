@@ -1,11 +1,12 @@
 import type { FastifyPluginAsync } from "fastify";
 import { type ZodTypeProvider } from "@fastify/type-provider-zod";
+import { z } from "zod";
 
 import type { TaskEvent } from "../../tasks.js";
 import type { TaskService } from "../../tasks.js";
 import type { ProjectRole } from "../../projects.js";
 import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, ExpectedRevisionNoteBodySchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
-import { ContinueWorkResponseSchema, TaskBodySchema, TaskListResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { ContinueWorkResponseSchema, TaskBodySchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;
@@ -34,6 +35,11 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
     return reply.code(result.created ? 201 : 200).send(result.task);
   });
   typed.get("/api/tasks/:taskId", { schema: { params: TaskIdParamsSchema, ...taskResponse } }, async (request, reply) => reply.send(tasks.getTask(request.forgeUser.id, request.params.taskId)));
+  typed.get("/api/tasks/:taskId/release", { schema: { params: TaskIdParamsSchema, response: { 200: TaskReleaseResponseSchema, 404: z.object({ error: z.string() }) } } }, async (request, reply) => {
+    const release = tasks.getRelease(request.forgeUser.id, request.params.taskId);
+    if (!release) return reply.code(404).send({ error: "Not found" });
+    return reply.header("Cache-Control", "private, no-store").send(release);
+  });
   typed.post("/api/tasks/:taskId/start-planning", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.startPlanning(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/request-supplemental-review", { schema: { params: TaskIdParamsSchema, ...revisionSchema } }, async (request, reply) => reply.send(await tasks.requestSupplementalReview(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
   typed.post("/api/tasks/:taskId/approve-plan", { schema: { params: TaskIdParamsSchema, ...noteSchema } }, async (request, reply) => reply.send(await tasks.approvePlan(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.note)));
@@ -62,6 +68,10 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   typed.get("/api/tasks/:taskId/artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
     const artifact = await tasks.getTaskArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
     return reply.header("Cache-Control", "private, no-store").type(artifact.artifact.mimeType).send(artifact.bytes);
+  });
+  typed.get("/api/tasks/:taskId/release/artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
+    const artifact = await tasks.getReleaseArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
+    return reply.header("Cache-Control", "private, no-store").type(artifact.mimeType).send(artifact.bytes);
   });
   typed.get("/api/tasks/events", async (request, reply) => {
     reply.hijack();

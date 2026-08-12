@@ -297,14 +297,14 @@ export async function reconcileRestoredState(database: ForgeDatabase, github: Gi
     const operationKey = `restore-reconcile:${release.id}:${release.headSha}`;
     let observation: RestoredProviderReconciliation;
     try {
-      if (!github.getPullRequest && !github.getBranchHead) {
+      if (typeof github.getPullRequest !== "function") {
         observation = { releaseId: release.id, repository: release.repository, branch: release.branch, pullRequestNumber: release.pullRequestNumber, status: "reauthentication_required", summary: "Provider read APIs are unavailable; reauthenticate before resuming release work." };
       } else {
         const [branchHead, pullRequest] = await Promise.all([
-          github.getBranchHead ? github.getBranchHead({ repository: release.repository, branch: release.branch }) : Promise.resolve(undefined),
-          github.getPullRequest && release.pullRequestNumber !== null ? github.getPullRequest({ repository: release.repository, number: release.pullRequestNumber }) : Promise.resolve(undefined),
+          typeof github.getBranchHead === "function" ? github.getBranchHead({ repository: release.repository, branch: release.branch }) : Promise.resolve(undefined),
+          release.pullRequestNumber !== null && typeof github.getPullRequest === "function" ? github.getPullRequest({ repository: release.repository, number: release.pullRequestNumber }) : Promise.resolve(undefined),
         ]);
-        const branchMatches = branchHead === undefined || branchHead.toLowerCase() === release.headSha.toLowerCase();
+        const branchMatches = branchHead === undefined || branchHead === null || branchHead.toLowerCase() === release.headSha.toLowerCase();
         if (!pullRequest) {
           observation = { releaseId: release.id, repository: release.repository, branch: release.branch, pullRequestNumber: release.pullRequestNumber, status: branchMatches ? "matched" : "changed", ...(branchHead ? { branchHead } : {}), summary: branchMatches ? "The restored release branch matches its recorded head." : "The restored release branch differs from its recorded head." };
         } else {

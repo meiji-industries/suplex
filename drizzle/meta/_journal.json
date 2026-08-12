@@ -148,6 +148,13 @@
       "when": 1786427500000,
       "tag": "0020_durable_task_projection_provenance",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1786427600000,
+      "tag": "0021_release_operation_intents",
+      "breakpoints": true
     }
   ]
 }

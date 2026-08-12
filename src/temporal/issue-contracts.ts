@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ReleaseFailureCodeSchema } from "../release-failures.js";
 
 import { PlanMaterialCategorySchema, type PlanMaterialCategory } from "../plan-governance.js";
 
@@ -100,7 +101,6 @@ export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "read
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
 export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "record_progress", "start_development", "retry_development", "cancel_development", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "cancel_issue", "reconcile_merge", "continue_work"]);
 export const IssuePlanDecisionSchema = z.enum(["approve", "reject"]);
-
 export const IssueContinuationStateSchema = z.object({
   phase: IssuePhaseSchema,
   revision: z.number().int().nonnegative(),
@@ -191,6 +191,11 @@ export const IssueContinuationStateSchema = z.object({
   mergeOutcome: z.enum(["open", "merged", "closed_without_merge", "changed", "provider_unavailable"]).nullable().optional(),
   predecessorTaskId: durableId.nullable().optional(),
   successorTaskId: durableId.nullable().optional(),
+  releaseStatus: z.enum(["reconciling", "draft", "blocked"]).nullable().optional(),
+  releaseFailureCode: ReleaseFailureCodeSchema.nullable().optional(),
+  releaseFailureSummary: z.string().max(500).nullable().optional(),
+  releaseRetryAt: z.string().datetime().nullable().optional(),
+  releaseOperationAttempt: z.number().int().nonnegative().nullable().optional(),
 });
 
 export const IssueWorkflowInputWithContinuationSchema = z.object({
@@ -311,6 +316,11 @@ export const IssueWorkflowStateSchema = z.object({
   mergeOutcome: z.enum(["open", "merged", "closed_without_merge", "changed", "provider_unavailable"]).nullable().optional(),
   predecessorTaskId: durableId.nullable().optional(),
   successorTaskId: durableId.nullable().optional(),
+  releaseStatus: z.enum(["reconciling", "draft", "blocked"]).nullable().optional(),
+  releaseFailureCode: ReleaseFailureCodeSchema.nullable().optional(),
+  releaseFailureSummary: z.string().max(500).nullable().optional(),
+  releaseRetryAt: z.string().datetime().nullable().optional(),
+  releaseOperationAttempt: z.number().int().nonnegative().nullable().optional(),
 });
 
 export function buildInitialIssueWorkflowState(input: IssueWorkflowInput): IssueWorkflowState {
@@ -650,34 +660,24 @@ export interface PublishReleaseActivityInput {
   targetBaseSha: string;
   subjectCommit: string;
   subjectTree: string;
-  planSummary: string;
-  deliverySummary: string;
-  verificationSummary: string;
-  expectedPullRequestNumber?: number;
 }
 
-export interface PublishReleaseActivityResult {
-  releaseId: string;
-  repository: string;
-  branchName: string;
-  headSha: string;
-  headTree: string;
-  pullRequestNumber: number;
-  pullRequestUrl: string;
-  isDraft: boolean;
-  reused: boolean;
-  baseDriftMerged?: boolean;
-  targetBaseSha?: string;
-  baseDriftConflict?: boolean;
-  mergeConflictEvidence?: DurableArtifactReference;
-  forwardMergeId?: string;
-  priorHead?: string;
-  mergeCommit?: string;
-  tree?: string;
-  // Legacy result fields are accepted only by the unpatched compatibility branch.
-  conflictFiles?: string[];
-  conflictDiff?: string;
-}
+const PublishReleaseIdentitySchema = z.object({
+  repository: z.string().max(256),
+  branchName: z.string().max(256),
+  headSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  headTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  reused: z.boolean(),
+  attempt: z.number().int().nonnegative(),
+});
+const sha = z.string().regex(/^[a-f0-9]{40,64}$/i);
+export const PublishReleaseActivityResultSchema = z.discriminatedUnion("outcome", [
+  PublishReleaseIdentitySchema.extend({ outcome: z.literal("completed"), releaseId: durableId, pullRequestNumber: z.number().int().positive(), pullRequestUrl: z.string().url().max(2_000), isDraft: z.literal(true), targetBaseSha: sha.optional() }),
+  PublishReleaseIdentitySchema.extend({ outcome: z.literal("blocked"), releaseId: durableId.nullable(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.boolean(), code: ReleaseFailureCodeSchema, summary: z.string().max(500), retryAt: z.string().datetime().nullable(), evidenceArtifactId: durableId.nullable() }),
+  PublishReleaseIdentitySchema.extend({ outcome: z.literal("base-drift-merged"), releaseId: z.null(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.literal(false), baseDriftMerged: z.literal(true), targetBaseSha: sha, priorHead: sha, forwardMergeId: durableId.optional(), mergeCommit: sha.optional(), tree: sha.optional() }),
+  PublishReleaseIdentitySchema.extend({ outcome: z.literal("base-drift-conflict"), releaseId: z.null(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.literal(false), baseDriftConflict: z.literal(true), targetBaseSha: sha, priorHead: sha, forwardMergeId: durableId.optional(), mergeConflictEvidence: DurableArtifactReferenceSchema.optional(), conflictFiles: z.array(z.string().max(1_000)).max(128).optional(), conflictDiff: z.string().max(80_000).optional() }),
+]);
+export type PublishReleaseActivityResult = z.infer<typeof PublishReleaseActivityResultSchema>;
 
 export interface MergeConflictPlanActivityInput {
   taskId: string;

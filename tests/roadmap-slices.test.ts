@@ -17,7 +17,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { ForwardMergeService } from "../src/forward-merge.js";
-import { ReleaseService, type GithubPullRequest, type GithubReleasePort } from "../src/github-release.js";
+import { GithubReleaseFailure, ReleaseService, type GithubAcceptancePort, type GithubPullRequest, type GithubReleasePort } from "../src/github-release.js";
 import { ArtifactStore } from "../src/artifacts.js";
 import { createActivities } from "../src/temporal/activities.js";
 
@@ -37,7 +37,7 @@ async function fixture(): Promise<{ root: string; database: ForgeDatabase; confi
     db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-a', 'Company A', 'active', ?)").run(now);
     db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-b', 'Company B', 'active', ?)").run(now);
     db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES ('project-a', 'company-a', 'Project A', ?, ?, 'main', 'main', 'pnpm install', 'pnpm test', '[]', '[]', '{}', 'active', 'revision-a', ?, ?)").run(join(root, "repo"), join(root, "worktrees"), now, now);
-    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, state, actor_user_id, created_at) VALUES ('revision-a', 'project-a', 1, 'identity-a', ?, ?, ?, 'accepted', 'admin', ?)").run(JSON.stringify({ repository: "acme/forge", repositoryPath: join(root, "repo"), worktreeRoot: join(root, "worktrees"), baseBranch: "main", targetBranch: "main", baseSha, targetSha: headSha, requiredChecks: ["Tests / unit"] }), baseSha, headSha, now);
+    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, state, actor_user_id, created_at) VALUES ('revision-a', 'project-a', 1, 'identity-a', ?, ?, ?, 'accepted', 'admin', ?)").run(JSON.stringify({ repository: "acme/forge", repositoryPath: join(root, "repo"), worktreeRoot: join(root, "worktrees"), baseBranch: "main", targetBranch: "main", baseSha, targetSha: headSha, setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"] }), baseSha, headSha, now);
     db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-a', 'company-a', 'task-brief', 'task.md', 'text/markdown', 4, ?, 'company-a/brief-a', ?)").run("d".repeat(64), now);
     db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-a', 'company-a', 'project-a', 'Task A', 'brief-a', '[]', '{}', 0, 'workflow-a', 'revision-a', 'task-a-key', ?, ?)").run(now, now);
     db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task-a', 'company-a', 'project-a', 'workflow-a', 1, 'delivery_blocked', 'human', '[\"record_delivery_decision\"]', 'Decision required', ?, 'workflow-a:1')").run(now);
@@ -67,19 +67,21 @@ function addReleaseFixtures(database: ForgeDatabase, status = "draft"): void {
 
 const pullRequest = (overrides: Partial<GithubPullRequest> = {}): GithubPullRequest => ({ number: 12, url: "https://github.com/acme/forge/pull/12", repository: "acme/forge", headBranch: "issue/task-a", baseBranch: "main", headSha, baseSha, isDraft: true, state: "open", mergedAt: null, ...overrides });
 
-function fakeGithub(checks: CheckObservation[] = []): GithubReleasePort & { pushed: number; ready: number } {
+function fakeGithub(checks: CheckObservation[] = []): GithubReleasePort & GithubAcceptancePort & { pushed: number; ready: number } {
   return {
     pushed: 0,
     ready: 0,
     async checkAuthentication() {},
     async getRemoteRepository() { return "acme/forge"; },
+    async getBranchHead(input) { return input.branch === "main" ? baseSha : this.pushed ? headSha : null; },
+    async inspectLocalRevision() { return { branch: "issue/task-a", headSha, treeSha, clean: true }; },
     async pushNormal() { this.pushed += 1; },
     async listPullRequests() { return []; },
     async createDraftPullRequest() { return pullRequest(); },
     async markReadyForReview() { this.ready += 1; },
     async getPullRequest() { return pullRequest(); },
     async listChecks() { return checks; },
-  } as GithubReleasePort & { pushed: number; ready: number };
+  } as GithubReleasePort & GithubAcceptancePort & { pushed: number; ready: number };
 }
 
 test("capacity is durable, FIFO, bounded, and restart-reconcilable", async () => {
@@ -119,7 +121,7 @@ test("release publishes one exact reviewed draft and CI accepts only the exact h
     addReleaseFixtures(value.database);
     const github = fakeGithub();
     const service = new ReleaseService(value.database, new ArtifactStore(value.config.artifactRoot), github);
-    const release = await service.publish({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", repositoryPath: value.root, repository: "acme/forge", branchName: "issue/task-a", baseBranch: "main", targetBaseSha: baseSha, subjectCommit: headSha, subjectTree: treeSha, reviewId: "review-a", planSummary: "Authorized plan", deliverySummary: "Exact delivery", verificationSummary: "Local checks passed" });
+    const release = await service.publish({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", coordinates: { projectRevisionId: "revision-a", repositoryPath: value.root, worktreePath: value.root, repository: "acme/forge", owner: "acme", headBranch: "issue/task-a", baseBranch: "main", expectedBaseSha: baseSha }, reviewedRevision: { reviewId: "review-a", developerExecutionId: "developer-a", commitSha: headSha, treeSha }, taskTitle: "Task A", delivery: { testResults: ["Local checks passed"] } });
     expect(release.pullRequest.isDraft).toBe(true);
     expect(github.pushed).toBe(1);
     const checks: CheckObservation[] = [{ providerCheckId: "1", name: "Tests / unit", headSha, status: "completed", conclusion: "success", detailsUrl: null, startedAt: now, completedAt: now, summary: "passed" }];
@@ -176,6 +178,45 @@ test("CI attempt idempotency avoids a second provider call and success resets tr
     expect(await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", expectedHeadSha: headSha, attemptNumber: 2 })).toMatchObject({ outcome: "passed" });
     expect(value.database.authQuery((db) => db.prepare("SELECT consecutive_provider_failures AS failures, completed_at AS completedAt FROM forge_ci_runs WHERE release_id = 'release-a'").get())).toMatchObject({ failures: 0, completedAt: expect.any(String) });
     expect(() => value.database.authQuery((db) => db.prepare("UPDATE forge_ci_attempts SET summary = 'changed'").run())).toThrow("forge_ci_attempts are immutable");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("release blocks when GitHub reports any contradictory pull request for the exact branch identity", async () => {
+  const value = await fixture();
+  try {
+    addReleaseFixtures(value.database);
+    const github = fakeGithub();
+    github.listPullRequests = async () => [pullRequest(), pullRequest({ number: 13, url: "https://github.com/acme/forge/pull/13", isDraft: false })];
+    const service = new ReleaseService(value.database, new ArtifactStore(value.config.artifactRoot), github);
+    await expect(service.publish({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", coordinates: { projectRevisionId: "revision-a", repositoryPath: value.root, worktreePath: value.root, repository: "acme/forge", owner: "acme", headBranch: "issue/task-a", baseBranch: "main", expectedBaseSha: baseSha }, reviewedRevision: { reviewId: "review-a", developerExecutionId: "developer-a", commitSha: headSha, treeSha }, taskTitle: "Task A", delivery: {} })).rejects.toMatchObject({ code: "ambiguous-provider-state" });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("release reconciles push and create timeouts after success without duplicate mutations", async () => {
+  const value = await fixture();
+  try {
+    addReleaseFixtures(value.database);
+    let remoteHead: string | null = null;
+    let created: GithubPullRequest | undefined;
+    let pushes = 0;
+    let creates = 0;
+    const github: GithubReleasePort = {
+      async checkAuthentication() {},
+      async getRemoteRepository() { return "acme/forge"; },
+      async getBranchHead(input) { return input.branch === "main" ? baseSha : remoteHead; },
+      async inspectLocalRevision() { return { branch: "issue/task-a", headSha, treeSha, clean: true }; },
+      async pushNormal() { pushes += 1; remoteHead = headSha; throw new GithubReleaseFailure("provider-unavailable", "push response lost"); },
+      async listPullRequests() { return created ? [created] : []; },
+      async createDraftPullRequest() { creates += 1; created = pullRequest(); throw new GithubReleaseFailure("provider-unavailable", "create response lost"); },
+      async getPullRequest() { return created!; },
+    };
+    const service = new ReleaseService(value.database, new ArtifactStore(value.config.artifactRoot), github);
+    const input = { taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", coordinates: { projectRevisionId: "revision-a", repositoryPath: value.root, worktreePath: value.root, repository: "acme/forge", owner: "acme", headBranch: "issue/task-a", baseBranch: "main", expectedBaseSha: baseSha }, reviewedRevision: { reviewId: "review-a", developerExecutionId: "developer-a", commitSha: headSha, treeSha }, taskTitle: "Task A", delivery: {} };
+    const first = await service.publish(input);
+    const second = await service.publish(input);
+    expect(second).toMatchObject({ releaseId: first.releaseId, reused: true, attempt: 1, pullRequest: { number: first.pullRequest.number } });
+    expect({ pushes, creates }).toEqual({ pushes: 1, creates: 1 });
+    expect(value.database.authQuery((db) => db.prepare("SELECT kind, status, attempt FROM forge_provider_operations WHERE release_key = (SELECT release_key FROM forge_releases WHERE id = ?) ORDER BY kind").all(first.releaseId))).toEqual([{ kind: "create-draft-pr", status: "completed", attempt: 1 }, { kind: "push", status: "completed", attempt: 1 }]);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -311,6 +352,7 @@ test("restore drill preserves users, completed work, artifacts, and draft releas
         async checkAuthentication() { providerMutations += 1; },
         async getRemoteRepository() { return "acme/forge"; },
         async getBranchHead() { providerReads += 1; return headSha; },
+        async inspectLocalRevision() { return { branch: "issue/task-a", headSha, treeSha, clean: true }; },
         async pushNormal() { providerMutations += 1; },
         async listPullRequests() { providerMutations += 1; return []; },
         async createDraftPullRequest() { providerMutations += 1; return pullRequest({ number: 42, headSha, baseSha }); },
@@ -582,14 +624,16 @@ test("publishRelease detects base drift, forward merges, and revalidates through
     db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES (?, 'task-a', 'company-a', 'workflow-a', 1, ?, ?, ?, 'lead-a', 'lead-session', 'approved', 'Approved exact delivery', ?, ?, 0, ?)").run(reviewId, oldBase, oldHead, oldTree, opinionId, leadEvidenceId, now);
   });
 
-  const github: GithubReleasePort & { pushed: number; created: GithubPullRequest[]; nextHead: string; nextBase: string } = {
+  const github: GithubReleasePort & GithubAcceptancePort & { pushed: number; created: GithubPullRequest[]; nextHead: string; nextTree: string; nextBase: string } = {
     pushed: 0,
     created: [],
     nextHead: oldHead,
+    nextTree: oldTree,
     nextBase: oldBase,
     async checkAuthentication() {},
     async getRemoteRepository() { return "acme/forge"; },
-    async getBranchHead() { return this.nextBase; },
+    async getBranchHead(input) { return input.branch === "main" ? this.nextBase : this.nextHead; },
+    async inspectLocalRevision() { return { branch: "issue/task-a", headSha: this.nextHead, treeSha: this.nextTree, clean: true }; },
     async pushNormal() { this.pushed += 1; },
     async listPullRequests() { return this.created; },
     async createDraftPullRequest(input) { const pr: GithubPullRequest = { number: this.created.length + 1, url: `https://github.com/${input.repository}/pull/${this.created.length + 1}`, repository: input.repository, headBranch: input.headBranch, baseBranch: input.baseBranch, headSha: this.nextHead, baseSha: this.nextBase, isDraft: true, state: "open", mergedAt: null }; this.created.push(pr); return pr; },
@@ -598,8 +642,17 @@ test("publishRelease detects base drift, forward merges, and revalidates through
   };
 
   const activities = createActivities(value.database, value.config, { githubRelease: github });
+  const mismatchedReviewId = artifactId("mismatched-review");
+  value.database.authQuery((db) => db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES (?, 'task-a', 'company-a', 'workflow-a', 1, ?, ?, ?, 'lead-a', 'lead-session', 'approved', 'Mismatched delivery', ?, ?, 0, ?)").run(mismatchedReviewId, oldBase, "f".repeat(40), oldTree, opinionId, leadEvidenceId, now));
+  const mismatched = await activities.publishRelease({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", reviewId: mismatchedReviewId, developerExecutionId: "developer-a", branchName: "issue/task-a", targetBaseSha: oldBase, subjectCommit: "f".repeat(40), subjectTree: oldTree });
+  expect(mismatched).toMatchObject({ outcome: "blocked", code: "stale-reviewed-revision", attempt: 0 });
   github.nextBase = newBase;
-  const drift = await activities.publishRelease({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", reviewId, developerExecutionId: "developer-a", branchName: "issue/task-a", targetBaseSha: oldBase, subjectCommit: oldHead, subjectTree: oldTree, planSummary: "Authorized plan", deliverySummary: "Exact delivery", verificationSummary: "Local checks passed" });
+  await mkdir(join(value.config.artifactRoot, "company-a"), { recursive: true });
+  await writeFile(join(value.config.artifactRoot, "company-a", deliveryId), JSON.stringify({ steps: [] }));
+  value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET byte_size = ?, sha256 = ? WHERE id = ?").run(JSON.stringify({ steps: [] }).length, createHash("sha256").update(JSON.stringify({ steps: [] })).digest("hex"), deliveryId));
+  const drift = await activities.publishRelease({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", reviewId, developerExecutionId: "developer-a", branchName: "issue/task-a", targetBaseSha: oldBase, subjectCommit: oldHead, subjectTree: oldTree });
+  expect(drift.outcome).toBe("base-drift-merged");
+  if (drift.outcome !== "base-drift-merged") throw new Error("Expected a completed forward merge");
   expect(drift.baseDriftMerged).toBe(true);
   expect(drift.priorHead).toBe(oldHead);
   expect(drift.targetBaseSha).toBe(newBase);
@@ -616,11 +669,14 @@ test("publishRelease detects base drift, forward merges, and revalidates through
   });
 
   github.nextHead = mergeHead;
+  github.nextTree = mergeTree;
   github.nextBase = newBase;
-  const release = await activities.publishRelease({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", reviewId: mergeReviewId, developerExecutionId: "developer-a", branchName: "issue/task-a", targetBaseSha: newBase, subjectCommit: mergeHead, subjectTree: mergeTree, planSummary: "Authorized plan", deliverySummary: "Exact delivery after revalidation", verificationSummary: "Local checks passed" });
+  const release = await activities.publishRelease({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", reviewId: mergeReviewId, developerExecutionId: "developer-a", branchName: "issue/task-a", targetBaseSha: newBase, subjectCommit: mergeHead, subjectTree: mergeTree });
+  expect(release.outcome).toBe("completed");
+  if (release.outcome !== "completed") throw new Error("Expected completed publication");
   expect(release.pullRequestNumber).toBeGreaterThan(0);
   expect(release.isDraft).toBe(true);
-  expect(github.pushed).toBe(1);
+  expect(github.pushed).toBe(0);
   expect(release.headSha).toBe(mergeHead);
   expect(release.headTree).toBe(mergeTree);
   expect(release.targetBaseSha).toBe(newBase);

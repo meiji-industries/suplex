@@ -1,8 +1,9 @@
 import { ActivityFailure, allHandlersFinished, ApplicationFailure, condition, continueAsNew, defineQuery, defineUpdate, patched, proxyActivities, setHandler, sleep, workflowInfo } from "@temporalio/workflow";
 
 import { ProbeWorkflowInputSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueActivities, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, RecordProgressInputSchema, StartPlanningInputSchema, type IssueActivities, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PublishReleaseActivityInput, type PublishReleaseActivityResult, type RecordProgressInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertContinuationStateWithinLimit, assertPayloadWithinLimit, WORKFLOW_HISTORY_EVENT_LIMIT } from "./policy.js";
+import { isRetryableReleaseFailure } from "../release-failures.js";
 
 const { recordProbeStarted } = proxyActivities<ProbeActivities>({
   startToCloseTimeout: "1 minute",
@@ -129,6 +130,7 @@ const planningProjectionIntegrityPatch = "forge-planning-projection-integrity-v1
 const distinctPlanningStatesPatch = "forge-distinct-planning-states-v1";
 const artifactBackedConflictPatch = "forge-artifact-backed-conflict-evidence-v1";
 const artifactBackedReviewPatch = "forge-artifact-backed-review-evidence-v1";
+const typedReleaseResultPatch = "forge-typed-release-result-v1";
 
 function compactStateForContinuation(state: IssueWorkflowState): IssueWorkflowState {
   const compact = { ...state, activeOperation: null } as Record<string, unknown>;
@@ -558,20 +560,31 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await projectIssueState(state);
     return state;
   };
-  setHandler(publishDraftUpdate, async (rawInput) => {
-    const command = StartPlanningInputSchema.parse(rawInput);
+  const runPublishTurn = async (): Promise<IssueWorkflowState> => {
     state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "releasing", owner: "lead", allowedCommands: [], pendingAction: "Publishing one exact draft pull request", lastEventId: `${state.workflowId}:${state.revision + 1}` });
     await projectIssueState(state);
     if (!state.deliveryReviewId || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree) throw new Error("Approved exact delivery is required before publishing");
-    let result;
-    try {
-      result = await publishRelease({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, reviewId: state.deliveryReviewId, developerExecutionId: state.developerExecutionId!, branchName: state.branchName, targetBaseSha: state.targetBaseSha, subjectCommit: state.resultCommit, subjectTree: state.resultTree, planSummary: state.leadSummary ?? "Approved Forge plan", deliverySummary: state.deliverySummary ?? "Exact Developer delivery", verificationSummary: "Lead delivery review approved", ...(state.pullRequestNumber ? { expectedPullRequestNumber: state.pullRequestNumber } : {}) });
-    } catch {
-      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Release provider reconciliation requires attention", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    const typedReleaseResult = patched(typedReleaseResultPatch);
+    const publishInput = { taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, reviewId: state.deliveryReviewId, developerExecutionId: state.developerExecutionId!, branchName: state.branchName, targetBaseSha: state.targetBaseSha, subjectCommit: state.resultCommit, subjectTree: state.resultTree };
+    const rawResult = await publishRelease((typedReleaseResult ? publishInput : { ...publishInput, planSummary: state.leadSummary ?? "Approved Forge plan", deliverySummary: state.deliverySummary ?? "Exact Developer delivery", verificationSummary: "Lead delivery review approved", ...(state.pullRequestNumber ? { expectedPullRequestNumber: state.pullRequestNumber } : {}) }) as PublishReleaseActivityInput);
+    let result: PublishReleaseActivityResult = rawResult;
+    if (!typedReleaseResult) {
+      const legacy = rawResult as unknown as Omit<PublishReleaseActivityResult, "outcome" | "attempt"> & { baseDriftMerged?: boolean; baseDriftConflict?: boolean };
+      result = { ...legacy, outcome: legacy.baseDriftConflict ? "base-drift-conflict" : legacy.baseDriftMerged ? "base-drift-merged" : "completed", attempt: 0 } as PublishReleaseActivityResult;
+    }
+    if (result.outcome === "blocked") {
+      if (result.code === "stale-reviewed-revision") {
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Fresh Lead review required for the exact Developer revision", deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, releaseStatus: "blocked", releaseFailureCode: result.code, releaseFailureSummary: result.summary, releaseRetryAt: null, releaseOperationAttempt: result.attempt, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        await projectIssueState(state);
+        return state;
+      }
+      const retryable = isRetryableReleaseFailure(result.code);
+      const waitingForRateLimit = result.code === "provider-rate-limited" && result.retryAt !== null;
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: waitingForRateLimit ? "releasing" : "delivery_blocked", owner: waitingForRateLimit ? "lead" : "human", allowedCommands: waitingForRateLimit ? ["cancel_issue"] : [...(retryable ? ["publish_draft"] : []), "cancel_issue"], pendingAction: waitingForRateLimit ? "Waiting for GitHub rate-limit reset" : result.summary ?? "Release provider reconciliation requires attention", releaseStatus: waitingForRateLimit ? "reconciling" : "blocked", releaseFailureCode: result.code ?? "provider-unavailable", releaseFailureSummary: result.summary ?? "Release provider reconciliation requires attention", releaseRetryAt: result.retryAt ?? null, releaseOperationAttempt: result.attempt, lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
       return state;
     }
-    if (result.baseDriftConflict) {
+    if (result.outcome === "base-drift-conflict") {
       const legacyConflict = !patched(artifactBackedConflictPatch);
       if (!legacyConflict && !result.mergeConflictEvidence) throw ApplicationFailure.nonRetryable("Merge-conflict evidence is missing", "merge_conflict_evidence_missing");
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_reviewing", owner: "lead", allowedCommands: [], pendingAction: "Lead conflict-resolution plan", targetBaseSha: result.targetBaseSha ?? state.targetBaseSha, forwardMergeId: result.forwardMergeId ?? null, forwardMergePriorHead: result.priorHead ?? state.resultCommit, forwardMergeTargetBaseSha: result.targetBaseSha ?? state.targetBaseSha, ...(result.mergeConflictEvidence ? { mergeConflictEvidence: result.mergeConflictEvidence } : {}), ...(legacyConflict ? { forwardMergeConflictFiles: result.conflictFiles ?? [], forwardMergeConflictDiff: result.conflictDiff ?? null } : {}), lastEventId: `${state.workflowId}:${state.revision + 1}` });
@@ -584,19 +597,22 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       }
       if (legacyConflict) continuationRequested = true;
       await projectIssueState(state);
-      void command;
       return state;
     }
-    if (result.baseDriftMerged) {
+    if (result.outcome === "base-drift-merged") {
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery"], pendingAction: "Fresh Lead review required after target-base forward merge", targetBaseSha: result.targetBaseSha ?? state.targetBaseSha, resultCommit: result.headSha, resultTree: result.headTree, deliveryReviewId: null, deliveryReviewOutcome: null, deliveryReviewSummary: null, deliveryBlockingFindings: [], deliveryRepairPlan: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, acceptanceId: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
       return state;
     }
-    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for required CI", releaseId: result.releaseId, pullRequestNumber: result.pullRequestNumber, pullRequestUrl: result.pullRequestUrl, expectedHeadSha: result.headSha, expectedHeadTree: result.headTree, ciAttempt: 0, ciOutcome: "waiting", ciNextPollAt: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    if (result.outcome !== "completed" || !result.releaseId || result.pullRequestNumber === null || result.pullRequestUrl === null) throw new Error("Release completion result is incomplete");
+    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for required CI", releaseStatus: "draft", releaseFailureCode: null, releaseFailureSummary: null, releaseRetryAt: null, releaseOperationAttempt: result.attempt, releaseId: result.releaseId, pullRequestNumber: result.pullRequestNumber, pullRequestUrl: result.pullRequestUrl, expectedHeadSha: result.headSha, expectedHeadTree: result.headTree, ciAttempt: 0, ciOutcome: "waiting", ciNextPollAt: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
     await projectIssueState(state);
-    void command;
     return state;
-  }, { validator(rawInput) { const command = StartPlanningInputSchema.parse(rawInput); if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision"); if (state.phase !== "delivery_reviewed" || !state.deliveryReviewId) throw new Error("Draft publication is only available after an approved delivery review"); } });
+  };
+  setHandler(publishDraftUpdate, async (rawInput) => {
+    StartPlanningInputSchema.parse(rawInput);
+    return runPublishTurn();
+  }, { validator(rawInput) { const command = StartPlanningInputSchema.parse(rawInput); if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision"); if (!(state.phase === "delivery_reviewed" || (state.phase === "delivery_blocked" && state.releaseStatus === "blocked" && state.allowedCommands.includes("publish_draft"))) || !state.deliveryReviewId) throw new Error("Draft publication is not available in the current phase"); } });
   setHandler(resolveMergeConflictUpdate, async (rawInput) => {
     const command = StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== state.revision || state.phase !== "merge_conflict_required") throw new Error("Merge-conflict resolution is not available in the current phase");
@@ -753,6 +769,13 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   // authoritative history to the projection boundary.
   if (!continuation) await projectIssueState(state);
   while (true) {
+    if (state.phase === "cancelled" || state.phase === "done") return state;
+    if (state.phase === "releasing" && state.releaseRetryAt) {
+      const delay = Math.max(0, Date.parse(state.releaseRetryAt) - Date.now());
+      if (delay > 0) await sleep(delay);
+      if (state.phase === "releasing") await runPublishTurn();
+      continue;
+    }
     if (state.phase === "ci_waiting") {
       const sleepingRevision = state.revision;
       const sleepingReleaseId = state.releaseId;
@@ -769,7 +792,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       await reconcileMergeTurn();
       continue;
     }
-    await condition(() => (continuationRequested && allHandlersFinished()) || state.phase === "ci_waiting" || state.phase === "manual_merge");
+    await condition(() => (continuationRequested && allHandlersFinished()) || (state.phase === "releasing" && Boolean(state.releaseRetryAt)) || state.phase === "ci_waiting" || state.phase === "manual_merge");
     if (continuationRequested && allHandlersFinished()) {
       if (stateMutationLocked || state.activeOperation !== null) continue;
       const compact = compactStateForContinuation(state);

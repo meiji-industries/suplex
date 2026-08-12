@@ -112,6 +112,7 @@ export interface ForgeTask {
   predecessorTaskId?: string | null;
   successorTaskId?: string | null;
   ci?: TaskCiProjection;
+  release?: TaskRelease | null;
   deliveryReview?: {
     id: string;
     outcome: "approved" | "blocking";
@@ -198,6 +199,30 @@ export interface TaskCiProjection {
   }>;
   repairPlan: { id: string; status: string; ciRunId: string; ciAttemptId: string; failedHeadSha: string; planArtifactId: string; evidenceArtifactId: string; summary: string; steps: Array<{ number: number; instruction: string; verification: string }>; createdAt: string; updatedAt: string; consumedAt: string | null; supersededAt: string | null } | null;
   repairs: Array<{ id: string; repairPlanId: string; priorCommit: string; priorTree: string; newCommit: string | null; newTree: string | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null; status: string; summary: string | null; createdAt: string; completedAt: string | null }>;
+}
+
+export interface TaskRelease {
+  id: string;
+  status: "reconciling" | "draft" | "blocked";
+  failureCode: string | null;
+  failureSummary: string | null;
+  retryAt: string | null;
+  repository: string;
+  baseBranch: string;
+  headBranch: string;
+  baseSha: string;
+  headSha: string;
+  headTree: string;
+  reviewedCommit: { abbreviated: string; full: string };
+  reviewedTree: { abbreviated: string; full: string };
+  pullRequestNumber: number | null;
+  pullRequestUrl: string | null;
+  isDraft: boolean;
+  reused: boolean;
+  bodyArtifactId: string | null;
+  title: string;
+  bodyPreview: string | null;
+  operation: { kind: string; status: string; attempt: number | null; startedAt: string | null; observedAt: string | null; completedAt: string | null } | null;
 }
 
 export interface TaskEvent {
@@ -1016,7 +1041,34 @@ export class TaskService {
     const findings = review ? this.database.authQuery((db) => db.prepare("SELECT id, severity, rationale, evidence_ref, disposition, repair_instruction FROM forge_delivery_findings WHERE review_id = ? AND task_id = ? AND company_id = ? ORDER BY id").all(review.id, row.id, row.company_id) as Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidence_ref: string; disposition: string; repair_instruction: string | null }>) : [];
     const decision = this.database.authQuery((db) => db.prepare("SELECT artifact_id FROM forge_delivery_decisions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { artifact_id: string } | undefined);
     const ci = this.ciProjection(row.id, row.company_id);
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), timeline, agentInvocations, ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
+    const release = this.releaseForTask(row.id, row.company_id, row.workflow_id);
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), timeline, agentInvocations, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
+  }
+
+  private releaseForTask(taskId: string, companyId: string, workflowId: string): TaskRelease | null | undefined {
+    const row = this.database.authQuery((db) => db.prepare(`SELECT r.id, r.status, r.repository, r.base_branch AS baseBranch, r.head_branch AS headBranch, r.base_sha AS baseSha, r.head_sha AS headSha, r.head_tree AS headTree, r.pr_number AS pullRequestNumber, r.pr_url AS pullRequestUrl, r.reused, r.title, r.body_artifact_id AS bodyArtifactId, a.storage_path AS bodyStoragePath, a.sha256 AS bodySha, o.kind AS operationKind, o.status AS operationStatus, o.attempt, o.started_at AS startedAt, o.observed_at AS observedAt, o.completed_at AS completedAt, o.failure_code AS failureCode, o.failure_summary AS failureSummary, o.retry_at AS retryAt
+      FROM forge_releases r LEFT JOIN forge_artifacts a ON a.id = r.body_artifact_id AND a.company_id = r.company_id AND a.kind = 'release-public-body'
+      LEFT JOIN forge_provider_operations o ON o.id = (SELECT latest.id FROM forge_provider_operations latest WHERE latest.task_id = r.task_id AND latest.company_id = r.company_id AND latest.workflow_id = r.workflow_id AND latest.release_key = r.release_key AND latest.kind IN ('push', 'create-draft-pr') ORDER BY latest.updated_at DESC, latest.id DESC LIMIT 1)
+      WHERE r.task_id = ? AND r.company_id = ? AND r.workflow_id = ? AND r.superseded_at IS NULL ORDER BY r.updated_at DESC LIMIT 1`).get(taskId, companyId, workflowId) as { id: string; status: string; repository: string; baseBranch: string; headBranch: string; baseSha: string; headSha: string; headTree: string; pullRequestNumber: number | null; pullRequestUrl: string | null; reused: number; title: string; bodyArtifactId: string | null; bodyStoragePath: string | null; bodySha: string | null; operationKind: string | null; operationStatus: string | null; attempt: number | null; startedAt: string | null; observedAt: string | null; completedAt: string | null; failureCode: string | null; failureSummary: string | null; retryAt: string | null } | undefined);
+    if (!row) return undefined;
+    let bodyPreview: string | null = null;
+    if (row.bodyArtifactId && row.bodyStoragePath && row.bodySha) {
+      try { bodyPreview = this.artifacts.readSync({ companyId, storagePath: row.bodyStoragePath, sha256: row.bodySha }).toString("utf8"); } catch { bodyPreview = null; }
+    }
+    const status: TaskRelease["status"] = row.status === "draft" ? "draft" : row.status === "reconciling" ? "reconciling" : "blocked";
+    return { id: row.id, status, failureCode: row.failureCode ?? (status === "blocked" ? row.status : null), failureSummary: row.failureSummary, retryAt: row.retryAt, repository: row.repository, baseBranch: row.baseBranch, headBranch: row.headBranch, baseSha: row.baseSha, headSha: row.headSha, headTree: row.headTree, reviewedCommit: { abbreviated: row.headSha.slice(0, 7), full: row.headSha }, reviewedTree: { abbreviated: row.headTree.slice(0, 7), full: row.headTree }, pullRequestNumber: row.pullRequestNumber, pullRequestUrl: row.pullRequestUrl, isDraft: row.pullRequestNumber !== null && status === "draft", reused: row.reused === 1, bodyArtifactId: row.bodyArtifactId, title: row.title, bodyPreview, operation: row.operationKind ? { kind: row.operationKind, status: row.operationStatus ?? "", attempt: row.attempt, startedAt: row.startedAt, observedAt: row.observedAt, completedAt: row.completedAt } : null };
+  }
+
+  getRelease(actorUserId: string, taskId: string): TaskRelease | null {
+    const task = this.getTask(actorUserId, taskId);
+    return this.releaseForTask(task.id, task.companyId, task.workflowId) ?? null;
+  }
+
+  async getReleaseArtifact(actorUserId: string, taskId: string, artifactId: string): Promise<{ mimeType: string; bytes: Buffer }> {
+    const task = this.getTask(actorUserId, taskId);
+    const artifact = this.database.authQuery((db) => db.prepare(`SELECT a.mime_type AS mimeType, a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_releases r ON r.body_artifact_id = a.id AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ? AND r.superseded_at IS NULL WHERE a.id = ? AND a.company_id = ? AND a.kind = 'release-public-body'`).get(task.id, task.companyId, task.workflowId, artifactId, task.companyId) as { mimeType: string; storagePath: string; sha256: string } | undefined);
+    if (!artifact) throw new TaskFailure("Not found", [], 404);
+    return { mimeType: artifact.mimeType, bytes: await this.artifacts.read({ companyId: task.companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 }) };
   }
 
   private leadOutput(taskId: string, companyId: string): ForgeTask["leadOutput"] {

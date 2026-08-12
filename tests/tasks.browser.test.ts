@@ -73,7 +73,17 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
     projectState(plannedState);
     return plannedState;
   }, async approvePlan(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development"], pendingAction: "Start development", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft"], pendingAction: "Publish draft pull request", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
+    projectState(plannedState);
+    return plannedState;
+  }, async publishDraft(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    const releaseBody = await new ArtifactStore(config.artifactRoot).put(company.id, "release-public-body", { filename: "release.md", mimeType: "text/markdown", bytes: Buffer.from("## Summary\n\nBrowser task") });
+    database.authTransaction((db) => {
+      const now = new Date().toISOString();
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(releaseBody.id, releaseBody.companyId, releaseBody.kind, releaseBody.filename, releaseBody.mimeType, releaseBody.byteSize, releaseBody.sha256, releaseBody.storagePath, releaseBody.createdAt);
+      db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, body_artifact_id, reused, created_at, updated_at) VALUES ('release-browser', ?, ?, ?, 'release-browser-key', 'acme/forge', 'issue/browser-task', 'main', ?, ?, ?, 'draft', 21, 'https://github.com/acme/forge/pull/21', 'Browser task', ?, 1, ?, ?)").run(plannedState!.issueId, company.id, plannedState!.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), releaseBody.id, now, now);
+    });
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Waiting for required CI", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
   }, async rejectPlan(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
@@ -96,7 +106,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
     const csrf = values.find((value) => value.split("=", 1)[0] === CSRF_COOKIE_NAME)?.split(";", 1)[0] ?? "";
     const browser = await chromium.launch({ headless: true });
     try {
-      const context = await browser.newContext({ viewport: { width: 1100, height: 800 } });
+      const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
       await context.addCookies([
         { name: SESSION_COOKIE_NAME, value: cookie.split("=", 2)[1] ?? "", domain: "127.0.0.1", path: "/" },
         { name: CSRF_COOKIE_NAME, value: csrf.split("=", 2)[1] ?? "", domain: "127.0.0.1", path: "/" },
@@ -134,8 +144,8 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
         const task = db.prepare("SELECT workflow_id AS workflowId FROM forge_tasks WHERE id = ?").get(taskId) as { workflowId: string };
         const observedAt = "2026-08-11T12:00:00.000Z";
         const baseSha = "a".repeat(40); const headSha = "b".repeat(40); const treeSha = "c".repeat(40);
-        db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, created_at, updated_at) VALUES ('release-browser', ?, ?, ?, 'browser-release', 'acme/forge', 'issue/browser-task', 'main', ?, ?, ?, 'draft', 77, 'https://github.com/acme/forge/pull/77', 'Browser release', ?, ?)").run(taskId, company.id, task.workflowId, baseSha, headSha, treeSha, observedAt, observedAt);
-        db.prepare("INSERT INTO forge_ci_runs (id, task_id, company_id, release_id, expected_head_sha, expected_head_tree, project_revision_id, policy_hash, policy_json, status, attempt, summary, first_observed_at, propagation_deadline, overall_deadline, completed_at, created_at, updated_at) VALUES ('ci-browser', ?, ?, 'release-browser', ?, ?, ?, ?, ?, 'failed', 1, 'One required check failed', ?, '2026-08-11T12:05:00.000Z', '2026-08-11T13:00:00.000Z', ?, ?, ?)").run(taskId, company.id, headSha, treeSha, activeProject.activeRevisionId, "f".repeat(64), JSON.stringify({ projectRevisionId: activeProject.activeRevisionId, requiredChecks: ["Tests / unit with an intentionally long but bounded display name that must wrap safely"], acceptedConclusions: ["success"] }), observedAt, observedAt, observedAt, observedAt);
+        db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, created_at, updated_at) VALUES ('release-ci-browser', ?, ?, ?, 'browser-release', 'acme/forge', 'issue/browser-task', 'main', ?, ?, ?, 'draft', 77, 'https://github.com/acme/forge/pull/77', 'Browser release', ?, ?)").run(taskId, company.id, task.workflowId, baseSha, headSha, treeSha, observedAt, observedAt);
+        db.prepare("INSERT INTO forge_ci_runs (id, task_id, company_id, release_id, expected_head_sha, expected_head_tree, project_revision_id, policy_hash, policy_json, status, attempt, summary, first_observed_at, propagation_deadline, overall_deadline, completed_at, created_at, updated_at) VALUES ('ci-browser', ?, ?, 'release-ci-browser', ?, ?, ?, ?, ?, 'failed', 1, 'One required check failed', ?, '2026-08-11T12:05:00.000Z', '2026-08-11T13:00:00.000Z', ?, ?, ?)").run(taskId, company.id, headSha, treeSha, activeProject.activeRevisionId, "f".repeat(64), JSON.stringify({ projectRevisionId: activeProject.activeRevisionId, requiredChecks: ["Tests / unit with an intentionally long but bounded display name that must wrap safely"], acceptedConclusions: ["success"] }), observedAt, observedAt, observedAt, observedAt);
         db.prepare("INSERT INTO forge_ci_attempts (id, run_id, attempt_number, observed_repository, observed_pr_number, observed_base_branch, observed_base_sha, observed_head_branch, observed_head_sha, outcome, reason, owner, repairable, summary, created_at) VALUES ('ci-attempt-browser', 'ci-browser', 1, 'acme/forge', 77, 'main', ?, 'issue/browser-task', ?, 'failed', 'required_check_failed', 'lead', 1, ?, ?)").run(baseSha, headSha, `The focused check failed safely. ${"bounded ".repeat(40)}`, observedAt);
         db.prepare("INSERT INTO forge_ci_attempt_checks (id, attempt_id, provider_check_id, name, head_sha, status, conclusion, details_url, summary, started_at, completed_at, selected_for_evaluation, created_at) VALUES ('ci-check-browser', 'ci-attempt-browser', '90071992547409932', 'Tests / unit with an intentionally long but bounded display name that must wrap safely', ?, 'completed', 'failure', 'https://github.com/acme/forge/actions/runs/77', 'A bounded failure summary', ?, ?, 1, ?)").run(headSha, observedAt, observedAt, observedAt);
       });
@@ -157,7 +167,14 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await taskDetail.getByRole("button", { name: "Request review", exact: true }).click();
       await taskDetail.getByText(/approval · revision 3/).waitFor();
       await taskDetail.getByRole("button", { name: "Approve plan", exact: true }).click();
-      await taskDetail.getByText(/ready_for_development · revision 4/).waitFor();
+      await taskDetail.getByText(/delivery_reviewed · revision 4/).waitFor();
+      await taskDetail.getByRole("button", { name: "Publish draft", exact: true }).click();
+      await taskDetail.getByText(/ci_waiting · revision 5/).waitFor();
+      await observerDetail.getByText(/ci_waiting · revision 5/).waitFor();
+      await taskDetail.getByRole("heading", { name: "Draft publication" }).waitFor();
+      expect(await taskDetail.getByText("acme/forge · main ← issue/browser-task", { exact: true }).isVisible()).toBe(true);
+      await taskDetail.getByText("Preview title and body", { exact: true }).click();
+      expect(await taskDetail.getByText(/## Summary/).isVisible()).toBe(true);
       expect(new URL(page.url()).pathname).toBe(detailPath);
       expect(await taskDetail.locator('[data-slot="timeline"][data-orientation="horizontal"]').count()).toBe(1);
       await taskDetail.getByRole("link", { name: "Tasks", exact: true }).click();
@@ -188,6 +205,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       expect(await narrowDetail.getByRole("heading", { name: "Browser task", exact: true, level: 2 }).isVisible()).toBe(true);
       expect(await narrowDetail.getByText("Description", { exact: true }).isVisible()).toBe(true);
       await narrowDetail.getByText("Exact-head CI", { exact: true }).waitFor();
+      expect(await narrowDetail.getByRole("heading", { name: "Draft publication" }).isVisible()).toBe(true);
       expect(await narrow.getByRole("dialog").count()).toBe(0);
       expect(await narrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       const activity = narrowDetail.locator("[data-task-activity-scroll]");

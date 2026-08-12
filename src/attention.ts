@@ -94,10 +94,25 @@ function candidateFor(database: ForgeDatabase, row: ProjectionRow): AttentionCan
   }
 
   const release = database.authQuery((db) => db.prepare("SELECT status FROM forge_releases WHERE task_id = ? ORDER BY updated_at DESC LIMIT 1").get(row.task_id) as { status: string } | undefined);
-  if (release?.status === "ambiguous" || release?.status === "provider_unavailable") {
+  const releaseGuidance: Record<string, AttentionCandidate | undefined> = {
+    "authentication-required": { taskId: row.task_id, category: "provider_authentication", summary: "GitHub authentication is unavailable for this release.", action: "Re-authenticate the host GitHub CLI, then retry publication." },
+    "stale-reviewed-revision": { taskId: row.task_id, category: "agent_contradiction", summary: "The approved review no longer matches the exact Developer revision.", action: "Run a fresh delivery review before publishing." },
+    "target-base-drift": { taskId: row.task_id, category: "target_drift", summary: "The pinned target base moved before publication.", action: "Reconcile the target base with the guarded forward-merge flow." },
+    "wrong-remote": { taskId: row.task_id, category: "provider_ambiguity", summary: "The local origin does not match the pinned GitHub repository.", action: "Correct the repository configuration, then retry publication." },
+    "pinned-configuration-incomplete": { taskId: row.task_id, category: "provider_ambiguity", summary: "The accepted project revision is missing release configuration.", action: "Create a complete accepted project revision before retrying publication." },
+    "public-projection-unsafe": { taskId: row.task_id, category: "provider_ambiguity", summary: "The release preview contains content that cannot be published safely.", action: "Remove the unsafe public projection input and retry after review." },
+    "remote-head-conflict": { taskId: row.task_id, category: "provider_ambiguity", summary: "The remote issue branch points to a different commit.", action: "Inspect the remote branch and reconcile it before retrying publication." },
+    "ambiguous-provider-state": { taskId: row.task_id, category: "provider_ambiguity", summary: "GitHub returned contradictory draft pull-request state.", action: "Inspect the matching branch and pull requests before retrying publication." },
+    "invalid-provider-response": { taskId: row.task_id, category: "provider_ambiguity", summary: "GitHub returned an invalid release observation.", action: "Verify GitHub availability and retry publication." },
+    "provider-unavailable": { taskId: row.task_id, category: "provider_ambiguity", summary: "GitHub release state could not be confirmed.", action: "Inspect the remote branch and pull requests before retrying publication." },
+  };
+  if (release?.status === "provider-rate-limited") {
+    // Durable Workflow retry state is truthful, but it is not a human attention item.
+  } else if (release?.status && releaseGuidance[release.status]) {
+    return releaseGuidance[release.status];
+  } else if (release?.status === "ambiguous" || release?.status === "provider_unavailable") {
     return { taskId: row.task_id, category: "provider_ambiguity", summary: "GitHub release state needs operator reconciliation.", action: "Inspect the existing branch and pull requests before retrying provider mutation." };
-  }
-  if (release?.status === "authentication") {
+  } else if (release?.status === "authentication") {
     return { taskId: row.task_id, category: "provider_authentication", summary: "GitHub authentication is unavailable for this release.", action: "Re-authenticate the host GitHub CLI, then retry the Workflow update." };
   }
 

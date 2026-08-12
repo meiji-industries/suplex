@@ -15,7 +15,7 @@ export interface ArtifactInput {
 export interface StoredArtifact {
   id: string;
   companyId: string;
-  kind: "task-brief" | "task-image" | "agent-evidence" | "lead-plan" | "decision-blocker" | "supplemental-review" | "plan-decision" | "developer-delivery" | "delivery-review" | "developer-repair" | "delivery-decision" | "ci-evidence" | "ci-repair-plan" | "ci-repair-evidence" | "merge-conflict-evidence" | "merge-conflict-plan" | "merge-conflict-resolution";
+  kind: "task-brief" | "task-image" | "agent-evidence" | "lead-plan" | "decision-blocker" | "supplemental-review" | "plan-decision" | "developer-delivery" | "delivery-review" | "developer-repair" | "delivery-decision" | "ci-evidence" | "ci-repair-plan" | "ci-repair-evidence" | "merge-conflict-evidence" | "merge-conflict-plan" | "merge-conflict-resolution" | "release-public-body";
   filename: string;
   mimeType: string;
   byteSize: number;
@@ -26,7 +26,7 @@ export interface StoredArtifact {
 
 export const ArtifactManifestEntrySchema = z.object({
   id: z.string().min(1).max(256),
-  kind: z.enum(["task-brief", "task-image", "agent-evidence", "lead-plan", "decision-blocker", "supplemental-review", "plan-decision", "developer-delivery", "delivery-review", "developer-repair", "delivery-decision", "ci-evidence", "ci-repair-plan", "ci-repair-evidence", "merge-conflict-evidence", "merge-conflict-plan", "merge-conflict-resolution"]),
+  kind: z.enum(["task-brief", "task-image", "agent-evidence", "lead-plan", "decision-blocker", "supplemental-review", "plan-decision", "developer-delivery", "delivery-review", "developer-repair", "delivery-decision", "ci-evidence", "ci-repair-plan", "ci-repair-evidence", "merge-conflict-evidence", "merge-conflict-plan", "merge-conflict-resolution", "release-public-body"]),
   filename: z.string().min(1).max(160),
   mimeType: z.string().min(1).max(120),
   byteSize: z.number().int().positive().max(8 * 1024 * 1024),

@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 
 import type { ForgeDatabase } from "./database.js";
-import type { GithubPullRequest, GithubReleasePort } from "./github-release.js";
+import type { GithubAcceptancePort, GithubPullRequest } from "./github-release.js";
 
 export type AcceptanceDecision = "accept" | "request_changes" | "cancel";
 export type ReconciliationOutcome = "open" | "merged" | "closed_without_merge" | "changed" | "provider_unavailable";
@@ -37,7 +37,7 @@ export interface AcceptanceResult {
 }
 
 export class AcceptanceService {
-  constructor(private readonly database: ForgeDatabase, private readonly github: GithubReleasePort) {}
+  constructor(private readonly database: ForgeDatabase, private readonly github: GithubAcceptancePort) {}
 
   async accept(input: AcceptanceInput): Promise<AcceptanceResult> {
     const release = this.database.authQuery((db) => db.prepare(`SELECT r.id, r.repository, r.head_branch, r.base_branch, r.base_sha, r.head_sha, r.head_tree, r.pr_number, r.pr_url, r.superseded_at
@@ -52,17 +52,14 @@ export class AcceptanceService {
     const decision = input.decision ?? "accept";
     const current = await this.currentPr(input.repository, release.pr_number);
     if (current.repository.toLowerCase() !== release.repository.toLowerCase() || current.number !== release.pr_number || current.url.replace(/\/$/, "").toLowerCase() !== release.pr_url?.replace(/\/$/, "").toLowerCase() || current.headSha.toLowerCase() !== input.headSha.toLowerCase() || current.headBranch !== release.head_branch || current.baseBranch !== input.baseBranch || current.baseSha.toLowerCase() !== release.base_sha.toLowerCase()) throw new AcceptanceFailure("stale");
-    if (this.github.getBranchHead) {
-      const baseHead = await this.github.getBranchHead({ repository: input.repository, branch: input.baseBranch });
-      if (baseHead.toLowerCase() !== release.base_sha.toLowerCase()) throw new AcceptanceFailure("stale");
-    }
+    const baseHead = await this.github.getBranchHead({ repository: input.repository, branch: input.baseBranch });
+    if (!baseHead || baseHead.toLowerCase() !== release.base_sha.toLowerCase()) throw new AcceptanceFailure("stale");
     if (!current.isDraft) throw new AcceptanceFailure("stale");
     const existingAcceptance = this.database.authQuery((db) => db.prepare("SELECT id, status FROM forge_acceptances WHERE task_id = ? AND release_id = ? AND head_sha = ? AND decision = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.releaseId, input.headSha, decision) as { id: string; status: "accepted" | "requested_changes" | "cancelled" } | undefined);
     if (existingAcceptance) return { acceptanceId: existingAcceptance.id, status: existingAcceptance.status, pullRequest: current };
     const acceptanceId = id();
     const now = new Date().toISOString();
     if (decision === "accept") {
-      if (!this.github.markReadyForReview) throw new AcceptanceFailure("provider");
       await this.github.markReadyForReview({ repository: input.repository, number: current.number });
     }
     const status = decision === "accept" ? "accepted" : decision === "request_changes" ? "requested_changes" : "cancelled";
@@ -75,7 +72,7 @@ export class AcceptanceService {
 
   async reconcile(input: { taskId: string; companyId: string; releaseId: string; repository: string; number: number; expectedHeadSha: string; expectedBaseBranch: string }): Promise<{ outcome: ReconciliationOutcome; pullRequest: GithubPullRequest | null }> {
     const release = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_releases WHERE id = ? AND task_id = ? AND company_id = ? AND repository = ?").get(input.releaseId, input.taskId, input.companyId, input.repository));
-    if (!release || !this.github.getPullRequest) throw new AcceptanceFailure("scope");
+    if (!release) throw new AcceptanceFailure("scope");
     let current: GithubPullRequest;
     try { current = await this.github.getPullRequest({ repository: input.repository, number: input.number }); } catch { return { outcome: "provider_unavailable", pullRequest: null }; }
     if (current.state === "merged") return { outcome: current.headSha.toLowerCase() === input.expectedHeadSha.toLowerCase() && current.baseBranch === input.expectedBaseBranch ? "merged" : "changed", pullRequest: current };
@@ -85,7 +82,6 @@ export class AcceptanceService {
   }
 
   private async currentPr(repository: string, number: number): Promise<GithubPullRequest> {
-    if (!this.github.getPullRequest) throw new AcceptanceFailure("provider");
     try { return await this.github.getPullRequest({ repository, number }); } catch { throw new AcceptanceFailure("provider"); }
   }
 }

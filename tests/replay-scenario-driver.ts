@@ -95,9 +95,9 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
     async cancelDeveloperExecution() { return { status: "cancelled" }; },
     async publishRelease(activityInput) {
       const scenario = scenarioFor(activityInput.workflowId);
-      const base = { releaseId: `release-${scenario}`, repository: "example/forge", branchName: activityInput.branchName, headSha: activityInput.subjectCommit, headTree: activityInput.subjectTree, pullRequestNumber: 1, pullRequestUrl: "https://example.test/pull/1", isDraft: true, reused: false, targetBaseSha: activityInput.targetBaseSha };
-      if (scenario === "release_base_drift_merged") return { ...base, releaseId: "", pullRequestNumber: 0, pullRequestUrl: "", baseDriftMerged: true, targetBaseSha: "9".repeat(40), headSha: "8".repeat(40), headTree: "7".repeat(40) };
-      if (scenario === "release_base_drift_conflict") return { ...base, releaseId: "", pullRequestNumber: 0, pullRequestUrl: "", baseDriftConflict: true, forwardMergeId: "forward-merge-conflict", priorHead: activityInput.subjectCommit, targetBaseSha: "9".repeat(40), mergeConflictEvidence: artifact("merge-conflict-evidence", "merge-conflict-evidence") };
+      const base = { outcome: "completed" as const, releaseId: `release-${scenario}`, repository: "example/forge", branchName: activityInput.branchName, headSha: activityInput.subjectCommit, headTree: activityInput.subjectTree, pullRequestNumber: 1, pullRequestUrl: "https://example.test/pull/1", isDraft: true as const, reused: false, attempt: 1, targetBaseSha: activityInput.targetBaseSha };
+      if (scenario === "release_base_drift_merged") return { ...base, outcome: "base-drift-merged" as const, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, isDraft: false as const, baseDriftMerged: true as const, priorHead: activityInput.subjectCommit, targetBaseSha: "9".repeat(40), headSha: "8".repeat(40), headTree: "7".repeat(40) };
+      if (scenario === "release_base_drift_conflict") return { ...base, outcome: "base-drift-conflict" as const, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, isDraft: false as const, baseDriftConflict: true as const, forwardMergeId: "forward-merge-conflict", priorHead: activityInput.subjectCommit, targetBaseSha: "9".repeat(40), mergeConflictEvidence: artifact("merge-conflict-evidence", "merge-conflict-evidence") };
       return base;
     },
     async reconcileCi(activityInput) {

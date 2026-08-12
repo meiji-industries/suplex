@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 
 import type { AuthUser } from "./auth.js";
 import { AuthFailure, AuthService } from "./auth.js";
+import type { CheckConclusion, CheckStatus, CiOutcome, CiOwner } from "./ci.js";
 import type { ForgeConfig } from "./config.js";
 import { ArtifactFailure, ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { LeadOutputSchema, type LeadOutput } from "./codex-lead.js";
@@ -11,7 +12,7 @@ import { acceptIssueDelivery, approveIssuePlan, cancelIssue, cancelIssueDevelopm
 import { createInitialIssueWorkflowState } from "./temporal/issue-contracts.js";
 import type { IssueWorkflowInput, IssueWorkflowState, PlanCommandInput, StartPlanningInput } from "./temporal/issue-contracts.js";
 
-export type TaskPhase = "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "ci_waiting" | "ci_repair_required" | "final_review" | "accepted" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
+export type TaskPhase = "backlog" | "planning" | "approval" | "ready_for_development" | "development" | "delivery_ready" | "reviewing_delivery" | "repair_required" | "delivery_reviewed" | "releasing" | "merge_conflict_reviewing" | "merge_conflict_required" | "merge_conflict_resolving" | "ci_waiting" | "ci_repair_planning" | "ci_repairing" | "ci_repair_required" | "final_review" | "accepted" | "manual_merge" | "done" | "delivery_blocked" | "cancelled" | "failed";
 
 export interface TaskFinding {
   code: string;
@@ -69,7 +70,7 @@ export interface TaskAgentInvocation {
   role: "lead" | "reviewer" | "developer";
   status: string;
   attempt: number;
-  sessionRef: string | null;
+  sessionPresent: boolean;
   startedAt: string;
   finishedAt: string | null;
   failureCode: string | null;
@@ -108,6 +109,7 @@ export interface ForgeTask {
   deliveryDecisionArtifactId?: string | null;
   predecessorTaskId?: string | null;
   successorTaskId?: string | null;
+  ci?: TaskCiProjection;
   deliveryReview?: {
     id: string;
     outcome: "approved" | "blocking";
@@ -117,7 +119,6 @@ export interface ForgeTask {
     subjectCommit: string;
     subjectTree: string;
     leadExecutionId: string;
-    sessionRef: string;
     opinionArtifactId: string;
     evidenceArtifactId: string;
     repairCycle: number;
@@ -128,9 +129,7 @@ export interface ForgeTask {
     status: string;
     attempt: number;
     branchName: string;
-    worktreePath: string;
     targetBaseSha: string;
-    sessionRef?: string | null;
     currentStep?: number | null;
     resultCommit?: string | null;
     resultTree?: string | null;
@@ -143,12 +142,60 @@ export interface ForgeTask {
   leadOutput?: {
     kind: "plan" | "decision_blocker";
     summary: string;
-    sessionRef: string;
     executionId: string;
     outputArtifactId: string;
     evidenceArtifactId: string;
     content: LeadOutput;
   };
+}
+
+export interface TaskCiProjection {
+  runId: string;
+  releaseId: string;
+  repository: string;
+  pullRequestNumber: number;
+  pullRequestUrl: string;
+  baseBranch: string;
+  headBranch: string;
+  expectedHeadSha: string;
+  expectedHeadTree: string;
+  status: string;
+  outcome: CiOutcome | null;
+  reason: string | null;
+  owner: CiOwner;
+  repairable: boolean;
+  policyHash: string;
+  policy: { projectRevisionId: string; requiredChecks: string[]; acceptedConclusions: ["success"] };
+  leadSessionContinuity: boolean;
+  developerSessionContinuity: boolean;
+  firstObservedAt: string | null;
+  propagationDeadline: string | null;
+  overallDeadline: string | null;
+  nextRetryAt: string | null;
+  completedAt: string | null;
+  supersededAt: string | null;
+  supersededRuns: Array<{ runId: string; releaseId: string; expectedHeadSha: string; expectedHeadTree: string | null; status: string; supersededAt: string | null }>;
+  attempts: Array<{
+    id: string;
+    attemptNumber: number;
+    observedRepository: string | null;
+    observedPrNumber: number | null;
+    observedBaseBranch: string | null;
+    observedBaseSha: string | null;
+    observedHeadBranch: string | null;
+    observedHeadSha: string | null;
+    outcome: CiOutcome;
+    reason: string;
+    owner: CiOwner;
+    repairable: boolean;
+    retryAt: string | null;
+    summary: string;
+    evidenceArtifactId: string | null;
+    createdAt: string;
+    checks: Array<{ providerCheckId: string; name: string; headSha: string; status: CheckStatus; conclusion: CheckConclusion; detailsUrl: string | null; summary: string | null; startedAt: string | null; completedAt: string | null; selectedForEvaluation: boolean }>;
+  }>;
+  repairPlan: { id: string; status: string; ciRunId: string; ciAttemptId: string; failedHeadSha: string; planArtifactId: string; evidenceArtifactId: string; summary: string; steps: Array<{ number: number; instruction: string; verification: string }>; createdAt: string; updatedAt: string; consumedAt: string | null; supersededAt: string | null } | null;
+  repairs: Array<{ id: string; repairPlanId: string; priorCommit: string; priorTree: string; newCommit: string | null; newTree: string | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null; status: string; summary: string | null; createdAt: string; completedAt: string | null }>;
 }
 
 export interface TaskEvent {
@@ -795,6 +842,20 @@ export class TaskService {
     return { artifact: { artifactId: artifact.id, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }, bytes };
   }
 
+  async getTaskArtifact(actorUserId: string, taskId: string, artifactId: string): Promise<{ artifact: { artifactId: string; kind: string; filename: string; mimeType: string; byteSize: number }; bytes: Buffer }> {
+    const task = this.getTask(actorUserId, taskId);
+    const artifact = this.database.authQuery((db) => db.prepare(`SELECT a.id, a.kind, a.filename, a.mime_type, a.byte_size, a.storage_path, a.sha256
+      FROM forge_artifacts a
+      WHERE a.id = ? AND a.company_id = ? AND (
+        EXISTS (SELECT 1 FROM forge_ci_attempts ca JOIN forge_ci_runs cr ON cr.id = ca.run_id WHERE ca.evidence_artifact_id = a.id AND cr.task_id = ? AND cr.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_ci_repair_plans cp WHERE (cp.plan_artifact_id = a.id OR cp.evidence_artifact_id = a.id) AND cp.task_id = ? AND cp.company_id = ?)
+        OR EXISTS (SELECT 1 FROM forge_ci_repairs cx JOIN forge_ci_repair_plans cp ON cp.id = cx.repair_plan_id WHERE (cx.delivery_artifact_id = a.id OR cx.evidence_artifact_id = a.id) AND cp.task_id = ? AND cp.company_id = ?)
+      )`).get(artifactId, task.companyId, task.id, task.companyId, task.id, task.companyId, task.id, task.companyId) as { id: string; kind: string; filename: string; mime_type: string; byte_size: number; storage_path: string; sha256: string } | undefined);
+    if (!artifact) throw new TaskFailure("Not found", [], 404);
+    const bytes = await this.artifacts.read({ companyId: task.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 });
+    return { artifact: { artifactId: artifact.id, kind: artifact.kind, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }, bytes };
+  }
+
   private validateTaskInput(input: TaskInput): TaskFinding[] {
     const findings: TaskFinding[] = [];
     if (!titlePattern.test(input.title.trim())) findings.push(finding("invalid-title", "title", "Title must contain 1 to 160 characters"));
@@ -867,7 +928,7 @@ export class TaskService {
         role: invocation.role,
         status: invocation.status,
         attempt: invocation.attempt,
-        sessionRef: invocation.session_ref,
+        sessionPresent: Boolean(invocation.session_ref),
         startedAt: invocation.started_at,
         finishedAt: invocation.finished_at,
         failureCode: invocation.failure_code,
@@ -875,12 +936,13 @@ export class TaskService {
         evidenceArtifactId: invocation.evidence_artifact_id,
       }));
     const leadOutput = this.leadOutput(row.id, row.company_id);
-    const developerExecution = this.database.authQuery((db) => db.prepare("SELECT id, status, attempt, branch_name, worktree_path, target_base_sha, session_ref, current_step, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id, failure_code, failure_summary FROM forge_developer_executions WHERE task_id = ? AND company_id = ? ORDER BY attempt DESC, started_at DESC LIMIT 1").get(row.id, row.company_id) as { id: string; status: string; attempt: number; branch_name: string; worktree_path: string; target_base_sha: string; session_ref: string | null; current_step: number | null; result_commit: string | null; result_tree: string | null; dirty_state: string | null; delivery_artifact_id: string | null; evidence_artifact_id: string | null; failure_code: string | null; failure_summary: string | null } | undefined);
+    const developerExecution = this.database.authQuery((db) => db.prepare("SELECT id, status, attempt, branch_name, branch_name AS branchName, target_base_sha AS targetBaseSha, current_step AS currentStep, result_commit AS resultCommit, result_tree AS resultTree, dirty_state AS dirtyState, delivery_artifact_id AS deliveryArtifactId, evidence_artifact_id AS evidenceArtifactId, failure_code AS failureCode, failure_summary AS failureSummary FROM forge_developer_executions WHERE task_id = ? AND company_id = ? ORDER BY attempt DESC, started_at DESC LIMIT 1").get(row.id, row.company_id) as { id: string; status: string; attempt: number; branch_name: string; branchName: string; targetBaseSha: string; currentStep: number | null; resultCommit: string | null; resultTree: string | null; dirtyState: string | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null; failureCode: string | null; failureSummary: string | null } | undefined);
     const governance = this.database.authQuery((db) => db.prepare("SELECT plan_revision, plan_material, material_categories_json, supplemental_review_used, supplemental_review_artifact_id, decision_id FROM forge_issue_governance WHERE task_id = ? AND company_id = ?").get(row.id, row.company_id) as { plan_revision: number | null; plan_material: number | null; material_categories_json: string | null; supplemental_review_used: number; supplemental_review_artifact_id: string | null; decision_id: string | null } | undefined);
     const review = this.database.authQuery((db) => db.prepare("SELECT id, outcome, summary, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, opinion_artifact_id, evidence_artifact_id, repair_cycle FROM forge_delivery_reviews WHERE task_id = ? AND company_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id) as { id: string; outcome: "approved" | "blocking"; summary: string; plan_revision: number; base_sha: string; subject_commit: string; subject_tree: string; lead_execution_id: string; session_ref: string; opinion_artifact_id: string; evidence_artifact_id: string; repair_cycle: number } | undefined);
     const findings = review ? this.database.authQuery((db) => db.prepare("SELECT id, severity, rationale, evidence_ref, disposition, repair_instruction FROM forge_delivery_findings WHERE review_id = ? AND task_id = ? AND company_id = ? ORDER BY id").all(review.id, row.id, row.company_id) as Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidence_ref: string; disposition: string; repair_instruction: string | null }>) : [];
     const decision = this.database.authQuery((db) => db.prepare("SELECT artifact_id FROM forge_delivery_decisions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { artifact_id: string } | undefined);
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), timeline, agentInvocations, ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, sessionRef: review.session_ref, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, worktreePath: developerExecution.worktree_path, targetBaseSha: developerExecution.target_base_sha, sessionRef: developerExecution.session_ref, currentStep: developerExecution.current_step, resultCommit: developerExecution.result_commit, resultTree: developerExecution.result_tree, dirtyState: developerExecution.dirty_state, deliveryArtifactId: developerExecution.delivery_artifact_id, evidenceArtifactId: developerExecution.evidence_artifact_id, failureCode: developerExecution.failure_code, failureSummary: developerExecution.failure_summary } } : {}) };
+    const ci = this.ciProjection(row.id, row.company_id);
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), timeline, agentInvocations, ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
   }
 
   private leadOutput(taskId: string, companyId: string): ForgeTask["leadOutput"] {
@@ -889,7 +951,28 @@ export class TaskService {
       WHERE o.task_id = ? AND o.company_id = ? ORDER BY o.revision DESC LIMIT 1`).get(taskId, companyId) as LeadOutputRow | undefined);
     if (!row) return undefined;
     const content = LeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
-    return { kind: row.kind, summary: row.summary, sessionRef: row.session_ref, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };
+    return { kind: row.kind, summary: row.summary, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };
+  }
+
+  private ciProjection(taskId: string, companyId: string): TaskCiProjection | undefined {
+    type RunRow = { runId: string; releaseId: string; repository: string; pullRequestNumber: number | null; pullRequestUrl: string | null; baseBranch: string; headBranch: string; expectedHeadSha: string; expectedHeadTree: string | null; status: string; policyHash: string | null; policyJson: string | null; firstObservedAt: string | null; propagationDeadline: string | null; overallDeadline: string | null; nextRetryAt: string | null; completedAt: string | null; supersededAt: string | null };
+    const run = this.database.authQuery((db) => db.prepare(`SELECT c.id AS runId, c.release_id AS releaseId, r.repository, r.pr_number AS pullRequestNumber, r.pr_url AS pullRequestUrl, r.base_branch AS baseBranch, r.head_branch AS headBranch, c.expected_head_sha AS expectedHeadSha, COALESCE(c.expected_head_tree, r.head_tree) AS expectedHeadTree, c.status, c.policy_hash AS policyHash, c.policy_json AS policyJson, c.first_observed_at AS firstObservedAt, c.propagation_deadline AS propagationDeadline, c.overall_deadline AS overallDeadline, c.next_poll_at AS nextRetryAt, c.completed_at AS completedAt, c.superseded_at AS supersededAt
+      FROM forge_ci_runs c JOIN forge_releases r ON r.id = c.release_id
+      WHERE c.task_id = ? AND c.company_id = ?
+      ORDER BY c.updated_at DESC, c.id DESC LIMIT 1`).get(taskId, companyId) as RunRow | undefined);
+    if (!run || run.pullRequestNumber === null || !run.pullRequestUrl || !run.expectedHeadTree || !run.policyHash) return undefined;
+    const attemptRows = this.database.authQuery((db) => db.prepare(`SELECT id, attempt_number AS attemptNumber, observed_repository AS observedRepository, observed_pr_number AS observedPrNumber, observed_base_branch AS observedBaseBranch, observed_base_sha AS observedBaseSha, observed_head_branch AS observedHeadBranch, observed_head_sha AS observedHeadSha, outcome, reason, owner, repairable, retry_at AS retryAt, summary, evidence_artifact_id AS evidenceArtifactId, created_at AS createdAt FROM forge_ci_attempts WHERE run_id = ? ORDER BY attempt_number DESC LIMIT 20`).all(run.runId) as Array<Omit<TaskCiProjection["attempts"][number], "checks" | "repairable"> & { repairable: number }>);
+    const attempts = attemptRows.map((attempt) => ({ ...attempt, repairable: attempt.repairable === 1, checks: this.database.authQuery((db) => db.prepare("SELECT provider_check_id AS providerCheckId, name, head_sha AS headSha, status, conclusion, details_url AS detailsUrl, summary, started_at AS startedAt, completed_at AS completedAt, selected_for_evaluation AS selectedForEvaluation FROM forge_ci_attempt_checks WHERE attempt_id = ? ORDER BY name, provider_check_id").all(attempt.id) as Array<Omit<TaskCiProjection["attempts"][number]["checks"][number], "selectedForEvaluation"> & { selectedForEvaluation: number }>).map((check) => ({ ...check, selectedForEvaluation: check.selectedForEvaluation === 1 })) }));
+    const latest = attempts[0];
+    const repairPlanRow = this.database.authQuery((db) => db.prepare("SELECT p.id, p.status, p.ci_run_id AS ciRunId, p.ci_attempt_id AS ciAttemptId, p.failed_head_sha AS failedHeadSha, p.plan_artifact_id AS planArtifactId, p.evidence_artifact_id AS evidenceArtifactId, p.summary, p.created_at AS createdAt, p.updated_at AS updatedAt, p.consumed_at AS consumedAt, p.superseded_at AS supersededAt, a.storage_path AS planStoragePath, a.sha256 AS planSha256 FROM forge_ci_repair_plans p JOIN forge_artifacts a ON a.id = p.plan_artifact_id AND a.company_id = p.company_id WHERE p.task_id = ? AND p.company_id = ? ORDER BY p.created_at DESC LIMIT 1").get(taskId, companyId) as (Omit<NonNullable<TaskCiProjection["repairPlan"]>, "steps"> & { planStoragePath: string; planSha256: string }) | undefined);
+    const repairPlan = repairPlanRow ? (() => { const { planStoragePath, planSha256, ...publicPlan } = repairPlanRow; let steps: Array<{ number: number; instruction: string; verification: string }> = []; try { const value = json<{ steps?: unknown }>(this.artifacts.readSync({ companyId, storagePath: planStoragePath, sha256: planSha256 }).toString("utf8"), {}); steps = Array.isArray(value.steps) ? value.steps.filter((step): step is { number: number; instruction: string; verification: string } => Boolean(step) && typeof step === "object" && typeof (step as Record<string, unknown>).number === "number" && typeof (step as Record<string, unknown>).instruction === "string" && typeof (step as Record<string, unknown>).verification === "string").slice(0, 32) : []; } catch { /* projection remains bounded when the artifact is unavailable */ } return { ...publicPlan, steps }; })() : null;
+    const repairs = this.database.authQuery((db) => db.prepare("SELECT x.id, x.repair_plan_id AS repairPlanId, x.prior_commit AS priorCommit, x.prior_tree AS priorTree, x.new_commit AS newCommit, x.new_tree AS newTree, x.delivery_artifact_id AS deliveryArtifactId, x.evidence_artifact_id AS evidenceArtifactId, x.status, x.summary, x.created_at AS createdAt, x.completed_at AS completedAt FROM forge_ci_repairs x JOIN forge_ci_repair_plans p ON p.id = x.repair_plan_id WHERE p.task_id = ? AND p.company_id = ? ORDER BY x.created_at DESC LIMIT 20").all(taskId, companyId) as TaskCiProjection["repairs"]);
+    const supersededRuns = this.database.authQuery((db) => db.prepare("SELECT c.id AS runId, c.release_id AS releaseId, c.expected_head_sha AS expectedHeadSha, c.expected_head_tree AS expectedHeadTree, c.status, c.superseded_at AS supersededAt FROM forge_ci_runs c WHERE c.task_id = ? AND c.company_id = ? AND c.superseded_at IS NOT NULL ORDER BY c.superseded_at DESC, c.id DESC LIMIT 5").all(taskId, companyId) as TaskCiProjection["supersededRuns"]);
+    const continuity = this.database.authQuery((db) => db.prepare(`SELECT
+      EXISTS (SELECT 1 FROM forge_ci_repair_plans p JOIN forge_issue_outputs o ON o.task_id = p.task_id AND o.company_id = p.company_id AND o.workflow_id = p.workflow_id AND o.session_ref = p.lead_session_ref WHERE p.task_id = ? AND p.company_id = ?) AS lead,
+      EXISTS (SELECT 1 FROM forge_ci_repairs x JOIN forge_ci_repair_plans p ON p.id = x.repair_plan_id JOIN forge_developer_executions d ON d.id = x.prior_developer_execution_id AND d.task_id = p.task_id AND d.company_id = p.company_id AND d.workflow_id = p.workflow_id WHERE p.task_id = ? AND p.company_id = ? AND d.session_ref = x.prior_developer_session_ref AND x.result_developer_session_ref = x.prior_developer_session_ref) AS developer`).get(taskId, companyId, taskId, companyId) as { lead: number; developer: number });
+    const policy = json<TaskCiProjection["policy"]>(run.policyJson ?? "{}", { projectRevisionId: "", requiredChecks: [], acceptedConclusions: ["success"] });
+    return { runId: run.runId, releaseId: run.releaseId, repository: run.repository, pullRequestNumber: run.pullRequestNumber, pullRequestUrl: run.pullRequestUrl, baseBranch: run.baseBranch, headBranch: run.headBranch, expectedHeadSha: run.expectedHeadSha, expectedHeadTree: run.expectedHeadTree, status: run.status, outcome: latest?.outcome ?? null, reason: latest?.reason ?? null, owner: latest?.owner ?? null, repairable: latest?.repairable ?? false, policyHash: run.policyHash, policy, leadSessionContinuity: continuity.lead === 1, developerSessionContinuity: continuity.developer === 1, firstObservedAt: run.firstObservedAt, propagationDeadline: run.propagationDeadline, overallDeadline: run.overallDeadline, nextRetryAt: run.nextRetryAt, completedAt: run.completedAt, supersededAt: run.supersededAt, supersededRuns, attempts, repairPlan, repairs };
   }
 
   private taskQuery(scope: string): string {

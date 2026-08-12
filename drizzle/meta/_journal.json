@@ -134,6 +134,13 @@
       "when": 1786427300000,
       "tag": "0018_task_creation_projection_integrity",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786427400000,
+      "tag": "0019_exact_head_ci_repair",
+      "breakpoints": true
     }
   ]
 }

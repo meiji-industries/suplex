@@ -71,6 +71,21 @@ export const DeliveryReviewSchema = z.object({
 export type DeliveryFinding = z.infer<typeof DeliveryFindingSchema>;
 export type DeliveryReview = z.infer<typeof DeliveryReviewSchema>;
 
+export const CiRepairPlanSchema = z.object({
+  kind: z.literal("ci-repair-plan"),
+  ciRunId: durableId,
+  ciAttemptId: durableId,
+  failedHeadSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
+  rootCause: z.string().min(1).max(2_000),
+  failedChecks: z.array(z.object({ name: z.string().min(1).max(200), evidenceArtifactId: durableId, diagnosis: z.string().min(1).max(2_000) }).strict()).min(1),
+  steps: z.array(z.object({ number: z.number().int().positive(), instruction: z.string().min(1).max(2_000), verification: z.string().min(1).max(1_000) }).strict()).min(1),
+  localVerification: z.array(z.string().min(1).max(500)).min(1),
+  unresolvedQuestions: z.array(z.string().min(1).max(1_000)).max(0),
+}).strict().superRefine((value, context) => {
+  value.steps.forEach((step, index) => { if (step.number !== index + 1) context.addIssue({ code: "custom", path: ["steps", index, "number"], message: "Repair step numbers must be contiguous" }); });
+});
+export type CiRepairPlan = z.infer<typeof CiRepairPlanSchema>;
+
 export const MergeConflictPlanSchema = z.object({
   kind: z.literal("merge_conflict_plan"),
   summary: z.string().min(1).max(2_000),
@@ -81,7 +96,7 @@ export const MergeConflictPlanSchema = z.object({
 
 export type MergeConflictPlan = z.infer<typeof MergeConflictPlanSchema>;
 
-export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_required", "final_review", "accepted", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"]);
+export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"]);
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
 export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "record_progress", "start_development", "retry_development", "cancel_development", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "cancel_issue", "reconcile_merge", "continue_work"]);
 export const IssuePlanDecisionSchema = z.enum(["approve", "reject"]);
@@ -151,7 +166,23 @@ export const IssueContinuationStateSchema = z.object({
   expectedHeadTree: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
   ciRunId: durableId.nullable().optional(),
   ciAttempt: z.number().int().nonnegative().optional(),
-  ciOutcome: z.enum(["waiting", "passed", "failed", "cancelled", "missing_required", "provider_unavailable", "rate_limited", "stale_head", "timed_out"]).nullable().optional(),
+  ciOutcome: z.enum(["waiting", "passed", "failed", "missing_required", "cancelled", "timed_out", "non_success", "stale_head", "rate_limited", "provider_unavailable", "invalid_provider_response"]).nullable().optional(),
+  ciReason: z.string().max(128).nullable().optional(),
+  ciOwner: z.enum(["system", "lead", "human"]).nullable().optional(),
+  ciRepairable: z.boolean().optional(),
+  ciAttemptId: durableId.nullable().optional(),
+  ciEvidenceArtifactId: durableId.nullable().optional(),
+  ciPolicyHash: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+  ciPropagationDeadline: z.string().datetime().nullable().optional(),
+  ciOverallDeadline: z.string().datetime().nullable().optional(),
+  ciRepairPlanId: durableId.nullable().optional(),
+  ciRepairPlanArtifactId: durableId.nullable().optional(),
+  ciRepairPlanEvidenceArtifactId: durableId.nullable().optional(),
+  ciRepairPlanSummary: z.string().max(2_000).nullable().optional(),
+  ciRepairLeadExecutionId: durableId.nullable().optional(),
+  ciRepairLeadSessionRef: durableId.nullable().optional(),
+  ciRepairDeveloperExecutionId: durableId.nullable().optional(),
+  ciRepairDeveloperSessionRef: durableId.nullable().optional(),
   ciNextPollAt: z.string().datetime().nullable().optional(),
   finalReviewId: durableId.nullable().optional(),
   finalReviewOutcome: z.enum(["approved", "blocking"]).nullable().optional(),
@@ -255,7 +286,23 @@ export const IssueWorkflowStateSchema = z.object({
   expectedHeadTree: z.string().regex(/^[a-f0-9]{40,64}$/i).nullable().optional(),
   ciRunId: durableId.nullable().optional(),
   ciAttempt: z.number().int().nonnegative().optional(),
-  ciOutcome: z.enum(["waiting", "passed", "failed", "cancelled", "missing_required", "provider_unavailable", "rate_limited", "stale_head", "timed_out"]).nullable().optional(),
+  ciOutcome: z.enum(["waiting", "passed", "failed", "missing_required", "cancelled", "timed_out", "non_success", "stale_head", "rate_limited", "provider_unavailable", "invalid_provider_response"]).nullable().optional(),
+  ciReason: z.string().max(128).nullable().optional(),
+  ciOwner: z.enum(["system", "lead", "human"]).nullable().optional(),
+  ciRepairable: z.boolean().optional(),
+  ciAttemptId: durableId.nullable().optional(),
+  ciEvidenceArtifactId: durableId.nullable().optional(),
+  ciPolicyHash: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
+  ciPropagationDeadline: z.string().datetime().nullable().optional(),
+  ciOverallDeadline: z.string().datetime().nullable().optional(),
+  ciRepairPlanId: durableId.nullable().optional(),
+  ciRepairPlanArtifactId: durableId.nullable().optional(),
+  ciRepairPlanEvidenceArtifactId: durableId.nullable().optional(),
+  ciRepairPlanSummary: z.string().max(2_000).nullable().optional(),
+  ciRepairLeadExecutionId: durableId.nullable().optional(),
+  ciRepairLeadSessionRef: durableId.nullable().optional(),
+  ciRepairDeveloperExecutionId: durableId.nullable().optional(),
+  ciRepairDeveloperSessionRef: durableId.nullable().optional(),
   ciNextPollAt: z.string().datetime().nullable().optional(),
   finalReviewId: durableId.nullable().optional(),
   finalReviewOutcome: z.enum(["approved", "blocking"]).nullable().optional(),
@@ -595,6 +642,7 @@ export interface PublishReleaseActivityInput {
   planSummary: string;
   deliverySummary: string;
   verificationSummary: string;
+  expectedPullRequestNumber?: number;
 }
 
 export interface PublishReleaseActivityResult {
@@ -690,15 +738,91 @@ export interface ReconcileCiActivityInput {
   companyId: string;
   releaseId: string;
   expectedHeadSha: string;
-  attempt?: number;
+  attemptNumber: number;
 }
 
 export interface ReconcileCiActivityResult {
   runId: string;
-  outcome: "waiting" | "passed" | "failed" | "cancelled" | "missing_required" | "provider_unavailable" | "rate_limited" | "stale_head" | "timed_out";
+  attemptId: string;
+  attemptNumber: number;
+  expectedHeadSha: string;
+  observedHeadSha: string | null;
+  evidenceArtifactId: string | null;
+  outcome: "waiting" | "passed" | "failed" | "missing_required" | "cancelled" | "timed_out" | "non_success" | "stale_head" | "rate_limited" | "provider_unavailable" | "invalid_provider_response";
+  reason: string;
+  owner: "system" | "lead" | "human" | null;
+  repairable: boolean;
   summary: string;
+  retryAt: string | null;
   nextPollAt: string | null;
+  policyHash: string;
+  propagationDeadline: string | null;
+  overallDeadline: string | null;
 }
+
+export interface CiRepairPlanActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  projectId: string;
+  projectRevisionId: string;
+  leadSessionRef: string;
+  ciRunId: string;
+  ciAttemptId: string;
+  failedHeadSha: string;
+  evidenceArtifactId: string;
+  requiredChecks: string[];
+  localVerification: string[];
+}
+
+export interface CiRepairPlanActivityResult {
+  planId: string;
+  planArtifactId: string;
+  evidenceArtifactId: string;
+  leadExecutionId: string;
+  leadSessionRef: string;
+  summary: string;
+}
+
+export interface CiRepairActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  releaseId?: string;
+  projectId: string;
+  projectRevisionId: string;
+  ciRunId: string;
+  ciAttemptId: string;
+  repairPlanId: string;
+  repairPlanArtifactId: string;
+  repairPlanEvidenceArtifactId: string;
+  failedHeadSha: string;
+  priorDeveloperExecutionId: string;
+  priorDeveloperSessionRef: string;
+  worktreePath: string;
+  branchName: string;
+  priorCommit: string;
+  priorTree: string;
+}
+
+export interface CiRepairActivityResult {
+  repairId: string;
+  developerExecutionId: string;
+  developerSessionRef: string;
+  worktreePath: string;
+  branchName: string;
+  priorCommit: string;
+  priorTree: string;
+  resultCommit: string | null;
+  resultTree: string | null;
+  deliveryArtifactId: string;
+  evidenceArtifactId: string;
+  summary: string;
+  outcome: "completed" | "blocked";
+}
+
+export type WorkflowCiRepairActivityInput = Omit<CiRepairActivityInput, "worktreePath"> & { worktreePath?: string };
+export type WorkflowCiRepairActivityResult = Omit<CiRepairActivityResult, "worktreePath">;
 
 export interface FinalReviewActivityInput {
   taskId: string;
@@ -784,6 +908,8 @@ export interface IssueActivities {
   cancelDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<{ status: "cancelled" | "ownership_ambiguous"; reason?: string | undefined }>;
   publishRelease(input: PublishReleaseActivityInput): Promise<PublishReleaseActivityResult>;
   reconcileCi(input: ReconcileCiActivityInput): Promise<ReconcileCiActivityResult>;
+  planCiRepair(input: CiRepairPlanActivityInput): Promise<CiRepairPlanActivityResult>;
+  runCiRepair(input: WorkflowCiRepairActivityInput): Promise<WorkflowCiRepairActivityResult>;
   finalReview(input: WorkflowFinalReviewActivityInput): Promise<FinalReviewActivityResult>;
   acceptDelivery(input: AcceptDeliveryActivityInput & { decision?: "accept" | "request_changes" | "cancel" }): Promise<AcceptDeliveryActivityResult>;
   reconcileMerge(input: ReconcileMergeActivityInput): Promise<ReconcileMergeActivityResult>;

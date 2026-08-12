@@ -15,8 +15,9 @@ import { ForgeDatabase } from "../src/database.js";
 import { ArtifactStore } from "../src/artifacts.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 import { createActivities } from "../src/temporal/activities.js";
+import { replayIssueHistory, type ReplayHistory } from "../src/temporal/replay.js";
 import { AgentFailure } from "../src/codex-lead.js";
-import { approveIssuePlan, connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, rejectIssuePlan, repairIssueDelivery, reviewIssueDelivery, startIssueDevelopment, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
+import { approveIssuePlan, cancelIssue, connectTemporal, ensureTemporalFoundation, queryIssueWorkflow, queryProbeWorkflow, rejectIssuePlan, repairIssueDelivery, reviewIssueDelivery, startIssueDevelopment, startIssuePlanning, startIssueWorkflow, startProbeWorkflow } from "../src/temporal/service.js";
 import { activityPayloadInterceptors } from "../src/temporal/payload-boundary-interceptors.js";
 import { buildProductionWorkflowBundle, temporalDataConverter } from "../src/temporal/workflow-bundle.js";
 import { runReplayScenarioCorpus } from "./replay-scenario-driver.js";
@@ -103,6 +104,38 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       run: async (input: { executionId?: string }) => ({ developerExecutionId: input.executionId ?? "developer_integration", developerSessionRef: "session_developer_integration", worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), currentStep: 1, resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_developer_evidence", deliverySummary: "Developer delivery", outcome: "completed" as const }),
       runRepair: async (input: { developerExecutionId: string }) => ({ developerExecutionId: "developer_repair_integration", developerSessionRef: "session_developer_integration", supersedesExecutionId: input.developerExecutionId, worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "d".repeat(40), resultTree: "e".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_repaired_delivery", evidenceArtifactId: "artifact_repaired_evidence", deliverySummary: "Developer repair", outcome: "completed" as const, cycle: 1 }),
     };
+    const ciCalls = new Map<string, number>();
+    const ciPlanInputs: Array<{ leadSessionRef: string; ciAttemptId: string }> = [];
+    const ciRepairInputs: Array<{ priorDeveloperSessionRef: string; ciAttemptId: string }> = [];
+    const baseActivities = createActivities(database, config, { agent: integrationAgent, developer: integrationDeveloper });
+    const integrationActivities = {
+      ...baseActivities,
+      async projectIssueState(state: Parameters<typeof baseActivities.projectIssueState>[0]) {
+        return state.issueId.startsWith("ci-") ? state : baseActivities.projectIssueState(state);
+      },
+      async reconcileCi(input: Parameters<typeof baseActivities.reconcileCi>[0]) {
+        if (!input.taskId.startsWith("ci-")) return baseActivities.reconcileCi(input);
+        const calls = (ciCalls.get(input.taskId) ?? 0) + 1;
+        ciCalls.set(input.taskId, calls);
+        const retryAt = new Date(Date.now() + 150).toISOString();
+        const common = { runId: `ci_run_${input.taskId}`, attemptId: `ci_attempt_${input.taskId}_${calls}`, attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: `artifact_ci_${input.taskId}_${calls}`, policyHash: "f".repeat(64), propagationDeadline: new Date(Date.now() + 300_000).toISOString(), overallDeadline: new Date(Date.now() + 3_600_000).toISOString() };
+        if (input.taskId === "ci-rate" && calls === 1) return { ...common, outcome: "rate_limited" as const, reason: "provider_rate_limited", owner: "system" as const, repairable: false, summary: "GitHub rate limit is active", retryAt, nextPollAt: retryAt };
+        if (input.taskId === "ci-repair") return { ...common, outcome: "failed" as const, reason: "required_check_failed", owner: "lead" as const, repairable: true, summary: "Required check failed", retryAt: null, nextPollAt: null };
+        return { ...common, outcome: "passed" as const, reason: "checks_passed", owner: null, repairable: false, summary: "All required checks passed", retryAt: null, nextPollAt: null };
+      },
+      async planCiRepair(input: Parameters<typeof baseActivities.planCiRepair>[0]) {
+        ciPlanInputs.push({ leadSessionRef: input.leadSessionRef, ciAttemptId: input.ciAttemptId });
+        return { planId: "ci_plan_integration", planArtifactId: "artifact_ci_plan", evidenceArtifactId: "artifact_ci_plan_evidence", leadExecutionId: "agent_ci_plan", leadSessionRef: input.leadSessionRef, summary: "Repair the exact failed check" };
+      },
+      async runCiRepair(input: Parameters<typeof baseActivities.runCiRepair>[0]) {
+        ciRepairInputs.push({ priorDeveloperSessionRef: input.priorDeveloperSessionRef, ciAttemptId: input.ciAttemptId });
+        return { repairId: "ci_repair_integration", developerExecutionId: "developer_ci_repair", developerSessionRef: input.priorDeveloperSessionRef, worktreePath: input.worktreePath, branchName: input.branchName, priorCommit: input.priorCommit, priorTree: input.priorTree, resultCommit: "d".repeat(40), resultTree: "e".repeat(40), deliveryArtifactId: "artifact_ci_repaired_delivery", evidenceArtifactId: "artifact_ci_repaired_evidence", summary: "Exact CI repair complete", outcome: "completed" as const };
+      },
+      async finalReview(input: Parameters<typeof baseActivities.finalReview>[0]) {
+        if (!input.taskId.startsWith("ci-")) return baseActivities.finalReview(input);
+        return { finalReviewId: `final_review_${input.taskId}`, leadExecutionId: `agent_final_${input.taskId}`, leadSessionRef: input.leadSessionRef, opinionArtifactId: `artifact_final_opinion_${input.taskId}`, evidenceArtifactId: `artifact_final_evidence_${input.taskId}`, outcome: "approved" as const, summary: "Exact release approved", findings: [] };
+      },
+    };
     workerConnection = await NativeConnection.connect({ address: config.temporalAddress });
     worker = await Worker.create({
       connection: workerConnection,
@@ -111,7 +144,7 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
       workflowBundle,
       dataConverter: temporalDataConverter,
       interceptors: { activity: activityPayloadInterceptors },
-      activities: createActivities(database, config, { agent: integrationAgent, developer: integrationDeveloper }),
+      activities: integrationActivities,
     });
     workerRun = worker.run();
     api = await createForgeServer(config);
@@ -176,6 +209,43 @@ test("starts, persists, restarts, and queries a probe Workflow in isolated test 
     expect(repairRequired).toMatchObject({ phase: "repair_required", revision: 10, allowedCommands: ["repair_delivery", "cancel_issue"], deliveryReviewId: "delivery_review_integration", deliveryReviewOutcome: "blocking", repairCycle: 0 });
     const repairedIssue = await repairIssueDelivery(config, startedIssue.workflowId, { expectedRevision: 10, actorUserId: "issue-admin" });
     expect(repairedIssue).toMatchObject({ phase: "delivery_ready", revision: 12, allowedCommands: ["review_delivery", "cancel_issue"], developerExecutionId: "developer_repair_integration", developerSessionRef: "session_developer_integration", resultCommit: "d".repeat(40), repairCycle: 1, deliveryReviewId: null, deliveryReviewOutcome: null });
+
+    const ciContinuation = (issueId: string, extra: Record<string, unknown> = {}) => ({ phase: "ci_waiting" as const, revision: 20, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Waiting for required CI", lastEventId: `${issueId}-20`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_ci_lead", leadExecutionId: "agent_ci_lead", leadOutputArtifactId: "artifact_ci_lead_output", planRevision: 1, developerExecutionId: "developer_ci_original", developerSessionRef: "session_ci_developer", worktreePath: join(root, "worktrees", issueId), branchName: `forge/issue/${issueId}`, targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_ci_delivery", developerEvidenceArtifactId: "artifact_ci_developer_evidence", releaseId: `release_${issueId}`, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", expectedHeadSha: "b".repeat(40), expectedHeadTree: "c".repeat(40), ciAttempt: 0, ciOutcome: "waiting" as const, ciNextPollAt: null, ...extra });
+    const startCiFixture = (issueId: string, extra: Record<string, unknown> = {}) => startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId, projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, continuationState: ciContinuation(issueId, extra) });
+    const waitForPhase = async (fixtureWorkflowId: string, phase: string) => {
+      let fixtureState = await queryIssueWorkflow(config, fixtureWorkflowId);
+      for (let attempt = 0; attempt < 40 && fixtureState.phase !== phase; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        fixtureState = await queryIssueWorkflow(config, fixtureWorkflowId);
+      }
+      return fixtureState;
+    };
+
+    const ciPass = await startCiFixture("ci-pass");
+    expect(await waitForPhase(ciPass.workflowId, "accepted")).toMatchObject({ phase: "accepted", ciOutcome: "passed", finalReviewId: "final_review_ci-pass", leadSessionRef: "session_ci_lead" });
+    expect(ciCalls.get("ci-pass")).toBe(1);
+
+    const ciRate = await startCiFixture("ci-rate");
+    expect(await waitForPhase(ciRate.workflowId, "accepted")).toMatchObject({ phase: "accepted", ciOutcome: "passed", ciAttempt: 2 });
+    expect(ciCalls.get("ci-rate")).toBe(2);
+
+    const ciRepair = await startCiFixture("ci-repair");
+    expect(await waitForPhase(ciRepair.workflowId, "delivery_ready")).toMatchObject({ phase: "delivery_ready", developerExecutionId: "developer_ci_repair", developerSessionRef: "session_ci_developer", resultCommit: "d".repeat(40), releaseId: null, ciRunId: null, finalReviewId: null });
+    expect(ciPlanInputs).toEqual([{ leadSessionRef: "session_ci_lead", ciAttemptId: "ci_attempt_ci-repair_1" }]);
+    expect(ciRepairInputs).toEqual([{ priorDeveloperSessionRef: "session_ci_developer", ciAttemptId: "ci_attempt_ci-repair_1" }]);
+
+    const ciCancel = await startCiFixture("ci-cancel", { ciNextPollAt: new Date(Date.now() + 300).toISOString() });
+    const waitingToCancel = await waitForPhase(ciCancel.workflowId, "ci_waiting");
+    expect(await cancelIssue(config, ciCancel.workflowId, { expectedRevision: waitingToCancel.revision, actorUserId: "issue-admin" })).toMatchObject({ phase: "cancelled" });
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    expect(ciCalls.get("ci-cancel") ?? 0).toBe(0);
+    const ciReplayClient = await connectTemporal(config);
+    try {
+      for (const [name, fixtureWorkflowId] of [["pass", ciPass.workflowId], ["rate-limit", ciRate.workflowId], ["repair", ciRepair.workflowId], ["cancel", ciCancel.workflowId]] as const) {
+        const history = await ciReplayClient.client.workflow.getHandle(fixtureWorkflowId).fetchHistory();
+        await replayIssueHistory(history as ReplayHistory, `ci-${name}-replay`);
+      }
+    } finally { ciReplayClient.connection.close(); }
 
     permanentPlanningFailure = true;
     const startedPermanentFailure = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-permanent-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false });

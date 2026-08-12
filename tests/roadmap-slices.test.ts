@@ -11,7 +11,7 @@ import { AttentionService } from "../src/attention.js";
 import { AuthService } from "../src/auth.js";
 import { BackupService, checkBackupHealth, reconcileRestoredState } from "../src/backup.js";
 import { CapacityManager } from "../src/capacity.js";
-import { CiService, type CheckSnapshot } from "../src/ci.js";
+import { CI_TRANSIENT_BACKOFF_MS, CiProviderFailure, CiService, type CheckObservation } from "../src/ci.js";
 import { createHash, randomBytes } from "node:crypto";
 
 import { createTestConfig } from "../src/config.js";
@@ -37,7 +37,7 @@ async function fixture(): Promise<{ root: string; database: ForgeDatabase; confi
     db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-a', 'Company A', 'active', ?)").run(now);
     db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-b', 'Company B', 'active', ?)").run(now);
     db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES ('project-a', 'company-a', 'Project A', ?, ?, 'main', 'main', 'pnpm install', 'pnpm test', '[]', '[]', '{}', 'active', 'revision-a', ?, ?)").run(join(root, "repo"), join(root, "worktrees"), now, now);
-    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, created_at) VALUES ('revision-a', 'project-a', 1, 'identity-a', ?, ?, ?, 'admin', ?)").run(JSON.stringify({ repository: "acme/forge", repositoryPath: join(root, "repo"), worktreeRoot: join(root, "worktrees"), baseBranch: "main", targetBranch: "main", baseSha, targetSha: headSha, requiredChecks: [] }), baseSha, headSha, now);
+    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, state, actor_user_id, created_at) VALUES ('revision-a', 'project-a', 1, 'identity-a', ?, ?, ?, 'accepted', 'admin', ?)").run(JSON.stringify({ repository: "acme/forge", repositoryPath: join(root, "repo"), worktreeRoot: join(root, "worktrees"), baseBranch: "main", targetBranch: "main", baseSha, targetSha: headSha, requiredChecks: ["Tests / unit"] }), baseSha, headSha, now);
     db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-a', 'company-a', 'task-brief', 'task.md', 'text/markdown', 4, ?, 'company-a/brief-a', ?)").run("d".repeat(64), now);
     db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-a', 'company-a', 'project-a', 'Task A', 'brief-a', '[]', '{}', 0, 'workflow-a', 'revision-a', 'task-a-key', ?, ?)").run(now, now);
     db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task-a', 'company-a', 'project-a', 'workflow-a', 1, 'delivery_blocked', 'human', '[\"record_delivery_decision\"]', 'Decision required', ?, 'workflow-a:1')").run(now);
@@ -67,7 +67,7 @@ function addReleaseFixtures(database: ForgeDatabase, status = "draft"): void {
 
 const pullRequest = (overrides: Partial<GithubPullRequest> = {}): GithubPullRequest => ({ number: 12, url: "https://github.com/acme/forge/pull/12", repository: "acme/forge", headBranch: "issue/task-a", baseBranch: "main", headSha, baseSha, isDraft: true, state: "open", mergedAt: null, ...overrides });
 
-function fakeGithub(checks: CheckSnapshot[] = []): GithubReleasePort & { pushed: number; ready: number } {
+function fakeGithub(checks: CheckObservation[] = []): GithubReleasePort & { pushed: number; ready: number } {
   return {
     pushed: 0,
     ready: 0,
@@ -122,10 +122,60 @@ test("release publishes one exact reviewed draft and CI accepts only the exact h
     const release = await service.publish({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", repositoryPath: value.root, repository: "acme/forge", branchName: "issue/task-a", baseBranch: "main", targetBaseSha: baseSha, subjectCommit: headSha, subjectTree: treeSha, reviewId: "review-a", planSummary: "Authorized plan", deliverySummary: "Exact delivery", verificationSummary: "Local checks passed" });
     expect(release.pullRequest.isDraft).toBe(true);
     expect(github.pushed).toBe(1);
-    const checks = [{ name: "Tests / unit", headSha, status: "completed" as const, conclusion: "success" as const, summary: "passed" }];
-    const ci = new CiService(value.database, { async listChecks() { return checks; } });
-    expect((await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: release.releaseId, repository: "acme/forge", expectedHeadSha: headSha, requiredChecks: ["Tests / unit"] })).outcome).toBe("passed");
-    expect((await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: release.releaseId, repository: "acme/forge", expectedHeadSha: headSha, requiredChecks: ["Tests / unit", "Browser"] })).outcome).toBe("missing_required");
+    const checks: CheckObservation[] = [{ providerCheckId: "1", name: "Tests / unit", headSha, status: "completed", conclusion: "success", detailsUrl: null, startedAt: now, completedAt: now, summary: "passed" }];
+    const ci = new CiService(value.database, { async getPullRequest() { return { repository: "acme/forge", number: 12, url: "https://github.com/acme/forge/pull/12", state: "open", draft: true, baseBranch: "main", baseSha, headBranch: "issue/task-a", headSha }; }, async listChecks() { return checks; } });
+    expect((await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: release.releaseId, expectedHeadSha: headSha, attemptNumber: 1 })).outcome).toBe("passed");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("CI retries transient provider failures with bounded backoff and stops on the fifth failure", async () => {
+  const value = await fixture();
+  try {
+    addReleaseFixtures(value.database);
+    let clock = new Date(now);
+    const ci = new CiService(value.database, {
+      async getPullRequest() { throw new CiProviderFailure("transient"); },
+      async listChecks() { return []; },
+    }, undefined, () => clock);
+    for (let attemptNumber = 1; attemptNumber <= 5; attemptNumber += 1) {
+      const result = await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", expectedHeadSha: headSha, attemptNumber });
+      expect(result.outcome).toBe("provider_unavailable");
+      if (attemptNumber < 5) {
+        expect(result.owner).toBe("system");
+        expect(result.retryAt).toBe(new Date(clock.getTime() + CI_TRANSIENT_BACKOFF_MS[attemptNumber - 1]!).toISOString());
+        clock = new Date(result.retryAt!);
+      } else {
+        expect(result).toMatchObject({ owner: "human", reason: "provider_failure_budget_exhausted", retryAt: null });
+      }
+    }
+    expect(value.database.authQuery((db) => db.prepare("SELECT attempt, consecutive_provider_failures AS failures, completed_at AS completedAt FROM forge_ci_runs WHERE release_id = 'release-a'").get())).toMatchObject({ attempt: 5, failures: 5, completedAt: expect.any(String) });
+    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_ci_attempts").get())).toEqual({ count: 5 });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("CI attempt idempotency avoids a second provider call and success resets transient state", async () => {
+  const value = await fixture();
+  try {
+    addReleaseFixtures(value.database);
+    let clock = new Date(now);
+    let calls = 0;
+    const checks: CheckObservation[] = [{ providerCheckId: "1", name: "Tests / unit", headSha, status: "completed", conclusion: "success", detailsUrl: null, startedAt: now, completedAt: now, summary: "passed" }];
+    const ci = new CiService(value.database, {
+      async getPullRequest() {
+        calls += 1;
+        if (calls === 1) throw new CiProviderFailure("transient");
+        return { repository: "acme/forge", number: 12, url: "https://github.com/acme/forge/pull/12", state: "open", draft: true, baseBranch: "main", baseSha, headBranch: "issue/task-a", headSha };
+      },
+      async listChecks() { return checks; },
+    }, undefined, () => clock);
+    const first = await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", expectedHeadSha: headSha, attemptNumber: 1 });
+    expect(first).toMatchObject({ owner: "system", reason: "provider_transient_failure" });
+    expect(await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", expectedHeadSha: headSha, attemptNumber: 1 })).toMatchObject({ attemptId: first.attemptId });
+    expect(calls).toBe(1);
+    clock = new Date(first.retryAt!);
+    expect(await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", expectedHeadSha: headSha, attemptNumber: 2 })).toMatchObject({ outcome: "passed" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT consecutive_provider_failures AS failures, completed_at AS completedAt FROM forge_ci_runs WHERE release_id = 'release-a'").get())).toMatchObject({ failures: 0, completedAt: expect.any(String) });
+    expect(() => value.database.authQuery((db) => db.prepare("UPDATE forge_ci_attempts SET summary = 'changed'").run())).toThrow("forge_ci_attempts are immutable");
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -133,10 +183,15 @@ test("acceptance records a decision, changes draft visibility only, and reconcil
   const value = await fixture();
   try {
     addReleaseFixtures(value.database);
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_ci_runs (id, task_id, company_id, release_id, expected_head_sha, status, attempt, summary, created_at, updated_at) VALUES ('ci-a', 'task-a', 'company-a', 'release-a', ?, 'passed', 1, 'passed', ?, ?)").run(headSha, now, now));
+    value.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_ci_runs (id, task_id, company_id, release_id, expected_head_sha, expected_head_tree, project_revision_id, policy_hash, policy_json, status, attempt, summary, created_at, updated_at) VALUES ('ci-a', 'task-a', 'company-a', 'release-a', ?, ?, 'revision-a', ?, ?, 'passed', 1, 'passed', ?, ?)").run(headSha, treeSha, "f".repeat(64), JSON.stringify({ projectRevisionId: "revision-a", requiredChecks: ["Tests / unit"], acceptedConclusions: ["success"] }), now, now);
+      db.prepare("INSERT INTO forge_ci_attempts (id, run_id, attempt_number, observed_repository, observed_pr_number, observed_base_branch, observed_base_sha, observed_head_branch, observed_head_sha, outcome, reason, owner, repairable, summary, created_at) VALUES ('ci-attempt-a', 'ci-a', 1, 'acme/forge', 12, 'main', ?, 'issue/task-a', ?, 'passed', 'checks_passed', NULL, 0, 'passed', ?)").run(baseSha, headSha, now);
+      db.prepare("INSERT INTO forge_final_reviews (id, task_id, company_id, workflow_id, release_id, ci_run_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, created_at) VALUES ('final-review-a', 'task-a', 'company-a', 'workflow-a', 'release-a', 'ci-a', 1, ?, ?, ?, 'lead-a', 'lead-session', 'approved', 'Approved exact release', 'opinion-a', 'evidence-a', ?)").run(baseSha, headSha, treeSha, now);
+    });
     const github = fakeGithub();
     const acceptance = new AcceptanceService(value.database, github);
-    const result = await acceptance.accept({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", reviewId: "review-a", ciRunId: "ci-a", repository: "acme/forge", baseBranch: "main", headSha, headTree: treeSha, actorUserId: "admin" });
+    await expect(acceptance.accept({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", reviewId: "review-a", finalReviewId: "missing-final-review", ciRunId: "ci-a", repository: "acme/forge", baseBranch: "main", headSha, headTree: treeSha, actorUserId: "admin" })).rejects.toMatchObject({ code: "not-ready" });
+    const result = await acceptance.accept({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", reviewId: "review-a", finalReviewId: "final-review-a", ciRunId: "ci-a", repository: "acme/forge", baseBranch: "main", headSha, headTree: treeSha, actorUserId: "admin" });
     expect(result.status).toBe("accepted");
     expect(github.ready).toBe(1);
     expect((await acceptance.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", repository: "acme/forge", number: 12, expectedHeadSha: headSha, expectedBaseBranch: "main" })).outcome).toBe("open");

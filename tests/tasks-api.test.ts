@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { AuthService, type WebAuthnAdapter } from "../src/auth.js";
+import { ArtifactStore } from "../src/artifacts.js";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
@@ -81,9 +82,33 @@ test("task API creates an idempotent backlog card and accepts only the current p
     const approved = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: { expectedRevision: 2, note: "Self-approved" } });
     expect(approved.statusCode).toBe(200);
     expect(approved.json()).toMatchObject({ phase: "ready_for_development", owner: "lead", revision: 3 });
+    const workflowId = (created.json() as { workflowId: string }).workflowId;
+    const baseSha = "a".repeat(40); const headSha = "b".repeat(40); const treeSha = "c".repeat(40); const observedAt = "2026-08-11T12:00:00.000Z";
+    database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, created_at, updated_at) VALUES ('release-api', ?, ?, ?, 'api-release', 'acme/forge', 'issue/api-task', 'main', ?, ?, ?, 'draft', 88, 'https://github.com/acme/forge/pull/88', 'API release', ?, ?)").run(task.id, company.id, workflowId, baseSha, headSha, treeSha, observedAt, observedAt);
+      db.prepare("INSERT INTO forge_ci_runs (id, task_id, company_id, release_id, expected_head_sha, expected_head_tree, project_revision_id, policy_hash, policy_json, status, attempt, summary, first_observed_at, propagation_deadline, overall_deadline, created_at, updated_at) VALUES ('ci-api', ?, ?, 'release-api', ?, ?, ?, ?, ?, 'failed', 1, 'failed', ?, '2026-08-11T12:05:00.000Z', '2026-08-11T13:00:00.000Z', ?, ?)").run(task.id, company.id, headSha, treeSha, active.activeRevisionId, "e".repeat(64), JSON.stringify({ projectRevisionId: active.activeRevisionId, requiredChecks: ["Tests / unit"], acceptedConclusions: ["success"] }), observedAt, observedAt, observedAt);
+      db.prepare("INSERT INTO forge_ci_attempts (id, run_id, attempt_number, observed_repository, observed_pr_number, observed_base_branch, observed_base_sha, observed_head_branch, observed_head_sha, outcome, reason, owner, repairable, summary, created_at) VALUES ('ci-attempt-api', 'ci-api', 1, 'acme/forge', 88, 'main', ?, 'issue/api-task', ?, 'failed', 'required_check_failed', 'lead', 1, 'failed', ?)").run(baseSha, headSha, observedAt);
+      db.prepare("INSERT INTO forge_ci_attempt_checks (id, attempt_id, provider_check_id, name, head_sha, status, conclusion, selected_for_evaluation, created_at) VALUES ('ci-check-api', 'ci-attempt-api', '1', 'Tests / unit', ?, 'completed', 'failure', 1, ?)").run(headSha, observedAt);
+    });
+    expect(tasks.getTask((enrolled.json() as { user: { id: string } }).user.id, task.id).ci).toBeDefined();
+    const projected = await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } });
+    expect(projected.statusCode, projected.body).toBe(200);
+    expect(projected.json()).toMatchObject({ ci: { runId: "ci-api", policy: { projectRevisionId: active.activeRevisionId, requiredChecks: ["Tests / unit"], acceptedConclusions: ["success"] }, attempts: [{ id: "ci-attempt-api", checks: [{ providerCheckId: "1", selectedForEvaluation: true }] }] } });
+    expect(projected.body).not.toMatch(/session_ref|worktree_path|provider response body|raw logs/i);
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: { expectedRevision: 2 } })).statusCode).toBe(409);
     expect((await app.inject({ method: "GET", url: "/api/tasks", headers: { cookie, origin } })).json().tasks).toHaveLength(1);
     expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/images/does-not-exist`, headers: { cookie, origin } })).statusCode).toBe(404);
+    const artifactStore = new ArtifactStore(config.artifactRoot);
+    const otherCompany = auth.createCompany((enrolled.json() as { user: { id: string } }).user.id, "Other API Company");
+    const [unlinked, crossCompany] = await Promise.all([
+      artifactStore.put(company.id, "ci-evidence", { filename: "unlinked.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
+      artifactStore.put(otherCompany.id, "ci-evidence", { filename: "foreign.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
+    ]);
+    database.authTransaction((db) => {
+      for (const artifact of [unlinked, crossCompany]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+    });
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/artifacts/${unlinked.id}`, headers: { cookie, origin } })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/artifacts/${crossCompany.id}`, headers: { cookie, origin } })).statusCode).toBe(404);
   } finally {
     await app.close(); database.close(); await rm(root, { recursive: true, force: true });
   }

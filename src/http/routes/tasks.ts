@@ -59,6 +59,10 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
     const image = await tasks.getTaskImage(request.forgeUser.id, request.params.taskId, request.params.artifactId);
     return reply.header("Cache-Control", "private, no-store").type(image.artifact.mimeType).send(image.bytes);
   });
+  typed.get("/api/tasks/:taskId/artifacts/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
+    const artifact = await tasks.getTaskArtifact(request.forgeUser.id, request.params.taskId, request.params.artifactId);
+    return reply.header("Cache-Control", "private, no-store").type(artifact.artifact.mimeType).send(artifact.bytes);
+  });
   typed.get("/api/tasks/events", async (request, reply) => {
     reply.hijack();
     reply.raw.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-store", Connection: "keep-alive" });

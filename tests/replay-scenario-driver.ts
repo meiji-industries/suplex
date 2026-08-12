@@ -104,9 +104,12 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
       const scenario = scenarioFor(projectionsForRelease(activityInput.releaseId));
       const attempt = (ciAttempts.get(activityInput.releaseId) ?? 0) + 1;
       ciAttempts.set(activityInput.releaseId, attempt);
-      if (scenario === "ci_wait_retry" && attempt === 1) return { runId: "ci-waiting", outcome: "waiting", summary: "Controlled CI wait", nextPollAt: "2099-01-01T00:00:00.000Z" };
-      return { runId: `ci-${scenario}`, outcome: "passed", summary: "Controlled CI passed", nextPollAt: null };
+      const common = { attemptId: `ci-attempt-${scenario}-${attempt}`, attemptNumber: activityInput.attemptNumber, expectedHeadSha: activityInput.expectedHeadSha, observedHeadSha: activityInput.expectedHeadSha, evidenceArtifactId: `ci-evidence-${scenario}-${attempt}`, policyHash: "f".repeat(64), propagationDeadline: "2099-01-01T00:05:00.000Z", overallDeadline: "2099-01-01T01:00:00.000Z" };
+      if (scenario === "ci_wait_retry" && attempt === 1) return { ...common, runId: "ci-waiting", outcome: "waiting", reason: "checks_pending", owner: "system", repairable: false, summary: "Controlled CI wait", retryAt: null, nextPollAt: "2099-01-01T00:00:00.000Z" };
+      return { ...common, runId: `ci-${scenario}`, outcome: "passed", reason: "checks_passed", owner: null, repairable: false, summary: "Controlled CI passed", retryAt: null, nextPollAt: null };
     },
+    async planCiRepair() { throw new Error("CI repair planning is not used by replay scenarios"); },
+    async runCiRepair() { throw new Error("CI repair execution is not used by replay scenarios"); },
     async finalReview(activityInput) {
       const scenario = scenarioFor(activityInput.workflowId);
       return { finalReviewId: `final-review-${scenario}`, leadExecutionId: `final-review-execution-${scenario}`, leadSessionRef: `lead-session-${scenario}`, opinionArtifactId: `final-review-artifact-${scenario}`, evidenceArtifactId: `final-review-evidence-${scenario}`, reviewArtifact: artifact("delivery-review", `final-review-artifact-${scenario}`), outcome: "approved", summary: "Controlled final review approved" };

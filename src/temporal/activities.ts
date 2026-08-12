@@ -15,13 +15,13 @@ import { CiService, createGithubCiProvider, type CiProvider } from "../ci.js";
 import { createGithubReleasePort, ReleaseService, type GithubReleasePort } from "../github-release.js";
 import { ForwardMergeService } from "../forward-merge.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeActivities, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { DeliveryDecisionActivityInputSchema, DeliveryReviewSchema, DurableArtifactReferenceSchema, IssueWorkflowStateSchema, SafeSummarySchema, type AcceptDeliveryActivityInput, type DurableArtifactReference, type IssueActivities, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput, type WorkflowDeliveryReviewActivityInput, type WorkflowDeveloperRepairActivityInput, type WorkflowFinalReviewActivityInput, type WorkflowMergeConflictPlanActivityInput, type WorkflowMergeConflictResolutionActivityInput } from "./issue-contracts.js";
+import { DeliveryDecisionActivityInputSchema, DeliveryReviewSchema, DurableArtifactReferenceSchema, IssueWorkflowStateSchema, SafeSummarySchema, type AcceptDeliveryActivityInput, type DurableArtifactReference, type IssueActivities, type IssueWorkflowState, type MergeConflictPlanActivityInput, type MergeConflictResolutionActivityInput, type PublishReleaseActivityInput, type ReconcileCiActivityInput, type ReconcileMergeActivityInput, type WorkflowCiRepairActivityInput, type WorkflowDeliveryReviewActivityInput, type WorkflowDeveloperRepairActivityInput, type WorkflowFinalReviewActivityInput, type WorkflowMergeConflictPlanActivityInput, type WorkflowMergeConflictResolutionActivityInput } from "./issue-contracts.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
 import { CapacityManager } from "../capacity.js";
 
 export interface ActivityOptions {
-  agent?: Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "planMergeConflict">>;
-  developer?: Partial<Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution">>;
+  agent?: Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "planMergeConflict" | "planCiRepair">>;
+  developer?: Partial<Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">>;
   githubRelease?: GithubReleasePort;
   ciProvider?: CiProvider;
 }
@@ -94,8 +94,8 @@ function compactWorkflowState(input: IssueWorkflowState): IssueWorkflowState {
 export function createActivities(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}): ProbeActivities & IssueActivities {
   const logger = new StructuredLogger();
   const defaultAgent = new AgentService(database, config);
-  const defaultDeveloper = new DeveloperService(database, config);
   const githubRelease = options.githubRelease ?? createGithubReleasePort();
+  const defaultDeveloper = new DeveloperService(database, config, { github: githubRelease });
   const artifacts = new ArtifactStore(config.artifactRoot);
   const release = new ReleaseService(database, artifacts, githubRelease);
   const ci = new CiService(database, options.ciProvider ?? createGithubCiProvider(), artifacts);
@@ -186,6 +186,14 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
           ...(state.deliveryRepairPlan !== undefined ? { deliveryRepairPlan: state.deliveryRepairPlan } : {}),
           ...(state.repairCycle !== undefined ? { repairCycle: state.repairCycle } : {}),
           ...(state.deliveryDecisionArtifactId !== undefined ? { deliveryDecisionArtifactId: state.deliveryDecisionArtifactId } : {}),
+          ...(state.ciReason !== undefined ? { ciReason: state.ciReason } : {}),
+          ...(state.ciOwner !== undefined ? { ciOwner: state.ciOwner } : {}),
+          ...(state.ciRepairable !== undefined ? { ciRepairable: state.ciRepairable } : {}),
+          ...(state.ciAttemptId !== undefined ? { ciAttemptId: state.ciAttemptId } : {}),
+          ...(state.ciEvidenceArtifactId !== undefined ? { ciEvidenceArtifactId: state.ciEvidenceArtifactId } : {}),
+          ...(state.ciPolicyHash !== undefined ? { ciPolicyHash: state.ciPolicyHash } : {}),
+          ...(state.ciPropagationDeadline !== undefined ? { ciPropagationDeadline: state.ciPropagationDeadline } : {}),
+          ...(state.ciOverallDeadline !== undefined ? { ciOverallDeadline: state.ciOverallDeadline } : {}),
         });
       } catch (error) {
         const permanentFailure = asNonRetryableApplicationFailure(error);
@@ -238,20 +246,25 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
           return { releaseId: "", repository, branchName: input.branchName || context.branchName, headSha, headTree, pullRequestNumber: 0, pullRequestUrl: "", isDraft: false, reused: false, baseDriftMerged: true, targetBaseSha: currentBaseSha, priorHead: merged.priorHead, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), ...(merged.mergeCommit ? { mergeCommit: merged.mergeCommit } : {}), ...(merged.tree ? { tree: merged.tree } : {}) };
         }
       }
-      const result = await release.publish({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, repositoryPath: context.worktreePath, repository, branchName: input.branchName || context.branchName, baseBranch, targetBaseSha: input.targetBaseSha || context.targetBaseSha, subjectCommit: input.subjectCommit || context.subjectCommit, subjectTree: input.subjectTree || context.subjectTree, reviewId: input.reviewId, planSummary: input.planSummary || context.title, deliverySummary: input.deliverySummary || context.deliverySummary, verificationSummary: input.verificationSummary });
+      const result = await release.publish({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, repositoryPath: context.worktreePath, repository, branchName: input.branchName || context.branchName, baseBranch, targetBaseSha: input.targetBaseSha || context.targetBaseSha, subjectCommit: input.subjectCommit || context.subjectCommit, subjectTree: input.subjectTree || context.subjectTree, reviewId: input.reviewId, planSummary: input.planSummary || context.title, deliverySummary: input.deliverySummary || context.deliverySummary, verificationSummary: input.verificationSummary, ...(input.expectedPullRequestNumber ? { expectedPullRequestNumber: input.expectedPullRequestNumber } : {}) });
       return { releaseId: result.releaseId, repository: result.repository, branchName: result.branchName, headSha: result.headSha, headTree: result.headTree, pullRequestNumber: result.pullRequest.number, pullRequestUrl: result.pullRequest.url, isDraft: result.pullRequest.isDraft, reused: result.reused, targetBaseSha: input.targetBaseSha || context.targetBaseSha };
     },
     async reconcileCi(input: ReconcileCiActivityInput) {
       const context = database.authQuery((db) => db.prepare("SELECT r.normalized_json AS normalizedJson FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' WHERE t.id = ? AND t.company_id = ?").get(input.taskId, input.companyId) as { normalizedJson: string } | undefined);
       if (!context) throw new Error("CI repository context is unavailable");
-      const pinned = pinnedProjectRevision(context.normalizedJson);
-      const result = await ci.reconcile({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, repository: pinned.repository, expectedHeadSha: input.expectedHeadSha, requiredChecks: pinned.requiredChecks, ...(input.attempt !== undefined ? { attempt: input.attempt } : {}) });
-      return { runId: result.runId, outcome: result.outcome, summary: result.summary, nextPollAt: result.nextPollAt };
+      const result = await ci.reconcile({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, expectedHeadSha: input.expectedHeadSha, attemptNumber: input.attemptNumber });
+      return { runId: result.runId, attemptId: result.attemptId, attemptNumber: result.attemptNumber, expectedHeadSha: result.expectedHeadSha, observedHeadSha: result.observedHeadSha, evidenceArtifactId: result.evidenceArtifactId, outcome: result.outcome, reason: result.reason, owner: result.owner, repairable: result.repairable, summary: result.summary, retryAt: result.retryAt, nextPollAt: result.nextPollAt, policyHash: result.policyHash, propagationDeadline: result.propagationDeadline, overallDeadline: result.overallDeadline };
+    },
+    async planCiRepair(input) {
+      return withCapacity(input, "lead", () => (agent?.planCiRepair ?? defaultAgent.planCiRepair.bind(defaultAgent))(input));
     },
     async finalReview(input: WorkflowFinalReviewActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
-      const context = database.authQuery((db) => db.prepare("SELECT r.normalized_json AS normalizedJson FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' WHERE t.id = ? AND t.company_id = ?").get(input.taskId, input.companyId) as { normalizedJson: string } | undefined);
+      const context = database.authQuery((db) => db.prepare("SELECT r.normalized_json AS normalizedJson, rel.repository, rel.pr_number AS pullRequestNumber, rel.pr_url AS pullRequestUrl, rel.head_branch AS headBranch, rel.base_branch AS baseBranch, rel.base_sha AS baseSha, rel.head_sha AS headSha, rel.superseded_at AS supersededAt FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' JOIN forge_releases rel ON rel.id = ? AND rel.task_id = t.id AND rel.company_id = t.company_id WHERE t.id = ? AND t.company_id = ?").get(input.releaseId, input.taskId, input.companyId) as { normalizedJson: string; repository: string; pullRequestNumber: number | null; pullRequestUrl: string | null; headBranch: string; baseBranch: string; baseSha: string; headSha: string; supersededAt: string | null } | undefined);
       const pinned = context ? pinnedProjectRevision(context.normalizedJson) : undefined;
+      if (!context || !pinned || context.supersededAt || context.pullRequestNumber === null || !githubRelease.getPullRequest) throw new Error("Final review release is unavailable");
+      const currentPullRequest = await githubRelease.getPullRequest({ repository: context.repository, number: context.pullRequestNumber });
+      if (currentPullRequest.state !== "open" || !currentPullRequest.isDraft || currentPullRequest.repository.toLowerCase() !== context.repository.toLowerCase() || currentPullRequest.number !== context.pullRequestNumber || currentPullRequest.url.replace(/\/$/, "").toLowerCase() !== context.pullRequestUrl?.replace(/\/$/, "").toLowerCase() || currentPullRequest.baseBranch !== context.baseBranch || currentPullRequest.baseSha.toLowerCase() !== context.baseSha.toLowerCase() || currentPullRequest.headBranch !== context.headBranch || currentPullRequest.headSha.toLowerCase() !== context.headSha.toLowerCase() || currentPullRequest.headSha.toLowerCase() !== input.subjectCommit.toLowerCase()) throw new Error("Pull request head changed before final review");
       if (pinned && githubRelease.getBranchHead) {
         const currentBaseSha = await githubRelease.getBranchHead({ repository: pinned.repository, branch: pinned.baseBranch });
         if (currentBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new Error("Target base has drifted since CI completed; a fresh forward merge and review are required");
@@ -267,7 +280,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         WHERE t.id = ? AND t.company_id = ? ORDER BY r.created_at DESC LIMIT 1`).get(input.releaseId, input.taskId, input.companyId) as { normalizedJson: string; reviewId: string; subjectCommit: string; subjectTree: string; pullRequestNumber: number | null } | undefined);
       if (!context || context.pullRequestNumber === null) throw new Error("Acceptance context is unavailable");
       const pinned = pinnedProjectRevision(context.normalizedJson);
-      const result = await acceptance.accept({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, reviewId: context.reviewId, ...(input.finalReviewId ? { finalReviewId: input.finalReviewId } : {}), ciRunId: input.ciRunId, repository: pinned.repository, baseBranch: pinned.baseBranch, headSha: input.expectedHeadSha || context.subjectCommit, headTree: input.expectedHeadTree || context.subjectTree, actorUserId: input.actorUserId, ...(input.decision ? { decision: input.decision } : {}) });
+      const result = await acceptance.accept({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, reviewId: context.reviewId, finalReviewId: input.finalReviewId, ciRunId: input.ciRunId, repository: pinned.repository, baseBranch: pinned.baseBranch, headSha: input.expectedHeadSha || context.subjectCommit, headTree: input.expectedHeadTree || context.subjectTree, actorUserId: input.actorUserId, ...(input.decision ? { decision: input.decision } : {}) });
       return { acceptanceId: result.acceptanceId, status: result.status, pullRequestNumber: result.pullRequest.number, pullRequestUrl: result.pullRequest.url };
     },
     async reconcileMerge(input: ReconcileMergeActivityInput) {
@@ -328,6 +341,14 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;
       return { ...safeResult, deliverySummary: SafeSummarySchema.parse(safeResult.deliverySummary) };
+    },
+    async runCiRepair(input: WorkflowCiRepairActivityInput) {
+      const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);
+      const result = await withCapacity(input, "developer", () => (developer.runCiRepair ?? defaultDeveloper.runCiRepair.bind(defaultDeveloper))({ ...input, worktreePath }));
+      activityWorktrees.set(result.developerExecutionId, result.worktreePath);
+      activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
+      const { worktreePath: _worktreePath, ...safeResult } = result;
+      return safeResult;
     },
     async cancelDeveloperExecution(input) {
       return cancelDeveloperExecution(database, input.executionId);

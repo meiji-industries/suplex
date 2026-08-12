@@ -13,6 +13,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
+import { TaskResponseSchema } from "../src/http/contracts/tasks.js";
 import type { IssueWorkflowInput, IssueWorkflowState, StartPlanningInput } from "../src/temporal/issue-contracts.js";
 import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 
@@ -37,13 +38,13 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
   const company = auth.createCompany("admin-1", "Browser Tasks");
   const profile = projects.createProfile("admin-1", { name: "Browser task profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const project = await projects.createProject("admin-1", company.id, { name: "Browser task project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
-  await projects.activateProject("admin-1", project.id);
+  const activeProject = await projects.activateProject("admin-1", project.id);
   let plannedState: IssueWorkflowState | undefined;
   let finishPlanning = (): void => {};
   const planningGate = new Promise<void>((resolve) => { finishPlanning = resolve; });
   const workflow: IssueWorkflowPort = { async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) { return { workflowId: input.workflowId!, runId: "run" }; }, async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     const taskId = workflowId.split("-issue-")[1]!;
-    workerDatabase.projectIssueState({ taskId, companyId: company.id, projectId: project.id, workflowId, projectRevisionId: project.activeRevisionId!, revision: input.expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
+    workerDatabase.projectIssueState({ taskId, companyId: company.id, projectId: project.id, workflowId, projectRevisionId: activeProject.activeRevisionId!, revision: input.expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
     await planningGate;
     const artifactStore = new ArtifactStore(config.artifactRoot);
     const evidence = await artifactStore.put(company.id, "agent-evidence", { filename: "agent.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"turn.completed\"}\n") });
@@ -54,7 +55,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_browser', ?, ?, ?, 'lead', 'completed', 1, 'session_browser', ?, ?, ?)").run(taskId, company.id, workflowId, now, now, evidence.id);
       db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_browser', ?, ?, ?, 'agent_browser', ?, 'plan', ?, ?, 'session_browser', 'A focused browser plan', ?)").run(taskId, company.id, workflowId, input.expectedRevision + 1, output.id, evidence.id, now);
     });
-    plannedState = { workflowId, companyId: company.id, projectId: project.id, issueId: taskId, projectRevisionId: project.activeRevisionId!, phase: "approval", revision: input.expectedRevision + 2, owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "reject_plan"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 2}`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: output.id, leadOutputKind: "plan", leadSummary: "A focused browser plan", planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: false };
+    plannedState = { workflowId, companyId: company.id, projectId: project.id, issueId: taskId, projectRevisionId: activeProject.activeRevisionId!, phase: "approval", revision: input.expectedRevision + 2, owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "reject_plan"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 2}`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: output.id, leadOutputKind: "plan", leadSummary: "A focused browser plan", planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: false };
     return plannedState;
   }, async requestSupplementalReview(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     plannedState = { ...plannedState!, revision: input.expectedRevision + 1, allowedCommands: ["approve_plan", "reject_plan"], pendingAction: "Approve final plan", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}`, supplementalReviewUsed: true };
@@ -100,6 +101,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await page.getByRole("button", { name: "Create task" }).click();
       await page.waitForURL(/\/tasks\/[^/?]+/);
       const detailPath = new URL(page.url()).pathname;
+      const taskId = detailPath.split("/").at(-1)!;
       const taskDetail = page.locator("[data-task-detail]");
       await taskDetail.waitFor();
       expect(await taskDetail.getByRole("heading", { name: "Browser task", exact: true, level: 2 }).isVisible()).toBe(true);
@@ -114,12 +116,29 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await taskDetail.getByRole("button", { name: "Start planning", exact: true }).click();
       await taskDetail.getByText(/planning · revision 1/).waitFor();
       await observerDetail.getByText(/planning · revision 1/).waitFor();
+      database.authTransaction((db) => {
+        const task = db.prepare("SELECT workflow_id AS workflowId FROM forge_tasks WHERE id = ?").get(taskId) as { workflowId: string };
+        const observedAt = "2026-08-11T12:00:00.000Z";
+        const baseSha = "a".repeat(40); const headSha = "b".repeat(40); const treeSha = "c".repeat(40);
+        db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, created_at, updated_at) VALUES ('release-browser', ?, ?, ?, 'browser-release', 'acme/forge', 'issue/browser-task', 'main', ?, ?, ?, 'draft', 77, 'https://github.com/acme/forge/pull/77', 'Browser release', ?, ?)").run(taskId, company.id, task.workflowId, baseSha, headSha, treeSha, observedAt, observedAt);
+        db.prepare("INSERT INTO forge_ci_runs (id, task_id, company_id, release_id, expected_head_sha, expected_head_tree, project_revision_id, policy_hash, policy_json, status, attempt, summary, first_observed_at, propagation_deadline, overall_deadline, completed_at, created_at, updated_at) VALUES ('ci-browser', ?, ?, 'release-browser', ?, ?, ?, ?, ?, 'failed', 1, 'One required check failed', ?, '2026-08-11T12:05:00.000Z', '2026-08-11T13:00:00.000Z', ?, ?, ?)").run(taskId, company.id, headSha, treeSha, activeProject.activeRevisionId, "f".repeat(64), JSON.stringify({ projectRevisionId: activeProject.activeRevisionId, requiredChecks: ["Tests / unit with an intentionally long but bounded display name that must wrap safely"], acceptedConclusions: ["success"] }), observedAt, observedAt, observedAt, observedAt);
+        db.prepare("INSERT INTO forge_ci_attempts (id, run_id, attempt_number, observed_repository, observed_pr_number, observed_base_branch, observed_base_sha, observed_head_branch, observed_head_sha, outcome, reason, owner, repairable, summary, created_at) VALUES ('ci-attempt-browser', 'ci-browser', 1, 'acme/forge', 77, 'main', ?, 'issue/browser-task', ?, 'failed', 'required_check_failed', 'lead', 1, ?, ?)").run(baseSha, headSha, `The focused check failed safely. ${"bounded ".repeat(40)}`, observedAt);
+        db.prepare("INSERT INTO forge_ci_attempt_checks (id, attempt_id, provider_check_id, name, head_sha, status, conclusion, details_url, summary, started_at, completed_at, selected_for_evaluation, created_at) VALUES ('ci-check-browser', 'ci-attempt-browser', '90071992547409932', 'Tests / unit with an intentionally long but bounded display name that must wrap safely', ?, 'completed', 'failure', 'https://github.com/acme/forge/actions/runs/77', 'A bounded failure summary', ?, ?, 1, ?)").run(headSha, observedAt, observedAt, observedAt);
+      });
       finishPlanning();
+      await expect.poll(() => plannedState?.phase).toBe("approval");
+      TaskResponseSchema.parse(tasks.getTask((enrolled.json() as { user: { id: string } }).user.id, taskId));
       await taskDetail.getByText(/approval · revision 2/).waitFor();
       await observerDetail.getByText(/approval · revision 2/).waitFor();
       await taskDetail.getByText("evidence.png", { exact: true }).waitFor();
       await taskDetail.getByText("Lead plan", { exact: true }).waitFor();
       await taskDetail.getByText("Inspect repository", { exact: true }).waitFor();
+      const ciDetail = taskDetail.locator("[data-task-ci]");
+      await ciDetail.getByText("Exact-head CI", { exact: true }).waitFor();
+      expect(await ciDetail.getByText("required_check_failed:", { exact: false }).isVisible()).toBe(true);
+      const prLink = ciDetail.getByRole("link", { name: "PR #77", exact: true });
+      await prLink.focus();
+      expect(await prLink.evaluate((element) => element === document.activeElement)).toBe(true);
       await taskDetail.getByRole("button", { name: "Request review", exact: true }).click();
       await taskDetail.getByText(/approval · revision 3/).waitFor();
       await taskDetail.getByRole("button", { name: "Approve plan", exact: true }).click();
@@ -135,6 +154,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
       expect(new URL(page.url()).pathname).toBe("/board");
       expect(await page.getByText("Backlog", { exact: true }).isVisible()).toBe(true);
+      for (const group of ["Planning", "Building", "Review", "CI", "Acceptance", "Done"]) expect(await page.getByText(group, { exact: true }).isVisible()).toBe(true);
       const boardTask = page.getByRole("button", { name: /Browser task/ });
       await boardTask.waitFor();
       await boardTask.scrollIntoViewIfNeeded();
@@ -152,6 +172,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       await narrowDetail.waitFor();
       expect(await narrowDetail.getByRole("heading", { name: "Browser task", exact: true, level: 2 }).isVisible()).toBe(true);
       expect(await narrowDetail.getByText("Description", { exact: true }).isVisible()).toBe(true);
+      await narrowDetail.getByText("Exact-head CI", { exact: true }).waitFor();
       expect(await narrow.getByRole("dialog").count()).toBe(0);
       expect(await narrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       const activity = narrowDetail.locator("[data-task-activity-scroll]");

@@ -11,8 +11,9 @@ import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { AgentFailure, agentProcessFailure, FileSessionStore, runCodexProcess, type LeadProcessRunner, type SessionStore } from "./codex-lead.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
+import type { GithubReleasePort } from "./github-release.js";
 import { createGitCommandGuard, WorktreeManager } from "./worktrees.js";
-import { DeveloperRepairActivityInputSchema, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairResult, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
+import { DeveloperRepairActivityInputSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairResult, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -99,6 +100,7 @@ export interface DeveloperServiceOptions {
   sessionStore?: SessionStore;
   worktrees?: WorktreeManager;
   now?: () => Date;
+  github?: Pick<GithubReleasePort, "getPullRequest">;
 }
 
 function safeJsonLine(line: string): string {
@@ -168,6 +170,7 @@ export class DeveloperService {
   private readonly sessionStore: SessionStore;
   private readonly worktrees: WorktreeManager;
   private readonly now: () => Date;
+  private readonly github: Pick<GithubReleasePort, "getPullRequest"> | undefined;
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: DeveloperServiceOptions = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot);
@@ -176,6 +179,7 @@ export class DeveloperService {
     this.sessionStore = options.sessionStore ?? new FileSessionStore(config.runtimeRoot);
     this.worktrees = options.worktrees ?? new WorktreeManager();
     this.now = options.now ?? (() => new Date());
+    this.github = options.github;
   }
 
   async run(rawInput: DeveloperExecutionActivityInput): Promise<DeveloperExecutionResult> {
@@ -422,6 +426,70 @@ export class DeveloperService {
     } finally { await guard.cleanup(); }
   }
 
+  async runCiRepair(rawInput: CiRepairActivityInput): Promise<CiRepairActivityResult> {
+    const input = rawInput;
+    const plan = this.database.authQuery((db) => db.prepare(`SELECT p.id, p.status, p.task_id AS taskId, p.company_id AS companyId, p.workflow_id AS workflowId, p.ci_run_id AS ciRunId, p.ci_attempt_id AS ciAttemptId, p.failed_head_sha AS failedHeadSha, p.plan_artifact_id AS planArtifactId, p.evidence_artifact_id AS planEvidenceArtifactId, a.storage_path AS planStoragePath, a.sha256 AS planSha256, ce.storage_path AS ciEvidenceStoragePath, ce.sha256 AS ciEvidenceSha256, r.repository, r.pr_number AS pullRequestNumber, r.pr_url AS pullRequestUrl, r.head_branch AS headBranch, r.base_branch AS baseBranch, r.base_sha AS baseSha
+      FROM forge_ci_repair_plans p
+      JOIN forge_ci_runs c ON c.id = p.ci_run_id AND c.task_id = p.task_id AND c.company_id = p.company_id AND c.superseded_at IS NULL
+      JOIN forge_ci_attempts ca ON ca.id = p.ci_attempt_id AND ca.run_id = c.id AND ca.outcome = 'failed' AND ca.observed_head_sha = p.failed_head_sha
+      JOIN forge_releases r ON r.id = c.release_id AND r.task_id = p.task_id AND r.company_id = p.company_id AND r.superseded_at IS NULL
+      JOIN forge_artifacts a ON a.id = p.plan_artifact_id AND a.company_id = p.company_id
+      JOIN forge_artifacts pe ON pe.id = p.evidence_artifact_id AND pe.company_id = p.company_id
+      JOIN forge_artifacts ce ON ce.id = ca.evidence_artifact_id AND ce.company_id = p.company_id
+      WHERE p.id = ? AND p.task_id = ? AND p.company_id = ? AND p.workflow_id = ? AND p.ci_run_id = ? AND p.ci_attempt_id = ? AND p.failed_head_sha = ? AND p.plan_artifact_id = ? AND p.evidence_artifact_id = ?`).get(input.repairPlanId, input.taskId, input.companyId, input.workflowId, input.ciRunId, input.ciAttemptId, input.failedHeadSha, input.repairPlanArtifactId, input.repairPlanEvidenceArtifactId) as { id: string; status: string; taskId: string; companyId: string; workflowId: string; ciRunId: string; ciAttemptId: string; failedHeadSha: string; planArtifactId: string; planEvidenceArtifactId: string; planStoragePath: string; planSha256: string; ciEvidenceStoragePath: string; ciEvidenceSha256: string; repository: string; pullRequestNumber: number; pullRequestUrl: string; headBranch: string; baseBranch: string; baseSha: string } | undefined);
+    if (!plan || plan.status !== "planned") throw new AgentFailure("ci-repair-plan-unavailable", "CI repair plan is not active");
+    const prior = this.database.authQuery((db) => db.prepare(`SELECT id, status, session_ref AS sessionRef, worktree_path AS worktreePath, branch_name AS branchName, result_commit AS resultCommit, result_tree AS resultTree
+      FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.priorDeveloperExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; status: string; sessionRef: string | null; worktreePath: string; branchName: string; resultCommit: string | null; resultTree: string | null } | undefined);
+    if (!prior || prior.status !== "completed" || prior.sessionRef !== input.priorDeveloperSessionRef || prior.worktreePath !== input.worktreePath || prior.branchName !== input.branchName || prior.resultCommit?.toLowerCase() !== input.priorCommit.toLowerCase() || prior.resultTree?.toLowerCase() !== input.priorTree.toLowerCase() || input.priorCommit.toLowerCase() !== input.failedHeadSha.toLowerCase()) throw new AgentFailure("ci-repair-identity-mismatch", "CI repair does not match the original Developer delivery");
+    if (!this.github?.getPullRequest) throw new AgentFailure("ci-repair-provider-unavailable", "The current pull request cannot be verified before repair");
+    const pullRequest = await this.github.getPullRequest({ repository: plan.repository, number: plan.pullRequestNumber });
+    if (pullRequest.state !== "open" || !pullRequest.isDraft || pullRequest.repository.toLowerCase() !== plan.repository.toLowerCase() || pullRequest.number !== plan.pullRequestNumber || pullRequest.url.replace(/\/$/, "").toLowerCase() !== plan.pullRequestUrl.replace(/\/$/, "").toLowerCase() || pullRequest.headBranch !== plan.headBranch || pullRequest.baseBranch !== plan.baseBranch || pullRequest.baseSha.toLowerCase() !== plan.baseSha.toLowerCase() || pullRequest.headSha.toLowerCase() !== input.failedHeadSha.toLowerCase()) throw new AgentFailure("ci-repair-pull-request-changed", "The pull request changed before CI repair");
+    const worktreePath = await scopedRepository(this.config.worktreeRoot, input.worktreePath);
+    const current = await this.worktrees.inspectDelivery(worktreePath);
+    if (current.branchName !== input.branchName || current.headSha.toLowerCase() !== input.priorCommit.toLowerCase() || current.treeSha.toLowerCase() !== input.priorTree.toLowerCase() || current.dirtyState !== "clean") throw new AgentFailure("ci-repair-subject-changed", "The CI repair worktree is not the original clean failed revision");
+    const rawSessionId = await this.sessionStore.read(input.priorDeveloperSessionRef);
+    if (!rawSessionId) throw new AgentFailure("invalid-session-reference", "Developer session reference is invalid");
+    const planText = (await this.artifacts.read({ companyId: input.companyId, storagePath: plan.planStoragePath, sha256: plan.planSha256 })).toString("utf8");
+    const evidenceText = (await this.artifacts.read({ companyId: input.companyId, storagePath: plan.ciEvidenceStoragePath, sha256: plan.ciEvidenceSha256 })).toString("utf8");
+    const executionId = `developer_${randomBytes(12).toString("hex")}`;
+    const repairId = `ci_repair_${randomBytes(12).toString("hex")}`;
+    const startedAt = this.now().toISOString();
+    const guard = await createGitCommandGuard(this.config.runtimeRoot);
+    this.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at) VALUES (?, ?, ?, ?, 0, 1, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.branchName, worktreePath, plan.baseSha, `wrapper_${randomBytes(12).toString("hex")}`, guard.directory, input.priorDeveloperExecutionId, input.priorDeveloperSessionRef, startedAt, startedAt);
+      db.prepare("INSERT INTO forge_ci_repairs (id, repair_plan_id, prior_developer_execution_id, prior_developer_session_ref, worktree_path, branch_name, prior_commit, prior_tree, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?)").run(repairId, input.repairPlanId, input.priorDeveloperExecutionId, input.priorDeveloperSessionRef, worktreePath, input.branchName, input.priorCommit, input.priorTree, startedAt);
+    });
+    const evidenceLines = [JSON.stringify({ type: "forge.ci-repair-context", ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, failedHeadSha: input.failedHeadSha, plan: redact(planText), evidence: redact(evidenceText) })];
+    const outputLines: string[] = [];
+    try {
+      const result = await this.processRunner({ command: this.command, args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.ciRepairPrompt(planText, { branchName: input.branchName, worktreePath, priorCommit: input.priorCommit, priorTree: input.priorTree })], cwd: worktreePath, env: guard.env, detached: true, onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); }, onLine: async (line) => { const event = eventValue(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair returned a different Developer session identity"); evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.heartbeat(executionId); } });
+      if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines);
+      const report = parseRepairReport(outputLines);
+      const gitState = await this.worktrees.inspectDelivery(worktreePath);
+      const parent = (await execFileAsync("git", ["rev-parse", "HEAD^"], { cwd: worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
+      if (gitState.branchName !== input.branchName || gitState.headSha.toLowerCase() === input.priorCommit.toLowerCase() || gitState.treeSha.toLowerCase() === input.priorTree.toLowerCase() || parent.toLowerCase() !== input.priorCommit.toLowerCase() || gitState.dirtyState !== "clean" || report.resultCommit.toLowerCase() !== gitState.headSha.toLowerCase() || report.resultTree.toLowerCase() !== gitState.treeSha.toLowerCase()) throw new AgentFailure("ci-repair-revision-invalid", "CI repair must create one clean ordinary child commit");
+      const delivery = await this.artifacts.put(input.companyId, "developer-repair", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, priorCommit: input.priorCommit, priorTree: input.priorTree }, null, 2), "utf8") });
+      const evidence = await this.artifacts.put(input.companyId, "ci-repair-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
+      const now = this.now().toISOString();
+      this.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(delivery.id, delivery.companyId, delivery.kind, delivery.filename, delivery.mimeType, delivery.byteSize, delivery.sha256, delivery.storagePath, delivery.createdAt, evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
+        db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = 'clean', delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(now, now, gitState.headSha, gitState.treeSha, delivery.id, evidence.id, executionId);
+        db.prepare("UPDATE forge_ci_repairs SET result_developer_execution_id = ?, result_developer_session_ref = ?, new_commit = ?, new_tree = ?, delivery_artifact_id = ?, evidence_artifact_id = ?, status = 'completed', summary = ?, completed_at = ? WHERE id = ?").run(executionId, input.priorDeveloperSessionRef, gitState.headSha, gitState.treeSha, delivery.id, evidence.id, report.summary, now, repairId);
+        db.prepare("UPDATE forge_ci_repair_plans SET status = 'consumed', consumed_at = ?, updated_at = ? WHERE id = ?").run(now, now, input.repairPlanId);
+        if (input.releaseId) {
+          db.prepare("UPDATE forge_releases SET status = 'superseded', superseded_at = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND superseded_at IS NULL").run(now, now, input.releaseId, input.taskId, input.companyId);
+          db.prepare("UPDATE forge_ci_runs SET superseded_at = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND superseded_at IS NULL").run(now, now, input.ciRunId, input.taskId, input.companyId);
+        }
+      });
+      return { repairId, developerExecutionId: executionId, developerSessionRef: input.priorDeveloperSessionRef, worktreePath, branchName: input.branchName, priorCommit: input.priorCommit, priorTree: input.priorTree, resultCommit: gitState.headSha, resultTree: gitState.treeSha, deliveryArtifactId: delivery.id, evidenceArtifactId: evidence.id, summary: report.summary, outcome: "completed" };
+    } catch (error) {
+      const failure = error instanceof AgentFailure ? error : new AgentFailure("ci-repair-failed", "CI repair failed");
+      const evidence = await this.persistEvidence(input.companyId, evidenceLines);
+      this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); db.prepare("UPDATE forge_ci_repairs SET status = 'failed', failure_code = ?, summary = ?, evidence_artifact_id = ?, completed_at = ? WHERE id = ?").run(failure.code, failure.message, evidence.id, this.now().toISOString(), repairId); });
+      throw failure;
+    } finally { await guard.cleanup(); }
+  }
+
   private mergeConflictResolutionPrompt(plan: string, input: MergeConflictResolutionActivityInput): string {
     return [
       "You are Forge's authenticated Developer continuing the same Developer session in the exact owned issue worktree. A guarded normal merge is already in progress. Resolve only the listed conflicts using the Lead-authored plan.",
@@ -430,6 +498,10 @@ export class DeveloperService {
       "Merge identity:\n" + JSON.stringify({ branchName: input.branchName, priorHead: input.priorHead, targetBaseSha: input.targetBaseSha, conflictFiles: input.conflictFiles }),
       "Lead-authored resolution plan:\n" + plan,
     ].join("\n\n");
+  }
+
+  private ciRepairPrompt(plan: string, input: { branchName: string; worktreePath: string; priorCommit: string; priorTree: string }): string {
+    return `You are Forge's authenticated Developer continuing the same Developer session in the same worktree and branch. Apply only the exact CI repair plan below. Do not create a PR, use provider commands, rerun CI, merge, rebase, amend, reset, clean, force-push, or rewrite history. Run the complete pinned local verification. Create exactly one ordinary child commit whose parent is the failed commit, leave the worktree clean, and return exactly the existing repair JSON schema with addressedFindingIds empty.\n\nCoordinates: ${JSON.stringify(input)}\nCI repair plan:\n${plan}`;
   }
 
   private repairPrompt(repairPlan: string, findings: DeliveryFinding[], worktree: { branchName: string; worktreePath: string; targetBaseSha: string; subjectCommit: string; subjectTree: string }): string {

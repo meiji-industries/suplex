@@ -124,6 +124,7 @@ export interface PublishReleaseInput {
   planSummary: string;
   deliverySummary: string;
   verificationSummary: string;
+  expectedPullRequestNumber?: number;
 }
 
 export interface PublishReleaseResult {
@@ -167,16 +168,25 @@ export class ReleaseService {
     insertArtifact();
     try {
       if (!existingRelease) await this.github.pushNormal({ cwd: input.repositoryPath, branch: input.branchName });
-      const candidates = await this.github.listPullRequests({ repository: input.repository, headBranch: input.branchName, baseBranch: input.baseBranch });
-      if (candidates.length > 1 || candidates.some((pr) => pr.repository.toLowerCase() !== input.repository.toLowerCase() || pr.headBranch !== input.branchName || pr.baseBranch !== input.baseBranch || !pr.isDraft)) throw new GithubReleaseFailure("ambiguous");
-      let pullRequest = candidates[0];
+      let pullRequest: GithubPullRequest | undefined;
+      if (input.expectedPullRequestNumber !== undefined) {
+        if (!this.github.getPullRequest) throw new GithubReleaseFailure("not-ready");
+        pullRequest = await this.github.getPullRequest({ repository: input.repository, number: input.expectedPullRequestNumber });
+        const expectedUrl = `https://github.com/${input.repository}/pull/${input.expectedPullRequestNumber}`;
+        if (pullRequest.state !== "open" || !pullRequest.isDraft || pullRequest.number !== input.expectedPullRequestNumber || pullRequest.url.replace(/\/$/, "").toLowerCase() !== expectedUrl.toLowerCase()) throw new GithubReleaseFailure("not-ready");
+      } else {
+        const candidates = await this.github.listPullRequests({ repository: input.repository, headBranch: input.branchName, baseBranch: input.baseBranch });
+        if (candidates.length > 1 || candidates.some((pr) => pr.repository.toLowerCase() !== input.repository.toLowerCase() || pr.headBranch !== input.branchName || pr.baseBranch !== input.baseBranch || !pr.isDraft)) throw new GithubReleaseFailure("ambiguous");
+        pullRequest = candidates[0];
+      }
       let reused = true;
       if (!pullRequest) { pullRequest = await this.github.createDraftPullRequest({ repository: input.repository, headBranch: input.branchName, baseBranch: input.baseBranch, title, body }); reused = false; }
-      if (pullRequest.headSha.toLowerCase() !== input.subjectCommit.toLowerCase() || pullRequest.baseSha.toLowerCase() !== input.targetBaseSha.toLowerCase() || pullRequest.baseBranch !== input.baseBranch || pullRequest.repository.toLowerCase() !== input.repository.toLowerCase() || !pullRequest.isDraft) throw new GithubReleaseFailure("stale-revision");
+      if (pullRequest.state !== "open" || pullRequest.headSha.toLowerCase() !== input.subjectCommit.toLowerCase() || pullRequest.baseSha.toLowerCase() !== input.targetBaseSha.toLowerCase() || pullRequest.baseBranch !== input.baseBranch || pullRequest.headBranch !== input.branchName || pullRequest.repository.toLowerCase() !== input.repository.toLowerCase() || !pullRequest.isDraft) throw new GithubReleaseFailure("stale-revision");
     const releaseRecordId = existingRelease?.id ?? newReleaseId();
     const now = new Date().toISOString();
       this.database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, body_artifact_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?) ON CONFLICT(release_key) DO UPDATE SET status = 'draft', pr_number = excluded.pr_number, pr_url = excluded.pr_url, head_sha = excluded.head_sha, head_tree = excluded.head_tree, body_artifact_id = excluded.body_artifact_id, updated_at = excluded.updated_at").run(releaseRecordId, input.taskId, input.companyId, input.workflowId, releaseKey, input.repository, input.branchName, input.baseBranch, input.targetBaseSha, input.subjectCommit, input.subjectTree, pullRequest.number, pullRequest.url, title, bodyArtifact.id, now, now);
+        if (!existingRelease) db.prepare("UPDATE forge_releases SET superseded_by_release_id = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND id <> ? AND superseded_at IS NOT NULL AND superseded_by_release_id IS NULL").run(releaseRecordId, input.taskId, input.companyId, input.workflowId, releaseRecordId);
         db.prepare("UPDATE forge_provider_operations SET status = 'completed', result_json = ?, updated_at = ? WHERE operation_key = ?").run(JSON.stringify({ releaseId: releaseRecordId, prNumber: pullRequest.number, prUrl: pullRequest.url, headSha: input.subjectCommit }), now, releaseKey);
       });
       return { releaseId: releaseRecordId, repository: input.repository, branchName: input.branchName, headSha: input.subjectCommit, headTree: input.subjectTree, pullRequest, reused };

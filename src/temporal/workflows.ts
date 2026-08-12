@@ -56,6 +56,14 @@ const { reconcileCi } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "2 minutes",
   retry: { maximumAttempts: 1 },
 });
+const { planCiRepair } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "20 minutes",
+  retry: { maximumAttempts: 1 },
+});
+const { runCiRepair } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "60 minutes",
+  retry: { maximumAttempts: 1 },
+});
 const { finalReview } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
   retry: { maximumAttempts: 1 },
@@ -457,26 +465,71 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await projectIssueState(state);
     return state;
   };
+  const runExactCiRepairTurn = async (): Promise<IssueWorkflowState> => {
+    if (!state.ciRepairPlanId || !state.ciRepairPlanArtifactId || !state.ciRepairPlanEvidenceArtifactId || !state.ciAttemptId || !state.ciRunId || !state.expectedHeadSha || !state.resultCommit || !state.resultTree || !state.developerExecutionId || !state.developerSessionRef || !state.branchName) throw new Error("The exact CI repair plan and prior Developer delivery are required");
+    const ciRunId = state.ciRunId;
+    const ciAttemptId = state.ciAttemptId;
+    const repairPlanId = state.ciRepairPlanId;
+    const repairPlanArtifactId = state.ciRepairPlanArtifactId;
+    const repairPlanEvidenceArtifactId = state.ciRepairPlanEvidenceArtifactId;
+    const failedHeadSha = state.expectedHeadSha;
+    const priorDeveloperExecutionId = state.developerExecutionId;
+    const priorDeveloperSessionRef = state.developerSessionRef;
+    const branchName = state.branchName;
+    const priorCommit = state.resultCommit;
+    const priorTree = state.resultTree;
+    const releaseId = state.releaseId;
+    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_repairing", owner: "lead", allowedCommands: [], pendingAction: "Developer repairing the exact failed CI result", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    await projectIssueState(state);
+    try {
+      const result = await runCiRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, ...(releaseId ? { releaseId } : {}), projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, ciRunId, ciAttemptId, repairPlanId, repairPlanArtifactId, repairPlanEvidenceArtifactId, failedHeadSha, priorDeveloperExecutionId, priorDeveloperSessionRef, branchName, priorCommit, priorTree });
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["request_delivery_changes", "cancel_issue"], pendingAction: result.outcome === "completed" ? "Fresh Lead delivery review required after CI repair" : "CI repair is blocked", developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.outcome === "completed" ? "clean" : "dirty", deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.summary, developerOutcome: result.outcome === "completed" ? "completed" : "blocked", deliveryReviewId: result.outcome === "completed" ? null : state.deliveryReviewId, releaseId: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, ciRepairDeveloperExecutionId: result.developerExecutionId, ciRepairDeveloperSessionRef: result.developerSessionRef, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    } catch {
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_repair_required", owner: "human", allowedCommands: ["repair_ci", "cancel_issue"], pendingAction: "CI repair failed; retry the same exact repair", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    }
+    await projectIssueState(state);
+    return state;
+  };
   const reconcileCiTurn = async (): Promise<IssueWorkflowState> => {
     if (!state.releaseId || !state.expectedHeadSha) throw new Error("Exact release head is required for CI reconciliation");
     const attempt = (state.ciAttempt ?? 0) + 1;
+    const expectedReleaseId = state.releaseId;
+    const expectedHeadSha = state.expectedHeadSha;
+    const expectedRevision = state.revision;
     let result;
     try {
-      result = await reconcileCi({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, releaseId: state.releaseId, expectedHeadSha: state.expectedHeadSha, attempt });
+      result = await reconcileCi({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, releaseId: state.releaseId, expectedHeadSha: state.expectedHeadSha, attemptNumber: attempt });
     } catch {
-      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ciAttempt: attempt, ciOutcome: "provider_unavailable", ciNextPollAt: null, phase: "ci_repair_required", owner: "human", allowedCommands: ["request_delivery_changes", "cancel_issue"], pendingAction: "CI provider reconciliation failed", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      if (state.phase !== "ci_waiting" || state.revision !== expectedRevision || state.releaseId !== expectedReleaseId || state.expectedHeadSha !== expectedHeadSha) return state;
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ciAttempt: attempt, ciOutcome: "provider_unavailable", ciReason: "provider_failure_budget_exhausted", ciOwner: "human", ciRepairable: false, ciNextPollAt: null, phase: "delivery_blocked", owner: "human", allowedCommands: ["reconcile_ci", "cancel_issue"], pendingAction: "CI provider reconciliation failed", lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
       return state;
     }
-    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ciAttempt: attempt, ciRunId: result.runId, ciOutcome: result.outcome, ciNextPollAt: result.nextPollAt, pendingAction: result.outcome === "waiting" || result.outcome === "rate_limited" ? "Waiting for required CI" : "Processing CI result", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    if (state.phase !== "ci_waiting" || state.revision !== expectedRevision || state.releaseId !== expectedReleaseId || state.expectedHeadSha !== expectedHeadSha) return state;
+    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, ciAttempt: result.attemptNumber, ciAttemptId: result.attemptId, ciRunId: result.runId, ciOutcome: result.outcome, ciReason: result.reason, ciOwner: result.owner, ciRepairable: result.repairable, ciEvidenceArtifactId: result.evidenceArtifactId, ciPolicyHash: result.policyHash, ciPropagationDeadline: result.propagationDeadline, ciOverallDeadline: result.overallDeadline, ciNextPollAt: result.nextPollAt, pendingAction: result.outcome === "waiting" || result.outcome === "rate_limited" ? "Waiting for required CI" : result.summary, lastEventId: `${state.workflowId}:${state.revision + 1}` });
     await projectIssueState(state);
     if (result.outcome === "passed") {
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "final_review", owner: "lead", allowedCommands: [], pendingAction: "Final Lead review", lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
       return runFinalReviewTurn();
     }
-    if (!["waiting", "rate_limited"].includes(result.outcome)) {
-      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_repair_required", owner: "lead", allowedCommands: ["repair_ci", "request_delivery_changes", "cancel_issue"], pendingAction: "Repair exact-head CI failure", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    if (result.outcome === "failed" && result.repairable && result.owner === "lead" && result.evidenceArtifactId && state.leadSessionRef && state.ciAttemptId) {
+      const leadSessionRef = state.leadSessionRef;
+      const ciAttemptId = state.ciAttemptId;
+      const evidenceArtifactId = result.evidenceArtifactId;
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_repair_planning", owner: "lead", allowedCommands: [], pendingAction: "Lead diagnosis of exact-head CI failure", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      await projectIssueState(state);
+      try {
+        const plan = await planCiRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, leadSessionRef, ciRunId: result.runId, ciAttemptId, failedHeadSha: expectedHeadSha, evidenceArtifactId, requiredChecks: [], localVerification: [] });
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_repair_required", owner: "lead", allowedCommands: [], pendingAction: "Developer repairing the exact failed CI result", ciRepairPlanId: plan.planId, ciRepairPlanArtifactId: plan.planArtifactId, ciRepairPlanEvidenceArtifactId: plan.evidenceArtifactId, ciRepairPlanSummary: plan.summary, ciRepairLeadExecutionId: plan.leadExecutionId, ciRepairLeadSessionRef: plan.leadSessionRef, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        await projectIssueState(state);
+        return runExactCiRepairTurn();
+      } catch {
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["request_delivery_changes", "cancel_issue"], pendingAction: "Lead CI repair planning failed; inspect the recorded evidence", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      }
+      await projectIssueState(state);
+    } else if (!(result.owner === "system" && result.retryAt)) {
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["reconcile_ci", "cancel_issue"], pendingAction: result.summary, lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
     }
     return state;
@@ -503,9 +556,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (!state.deliveryReviewId || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree) throw new Error("Approved exact delivery is required before publishing");
     let result;
     try {
-      result = await publishRelease({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, reviewId: state.deliveryReviewId, developerExecutionId: state.developerExecutionId!, branchName: state.branchName, targetBaseSha: state.targetBaseSha, subjectCommit: state.resultCommit, subjectTree: state.resultTree, planSummary: state.leadSummary ?? "Approved Forge plan", deliverySummary: state.deliverySummary ?? "Exact Developer delivery", verificationSummary: "Lead delivery review approved" });
+      result = await publishRelease({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, reviewId: state.deliveryReviewId, developerExecutionId: state.developerExecutionId!, branchName: state.branchName, targetBaseSha: state.targetBaseSha, subjectCommit: state.resultCommit, subjectTree: state.resultTree, planSummary: state.leadSummary ?? "Approved Forge plan", deliverySummary: state.deliverySummary ?? "Exact Developer delivery", verificationSummary: "Lead delivery review approved", ...(state.pullRequestNumber ? { expectedPullRequestNumber: state.pullRequestNumber } : {}) });
     } catch {
-      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["record_delivery_decision", "cancel_issue"], pendingAction: "Release provider reconciliation requires attention", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Release provider reconciliation requires attention", lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
       return state;
     }
@@ -557,12 +610,17 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   } });
   setHandler(reconcileCIUpdate, async (rawInput) => {
     const command = StartPlanningInputSchema.parse(rawInput);
-    if (command.expectedRevision !== state.revision || state.phase !== "ci_waiting") throw new Error("CI reconciliation is not available in the current phase");
+    if (command.expectedRevision !== state.revision || !["ci_waiting", "delivery_blocked"].includes(state.phase) || !state.allowedCommands.includes("reconcile_ci")) throw new Error("CI reconciliation is not available in the current phase");
+    if (state.phase === "delivery_blocked") {
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Retrying CI reconciliation", ciNextPollAt: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      await projectIssueState(state);
+    }
     return reconcileCiTurn();
   });
   setHandler(repairCIUpdate, async (rawInput) => {
     const command = StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== state.revision || state.phase !== "ci_repair_required") throw new Error("CI repair is not available in the current phase");
+    if (state.ciRepairPlanId && state.ciRepairPlanArtifactId && state.ciRepairPlanEvidenceArtifactId && state.ciAttemptId && state.ciRunId && state.expectedHeadSha && state.resultCommit && state.resultTree && state.developerExecutionId && state.developerSessionRef && state.branchName) return runExactCiRepairTurn();
     if (!state.deliveryReviewId || !state.developerExecutionId || !state.developerSessionRef || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree || !state.leadSessionRef) throw new Error("The exact prior Developer delivery is required for CI repair");
     const cycle = (state.repairCycle ?? 0) + 1;
     if (cycle > validatedInput.repairCycleLimit) throw new Error("CI repair limit is exhausted");
@@ -683,9 +741,13 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   if (!continuation) await projectIssueState(state);
   while (true) {
     if (state.phase === "ci_waiting") {
+      const sleepingRevision = state.revision;
+      const sleepingReleaseId = state.releaseId;
+      const sleepingHeadSha = state.expectedHeadSha;
       const pollAt = state.ciNextPollAt ? Date.parse(state.ciNextPollAt) : Date.now();
       const delay = Math.max(0, pollAt - Date.now());
       if (delay > 0) await sleep(delay);
+      if (state.phase !== "ci_waiting" || state.revision !== sleepingRevision || state.releaseId !== sleepingReleaseId || state.expectedHeadSha !== sleepingHeadSha) continue;
       await reconcileCiTurn();
       continue;
     }

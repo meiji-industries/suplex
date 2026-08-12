@@ -6,6 +6,7 @@ import type { ForgeConfig } from "../../config.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { ProjectService } from "../../projects.js";
 import type { TaskService } from "../../tasks.js";
+import type { CapacityManager } from "../../capacity.js";
 import { sessionUser } from "../session.js";
 import administration from "./administration.js";
 import { authMe } from "./auth.js";
@@ -21,6 +22,7 @@ export interface AuthenticatedRoutesOptions {
   tasks?: TaskService;
   attention?: AttentionService;
   database?: ForgeDatabase;
+  capacity?: CapacityManager;
 }
 
 const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app, options) => {
@@ -36,7 +38,7 @@ const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app
 
   await app.register(authMe, { prefix: "/api/auth" });
   await app.register(companies, { auth: options.auth });
-  await app.register(administration, { auth: options.auth, ...(options.config ? { config: options.config } : {}), ...(options.projects ? { projects: options.projects } : {}), ...(options.attention ? { attention: options.attention } : {}), ...(options.database ? { database: options.database } : {}) });
+  await app.register(administration, { auth: options.auth, ...(options.config ? { config: options.config } : {}), ...(options.projects ? { projects: options.projects } : {}), ...(options.attention ? { attention: options.attention } : {}), ...(options.database ? { database: options.database } : {}), ...(options.capacity ? { capacity: options.capacity } : {}) });
   if (options.projects) await app.register(projects, { projects: options.projects });
   if (options.tasks) await app.register(tasks, { tasks: options.tasks });
   if (options.attention) await app.register(attention, { attention: options.attention });

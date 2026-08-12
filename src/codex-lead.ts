@@ -10,7 +10,9 @@ import { z } from "zod";
 import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { ForgeDatabase } from "./database.js";
+import { CapacityManager } from "./capacity.js";
 import { redact } from "./logging.js";
+import { cleanupAgentWrapper, createAgentWrapperManifest, inspectAgentWrapper, launchAgentWrapper, readAgentWrapperManifest } from "./agent-wrapper.js";
 import { PlanMaterialCategorySchema, classifyPlanMateriality, materialitySummary, type PlanMaterialCategory } from "./plan-governance.js";
 import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./temporal/issue-contracts.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
@@ -74,6 +76,7 @@ export const LeadPlanningActivityInputSchema = z.object({
   revision: z.number().int().nonnegative(),
   revisionRequestId: durableId.optional(),
   resumeLeadSessionRef: durableId.optional(),
+  capacityRequestId: durableId.optional(),
 });
 
 export type LeadPlan = z.infer<typeof LeadPlanSchema>;
@@ -100,6 +103,7 @@ export interface LeadInvocation {
   cwd: string;
   env?: NodeJS.ProcessEnv;
   detached?: boolean;
+  durable?: { runtimeRoot: string; executionId: string; pathOverride?: string };
   onStart: (pid: number, startedAt: string) => Promise<void>;
   onLine: (line: string) => Promise<void>;
 }
@@ -128,12 +132,16 @@ export function resolveAgentCommand(command: string, executablePath = process.en
 export class AgentFailure extends Error {
   readonly code: string;
   readonly nonRetryable: boolean;
+  readonly retryAt: string | undefined;
+  readonly retryAfterMs: number | undefined;
 
-  constructor(code: string, message: string, options: { nonRetryable?: boolean } = {}) {
+  constructor(code: string, message: string, options: { nonRetryable?: boolean; retryAt?: string; retryAfterMs?: number } = {}) {
     super(message);
     this.name = "AgentFailure";
     this.code = code;
     this.nonRetryable = options.nonRetryable ?? false;
+    this.retryAt = options.retryAt;
+    this.retryAfterMs = options.retryAfterMs;
   }
 }
 
@@ -160,7 +168,76 @@ export class FileSessionStore implements SessionStore {
   }
 }
 
+function forgeWrapperLauncher(): { command: string; args: string[] } {
+  const entry = process.argv[1] ?? "";
+  // Unit and real-proof runners execute services inside Vitest rather than
+  // through Forge's normal CLI entry point. Keep the same hidden CLI branch
+  // in that environment so durable wrappers are still real child processes.
+  if (entry.includes("vitest")) return { command: join(process.cwd(), "node_modules", ".bin", "tsx"), args: [join(process.cwd(), "src", "cli.ts")] };
+  const args = entry.includes(`${sep}.bin${sep}`) || entry.endsWith("/tsx") || entry.endsWith("\\tsx")
+    ? process.argv.slice(1, 3)
+    : process.argv.slice(1, 2);
+  return { command: process.execPath, args };
+}
+
+async function runDurableProcess(invocation: LeadInvocation & { durable: NonNullable<LeadInvocation["durable"]> }): Promise<LeadProcessResult> {
+  const expected = {
+    runtimeRoot: invocation.durable.runtimeRoot,
+    executionId: invocation.durable.executionId,
+    command: invocation.command,
+    args: invocation.args,
+    cwd: invocation.cwd,
+    ...(invocation.durable.pathOverride ? { pathOverride: invocation.durable.pathOverride } : {}),
+  };
+  const manifestPath = join(invocation.durable.runtimeRoot, "agent-executions", invocation.durable.executionId, "manifest.json");
+  let directory;
+  let existing = false;
+  try {
+    const loaded = await readAgentWrapperManifest(manifestPath);
+    if (loaded.manifest.runtimeRoot !== expected.runtimeRoot || loaded.manifest.executionId !== expected.executionId || loaded.manifest.command !== expected.command || loaded.manifest.cwd !== expected.cwd || JSON.stringify(loaded.manifest.args) !== JSON.stringify(expected.args) || (loaded.manifest.pathOverride ?? null) !== (expected.pathOverride ?? null)) throw new AgentFailure("wrapper-identity-mismatch", "The durable Codex wrapper manifest does not match the retried execution");
+    directory = loaded.paths;
+    existing = true;
+  } catch (error) {
+    if (!(error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT")) throw error;
+    directory = await createAgentWrapperManifest(expected);
+  }
+  const initialInspection = await inspectAgentWrapper(directory.manifestPath);
+  if (!existing || (!initialInspection.live && !initialInspection.result && !initialInspection.state)) await launchAgentWrapper(directory.manifestPath, forgeWrapperLauncher());
+  else if (!initialInspection.live && !initialInspection.result && initialInspection.state) throw new AgentFailure("wrapper-process-missing", "The durable Codex wrapper stopped without a stored result");
+  let stdoutOffset = 0;
+  let pending = "";
+  let started = false;
+  const readOutput = async (): Promise<void> => {
+    const bytes = await readFile(directory.stdoutPath).catch(() => Buffer.alloc(0));
+    if (bytes.length <= stdoutOffset) return;
+    pending += bytes.subarray(stdoutOffset).toString("utf8");
+    stdoutOffset = bytes.length;
+    const lines = pending.split(/\r?\n/);
+    pending = lines.pop() ?? "";
+    for (const line of lines) if (line.trim()) await invocation.onLine(line);
+  };
+  for (;;) {
+    await readOutput();
+    const inspection = await inspectAgentWrapper(directory.manifestPath);
+    if (!started && inspection.state?.childPid) {
+      const identity = inspection.state.childStartIdentity?.split(":").slice(1).join(":") || new Date().toISOString();
+      await invocation.onStart(inspection.state.childPid, identity);
+      started = true;
+    }
+    if (inspection.result) {
+      if (pending.trim()) {
+        await invocation.onLine(pending);
+        pending = "";
+      }
+      const stderr = await readFile(directory.stderrPath, "utf8").catch(() => "");
+      return { exitCode: inspection.result.exitCode, stderr: redact(stderr.slice(-16_384)) as string };
+    }
+    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
+  }
+}
+
 function defaultProcessRunner(invocation: LeadInvocation): Promise<LeadProcessResult> {
+  if (invocation.durable) return runDurableProcess(invocation as LeadInvocation & { durable: NonNullable<LeadInvocation["durable"]> });
   return new Promise((resolve, reject) => {
     const child = spawn(invocation.command, invocation.args, { cwd: invocation.cwd, env: invocation.env, detached: invocation.detached, stdio: ["ignore", "pipe", "pipe"] });
     const startedAt = new Date().toISOString();
@@ -388,13 +465,48 @@ async function readDeliveryGitEvidence(worktreePath: string, targetBaseSha: stri
   };
 }
 
+function futureResetTimestamp(value: unknown, now = Date.now()): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const millis = value > 10_000_000_000 ? value : value * 1_000;
+    if (millis > now && millis <= now + 7 * 24 * 60 * 60 * 1_000) return new Date(millis).toISOString();
+    return undefined;
+  }
+  if (typeof value !== "string") return undefined;
+  const parsed = Date.parse(value);
+  return parsed > now && parsed <= now + 7 * 24 * 60 * 60 * 1_000 ? new Date(parsed).toISOString() : undefined;
+}
+
+function rateLimitTiming(outputLines: string[]): { retryAt?: string; retryAfterMs?: number } {
+  for (const line of outputLines) {
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (!parsed || typeof parsed !== "object") continue;
+      const record = parsed as Record<string, unknown>;
+      const nested = record.error && typeof record.error === "object" ? record.error as Record<string, unknown> : record;
+      for (const key of ["retry_at", "reset_at", "resets_at", "retryAt", "resetAt"]) {
+        const retryAt = futureResetTimestamp(nested[key]);
+        if (retryAt) return { retryAt };
+      }
+      for (const key of ["retry_after_seconds", "retryAfterSeconds"]) {
+        const seconds = typeof nested[key] === "number" ? nested[key] : typeof nested[key] === "string" ? Number(nested[key]) : Number.NaN;
+        if (Number.isFinite(seconds) && seconds >= 0 && seconds <= 7 * 24 * 60 * 60) return { retryAfterMs: Math.round(seconds * 1_000) };
+      }
+      for (const key of ["retry_after_ms", "retryAfterMs"]) {
+        const millis = typeof nested[key] === "number" ? nested[key] : typeof nested[key] === "string" ? Number(nested[key]) : Number.NaN;
+        if (Number.isFinite(millis) && millis >= 0 && millis <= 7 * 24 * 60 * 60 * 1_000) return { retryAfterMs: Math.round(millis) };
+      }
+    } catch { /* plain-text provider diagnostics are handled by regex below */ }
+  }
+  return {};
+}
+
 export function agentProcessFailure(result: LeadProcessResult, outputLines: string[] = [], model?: string): AgentFailure {
   const diagnosticText = `${result.stderr}\n${outputLines.join("\n")}`;
   if (/not logged in|login required|authentication required|unauthenticated|oauth authorization required/i.test(diagnosticText)) {
     return new AgentFailure("login-expired", "Agent provider authentication is unavailable. Sign in again, then retry.", { nonRetryable: true });
   }
   if (/rate[ -]?limit|too many requests|\b429\b/i.test(diagnosticText)) {
-    return new AgentFailure("rate-limited", "Agent provider rate limiting prevented this invocation from completing.");
+    return new AgentFailure("rate-limited", "Agent provider rate limiting prevented this invocation from completing.", rateLimitTiming(outputLines));
   }
   if (/model .*not supported|unsupported model|invalid model|unknown model|model_not_found|model metadata .*not found|model .*does not exist/i.test(diagnosticText)) {
     const configuredModel = model ? ` “${model}”` : "";
@@ -520,20 +632,27 @@ export class AgentService {
     if (!openFindings.length) throw new AgentFailure("repair-plan-invalid", "Delivery repair planning requires an open blocking finding");
     const rawSessionId = await this.sessionStore.read(input.leadSessionRef);
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
-    const executionId = `agent_${randomBytes(12).toString("hex")}`;
+    const profile = this.executionProfile(input, undefined);
+    if (profile && profile.provider !== "codex") throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for delivery repair planning");
+    const active = this.activeCapacityExecution(input, "lead");
+    const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const evidenceLines: string[] = [];
     const outputLines: string[] = [];
     const startedAt = this.now().toISOString();
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.leadSessionRef, startedAt));
+    if (!active) this.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.leadSessionRef, startedAt);
+      this.bindCapacityInTransaction(db, input, executionId, input.leadSessionRef, worktreePath);
+    });
     let output: z.infer<typeof DeliveryRepairLeadOutputSchema>;
     try {
-      const result = await this.processRunner({ command: this.command, args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.deliveryRepairPlanPrompt(input, openFindings)], cwd: worktreePath, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.databaseHeartbeat(executionId, "running"); } });
+      const result = await this.processRunner({ command: this.command, args: ["exec", "resume", ...(profile ? this.profileArgs(profile) : []), rawSessionId, "--json", "--skip-git-repo-check", this.deliveryRepairPlanPrompt(input, openFindings)], cwd: worktreePath, durable: { runtimeRoot: this.config.runtimeRoot, executionId }, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.databaseHeartbeat(executionId, "running"); } });
       if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines, "delivery-repair-plan");
       output = parseDeliveryRepairPlan(outputLines);
     } catch (error) {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("repair-plan-failed", "Codex Lead delivery repair planning failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); });
+      await this.cleanupTerminalWrapper(executionId);
       throw failure;
     }
     const summary = output.summary;
@@ -577,7 +696,38 @@ export class AgentService {
       );
     });
     this.database.authTransaction((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidenceArtifact.id, executionId));
-    return DeliveryRepairPlanResultSchema.parse({ planId, planArtifactId: planArtifact.id, planSha256: planArtifact.sha256, evidenceArtifactId: evidenceArtifact.id, leadSessionRef: input.leadSessionRef, summary, findings: openFindings });
+    await this.cleanupTerminalWrapper(executionId);
+    return DeliveryRepairPlanResultSchema.parse({ planId, leadExecutionId: executionId, planArtifactId: planArtifact.id, planSha256: planArtifact.sha256, evidenceArtifactId: evidenceArtifact.id, leadSessionRef: input.leadSessionRef, summary, findings: openFindings });
+  }
+
+  private bindCapacityInTransaction(db: import("better-sqlite3").Database, input: { capacityRequestId?: string | undefined }, executionId: string, sessionRef?: string, worktreePath?: string): void {
+    if (!input.capacityRequestId) return;
+    const request = new CapacityManager(this.database, this.config).bindExecutionInTransaction(db, input.capacityRequestId, { executionKind: "agent", executionId, ...(sessionRef ? { sessionRef } : {}), ...(worktreePath ? { worktreePath } : {}) });
+    db.prepare("UPDATE forge_agent_executions SET capacity_request_id = ?, profile_id = ?, provider = ?, model = ?, reasoning_level = ?, service_priority = ?, wrapper_id = COALESCE(wrapper_id, ?), wrapper_path = COALESCE(wrapper_path, ?) WHERE id = ?").run(request.id, request.profileId, request.provider, request.model, request.reasoningLevel, request.servicePriority, `wrapper_${request.id}`, join(this.config.runtimeRoot, "agent-executions", executionId), executionId);
+  }
+
+  private executionProfile(input: { capacityRequestId?: string | undefined }, profileId: string | undefined): ProfileSettings | undefined {
+    if (input.capacityRequestId) return this.database.authQuery((db) => db.prepare("SELECT profile_id AS id, profile_id AS name, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority, requested_capacity AS capacity FROM forge_capacity_requests WHERE id = ? AND (? IS NULL OR profile_id = ?)").get(input.capacityRequestId, profileId ?? null, profileId ?? null) as ProfileSettings | undefined);
+    if (!profileId) return undefined;
+    return this.database.authQuery((db) => db.prepare("SELECT id, name, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority, capacity FROM forge_profiles WHERE id = ?").get(profileId) as ProfileSettings | undefined);
+  }
+
+  private profileArgs(profile: Pick<ProfileSettings, "model" | "reasoningLevel" | "servicePriority">): string[] {
+    return ["--model", profile.model, "-c", `model_reasoning_effort=\"${profile.reasoningLevel}\"`, "-c", `service_tier=\"${profile.servicePriority === "priority" ? "priority" : "default"}\"`];
+  }
+
+  private activeCapacityExecution(input: { capacityRequestId?: string | undefined; taskId: string; companyId: string; workflowId: string }, role: "lead" | "reviewer"): { id: string; sessionRef: string | null } | undefined {
+    if (!input.capacityRequestId) return undefined;
+    return this.database.authQuery((db) => db.prepare(`SELECT id, session_ref AS sessionRef
+      FROM forge_agent_executions
+      WHERE capacity_request_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND role = ?
+        AND status IN ('starting', 'running')
+      ORDER BY started_at DESC LIMIT 1`).get(input.capacityRequestId, input.taskId, input.companyId, input.workflowId, role) as { id: string; sessionRef: string | null } | undefined);
+  }
+
+  private async cleanupTerminalWrapper(executionId: string): Promise<void> {
+    const terminal = this.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_agent_executions WHERE id = ? AND status NOT IN ('starting', 'running', 'cancelling')").get(executionId));
+    if (terminal) await cleanupAgentWrapper(this.config.runtimeRoot, executionId).catch(() => undefined);
   }
 
   async runLeadPlanning(rawInput: LeadPlanningActivityInput): Promise<LeadPlanningResult> {
@@ -602,6 +752,12 @@ export class AgentService {
       const placeholders = profileIds.map(() => "?").join(",");
       return db.prepare(`SELECT id, name, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority, capacity FROM forge_profiles WHERE id IN (${placeholders})`).all(...profileIds) as ProfileSettings[];
     });
+    const pinnedLead = this.executionProfile(input, input.roleProfiles.lead);
+    if (pinnedLead) {
+      const index = profileSettings.findIndex((profile) => profile.id === input.roleProfiles.lead);
+      const existing = index >= 0 ? profileSettings[index] : undefined;
+      if (existing) profileSettings[index] = { ...existing, model: pinnedLead.model, provider: pinnedLead.provider, reasoningLevel: pinnedLead.reasoningLevel, servicePriority: pinnedLead.servicePriority, capacity: pinnedLead.capacity };
+    }
     if (!input.roleProfiles.lead) throw new AgentFailure("profile-unavailable", "Lead planning requires a configured Lead profile");
     const leadProfile = profileSettings.find((profile) => profile.id === input.roleProfiles.lead);
     if (!leadProfile || leadProfile.provider !== "codex") throw new AgentFailure("profile-unavailable", "The configured Lead profile is unavailable");
@@ -616,14 +772,18 @@ export class AgentService {
     let rawSessionId: string | undefined;
     const startedAt = this.now().toISOString();
     try {
-      const active = this.database.authQuery((db) => db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at FROM forge_agent_executions WHERE task_id = ? AND role = 'lead' AND status IN ('starting', 'running') ORDER BY started_at DESC LIMIT 1").get(input.taskId) as { id: string; status: string; attempt: number; session_ref: string | null; heartbeat_at: string | null } | undefined);
+      const active = this.database.authQuery((db) => input.capacityRequestId
+        ? db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at, capacity_request_id FROM forge_agent_executions WHERE capacity_request_id = ? AND role = 'lead' AND status IN ('starting', 'running') ORDER BY started_at DESC LIMIT 1").get(input.capacityRequestId) as { id: string; status: string; attempt: number; session_ref: string | null; heartbeat_at: string | null; capacity_request_id: string } | undefined
+        : db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at, capacity_request_id FROM forge_agent_executions WHERE task_id = ? AND role = 'lead' AND status IN ('starting', 'running') ORDER BY started_at DESC LIMIT 1").get(input.taskId) as { id: string; status: string; attempt: number; session_ref: string | null; heartbeat_at: string | null; capacity_request_id: string | null } | undefined);
       if (active) {
         const heartbeatAge = active.heartbeat_at ? Date.now() - Date.parse(active.heartbeat_at) : Number.POSITIVE_INFINITY;
-        if (heartbeatAge < 30_000) throw new AgentFailure("active-lease", "A Lead execution is already active for this issue");
+        if (!input.capacityRequestId || active.capacity_request_id !== input.capacityRequestId) {
+          if (heartbeatAge < 30_000) throw new AgentFailure("active-lease", "A Lead execution is already active for this issue");
+        }
         executionId = active.id;
         sessionRef = active.session_ref ?? undefined;
         rawSessionId = sessionRef ? await this.sessionStore.read(sessionRef) : undefined;
-        this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'starting', attempt = ?, heartbeat_at = ?, finished_at = NULL, failure_code = NULL, failure_summary = NULL WHERE id = ?").run(active.attempt + 1, startedAt, executionId));
+        if (!input.capacityRequestId || active.capacity_request_id !== input.capacityRequestId) this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'starting', attempt = ?, heartbeat_at = ?, finished_at = NULL, failure_code = NULL, failure_summary = NULL WHERE id = ?").run(active.attempt + 1, startedAt, executionId));
       } else if (input.resumeLeadSessionRef) {
         const prior = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND role = 'lead' AND session_ref = ? AND status = 'completed' ORDER BY finished_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.resumeLeadSessionRef) as { id: string } | undefined);
         if (!prior) throw new AgentFailure("lead-session-ownership", "The prior Lead session cannot be resumed for this issue");
@@ -633,12 +793,17 @@ export class AgentService {
       } else {
         this.database.authTransaction((db) => {
           db.prepare(`INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?)`).run(executionId, input.taskId, input.companyId, input.workflowId, startedAt);
+          this.bindCapacityInTransaction(db, input, executionId, sessionRef);
         });
       }
     } catch (error) {
       if (error instanceof AgentFailure) throw error;
       if (error instanceof Error && /forge_agent_active_lease_idx|UNIQUE constraint/i.test(error.message)) throw new AgentFailure("active-lease", "A Lead execution is already active for this issue");
       throw error;
+    }
+
+    if (input.capacityRequestId && sessionRef) {
+      this.database.authTransaction((db) => this.bindCapacityInTransaction(db, input, executionId, sessionRef));
     }
 
     const evidenceLines: string[] = [];
@@ -649,8 +814,8 @@ export class AgentService {
         const prompt = attempt === 0 ? this.initialPrompt(row.title, brief, row.normalized_json, profileSettings, repositoryEvidence, revisionContext) : this.correctionPrompt();
         const imagePaths = images.map((image) => resolve(this.config.artifactRoot, image.storage_path));
         const args = rawSessionId
-          ? ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", ...imagePaths.flatMap((path) => ["--image", path]), prompt]
-          : ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--model", leadProfile.model, ...imagePaths.flatMap((path) => ["--image", path]), prompt];
+          ? ["exec", "resume", ...this.profileArgs(leadProfile), rawSessionId, "--json", "--skip-git-repo-check", ...imagePaths.flatMap((path) => ["--image", path]), prompt]
+          : ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", ...this.profileArgs(leadProfile), ...imagePaths.flatMap((path) => ["--image", path]), prompt];
         const lines: string[] = [];
         await this.databaseHeartbeat(executionId, "running");
         const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
@@ -658,8 +823,9 @@ export class AgentService {
           command: this.command,
           args,
           cwd: repositoryPath,
+          durable: { runtimeRoot: this.config.runtimeRoot, executionId },
           onStart: async (pid, processStartedAt) => {
-            await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId));
+            await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId));
           },
           onLine: async (line) => {
             const sanitized = safeJsonLine(line);
@@ -689,6 +855,10 @@ export class AgentService {
         } catch (error) {
           lastFailure = error instanceof AgentFailure ? error : new AgentFailure("invalid-output", "Codex Lead output was invalid");
           if (!rawSessionId || attempt === 1) break;
+          // The first Codex child is terminal before correction. Remove only
+          // that durable result so the same ledger execution can launch the
+          // bounded resume turn without overlapping the prior process.
+          await cleanupAgentWrapper(this.config.runtimeRoot, executionId);
         }
       }
       throw lastFailure ?? new AgentFailure("lead-failed", "Codex Lead execution failed");
@@ -698,11 +868,13 @@ export class AgentService {
       this.database.authQuery((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt));
       await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId));
       throw failure;
-    }
+    } finally { await this.cleanupTerminalWrapper(executionId); }
   }
 
   async planMergeConflict(rawInput: MergeConflictPlanInput): Promise<MergeConflictPlanActivityResult> {
     const input = rawInput;
+    const profile = this.executionProfile(input, undefined);
+    if (profile && profile.provider !== "codex") throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for merge-conflict planning");
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256
       FROM forge_tasks t
       JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
@@ -733,18 +905,23 @@ export class AgentService {
       this.artifacts.read({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
     ]);
     const rawSessionId = await this.sessionStore.read(input.leadSessionRef);
-    const executionId = `agent_${randomBytes(12).toString("hex")}`;
+    const active = this.activeCapacityExecution(input, "lead");
+    const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.leadSessionRef, startedAt));
+    if (!active) this.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.leadSessionRef, startedAt);
+      this.bindCapacityInTransaction(db, input, executionId, input.leadSessionRef, worktreePath);
+    });
     const evidenceLines: string[] = [];
     const expectedRawSessionId = rawSessionId;
     const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
     try {
       const result = await this.processRunner({
         command: this.command,
-        args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.mergeConflictPlanPrompt(context.title, brief, plan, input, conflict, pinnedCommands)],
+        args: ["exec", "resume", ...(profile ? this.profileArgs(profile) : []), rawSessionId, "--json", "--skip-git-repo-check", this.mergeConflictPlanPrompt(context.title, brief, plan, input, conflict, pinnedCommands)],
         cwd: worktreePath,
-        onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
+        durable: { runtimeRoot: this.config.runtimeRoot, executionId },
+        onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
         onLine: async (line) => {
           const event = eventValue(line);
           if (event.threadId && event.threadId !== expectedRawSessionId) throw new AgentFailure("session-identity-conflict", "Merge-conflict planning returned a different Lead session identity");
@@ -777,7 +954,7 @@ export class AgentService {
         db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId);
       });
       throw failure;
-    } finally { clearInterval(heartbeat); }
+    } finally { clearInterval(heartbeat); await this.cleanupTerminalWrapper(executionId); }
   }
 
   private async blockedDeliveryReviewPreflight(input: DeliveryReviewActivityInput, failure: AgentFailure): Promise<DeliveryReviewActivityResult> {
@@ -989,7 +1166,7 @@ export class AgentService {
         throw failure;
       }
     }
-    const leadProfile = this.database.authQuery((db) => db.prepare("SELECT model, provider FROM forge_profiles WHERE id = ?").get(input.roleProfiles.lead) as { model: string; provider: string } | undefined);
+    const leadProfile = this.executionProfile(input, input.roleProfiles.lead);
     if (!leadProfile || leadProfile.provider !== "codex") {
       const failure = new AgentFailure("profile-unavailable", "Lead review requires the configured Codex Lead profile");
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
@@ -1008,12 +1185,15 @@ export class AgentService {
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
       throw failure;
     }
-    const executionId = `agent_${randomBytes(12).toString("hex")}`;
+    const active = this.activeCapacityExecution(input, "lead");
+    const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
-    const attemptId = `review_attempt_${randomBytes(12).toString("hex")}`;
-    this.database.authTransaction((db) => {
+    const activeAttempt = active && !isFinalReview ? this.database.authQuery((db) => db.prepare("SELECT id FROM forge_delivery_review_attempts WHERE lead_execution_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(executionId, input.taskId, input.companyId, input.workflowId) as { id: string } | undefined) : undefined;
+    const attemptId = activeAttempt?.id ?? `review_attempt_${randomBytes(12).toString("hex")}`;
+    if (!active) this.database.authTransaction((db) => {
       db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, leadSessionRef, startedAt);
       if (!isFinalReview) db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id, lead_execution_id, lead_session_ref, developer_session_ref, status, correction_attempts, supersedes_review_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 0, ?, ?)").run(attemptId, input.taskId, input.companyId, input.workflowId, subject.planRevision, targetBaseSha, subjectCommit, subjectTree, subject.developerExecutionId, subject.deliveryArtifactId, subject.developerEvidenceArtifactId, executionId, leadSessionRef, context.developerSessionRef, input.supersedesReviewId, startedAt);
+      this.bindCapacityInTransaction(db, input, executionId, leadSessionRef, input.worktreePath);
     });
     const evidenceLines: string[] = [];
     const outputLines: string[] = [];
@@ -1027,9 +1207,10 @@ export class AgentService {
         evidenceLines.push(JSON.stringify({ type: "forge.review-turn-start", turn }));
         const result = await this.processRunner({
           command: this.command,
-          args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", prompt],
+          args: ["exec", "resume", ...this.profileArgs(leadProfile), rawSessionId, "--json", "--skip-git-repo-check", prompt],
           cwd: worktreePath,
-          onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
+          durable: { runtimeRoot: this.config.runtimeRoot, executionId },
+          onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
           onLine: async (line) => {
             const sanitized = safeJsonLine(line);
             evidenceBytes += Buffer.byteLength(sanitized, "utf8") + 1;
@@ -1054,6 +1235,7 @@ export class AgentService {
         if (!["missing-review-output", "malformed-review-output", "invalid-review-output"].includes(firstFailure.code)) throw firstFailure;
         correctionAttempts = 1;
         outputLines.length = 0;
+        await cleanupAgentWrapper(this.config.runtimeRoot, executionId);
         const correctionPrompt = (`The prior Lead response was not machine-readable. Format-only correction; do not change the review substance or scope. Validation issue: ${firstFailure.code}: ${firstFailure.message}\nReturn only the required delivery_review JSON object described in the prior prompt.`).slice(0, 2_000);
         await runTurn(2, correctionPrompt);
         try { review = DeliveryReviewSchema.parse(parseDeliveryReview(outputLines)); }
@@ -1091,12 +1273,12 @@ export class AgentService {
       });
       if (!expectedFailure || isFinalReview) throw error;
       return DeliveryReviewActivityResultSchema.parse({ outcome: "blocked", attemptId, code, summary, evidenceArtifactId: evidence.id, executionId, sessionRef: leadSessionRef, correctionAttempts, subject: { ...subject, developerSessionRef: context.developerSessionRef } });
-    } finally { clearInterval(heartbeat); }
+    } finally { clearInterval(heartbeat); await this.cleanupTerminalWrapper(executionId); }
   }
 
   async runSupplementalReview(rawInput: SupplementalReviewActivityInput): Promise<SupplementalReviewResult> {
     const input = rawInput;
-    const profile = this.database.authQuery((db) => db.prepare("SELECT id, model, provider FROM forge_profiles WHERE id = ?").get(input.roleProfiles.reviewer) as { id: string; model: string; provider: string } | undefined);
+    const profile = this.executionProfile(input, input.roleProfiles.reviewer);
     if (!profile || profile.provider !== "codex") throw new AgentFailure("reviewer-profile-unavailable", "Supplemental review requires an allowed profile");
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256, oa.storage_path AS output_storage_path, oa.sha256 AS output_sha256, e.storage_path AS evidence_storage_path, e.sha256 AS evidence_sha256
       FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
@@ -1108,19 +1290,24 @@ export class AgentService {
     const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
     const draft = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
     const priorEvidence = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.evidence_storage_path, sha256: context.evidence_sha256 })).toString("utf8");
-    const executionId = `agent_${randomBytes(12).toString("hex")}`;
+    const active = this.activeCapacityExecution(input, "reviewer");
+    const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES (?, ?, ?, ?, 'reviewer', 'starting', 1, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, startedAt));
+    if (!active) this.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES (?, ?, ?, ?, 'reviewer', 'starting', 1, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, startedAt);
+      this.bindCapacityInTransaction(db, input, executionId, undefined, repositoryPath);
+    });
     const lines: string[] = [];
-    let sessionRef: string | undefined;
+    let sessionRef: string | undefined = active?.sessionRef ?? undefined;
     let rawSessionId: string | undefined;
     const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
     try {
       const result = await this.processRunner({
         command: this.command,
-        args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", "--model", profile.model, this.reviewPrompt(context.title, brief, context.normalized_json, draft, priorEvidence)],
+        args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "read-only", ...this.profileArgs(profile), this.reviewPrompt(context.title, brief, context.normalized_json, draft, priorEvidence)],
         cwd: repositoryPath,
-        onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
+        durable: { runtimeRoot: this.config.runtimeRoot, executionId },
+        onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); },
         onLine: async (line) => {
           const sanitized = safeJsonLine(line);
           lines.push(sanitized);
@@ -1149,12 +1336,12 @@ export class AgentService {
         db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId);
       });
       throw failure;
-    } finally { clearInterval(heartbeat); }
+    } finally { clearInterval(heartbeat); await this.cleanupTerminalWrapper(executionId); }
   }
 
   async consolidateLeadPlan(rawInput: ConsolidateLeadPlanActivityInput): Promise<LeadPlanningResult> {
     const rawSessionId = await this.sessionStore.read(rawInput.leadSessionRef);
-    const lead = this.database.authQuery((db) => db.prepare("SELECT model, provider FROM forge_profiles WHERE id = ?").get(rawInput.roleProfiles.lead) as { model: string; provider: string } | undefined);
+    const lead = this.executionProfile(rawInput, rawInput.roleProfiles.lead);
     if (!lead || lead.provider !== "codex") throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for consolidation");
     const draft = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.leadOutputArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
     const review = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.supplementalReviewArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
@@ -1162,13 +1349,17 @@ export class AgentService {
     const repositoryPath = await this.consolidationRepositoryPath(rawInput);
     const draftText = (await this.artifacts.read({ ...draft, companyId: rawInput.companyId })).toString("utf8");
     const reviewText = (await this.artifacts.read({ ...review, companyId: rawInput.companyId })).toString("utf8");
-    const executionId = `agent_${randomBytes(12).toString("hex")}`;
+    const active = this.activeCapacityExecution(rawInput, "lead");
+    const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, rawInput.taskId, rawInput.companyId, rawInput.workflowId, rawInput.leadSessionRef, startedAt));
+    if (!active) this.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?)").run(executionId, rawInput.taskId, rawInput.companyId, rawInput.workflowId, rawInput.leadSessionRef, startedAt);
+      this.bindCapacityInTransaction(db, rawInput, executionId, rawInput.leadSessionRef, repositoryPath);
+    });
     const lines: string[] = [];
     const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 5_000);
     try {
-      const result = await this.processRunner({ command: this.command, args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.consolidationPrompt(draftText, reviewText)], cwd: repositoryPath, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { lines.push(safeJsonLine(line)); await this.databaseHeartbeat(executionId, "running"); } });
+    const result = await this.processRunner({ command: this.command, args: ["exec", "resume", ...this.profileArgs(lead), rawSessionId, "--json", "--skip-git-repo-check", this.consolidationPrompt(draftText, reviewText)], cwd: repositoryPath, durable: { runtimeRoot: this.config.runtimeRoot, executionId }, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { lines.push(safeJsonLine(line)); await this.databaseHeartbeat(executionId, "running"); } });
       if (result.exitCode !== 0) throw agentProcessFailure(result, lines, lead.model);
       const output = parseLeadOutput(lines);
       const persisted = await this.persistOutput({ taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, projectId: rawInput.projectId, projectRevisionId: rawInput.projectRevisionId, briefArtifactId: rawInput.briefArtifactId, imageArtifactIds: rawInput.imageArtifactIds, roleProfiles: rawInput.roleProfiles, revision: rawInput.revision }, executionId, rawInput.leadSessionRef, lines, output);
@@ -1179,7 +1370,7 @@ export class AgentService {
       const evidence = await this.persistEvidence(rawInput.companyId, executionId, lines);
       this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); });
       throw failure;
-    } finally { clearInterval(heartbeat); }
+    } finally { clearInterval(heartbeat); await this.cleanupTerminalWrapper(executionId); }
   }
 
   private deliveryRepairPlanPrompt(input: DeliveryRepairPlanActivityInput, findings: DeliveryFinding[]): string {

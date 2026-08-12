@@ -10,6 +10,7 @@ import type Database from "better-sqlite3";
 import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { AgentFailure, agentProcessFailure, FileSessionStore, resolveAgentCommand, runCodexProcess, type LeadProcessRunner, type SessionStore } from "./codex-lead.js";
+import { CapacityManager } from "./capacity.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import type { GithubReleasePort } from "./github-release.js";
@@ -153,6 +154,8 @@ interface DeveloperProfile {
   id: string;
   model: string;
   provider: string;
+  reasoningLevel: string;
+  servicePriority: string;
 }
 
 interface PriorDeveloperExecution {
@@ -261,6 +264,22 @@ export class DeveloperService {
     this.github = options.github;
   }
 
+  private bindCapacityInTransaction(db: Database.Database, input: { capacityRequestId?: string | undefined }, executionId: string, sessionRef?: string, worktreePath?: string): void {
+    if (!input.capacityRequestId) return;
+    const request = new CapacityManager(this.database, this.config).bindExecutionInTransaction(db, input.capacityRequestId, { executionKind: "developer", executionId, ...(sessionRef ? { sessionRef } : {}), ...(worktreePath ? { worktreePath } : {}) });
+    db.prepare("UPDATE forge_developer_executions SET capacity_request_id = ?, profile_id = ?, provider = ?, model = ?, reasoning_level = ?, service_priority = ? WHERE id = ?").run(request.id, request.profileId, request.provider, request.model, request.reasoningLevel, request.servicePriority, executionId);
+  }
+
+  private executionProfile(input: { capacityRequestId?: string | undefined }, profileId?: string): DeveloperProfile | undefined {
+    if (input.capacityRequestId) return this.database.authQuery((db) => db.prepare("SELECT profile_id AS id, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_capacity_requests WHERE id = ? AND (? IS NULL OR profile_id = ?)").get(input.capacityRequestId, profileId ?? null, profileId ?? null) as DeveloperProfile | undefined);
+    if (!profileId) return undefined;
+    return this.database.authQuery((db) => db.prepare("SELECT id, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId) as DeveloperProfile | undefined);
+  }
+
+  private profileArgs(profile: DeveloperProfile): string[] {
+    return ["--model", profile.model, "-c", `model_reasoning_effort=\"${profile.reasoningLevel}\"`, "-c", `service_tier=\"${profile.servicePriority === "priority" ? "priority" : "default"}\"`];
+  }
+
   async run(rawInput: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<DeveloperExecutionResult> {
     const input = rawInput;
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256
@@ -279,7 +298,7 @@ export class DeveloperService {
     ]);
     const plan = JSON.parse(planText) as { kind?: unknown; steps?: Array<{ number: number; instruction: string; verification: string }> };
     if (plan.kind !== "plan" || !Array.isArray(plan.steps) || !plan.steps.length) throw new AgentFailure("plan-unavailable", "A final Lead plan is required before development");
-    const profile = this.database.authQuery((db) => db.prepare("SELECT id, model, provider FROM forge_profiles WHERE id = ?").get(input.roleProfiles.developer) as DeveloperProfile | undefined);
+    const profile = this.executionProfile(input, input.roleProfiles.developer);
     if (!profile || profile.provider !== "codex") throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
     const prior = input.supersedesExecutionId
       ? this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.supersedesExecutionId, input.taskId, input.companyId, input.workflowId) as PriorDeveloperExecution | undefined)
@@ -320,7 +339,10 @@ export class DeveloperService {
     const wrapperId = `wrapper_${randomBytes(12).toString("hex")}`;
     let guard: Awaited<ReturnType<typeof createGitCommandGuard>> | undefined;
     guard = await createGitCommandGuard(this.config.runtimeRoot);
-    this.database.authTransaction((db) => db.prepare(`INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, 1)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, wrapperId, guard!.directory, prior?.id ?? null, startedAt, startedAt));
+    this.database.authTransaction((db) => {
+      db.prepare(`INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, 1)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, wrapperId, guard!.directory, prior?.id ?? null, startedAt, startedAt);
+      this.bindCapacityInTransaction(db, input, executionId, existing?.sessionRef ?? undefined, worktree.worktreePath);
+    });
     const prompt = this.prompt(context.title, brief, planText, leadEvidence, worktree);
     const evidenceLines = [JSON.stringify({ type: "forge.prompt", text: redact(prompt) })];
     const outputLines: string[] = [];
@@ -331,7 +353,7 @@ export class DeveloperService {
       try {
         const result = await this.processRunner({
           command: this.command,
-          args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", ...metadataDirectories.flatMap((directory) => ["--add-dir", directory]), "--model", profile.model, prompt],
+          args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", ...metadataDirectories.flatMap((directory) => ["--add-dir", directory]), ...this.profileArgs(profile), prompt],
           cwd: worktree.worktreePath,
           env: guard.env,
           detached: true,
@@ -407,6 +429,8 @@ export class DeveloperService {
       throw new AgentFailure("merge_state_ownership_mismatch", "The in-progress merge no longer matches the recorded forward-merge operation");
     }
     const plan = (await this.artifacts.read({ companyId: input.companyId, storagePath: planRow.storage_path, sha256: planRow.sha256 })).toString("utf8");
+    const profile = this.executionProfile(input);
+    if (profile && profile.provider !== "codex") throw new AgentFailure("developer-profile-unavailable", "Developer profile is unavailable for merge-conflict resolution");
     const rawSessionId = await this.sessionStore.read(input.developerSessionRef);
     const executionId = input.developerTurnExecutionId ?? `developer_${randomBytes(12).toString("hex")}`;
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
@@ -414,7 +438,10 @@ export class DeveloperService {
     if (existing && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== input.branchName || existing.worktreePath !== input.worktreePath || existing.targetBaseSha !== input.targetBaseSha || existing.supersedesExecutionId !== input.developerExecutionId || existing.sessionRef !== input.developerSessionRef || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic merge-resolution ID is already bound to different coordinates", { nonRetryable: true });
     const guard = await createGitCommandGuard(this.config.runtimeRoot);
     const startedAt = this.now().toISOString();
-    this.database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at, execution_kind) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'forward_merge')").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, input.worktreePath, input.targetBaseSha, `wrapper_${randomBytes(12).toString("hex")}`, guard.directory, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt));
+    this.database.authTransaction((db) => {
+      db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at, execution_kind) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'forward_merge')").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, input.worktreePath, input.targetBaseSha, `wrapper_${randomBytes(12).toString("hex")}`, guard.directory, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt);
+      this.bindCapacityInTransaction(db, input, executionId, input.developerSessionRef, input.worktreePath);
+    });
     const evidenceLines: string[] = [];
     const expectedRawSessionId = rawSessionId;
     let verificationArtifact: StoredArtifact | undefined;
@@ -422,7 +449,7 @@ export class DeveloperService {
     try {
       const result = await this.processRunner({
         command: this.command,
-        args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.mergeConflictResolutionPrompt(plan, input, conflict)],
+        args: ["exec", "resume", ...(profile ? this.profileArgs(profile) : []), rawSessionId, "--json", "--skip-git-repo-check", this.mergeConflictResolutionPrompt(plan, input, conflict)],
         cwd: input.worktreePath,
         env: guard.env,
         detached: true,
@@ -519,6 +546,8 @@ export class DeveloperService {
       FROM forge_delivery_reviews WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.reviewId, input.taskId, input.companyId, input.workflowId) as { id: string; task_id: string; company_id: string; workflow_id: string; plan_revision: number; base_sha: string; subject_commit: string; subject_tree: string; session_ref: string; outcome: string } | undefined);
     if (!prior || !review) throw new AgentFailure("repair-identity-mismatch", "Developer repair coordinates do not match the immutable review subject");
     const priorSubject = DeliveryReviewSubjectSchema.parse({ planRevision: review.plan_revision, targetBaseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, developerExecutionId: prior.id, deliveryArtifactId: prior.delivery_artifact_id, developerEvidenceArtifactId: prior.evidence_artifact_id, leadSessionRef: review.session_ref, developerSessionRef: prior.session_ref });
+    const profile = this.executionProfile(input);
+    if (profile && profile.provider !== "codex") throw new AgentFailure("developer-profile-unavailable", "Developer profile is unavailable for repair");
     const executionId = input.developerTurnExecutionId ?? `developer_${randomBytes(12).toString("hex")}`;
     const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; planRevision: number; attempt: number; status: string; branchName: string; worktreePath: string; targetBaseSha: string; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
@@ -539,6 +568,7 @@ export class DeveloperService {
       this.database.authTransaction((db) => {
         db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, input.branchName, worktreePath, input.targetBaseSha, wrapperId, guard!.directory, input.developerExecutionId, input.developerSessionRef, startedAt, startedAt);
         db.prepare("INSERT OR IGNORE INTO forge_delivery_repairs (id, task_id, company_id, workflow_id, review_id, developer_execution_id, cycle, status, subject_commit, subject_tree, developer_session_ref, branch_name, worktree_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?)").run(repairAttemptId, input.taskId, input.companyId, input.workflowId, input.reviewId, executionId, input.cycle, input.subjectCommit, input.subjectTree, input.developerSessionRef, input.branchName, worktreePath, startedAt);
+        this.bindCapacityInTransaction(db, input, executionId, input.developerSessionRef, worktreePath);
         repairRowCreated = true;
       });
       if (input.cycle > input.repairCycleLimit) throw new AgentFailure("repair-cap-exhausted", "The configured Developer repair-cycle limit has been reached");
@@ -560,7 +590,7 @@ export class DeveloperService {
       try {
         const result = await this.processRunner({
           command: this.command,
-          args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", repairPrompt],
+          args: ["exec", "resume", ...(profile ? this.profileArgs(profile) : []), rawSessionId, "--json", "--skip-git-repo-check", repairPrompt],
           cwd: worktreePath,
           env: guard.env,
           detached: true,

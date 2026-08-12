@@ -12,6 +12,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { ProjectService } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
 import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
+import { CapacityManager } from "../src/capacity.js";
 
 function webAuthn(): WebAuthnAdapter {
   let sequence = 0;
@@ -55,7 +56,7 @@ test("project API activates valid configuration, redacts typed failures, and pre
     localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } },
     repositoryProvisioner: { async ensure(input) { await mkdir(input.repositoryPath, { recursive: true }); await mkdir(input.worktreeRoot, { recursive: true }); } },
   });
-  const app = createApp({ config, auth, projects, health: {
+  const app = createApp({ config, auth, projects, capacity: new CapacityManager(database, config), health: {
     temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }),
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
     artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
@@ -71,7 +72,16 @@ test("project API activates valid configuration, redacts typed failures, and pre
     const origin = config.reachableAddress;
     const company = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin }, payload: { name: "Project Company" } })).json() as { id: string };
     const otherCompany = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin }, payload: { name: "Other Project Company" } })).json() as { id: string };
-    const profile = (await app.inject({ method: "POST", url: "/api/admin/profiles", headers: { cookie: adminCookie, origin }, payload: { name: "API profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 } })).json() as { id: string };
+    const profile = (await app.inject({ method: "POST", url: "/api/admin/profiles", headers: { cookie: adminCookie, origin }, payload: { name: "API profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 } })).json() as { id: string; capacity: number; effectiveCapacity: number };
+    expect(profile).toMatchObject({ capacity: 2, effectiveCapacity: 2 });
+    const inheritedCapacity = await app.inject({ method: "PATCH", url: `/api/admin/profiles/${profile.id}/capacity`, headers: { cookie: adminCookie, origin }, payload: { capacity: null } });
+    expect(inheritedCapacity.json()).toMatchObject({ capacity: null, effectiveCapacity: config.externalTurnCapacity });
+    const restoredCapacity = await app.inject({ method: "PATCH", url: `/api/admin/profiles/${profile.id}/capacity`, headers: { cookie: adminCookie, origin }, payload: { capacity: 3 } });
+    expect(restoredCapacity.json()).toMatchObject({ capacity: 3, effectiveCapacity: 3 });
+    const capacityLanes = await app.inject({ method: "GET", url: "/api/admin/capacity", headers: { cookie: adminCookie } });
+    expect(capacityLanes.statusCode).toBe(200);
+    expect(capacityLanes.json()).toMatchObject({ lanes: [expect.objectContaining({ profileId: profile.id, profileName: "API profile", capacity: 3, effectiveCapacity: 3, activeCount: 0, queuedCount: 0, rateLimitedCount: 0, oldestQueuedAt: null })] });
+    expect(JSON.stringify(capacityLanes.json())).not.toMatch(/taskId|session|process|wrapper|worktree|command|artifact/i);
     const models = (await app.inject({ method: "GET", url: "/api/admin/models", headers: { cookie: adminCookie } })).json() as { models: Array<{ id: string; status: string }> };
     expect(models.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: "gpt-5.6-sol", status: "active" })]));
     const minimal = await app.inject({ method: "POST", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie, origin }, payload: { repositoryUrl: "git@github.com:meiji-industries/sampler.git" } });

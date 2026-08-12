@@ -5,12 +5,13 @@ import { z } from "zod";
 import type { AttentionService } from "../../attention.js";
 import type { AuthService } from "../../auth.js";
 import type { ForgeDatabase } from "../../database.js";
+import type { CapacityManager } from "../../capacity.js";
 import type { ProjectService } from "../../projects.js";
 import type { ForgeConfig } from "../../config.js";
 import { ProjectionRebuildFailure, ProjectionRebuildService } from "../../projection-rebuild.js";
 import { AuditEventListResponseSchema, CredentialIdParamsSchema, CredentialListResponseSchema, ErrorResponseSchema, InvitationResponseSchema, InvitationSummaryListResponseSchema, UserIdParamsSchema, UserListResponseSchema } from "../contracts/common.js";
 import { DisplayNameBodySchema } from "../contracts/auth.js";
-import { ModelBodySchema, ModelIdParamsSchema, ModelListResponseSchema, ModelResponseSchema, ModelStatusBodySchema, ProfileBodySchema, ProfileResponseSchema } from "../contracts/projects.js";
+import { AdminCapacityListResponseSchema, ModelBodySchema, ModelIdParamsSchema, ModelListResponseSchema, ModelResponseSchema, ModelStatusBodySchema, ProfileBodySchema, ProfileCapacityBodySchema, ProfileResponseSchema } from "../contracts/projects.js";
 
 const ProjectionRebuildBodySchema = z.object({ companyId: z.string().optional(), taskId: z.string().optional() }).default({});
 
@@ -20,11 +21,12 @@ export interface AdministrationRoutesOptions {
   database?: ForgeDatabase;
   attention?: AttentionService;
   config?: ForgeConfig;
+  capacity?: CapacityManager;
 }
 
 const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (app, options) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const { auth, projects, database, attention, config } = options;
+  const { auth, projects, database, attention, config, capacity } = options;
   typed.post("/api/admin/invitations", { schema: { body: DisplayNameBodySchema, response: { 201: InvitationResponseSchema } } }, async (request, reply) => reply.code(201).send(auth.inviteUser(request.forgeUser.id, { displayName: request.body.displayName })));
   typed.get("/api/admin/invitations", { schema: { response: { 200: InvitationSummaryListResponseSchema } } }, async (request, reply) => reply.send({ invitations: auth.listInvitations(request.forgeUser.id) }));
   typed.get("/api/admin/users", { schema: { response: { 200: UserListResponseSchema } } }, async (request, reply) => reply.send({ users: auth.listUsers(request.forgeUser.id) }));
@@ -39,11 +41,16 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
   });
   typed.get("/api/admin/audit", { schema: { response: { 200: AuditEventListResponseSchema } } }, async (request, reply) => reply.send({ events: auth.listAuditEvents(request.forgeUser.id) }));
   if (projects) {
-    typed.post("/api/admin/profiles", { schema: { body: ProfileBodySchema, response: { 201: ProfileResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.createProfile(request.forgeUser.id, request.body)));
+    typed.post("/api/admin/profiles", { schema: { body: ProfileBodySchema, response: { 201: ProfileResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.createProfile(request.forgeUser.id, { ...request.body, capacity: request.body.capacity ?? null })));
+    typed.patch("/api/admin/profiles/:profileId/capacity", { schema: { params: z.object({ profileId: z.string() }), body: ProfileCapacityBodySchema, response: { 200: ProfileResponseSchema } } }, async (request, reply) => reply.send(projects.updateProfileCapacity(request.forgeUser.id, request.params.profileId, request.body.capacity ?? null)));
     typed.get("/api/admin/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: projects.listModels(request.forgeUser.id, true) }));
     typed.post("/api/admin/models", { schema: { body: ModelBodySchema, response: { 201: ModelResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.createModel(request.forgeUser.id, request.body)));
     typed.patch("/api/admin/models/:modelId", { schema: { params: ModelIdParamsSchema, body: ModelStatusBodySchema, response: { 200: ModelResponseSchema } } }, async (request, reply) => reply.send(projects.setModelStatus(request.forgeUser.id, request.params.modelId, request.body.status)));
   }
+  if (capacity) typed.get("/api/admin/capacity", { schema: { response: { 200: AdminCapacityListResponseSchema, 403: ErrorResponseSchema } } }, async (request, reply) => {
+    if (request.forgeUser.role !== "admin") return reply.code(403).send({ error: "Administrator access required" });
+    return reply.send({ lanes: capacity.listAdminLanes() });
+  });
   if (database && attention) {
     typed.post("/api/admin/rebuild-projections", { schema: { body: ProjectionRebuildBodySchema, response: { 200: z.object({ source: z.literal("temporal"), rebuilt: z.number(), findings: z.array(z.object({ taskId: z.string(), code: z.string(), summary: z.string() })) }), 403: ErrorResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
       if (request.forgeUser.role !== "admin") return reply.code(403).send({ error: "Administrator access required" });

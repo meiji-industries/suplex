@@ -8,6 +8,7 @@ import { expect, test } from "vitest";
 import { ApplicationFailure } from "@temporalio/activity";
 
 import { ArtifactStore } from "../src/artifacts.js";
+import { CapacityManager } from "../src/capacity.js";
 import { AgentFailure, AgentService, LeadOutputSchema, resolveAgentCommand, runCodexProcess, type LeadProcessRunner, type SessionStore } from "../src/codex-lead.js";
 import { DeveloperService } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
@@ -127,6 +128,35 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
     expect(evidenceText.toString("utf8")).not.toContain("gho_secret");
     expect(evidenceText.toString("utf8")).not.toContain("raw-session-1");
     expect(value.database.authQuery((db) => db.prepare("SELECT kind, revision, session_ref FROM forge_issue_outputs WHERE task_id = 'task_1'").get())).toEqual({ kind: "plan", revision: 1, session_ref: "session_opaque" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("a capacity request pins model, reasoning, and service priority through later profile edits", async () => {
+  const value = await fixture("pinned-model");
+  const calls: string[][] = [];
+  const runner: LeadProcessRunner = async (invocation) => {
+    calls.push(invocation.args);
+    await invocation.onStart(4330, "2026-08-12T00:00:00.000Z");
+    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-pinned-session" }));
+    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "plan", summary: "Pinned profile plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect the fixture", verification: "The focused test passes" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused test.", unresolvedTechnicalQuestions: [], materialCategories: [] }) } }));
+    return { exitCode: 0, stderr: "" };
+  };
+  try {
+    value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET reasoning_level = 'high', service_priority = 'priority' WHERE id = 'profile_1'").run());
+    const capacity = new CapacityManager(value.database, value.config);
+    const request = capacity.request({ logicalTurnKey: "workflow-test-issue-task_1:1:lead_planning", companyId: "company_1", taskId: "task_1", workflowId: "workflow-test-issue-task_1", projectRevisionId: "revision_1", workflowRevision: 1, operation: "lead_planning", role: "lead", profileId: "profile_1" });
+    expect(capacity.tryAcquire(request.id, 1).status).toBe("active");
+    value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET model = 'later-model', reasoning_level = 'low', service_priority = 'standard' WHERE id = 'profile_1'").run());
+
+    const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_pinned"; }, async read() { return "raw-pinned-session"; } } });
+    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1" }, revision: 1, capacityRequestId: request.id });
+
+    expect(calls[0]).toEqual(expect.arrayContaining(["--model", "pinned-model", "-c", 'model_reasoning_effort="high"', "-c", 'service_tier="priority"']));
+    expect(calls[0]).not.toContain("later-model");
+    expect(value.database.authQuery((db) => db.prepare("SELECT profile_id, model, reasoning_level, service_priority, capacity_request_id FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ profile_id: "profile_1", model: "pinned-model", reasoning_level: "high", service_priority: "priority", capacity_request_id: request.id });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -337,7 +367,6 @@ test("Developer activities preserve the configured service receiver", async () =
     const activities = createActivities(value.database, value.config, { developer });
     await activities.runDeveloperExecution({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { developer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: "artifact_plan" });
     expect(developer.calls).toBe(1);
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, release_reason FROM forge_capacity_requests WHERE task_id = 'task_1' AND turn_kind = 'developer'").get())).toEqual({ status: "released", release_reason: "turn-completed" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -921,8 +950,10 @@ test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Codex 
     expect(review.sessionRef).not.toBe(result.leadSessionRef);
     expect(consolidated.leadSessionRef).toBe(result.leadSessionRef);
     expect(calls).toHaveLength(4);
-    expect(calls[1]?.slice(0, 4)).toEqual(["exec", "resume", expect.any(String), "--json"]);
-    expect(calls[3]?.slice(0, 4)).toEqual(["exec", "resume", expect.any(String), "--json"]);
+    for (const call of [calls[1], calls[3]]) {
+      expect(call?.slice(0, 2)).toEqual(["exec", "resume"]);
+      expect(call).toEqual(expect.arrayContaining(["--model", process.env.FORGE_CODEX_REAL_MODEL ?? "gpt-5.6-luna", "-c", 'model_reasoning_effort="medium"', "-c", 'service_tier="default"', "--json"]));
+    }
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

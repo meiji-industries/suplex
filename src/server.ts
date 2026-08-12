@@ -16,6 +16,7 @@ import { createHostHealthDependencies } from "./host-health.js";
 import { createFastifyLogger, StructuredLogger } from "./logging.js";
 import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
+import { CapacityManager } from "./capacity.js";
 import { createGithubReleasePort, ReleaseService } from "./github-release.js";
 import { ProjectionRebuildService } from "./projection-rebuild.js";
 
@@ -31,8 +32,9 @@ export async function createForgeServer(config: ForgeConfig = loadConfig()): Pro
   const auth = new AuthService(database, config);
   const projects = new ProjectService(database, auth, config);
   await seedDevelopmentData(auth, projects, config);
-  const tasks = new TaskService(database, auth, projects, config);
   const artifactStore = new ArtifactStore(config.artifactRoot);
+  const capacity = new CapacityManager(database, config);
+  const tasks = new TaskService(database, auth, projects, config, { capacity });
   const attention = new AttentionService(database, auth, artifactStore);
   const githubRelease = createGithubReleasePort();
   const release = new ReleaseService(database, artifactStore, githubRelease);
@@ -52,6 +54,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig()): Pro
     acceptance,
     rebuild,
     logger: createFastifyLogger(),
+    capacity,
   } satisfies Parameters<typeof createApp>[0];
   let app: FastifyInstance;
   try {

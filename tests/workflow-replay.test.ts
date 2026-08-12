@@ -37,6 +37,15 @@ function activityCount(history: { events: unknown[] }, activity: string): number
   return JSON.stringify(history).match(new RegExp(`\\"name\\":\\"${activity}\\"`, "g"))?.length ?? 0;
 }
 
+const capacityHistoryFixturePaths = [
+  "capacity-two-acquire-third-queued-release-admit.json",
+  "ownership-ambiguity-blocker.json",
+  "bounded-capacity-exhaustion.json",
+  "queued-cancellation.json",
+  "rate-limit-reset-reacquire.json",
+  "worker-restart-wrapper-reattachment.json",
+].map((filename) => join(process.cwd(), ".scratch/forge-mvp/replay", filename));
+
 async function mutationBundle(mode: "compatible" | "incompatible") {
   const loader = fileURLToPath(new URL("./fixtures/workflow-mutation-loader.cjs", import.meta.url));
   const options = productionWorkflowBundleOptions();
@@ -53,7 +62,7 @@ async function mutationBundle(mode: "compatible" | "incompatible") {
 
 test("INV-15 the versioned manifest consumes every sanitized fixture and batch replays the production bundle", async () => {
   const manifest = await readReplayManifest(manifestPath);
-  expect(manifest.fixtures).toHaveLength(26);
+  expect(manifest.fixtures).toHaveLength(32);
   expect(manifest.fixtures.map((fixture) => fixture.scenario)).toEqual(expect.arrayContaining([
     "backlog_planning",
     "normal_success",
@@ -261,4 +270,12 @@ test("the module audit follows a transitive project import", async () => {
   const bundle = await buildProductionWorkflowBundle();
   const root = join(process.cwd(), "tests/fixtures/workflow-transitive-root.ts");
   await expect(auditProductionWorkflowBundle(bundle, root)).rejects.toThrow(/node:fs/);
+});
+
+test("the captured durable-capacity timer history replays through the current Workflow bundle", async () => {
+  for (const [index, fixture] of capacityHistoryFixturePaths.entries()) {
+    const history = await readReplayHistory(fixture);
+    expect(history.events.length).toBeGreaterThan(10);
+    await replayIssueHistory(history, `workflow-replay-capacity-${index}`);
+  }
 });

@@ -6,6 +6,7 @@ import { afterEach, expect, test } from "vitest";
 
 import type { IssueActivities, IssueWorkflowInput, ReconcileTargetBaseActivityInput, ReconcileTargetBaseActivityResult, TargetBaseCheckpoint } from "../src/temporal/issue-contracts.js";
 import { acceptDeliveryUpdate, cancelIssueUpdate, finalReviewUpdate, issueWorkflow, publishDraftUpdate, resolveMergeConflictUpdate, retryForwardMergeVerificationUpdate } from "../src/temporal/workflows.js";
+import { createImmediateCapacityActivities } from "./immediate-capacity-activities.js";
 
 const base = "a".repeat(40);
 const head = "b".repeat(40);
@@ -77,7 +78,7 @@ function input(issueId: string, checkpoint: TargetBaseCheckpoint): IssueWorkflow
     briefArtifactId: "brief_test",
     briefSha256: "0".repeat(64),
     imageArtifactIds: [],
-    roleProfiles: {},
+    roleProfiles: { lead: "profile", developer: "profile" },
     supplementalReview: false,
     continuationState: continuation(checkpoint),
   };
@@ -106,7 +107,9 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
   const histories: Array<{ history: Parameters<typeof Worker.runReplayHistory>[1]; workflowId: string }> = [];
   const outcomes = new Map<string, "no_drift" | "revalidated" | "provider" | "race" | "verification_then_pass" | "conflict">();
   const attempts = new Map<string, number>();
+  const capacity = createImmediateCapacityActivities();
   const activities: Partial<IssueActivities> = {
+    ...capacity.activities,
     projectIssueState: async (event) => event.state,
     reconcileTargetBase: async (activityInput) => {
       const configured = outcomes.get(activityInput.taskId) ?? "no_drift";

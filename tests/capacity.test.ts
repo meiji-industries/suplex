@@ -1,35 +1,210 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { Worker } from "node:worker_threads";
 
 import { expect, test } from "vitest";
 
 import { CapacityManager } from "../src/capacity.js";
+import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 
-test("INV-14 developer capacity stays held through a live ledger and releases once after it ends", async () => {
+const now = new Date().toISOString();
+
+async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "forge-capacity-test-"));
-  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  const config = createTestConfig(root, { externalTurnCapacity: 2, externalTurnRateLimitAttempts: 2 });
+  const database = new ForgeDatabase(config.databasePath);
+  database.authTransaction((db) => {
+    db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin', 'Admin', 'admin', 'admin', 'active', ?, ?)").run(now, now);
+    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES ('project', 'company', 'Project', '/tmp/repo', '/tmp/worktrees', 'main', 'main', 'setup', 'test', '[]', '[]', '{}', 'active', 'revision', ?, ?)").run(now, now);
+    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, created_at) VALUES ('revision', 'project', 1, 'identity', '{}', ?, ?, 'admin', ?)").run("a".repeat(40), "b".repeat(40), now);
+    db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES ('profile', 'Profile', 'codex', 'gpt-5.6-sol', 'medium', 'standard', 2, ?, ?)").run(now, now);
+    for (const taskId of ["task-a", "task-b", "task-c", "task-d"]) {
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company', 'task-brief', ?, 'text/plain', 1, ?, ?, ?)").run(`brief-${taskId}`, `${taskId}.txt`, "a".repeat(64), `company/${taskId}`, now);
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES (?, 'company', 'project', ?, ?, '[]', ?, 0, ?, 'revision', ?, ?, ?)").run(taskId, taskId, `brief-${taskId}`, JSON.stringify({ developer: "profile", lead: "profile", reviewer: "profile" }), `workflow-${taskId}`, `key-${taskId}`, now, now);
+    }
+  });
+  return { root, config, database };
+}
+
+function input(taskId: string, logicalTurnKey: string, requestedAt?: string, workflowRevision = 0) {
+  return { logicalTurnKey, companyId: "company", taskId, workflowId: `workflow-${taskId}`, projectRevisionId: "revision", workflowRevision, operation: "developer_execution" as const, role: "developer" as const, profileId: "profile", ...(requestedAt ? { requestedAt } : {}) };
+}
+
+test("admits FIFO requests per profile lane and releases exactly one slot", async () => {
+  const value = await fixture();
   try {
-    const now = "2026-08-12T00:00:00.000Z";
-    database.authQuery((db) => {
-      db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-capacity', 'Capacity', 'active', ?)").run(now);
-      db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, created_at, updated_at) VALUES ('project-capacity', 'company-capacity', 'Capacity', ?, ?, 'main', 'main', '', '', '[]', '[]', '{}', 'active', ?, ?)").run(root, join(root, "worktrees"), now, now);
-      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-capacity', 'company-capacity', 'task-brief', 'brief.md', 'text/markdown', 0, ?, 'capacity/brief.bin', ?)").run("0".repeat(64), now);
-      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-capacity', 'company-capacity', 'project-capacity', 'Capacity', 'brief-capacity', '[]', '{}', 0, 'workflow-capacity', 'missing', 'capacity-key', ?, ?)").run(now, now);
-      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES ('developer_capacity_execution', 'task-capacity', 'company-capacity', 'workflow-capacity', 1, 1, 'running', 'forge/issue/task-capacity', ?, ?, ?, ?)").run(join(root, "worktrees", "task-capacity"), "a".repeat(40), now, now);
-    });
-    const capacity = new CapacityManager(database, { externalTurnCapacity: 1 });
-    const first = capacity.request({ companyId: "company-capacity", taskId: "task-capacity", workflowId: "workflow-capacity", turnKind: "developer", requestedAt: now });
-    expect(capacity.request({ companyId: "company-capacity", taskId: "task-capacity", workflowId: "workflow-capacity", turnKind: "developer", requestedAt: now }).id).toBe(first.id);
-    expect(capacity.tryAcquire(first.id).acquired).toBe(true);
-    expect(capacity.reconcileFromLedgers(now)).toBe(0);
-    database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'failed' WHERE id = 'developer_capacity_execution'").run());
-    expect(capacity.reconcileFromLedgers(now)).toBe(1);
-    expect(capacity.release(first.id, "duplicate-release", now)).toBe(false);
-    expect(database.authQuery((db) => db.prepare("SELECT status, release_reason FROM forge_capacity_requests WHERE id = ?").get(first.id))).toEqual({ status: "stale", release_reason: "worker-restart-ledger-reconciled" });
+    const capacity = new CapacityManager(value.database, value.config);
+    const requests = ["task-a", "task-b", "task-c"].map((taskId, index) => capacity.request(input(taskId, `workflow-${taskId}:${index}:developer_execution`, new Date(Date.parse(now) + index * 1_000).toISOString())));
+    const [first, second, third] = requests;
+    expect(capacity.tryAcquire(first!.id, 0).status).toBe("active");
+    expect(capacity.tryAcquire(second!.id, 0).status).toBe("active");
+    expect(capacity.tryAcquire(third!.id, 0).status).toBe("queued");
+    expect(capacity.position(third!.id)).toBe(1);
+    capacity.bindExecution(first!.id, { executionKind: "developer", executionId: "developer-a", worktreePath: "/tmp/a", sessionRef: "session-a" });
+    capacity.finalize(first!.id, "developer-a", "completed");
+    expect(capacity.tryAcquire(third!.id, 0).status).toBe("active");
+    expect(capacity.inspect(first!.id).terminalReason).toBe("completed");
   } finally {
-    database.close();
-    await rm(root, { recursive: true, force: true });
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("uses the current host default when an override is cleared", async () => {
+  const value = await fixture();
+  try {
+    const capacity = new CapacityManager(value.database, value.config);
+    const first = capacity.request(input("task-a", "default-a"));
+    const second = capacity.request(input("task-b", "default-b", new Date(Date.parse(now) + 1_000).toISOString()));
+    expect(capacity.tryAcquire(first.id, 0).status).toBe("active");
+    value.database.authTransaction((db) => db.prepare("UPDATE forge_profiles SET capacity = NULL WHERE id = 'profile'").run());
+    const currentDefault = new CapacityManager(value.database, { ...value.config, externalTurnCapacity: 1 });
+    expect(currentDefault.tryAcquire(second.id, 0).status).toBe("queued");
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("does not release an Agent slot while its execution is cancelling", async () => {
+  const value = await fixture();
+  try {
+    const capacity = new CapacityManager(value.database, value.config);
+    const request = capacity.request(input("task-a", "cancelling-agent"));
+    expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
+    capacity.bindExecution(request.id, { executionKind: "agent", executionId: "agent-cancelling" });
+    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES ('agent-cancelling', 'task-a', 'company', 'workflow-task-a', 'lead', 'cancelling', 1, ?)").run(now));
+    expect(() => capacity.finalize(request.id, "agent-cancelling", "cancelled")).toThrowError("Capacity request invalid-status");
+    expect(capacity.inspect(request.id).status).toBe("active");
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("does not release a slot while the bound wrapper is still live", async () => {
+  const value = await fixture();
+  const wrapperRoot = await mkdtemp(join(tmpdir(), "forge-capacity-wrapper-"));
+  try {
+    const capacity = new CapacityManager(value.database, value.config);
+    const request = capacity.request(input("task-a", "live-wrapper"));
+    expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
+    capacity.bindExecution(request.id, { executionKind: "agent", executionId: "agent-live" });
+    await writeFile(join(wrapperRoot, "state.json"), JSON.stringify({ wrapperPid: 2, wrapperProcessGroupId: 2, wrapperStartIdentity: "2:live", childPid: 3, childProcessGroupId: 3, childStartIdentity: "3:live", heartbeatAt: now, status: "running" }));
+    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, wrapper_path, started_at) VALUES ('agent-live', 'task-a', 'company', 'workflow-task-a', 'lead', 'failed', 1, ?, ?)").run(wrapperRoot, now));
+    expect(() => capacity.finalize(request.id, "agent-live", "process_failed")).toThrowError("Capacity request invalid-status");
+    expect(capacity.inspect(request.id).status).toBe("active");
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+    await rm(wrapperRoot, { recursive: true, force: true });
+  }
+});
+
+test("skips a same-issue head while an independent request uses the free lane slot", async () => {
+  const value = await fixture();
+  try {
+    const capacity = new CapacityManager(value.database, value.config);
+    const active = capacity.request(input("task-a", "workflow-a:0:developer_execution", now));
+    capacity.tryAcquire(active.id, 0);
+    const sameIssue = capacity.request(input("task-a", "workflow-a:1:developer_execution", new Date(Date.parse(now) + 1_000).toISOString()));
+    const independent = capacity.request(input("task-d", "workflow-d:1:developer_execution", new Date(Date.parse(now) + 2_000).toISOString()));
+    expect(capacity.tryAcquire(sameIssue.id, 0).status).toBe("queued");
+    expect(capacity.tryAcquire(independent.id, 0).status).toBe("active");
+    expect(capacity.inspect(sameIssue.id).waitReason).toBe("issue_active");
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("skips a queued request whose workflow revision is no longer current", async () => {
+  const value = await fixture();
+  try {
+    value.database.authTransaction((db) => db.prepare("UPDATE forge_profiles SET capacity = 1 WHERE id = 'profile'").run());
+    const capacity = new CapacityManager(value.database, value.config);
+    const stale = capacity.request(input("task-a", "workflow-task-a:0:developer_execution", now, 0));
+    const current = capacity.request(input("task-b", "workflow-task-b:1:developer_execution", new Date(Date.parse(now) + 1_000).toISOString(), 1));
+    value.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, 'company', ?, 1, ?, ?)").run("task-a", "workflow-task-a", JSON.stringify({ capacity: null }), now);
+      db.prepare("INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, 'company', ?, 1, ?, ?)").run("task-b", "workflow-task-b", JSON.stringify({ capacity: { requestId: current.id, workflowRevision: 1 } }), now);
+    });
+    expect(capacity.tryAcquire(stale.id, 0).status).toBe("stale");
+    expect(capacity.tryAcquire(current.id, 1).status).toBe("active");
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("rate-limit attempts become durable exhaustion without changing the lane", async () => {
+  const value = await fixture();
+  try {
+    const capacity = new CapacityManager(value.database, value.config);
+    const request = capacity.request(input("task-a", "workflow-a:0:developer_execution"));
+    capacity.tryAcquire(request.id, 0);
+    capacity.bindExecution(request.id, { executionKind: "developer", executionId: "developer-rate", worktreePath: "/tmp/rate" });
+    const retryAt = new Date(Date.now() + 60_000).toISOString();
+    const limited = capacity.recordRateLimit(request.id, "developer-rate", retryAt);
+    expect(limited.status).toBe("rate_limited");
+    capacity.requeueRateLimited(request.id, new Date(Date.parse(retryAt) + 1).toISOString());
+    capacity.tryAcquire(request.id, 0);
+    capacity.bindExecution(request.id, { executionKind: "developer", executionId: "developer-rate", worktreePath: "/tmp/rate" });
+    const exhausted = capacity.recordRateLimit(request.id, "developer-rate", retryAt);
+    expect(exhausted).toMatchObject({ status: "exhausted", rateLimitAttempts: 2, terminalReason: "wait_exhausted" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("ambiguous execution ledgers retain the capacity slot after worker reconciliation", async () => {
+  const value = await fixture();
+  try {
+    const capacity = new CapacityManager(value.database, value.config);
+    const request = capacity.request(input("task-a", "workflow-a:ambiguous:developer_execution"));
+    expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
+    capacity.bindExecution(request.id, { executionKind: "developer", executionId: "developer-ambiguous", worktreePath: "/tmp/ambiguous" });
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('developer-ambiguous', 'task-a', 'company', 'workflow-a', 1, 99, 'ownership_ambiguous', 'forge/ambiguous', '/tmp/ambiguous', ?, ?)").run("a".repeat(40), now));
+    capacity.reconcileFromLedgers();
+    expect(capacity.inspect(request.id)).toMatchObject({ status: "ownership_ambiguous", terminalReason: "ownership_ambiguous" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("separate SQLite workers race admission without exceeding the lane", async () => {
+  const value = await fixture();
+  try {
+    const capacity = new CapacityManager(value.database, value.config);
+    const requests = ["task-a", "task-b", "task-c", "task-d"].map((taskId, index) => capacity.request(input(taskId, `worker-${index}:0:developer_execution`, new Date(Date.parse(now) + index * 1_000).toISOString())));
+    const gate = new SharedArrayBuffer(4);
+    const workers: Worker[] = [];
+    const results: Promise<{ status: string; acquired: boolean }>[] = [];
+    const ready = new Promise<void>((resolveReady, rejectReady) => {
+      let count = 0;
+      for (const request of requests) {
+        const worker = new Worker(new URL("./capacity-worker.ts", import.meta.url), { execArgv: ["--import", "tsx"], workerData: { databasePath: value.config.databasePath, requestId: request.id, capacity: 2, gate } });
+        workers.push(worker);
+        results.push(new Promise((resolveResult, rejectResult) => { worker.once("error", rejectResult); worker.on("message", (message: { type: string; status?: string; acquired?: boolean }) => { if (message.type === "result") resolveResult({ status: message.status ?? "", acquired: Boolean(message.acquired) }); }); }));
+        worker.once("error", rejectReady);
+        worker.on("message", (message: { type: string }) => { if (message.type === "ready" && ++count === requests.length) resolveReady(); });
+      }
+    });
+    await ready;
+    Atomics.store(new Int32Array(gate), 0, 1);
+    Atomics.notify(new Int32Array(gate), 0, requests.length);
+    await Promise.all(results);
+    await Promise.all(workers.map((worker) => worker.terminate()));
+    const active = value.database.authQuery((db) => db.prepare("SELECT id FROM forge_capacity_requests WHERE status = 'active' ORDER BY requested_at, id").all() as Array<{ id: string }>);
+    expect(active.map((entry) => entry.id)).toEqual(requests.slice(0, 2).map((entry) => entry.id));
+    expect(value.database.authQuery((db) => (db.prepare("SELECT COUNT(*) AS count FROM forge_capacity_requests WHERE status = 'active'").get() as { count: number }).count)).toBe(2);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
   }
 });

@@ -261,6 +261,7 @@ export class ForgeDatabase {
   constructor(filename: string) {
     mkdirSync(dirname(filename), { recursive: true });
     this.db = new Database(filename);
+    this.db.pragma("busy_timeout = 5000");
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = FULL");
     this.db.pragma("foreign_keys = ON");
@@ -394,6 +395,10 @@ export class ForgeDatabase {
 
   authTransaction<T>(operation: (database: Database.Database) => T): T {
     return this.db.transaction(() => operation(this.db))();
+  }
+
+  authImmediateTransaction<T>(operation: (database: Database.Database) => T): T {
+    return this.db.transaction(() => operation(this.db)).immediate();
   }
 
   authOrm(): BetterSQLite3Database<AuthSchema> {

@@ -15,6 +15,9 @@ import { AttentionService } from "./attention.js";
 import { CapacityManager } from "./capacity.js";
 import { createGithubReleasePort } from "./github-release.js";
 import { ProjectionRebuildFailure, ProjectionRebuildService } from "./projection-rebuild.js";
+import { runAgentWrapper } from "./agent-wrapper.js";
+import { reconcileAgentExecutions } from "./agent-recovery.js";
+import { reconcileDeveloperExecutions } from "./developer-recovery.js";
 
 const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
 const foreground = process.argv.includes("--foreground");
@@ -28,6 +31,12 @@ async function stopForge(config: ReturnType<typeof loadConfig>): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  if (command === "agent-wrapper") {
+    const manifestPath = process.argv[3];
+    if (!manifestPath) throw new Error("agent-wrapper requires a manifest path");
+    await runAgentWrapper(manifestPath);
+    return;
+  }
   if (command === "setup" || command === "onboard") {
     await runSetup();
     return;
@@ -65,6 +74,8 @@ async function main(): Promise<void> {
         }
         const restoredAuth = new AuthService(restoredDatabase, config);
         const companies = new AttentionService(restoredDatabase, restoredAuth).rebuildAll();
+        await reconcileAgentExecutions(restoredDatabase);
+        await reconcileDeveloperExecutions(restoredDatabase);
         new CapacityManager(restoredDatabase, config).reconcileFromLedgers();
         const reconciliation = await reconcileRestoredState(restoredDatabase, createGithubReleasePort());
         const handoff = {
@@ -89,6 +100,19 @@ async function main(): Promise<void> {
       } finally { restoredDatabase.close(); }
       process.stdout.write(`backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"} (${result.restoreDurationMs}ms); see forge-backup/restore-handoff.json\n`);
     }
+    return;
+  }
+  if (command === "rebuild-projections") {
+    const database = new ForgeDatabase(config.databasePath);
+    try {
+      const rebuild = await new ProjectionRebuildService(database, config).rebuild();
+      const attention = new AttentionService(database, new AuthService(database, config));
+      attention.rebuildAll();
+      await reconcileAgentExecutions(database);
+      await reconcileDeveloperExecutions(database);
+      new CapacityManager(database, config).reconcileFromLedgers();
+      process.stdout.write(`Rebuilt ${rebuild.rebuilt} issue projections (${rebuild.findings.length} findings) and reconciled operator ledgers\n`);
+    } finally { database.close(); }
     return;
   }
   if (command === "recover") {

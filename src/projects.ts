@@ -45,7 +45,8 @@ export interface CodexProfile {
   model: string;
   reasoningLevel: ReasoningLevel;
   servicePriority: ServicePriority;
-  capacity: number;
+  capacity: number | null;
+  effectiveCapacity: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -169,7 +170,7 @@ interface ProfileRow {
   model: string;
   reasoning_level: ReasoningLevel;
   service_priority: ServicePriority;
-  capacity: number;
+  capacity: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -266,7 +267,11 @@ function configIdentity(input: ProjectInput): string {
   return createHash("sha256").update(JSON.stringify(input)).digest("hex");
 }
 
-function publicProfile(row: ProfileRow): CodexProfile {
+export function effectiveProfileCapacity(profile: Pick<CodexProfile, "capacity">, config: Pick<ForgeConfig, "externalTurnCapacity">): number {
+  return profile.capacity ?? config.externalTurnCapacity;
+}
+
+function publicProfile(row: ProfileRow, config: Pick<ForgeConfig, "externalTurnCapacity">): CodexProfile {
   return {
     id: row.id,
     name: row.name,
@@ -275,6 +280,7 @@ function publicProfile(row: ProfileRow): CodexProfile {
     reasoningLevel: row.reasoning_level,
     servicePriority: row.service_priority,
     capacity: row.capacity,
+    effectiveCapacity: effectiveProfileCapacity(row, config),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -542,7 +548,7 @@ export class ProjectService {
     this.repositoryProvisioner = options.repositoryProvisioner ?? defaultRepositoryProvisioner();
   }
 
-  createProfile(actorUserId: string, input: { name: string; model: string; reasoningLevel: ReasoningLevel; servicePriority: ServicePriority; capacity: number }): CodexProfile {
+  createProfile(actorUserId: string, input: { name: string; model: string; reasoningLevel: ReasoningLevel; servicePriority: ServicePriority; capacity?: number | null }): CodexProfile {
     const actor = this.requireAdmin(actorUserId);
     void actor;
     const name = input.name.trim();
@@ -552,9 +558,9 @@ export class ProjectService {
     if (!modelIdPattern.test(model) || secretPattern.test(model) || !catalogModel) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-model", "model", "Select an active model from the catalog")]);
     if (!["low", "medium", "high"].includes(input.reasoningLevel)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-reasoning", "reasoningLevel", "Reasoning level is invalid")]);
     if (!["standard", "priority"].includes(input.servicePriority)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-priority", "servicePriority", "Service priority is invalid")]);
-    if (!Number.isInteger(input.capacity) || input.capacity < 1 || input.capacity > 32) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-capacity", "capacity", "Capacity must be an integer from 1 to 32")]);
+    if (input.capacity !== null && input.capacity !== undefined && (!Number.isInteger(input.capacity) || input.capacity < 1 || input.capacity > 32)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-capacity", "capacity", "Capacity must be an integer from 1 to 32")]);
     const now = this.now().toISOString();
-    const profile = { id: identifier("profile"), name, provider: "codex" as const, model, reasoningLevel: input.reasoningLevel, servicePriority: input.servicePriority, capacity: input.capacity, createdAt: now, updatedAt: now };
+    const profile = { id: identifier("profile"), name, provider: "codex" as const, model, reasoningLevel: input.reasoningLevel, capacity: input.capacity ?? null, servicePriority: input.servicePriority, effectiveCapacity: input.capacity ?? this.config.externalTurnCapacity, createdAt: now, updatedAt: now };
     try {
       this.database.authTransaction((db) => {
         db.prepare(`INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, ?, 'codex', ?, ?, ?, ?, ?, ?)`)
@@ -569,7 +575,20 @@ export class ProjectService {
 
   listProfiles(actorUserId: string): CodexProfile[] {
     this.user(actorUserId);
-    return this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_profiles ORDER BY name").all() as ProfileRow[]).map(publicProfile));
+    return this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_profiles ORDER BY name").all() as ProfileRow[]).map((row) => publicProfile(row, this.config)));
+  }
+
+  updateProfileCapacity(actorUserId: string, profileId: string, capacity: number | null): CodexProfile {
+    this.requireAdmin(actorUserId);
+    if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 32)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-capacity", "capacity", "Capacity must be an integer from 1 to 32")]);
+    const now = this.now().toISOString();
+    const changed = this.database.authTransaction((db) => {
+      const result = db.prepare("UPDATE forge_profiles SET capacity = ?, updated_at = ? WHERE id = ?").run(capacity, now, profileId);
+      if (result.changes !== 1) throw new ProjectFailure("Profile not found", [], 404);
+      this.auth.recordAuditEventInTransaction(db, actorUserId, "profile_capacity_updated", undefined, undefined, { profileId, capacityMode: capacity === null ? "default" : "override" });
+      return db.prepare("SELECT * FROM forge_profiles WHERE id = ?").get(profileId) as ProfileRow;
+    });
+    return publicProfile(changed, this.config);
   }
 
   listModels(actorUserId: string, includeRetired = false): CodexModel[] {

@@ -2,6 +2,7 @@ import { z } from "zod";
 import { ReleaseFailureCodeSchema } from "../release-failures.js";
 
 import { PlanMaterialCategorySchema, type PlanMaterialCategory } from "../plan-governance.js";
+import { CapacityBlockerSchema, WorkflowCapacityStateSchema } from "../capacity-contracts.js";
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const sha = z.string().regex(/^[a-f0-9]{40,64}$/i);
@@ -268,7 +269,7 @@ export type MergeConflictPlan = z.infer<typeof MergeConflictPlanSchema>;
 export const IssuePhaseSchema = z.enum(["backlog", "planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_planning", "ci_repairing", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge", "done", "delivery_blocked", "cancelled", "failed"]);
 export type IssuePhase = z.infer<typeof IssuePhaseSchema>;
 export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
-export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "revise_plan", "record_progress", "start_development", "retry_development", "cancel_development", "verify_developer_ownership", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "reconcile_acceptance", "cancel_issue", "reconcile_merge", "continue_work"]);
+export const IssueCommandSchema = z.enum(["start_planning", "request_supplemental_review", "approve_plan", "reject_plan", "revise_plan", "record_progress", "start_development", "retry_development", "cancel_development", "verify_developer_ownership", "review_delivery", "repair_delivery", "record_delivery_decision", "publish_draft", "resolve_merge_conflict", "retry_target_base_reconciliation", "retry_forward_merge_verification", "reconcile_ci", "repair_ci", "final_review", "accept_delivery", "request_delivery_changes", "reconcile_acceptance", "cancel_issue", "reconcile_merge", "continue_work", "retry_capacity"]);
 export type IssueCommand = z.infer<typeof IssueCommandSchema>;
 export const IssuePlanDecisionSchema = z.enum(["approve", "reject"]);
 export const AttentionCategorySchema = z.enum(["member_authorization", "member_decision", "agent_contradiction", "agent_exhausted", "unsafe_recovery", "provider_ambiguity", "provider_authentication", "provider_connectivity_exhausted", "verification_unrecoverable", "target_drift", "capacity_exhausted"]);
@@ -296,6 +297,8 @@ export const IssueContinuationStateSchema = z.object({
   activeOperation: ActiveOperationSchema.optional(),
   processedCommandIds: z.array(durableId).max(64).optional(),
   ...DeveloperRecoveryFields,
+  capacity: WorkflowCapacityStateSchema.nullable().optional(),
+  capacityBlocker: CapacityBlockerSchema.nullable().optional(),
   leadSessionRef: durableId.nullable().optional(),
   leadExecutionId: durableId.nullable().optional(),
   leadEvidenceArtifactId: durableId.nullable().optional(),
@@ -475,6 +478,8 @@ export const IssueWorkflowStateSchema = z.object({
   activeOperation: ActiveOperationSchema.optional(),
   processedCommandIds: z.array(durableId).max(64).optional(),
   ...DeveloperRecoveryFields,
+  capacity: WorkflowCapacityStateSchema.nullable().optional(),
+  capacityBlocker: CapacityBlockerSchema.nullable().optional(),
   leadSessionRef: durableId.nullable().optional(),
   leadExecutionId: durableId.nullable().optional(),
   leadEvidenceArtifactId: durableId.nullable().optional(),
@@ -711,6 +716,7 @@ const DeliveryReviewActivityInputCoreSchema = z.object({
   ciRunId: durableId.optional(),
   supersedesReviewId: durableId.nullable().default(null),
   deliveryReviewId: durableId.optional(),
+  capacityRequestId: durableId.optional(),
 }).strict().superRefine((value, context) => {
   if (value.reviewKind === "final" && !value.deliveryReviewId) context.addIssue({ code: "custom", path: ["deliveryReviewId"], message: "Final review requires the exact delivery review" });
 });
@@ -782,6 +788,7 @@ export const DeveloperRepairActivityInputSchema = z.object({
   repairPlan: z.string().min(1).max(12_000).optional(),
   repairPlanArtifactId: durableId.optional(),
   repairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  capacityRequestId: durableId.optional(),
 }).superRefine((value, context) => {
   if (!value.repairPlan && !value.repairPlanArtifactId) context.addIssue({ code: "custom", path: ["repairPlanArtifactId"], message: "A verified repair-plan artifact is required" });
   if (value.repairPlanArtifactId && !value.repairPlanSha256) context.addIssue({ code: "custom", path: ["repairPlanSha256"], message: "The repair-plan artifact hash is required" });
@@ -846,6 +853,7 @@ export interface LeadPlanningActivityInput {
   revision: number;
   revisionRequestId?: string;
   resumeLeadSessionRef?: string;
+  capacityRequestId?: string;
 }
 
 export interface LeadPlanningResult {
@@ -874,6 +882,7 @@ export interface SupplementalReviewActivityInput {
   revision: number;
   leadOutputArtifactId: string;
   leadEvidenceArtifactId: string;
+  capacityRequestId?: string;
 }
 
 export interface SupplementalReviewResult {
@@ -898,6 +907,7 @@ export interface ConsolidateLeadPlanActivityInput {
   leadSessionRef: string;
   leadOutputArtifactId: string;
   supplementalReviewArtifactId: string;
+  capacityRequestId?: string;
 }
 
 export interface PlanDecisionActivityInput {
@@ -951,6 +961,7 @@ export interface DeveloperExecutionActivityInput {
   turnKind?: DeveloperTurnKind;
   supersedesExecutionId?: string | undefined;
   reuseWorktree?: boolean | undefined;
+  capacityRequestId?: string;
 }
 
 export interface DeveloperExecutionResult {
@@ -1041,12 +1052,14 @@ export const DeliveryRepairPlanInputSchema = z.object({
   subjectCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
   subjectTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
   findings: z.array(DeliveryFindingSchema).min(1).max(64),
+  capacityRequestId: durableId.optional(),
 });
 
 export type DeliveryRepairPlanActivityInput = z.infer<typeof DeliveryRepairPlanInputSchema>;
 
 export const DeliveryRepairPlanResultSchema = z.object({
   planId: durableId,
+  leadExecutionId: durableId,
   planArtifactId: durableId,
   planSha256: z.string().regex(/^[a-f0-9]{64}$/i),
   evidenceArtifactId: durableId,
@@ -1082,6 +1095,7 @@ export interface DeveloperRepairActivityInput {
   repairPlan?: string;
   repairPlanArtifactId?: string;
   repairPlanSha256?: string;
+  capacityRequestId?: string;
 }
 
 export interface LegacyDeveloperRepairResult {
@@ -1170,6 +1184,7 @@ export interface MergeConflictPlanActivityInput {
   targetBaseSha: string;
   conflictArtifact: ArtifactReference;
   conflictFileCount: number;
+  capacityRequestId?: string;
 }
 
 export type WorkflowMergeConflictPlanActivityInput = Omit<MergeConflictPlanActivityInput, "worktreePath"> & {
@@ -1200,6 +1215,7 @@ export interface MergeConflictResolutionActivityInput {
   conflictArtifact: ArtifactReference;
   conflictFileCount: number;
   planArtifactId: string;
+  capacityRequestId?: string;
 }
 
 export type WorkflowMergeConflictResolutionActivityInput = Omit<MergeConflictResolutionActivityInput, "worktreePath"> & {
@@ -1275,6 +1291,7 @@ export interface CiRepairPlanActivityInput {
   evidenceArtifactId: string;
   requiredChecks: string[];
   localVerification: string[];
+  capacityRequestId?: string;
 }
 
 export interface CiRepairPlanActivityResult {
@@ -1305,6 +1322,7 @@ export interface CiRepairActivityInput {
   branchName: string;
   priorCommit: string;
   priorTree: string;
+  capacityRequestId?: string;
 }
 
 export interface CiRepairActivityResult {
@@ -1353,6 +1371,7 @@ export interface FinalReviewActivityInput {
   targetBaseSha: string;
   subjectCommit: string;
   subjectTree: string;
+  capacityRequestId?: string;
 }
 
 export type WorkflowFinalReviewActivityInput = Omit<FinalReviewActivityInput, "worktreePath"> & { worktreePath?: string };
@@ -1474,6 +1493,7 @@ export interface IssueActivities {
   runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput): Promise<WorkflowDeveloperRepairResult>;
   runDeveloperRepairSupervised(input: SupervisedDeveloperRepairActivityInput): Promise<DeveloperTurnActivityOutcome<WorkflowDeveloperRepairResult>>;
   recordDeliveryDecision(input: DeliveryDecisionActivityInput): Promise<{ artifactId: string }>;
+  cancelCapacityExecution(input: { requestId: string }): Promise<{ status: "cancelled" | "ownership_ambiguous"; executionId?: string | undefined; reason?: string | undefined }>;
   publishRelease(input: PublishReleaseActivityInput): Promise<PublishReleaseActivityResult>;
   reconcileTargetBase(input: ReconcileTargetBaseActivityInput): Promise<ReconcileTargetBaseActivityResult>;
   reconcileCi(input: ReconcileCiActivityInput): Promise<ReconcileCiActivityResult>;
@@ -1486,6 +1506,14 @@ export interface IssueActivities {
   planMergeConflict(input: WorkflowMergeConflictPlanActivityInput): Promise<MergeConflictPlanActivityResult>;
   resolveMergeConflict(input: WorkflowMergeConflictResolutionActivityInput): Promise<MergeConflictResolutionActivityResult>;
   resolveMergeConflictSupervised(input: SupervisedMergeConflictResolutionActivityInput): Promise<DeveloperTurnActivityOutcome<MergeConflictResolutionActivityResult>>;
+  requestCapacity(input: import("../capacity-contracts.js").CapacityRequestInput): Promise<import("../capacity-contracts.js").CapacityRequestSnapshot>;
+  tryAcquireCapacity(input: { requestId: string; expectedWorkflowRevision: number }): Promise<import("../capacity-contracts.js").CapacityAdmissionResult>;
+  inspectCapacity(input: { requestId: string }): Promise<import("../capacity-contracts.js").CapacityRequestSnapshot>;
+  requeueCapacity(input: { requestId: string; now?: string }): Promise<import("../capacity-contracts.js").CapacityRequestSnapshot>;
+  cancelCapacity(input: { requestId: string; reason?: string }): Promise<import("../capacity-contracts.js").CapacityRequestSnapshot>;
+  finalizeCapacity(input: { requestId: string; expectedExecutionId: string; terminalReason: import("../capacity-contracts.js").CapacityTerminalReason }): Promise<import("../capacity-contracts.js").CapacityRequestSnapshot>;
+  rateLimitCapacity(input: { requestId: string; executionId: string; retryAt?: string }): Promise<import("../capacity-contracts.js").CapacityRequestSnapshot>;
+  reconcileCapacityOwnership(input?: { now?: string }): Promise<import("../capacity-contracts.js").CapacityReconciliationResult[]>;
 }
 
 export interface DeliveryBlockerActivityInput {

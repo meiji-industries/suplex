@@ -15,6 +15,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { ProjectService } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
 import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
+import { CapacityManager } from "../src/capacity.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -71,7 +72,7 @@ test("projects desktop flow activates valid configuration and shows actionable v
     github,
     repositoryProvisioner: { async ensure(input) { await mkdir(input.repositoryPath, { recursive: true }); await mkdir(input.worktreeRoot, { recursive: true }); } },
   });
-  const app = createApp({ config, auth, projects, health: {
+  const app = createApp({ config, auth, projects, capacity: new CapacityManager(database, config), health: {
     temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }),
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
     artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
@@ -133,12 +134,20 @@ test("projects desktop flow activates valid configuration and shows actionable v
       await page.goto(`${baseUrl}/admin/profiles`);
       await page.getByRole("heading", { name: "Profiles", exact: true }).waitFor();
       await page.getByText("Model catalog", { exact: true }).waitFor();
+      await page.getByText(/Override · 2 slots · 0 active \/ 0 queued/).waitFor();
+      const capacityInput = page.getByLabel("Browser profile capacity");
+      await capacityInput.fill("3");
+      await page.getByRole("button", { name: "Save", exact: true }).click();
+      await page.getByText(/Override · 3 slots · 0 active \/ 0 queued/).waitFor();
       await page.getByRole("combobox", { name: "Model" }).click();
       await expect.poll(async () => page.getByRole("option").allTextContents()).toEqual(expect.arrayContaining([expect.stringContaining("GPT-5.6 Sol"), expect.stringContaining("GPT-5.6 Terra")]));
       await page.keyboard.press("Escape");
 
       const narrow = await context.newPage();
       await narrow.setViewportSize({ width: 390, height: 844 });
+      await narrow.goto(`${baseUrl}/admin/profiles`);
+      await narrow.getByLabel("Browser profile capacity").waitFor();
+      expect(await narrow.getByText(/Override · 3 slots · 0 active \/ 0 queued/).isVisible()).toBe(true);
       await narrow.goto(`${baseUrl}/projects`);
       await narrow.getByRole("button", { name: "Open navigation" }).waitFor();
       await narrow.getByRole("button", { name: "Open navigation" }).click();

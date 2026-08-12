@@ -10,6 +10,8 @@ import { reconcileDeveloperExecutions } from "./developer-recovery.js";
 import { reconcileSuccessorIntents } from "./successor-recovery.js";
 import { activityPayloadInterceptors } from "./temporal/payload-boundary-interceptors.js";
 import { buildProductionWorkflowBundle, temporalDataConverter } from "./temporal/workflow-bundle.js";
+import { reconcileAgentExecutions } from "./agent-recovery.js";
+import { CapacityManager } from "./capacity.js";
 
 export function workerHasLivePollers(status: Pick<WorkerStatus, "runState" | "workflowPollerState" | "activityPollerState">): boolean {
   return status.runState === "RUNNING"
@@ -41,8 +43,10 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   let heartbeat: NodeJS.Timeout | undefined;
   let shutdown: (() => void) | undefined;
   try {
+    await reconcileAgentExecutions(database);
     await reconcileDeveloperExecutions(database);
     await reconcileSuccessorIntents(database, config);
+    new CapacityManager(database, config).reconcileFromLedgers();
     connection = await NativeConnection.connect(temporalConnectionOptions(config));
     worker = await Worker.create({
       connection,

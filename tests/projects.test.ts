@@ -103,6 +103,20 @@ test("maintains the model catalog and only creates profiles from active models",
   }
 });
 
+test("preserves inherited capacity and applies integer profile overrides", async () => {
+  const value = await fixture();
+  try {
+    expect(value.projects.createProfile(value.adminId, { name: "Inherited", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard" })).toMatchObject({ capacity: null, effectiveCapacity: 2 });
+    const explicitNull = value.projects.createProfile(value.adminId, { name: "Explicit default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: null });
+    expect(explicitNull).toMatchObject({ capacity: null, effectiveCapacity: 2 });
+    const patched = value.projects.updateProfileCapacity(value.adminId, explicitNull.id, 3);
+    expect(patched).toMatchObject({ capacity: 3, effectiveCapacity: 3 });
+    expect(value.projects.updateProfileCapacity(value.adminId, explicitNull.id, null)).toMatchObject({ capacity: null, effectiveCapacity: 2 });
+  } finally {
+    await close(value);
+  }
+});
+
 test("creates a minimal draft from a GitHub URL under the configured Forge roots", async () => {
   const value = await fixture();
   const provisioned: Array<{ cloneUrl: string; repository: string; repositoryPath: string; worktreeRoot: string }> = [];

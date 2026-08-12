@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
-import { ApplicationFailure } from "@temporalio/activity";
+import { ApplicationFailure, Context } from "@temporalio/activity";
 import { z } from "zod";
 
 import { ProjectionIntegrityFailure, projectionStateHash, type ForgeDatabase } from "../database.js";
@@ -10,6 +10,7 @@ import { redact } from "../logging.js";
 import { AgentFailure, AgentService, type LeadProcessRunner } from "../codex-lead.js";
 import { DeveloperService } from "../codex-developer.js";
 import { cancelDeveloperExecution, reconcileDeveloperExecutions } from "../developer-recovery.js";
+import { cancelAgentExecution, reconcileAgentExecutions } from "../agent-recovery.js";
 import { DeveloperExecutionLeaseRepository } from "../developer-execution-leases.js";
 import { runDeveloperTurn, type DeveloperTurnRunResult } from "../developer-turn-runner.js";
 import { AcceptanceFailure, AcceptanceService } from "../acceptance.js";
@@ -76,7 +77,8 @@ import {
   type WorkflowMergeConflictResolutionActivityInput,
 } from "./issue-contracts.js";
 import { StructuredLogger, activityLogContext } from "../logging.js";
-import { CapacityManager } from "../capacity.js";
+import { CapacityFailure, CapacityManager } from "../capacity.js";
+import { CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema, type CapacityRequestInput } from "../capacity-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "../worktrees.js";
 import { startIssueWorkflow } from "./service.js";
 
@@ -85,13 +87,6 @@ export interface ActivityOptions {
   developer?: Omit<Partial<Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">>, "runRepair"> & { runRepair?: (input: Parameters<DeveloperService["runRepair"]>[0]) => Promise<unknown> };
   githubRelease?: GithubReleaseAdapter;
   ciProvider?: CiProvider;
-}
-
-export class CapacityWaitError extends Error {
-  constructor(readonly requestId: string, readonly position: number) {
-    super(`Forge capacity is unavailable; retry request ${requestId} at queue position ${position}`);
-    this.name = "CapacityWaitError";
-  }
 }
 
 class SupervisedDeveloperTerminalError extends Error {
@@ -105,6 +100,17 @@ export function asNonRetryableApplicationFailure(error: unknown): ApplicationFai
   if (error instanceof AgentFailure && error.nonRetryable) return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
   if (error instanceof ProjectionIntegrityFailure) return ApplicationFailure.nonRetryable(error.message, "projection_integrity_failure", { code: error.code, summary: error.message, taskId: error.taskId, revision: error.revision });
   return undefined;
+}
+
+export function asRetryableAgentFailure(error: unknown): ApplicationFailure | undefined {
+  if (!(error instanceof AgentFailure) || error.code !== "rate-limited") return undefined;
+  const retryAt = error.retryAt ?? (error.retryAfterMs !== undefined ? new Date(Date.now() + error.retryAfterMs).toISOString() : undefined);
+  return ApplicationFailure.retryable(error.message, error.code, { ...(retryAt ? { retryAt } : {}), ...(error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}) });
+}
+
+function asNonRetryableCapacityFailure(error: unknown): ApplicationFailure | undefined {
+  if (!(error instanceof CapacityFailure)) return undefined;
+  return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
 }
 
 const LegacyPinnedProjectRevisionSchema = z.object({
@@ -222,28 +228,31 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
   };
   const artifactSha256 = (companyId: string, artifactId: string | null | undefined): string | undefined => artifactId ? database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(artifactId, companyId) as { sha256: string } | undefined)?.sha256 : undefined;
   const agentCategory = (error: AgentFailure): AttentionCategory => error.code === "login-expired" ? "provider_authentication" : error.code === "model-unavailable" ? "provider_ambiguity" : error.code === "rate-limited" ? "provider_connectivity_exhausted" : error.code === "malformed-output" || error.code === "invalid-output" ? "agent_contradiction" : "agent_exhausted";
-  const withCapacity = async <T>(input: { taskId: string; companyId: string; workflowId: string }, turnKind: "lead" | "developer" | "review", operation: () => Promise<T>): Promise<T> => {
-    const request = capacity.request({ ...input, turnKind });
-    const admitted = capacity.tryAcquire(request.id);
-    if (!admitted.acquired) throw new CapacityWaitError(request.id, capacity.position(request.id) ?? 1);
-    let releaseReason = "turn-completed";
+  const invokeAgent = async <T>(input: { companyId: string }, operation: () => Promise<T>): Promise<T> => {
+    let heartbeat: NodeJS.Timeout | undefined;
+    try {
+      const activityContext = Context.current();
+      heartbeat = setInterval(() => activityContext.heartbeat(), 5_000);
+      heartbeat.unref();
+    } catch { /* direct unit calls do not have an Activity context */ }
     try {
       return await operation();
     } catch (error) {
-      releaseReason = "turn-failed";
       const permanentFailure = asNonRetryableApplicationFailure(error);
       if (permanentFailure) {
         if (error instanceof AgentFailure) await attentionFailure(input, agentCategory(error), error.code, error.message);
         throw permanentFailure;
       }
+      const retryableFailure = asRetryableAgentFailure(error);
+      if (retryableFailure) throw retryableFailure;
       throw error;
     } finally {
-      capacity.release(request.id, releaseReason);
+      if (heartbeat) clearInterval(heartbeat);
     }
   };
-  const releaseActiveDeveloperCapacity = (input: { taskId: string; workflowId: string }, reason: string): void => {
-    const active = database.authQuery((db) => db.prepare("SELECT id FROM forge_capacity_requests WHERE task_id = ? AND workflow_id = ? AND turn_kind = 'developer' AND status = 'active' ORDER BY requested_at, id LIMIT 1").get(input.taskId, input.workflowId) as { id: string } | undefined);
-    if (active) capacity.release(active.id, reason);
+  const bindCapacityExecution = async <T>(capacityRequestId: string | undefined, owner: { executionKind: "agent" | "developer"; executionId: string; sessionRef?: string | null; worktreePath?: string | null }, result: T): Promise<T> => {
+    if (capacityRequestId) capacity.bindExecution(capacityRequestId, owner);
+    return result;
   };
   const recoverFinalizedDeveloperResult = async <T>(input: { taskId: string; companyId: string; workflowId: string; planRevision: number } & DeveloperSupervisorActivityIdentity): Promise<{ result: T; resultHash: string } | undefined> => {
     const lease = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).get(input.developerTurnExecutionId);
@@ -276,20 +285,15 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     return { result: result as T, resultHash: lease.resultHash };
   };
   const runSupervised = async <T extends { developerExecutionId: string; evidenceArtifactId: string | null; deliveryArtifactId?: string; verificationArtifact?: { id: string } }>(
-    input: { taskId: string; companyId: string; workflowId: string; planRevision: number } & DeveloperSupervisorActivityIdentity,
+    input: { taskId: string; companyId: string; workflowId: string; planRevision: number; capacityRequestId?: string } & DeveloperSupervisorActivityIdentity,
     operation: (service: Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution">) => Promise<T>,
   ): Promise<DeveloperTurnActivityOutcome<T>> => {
     const leases = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot);
     const priorClaim = leases.readClaim(input.developerTurnExecutionId);
     if (priorClaim) {
-      releaseActiveDeveloperCapacity(input, "developer-result-claim-recovered");
       return { status: "completed", result: JSON.parse(priorClaim.activityResultJson) as T, resultHash: priorClaim.resultHash };
     }
-    const request = capacity.request({ ...input, turnKind: "developer" });
-    const admitted = capacity.tryAcquire(request.id);
-    if (!admitted.acquired) throw new CapacityWaitError(request.id, capacity.position(request.id) ?? 1);
     let terminal: DeveloperTurnRunResult | undefined;
-    let releaseCapacity = true;
     const processRunner: LeadProcessRunner = async (invocation) => {
       const env = Object.fromEntries(Object.entries(invocation.env ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
       terminal = await runDeveloperTurn({
@@ -322,13 +326,13 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         if (!deliveryArtifactId || !recovered.result.evidenceArtifactId) throw new Error("A supervised Developer result requires durable result and evidence artifacts");
         const claim = leases.claim({ executionId: input.developerTurnExecutionId, resultHash: recovered.resultHash, activityResultJson: JSON.stringify(recovered.result), deliveryArtifactId, evidenceArtifactId: recovered.result.evidenceArtifactId });
         if (claim.conflict) {
-          releaseCapacity = false;
           return { status: "ownership_ambiguous", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: leases.get(input.developerTurnExecutionId)?.heartbeatAt ?? null };
         }
         return { status: "completed", result: JSON.parse(claim.claim.activityResultJson) as T, resultHash: claim.claim.resultHash };
       }
       const service = options.developer ? developer as DeveloperService : new DeveloperService(database, config, { github: githubRelease, processRunner });
       const result = await operation(service);
+      await bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId }, result);
       if (!terminal) {
         // Explicitly injected Developer ports are test seams and do not launch
         // an external process. They retain their existing direct behavior.
@@ -338,13 +342,11 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       if (!deliveryArtifactId || !result.evidenceArtifactId) throw new Error("A supervised Developer result requires durable result and evidence artifacts");
       const claim = leases.claim({ executionId: input.developerTurnExecutionId, resultHash: terminal.resultHash, activityResultJson: JSON.stringify(result), deliveryArtifactId, evidenceArtifactId: result.evidenceArtifactId });
       if (claim.conflict) {
-        releaseCapacity = false;
         return { status: "ownership_ambiguous", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: terminal.lastHeartbeatAt };
       }
       return { status: "completed", result: JSON.parse(claim.claim.activityResultJson) as T, resultHash: claim.claim.resultHash };
     } catch (error) {
       if (error instanceof SupervisedDeveloperTerminalError) {
-        if (error.result.terminal === "ownership_ambiguous") releaseCapacity = false;
         const status = error.result.terminal === "interrupted" ? "interrupted" as const : "ownership_ambiguous" as const;
         return { status, developerExecutionId: input.developerTurnExecutionId, reasonCode: status === "interrupted" ? "developer-worker-lost" : "developer-ownership-ambiguous", summary: status === "interrupted" ? "The Developer process ended before Forge could claim a result." : "Forge cannot prove ownership of the previous Developer process.", lastHeartbeatAt: error.result.lastHeartbeatAt };
       }
@@ -353,8 +355,6 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         return { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: error.code, summary: SafeSummarySchema.parse(error.message), evidenceArtifactId: evidence };
       }
       throw error;
-    } finally {
-      if (releaseCapacity) capacity.release(request.id, "developer-turn-terminal");
     }
   };
   const latestWorktree = (input: { taskId: string; companyId: string; workflowId: string; branchName?: string }, executionId?: string): string => {
@@ -398,6 +398,47 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       const artifact = await artifacts.put(input.companyId, "delivery-blocker", { filename: `${input.workflowId}-${input.operation}-blocker.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ type: "forge.delivery-blocker", operation: input.operation, summary }), "utf8") });
       database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
       return { artifactId: artifact.id };
+    },
+    async requestCapacity(rawInput: CapacityRequestInput) {
+      const input = CapacityRequestInputSchema.parse(rawInput);
+      try {
+        return CapacityRequestSnapshotSchema.parse(capacity.request(input));
+      } catch (error) {
+        const failure = asNonRetryableCapacityFailure(error);
+        if (failure) throw failure;
+        throw error;
+      }
+    },
+    async tryAcquireCapacity(input) {
+      try {
+        const result = capacity.tryAcquire(input.requestId, input.expectedWorkflowRevision);
+        return CapacityAdmissionResultSchema.parse({ status: result.status, publicState: result.publicState });
+      } catch (error) {
+        const failure = asNonRetryableCapacityFailure(error);
+        if (failure) throw failure;
+        throw error;
+      }
+    },
+    async inspectCapacity(input) {
+      return CapacityRequestSnapshotSchema.parse(capacity.inspect(input.requestId));
+    },
+    async requeueCapacity(input) {
+      return CapacityRequestSnapshotSchema.parse(capacity.requeueRateLimited(input.requestId, input.now));
+    },
+    async cancelCapacity(input) {
+      return CapacityRequestSnapshotSchema.parse(capacity.cancelQueued(input.requestId, input.reason));
+    },
+    async finalizeCapacity(input) {
+      return CapacityRequestSnapshotSchema.parse(capacity.finalize(input.requestId, input.expectedExecutionId, input.terminalReason));
+    },
+    async rateLimitCapacity(input) {
+      return CapacityRequestSnapshotSchema.parse(capacity.recordRateLimit(input.requestId, input.executionId, input.retryAt));
+    },
+    async reconcileCapacityOwnership(input) {
+      await reconcileAgentExecutions(database);
+      await reconcileDeveloperExecutions(database);
+      capacity.reconcileFromLedgers(input?.now);
+      return database.authQuery((db) => (db.prepare("SELECT id AS requestId, status, COALESCE(terminal_reason, 'reconciled') AS reason FROM forge_capacity_requests WHERE status = 'ownership_ambiguous'").all() as Array<{ requestId: string; status: string; reason: string }>).map((entry) => ({ requestId: entry.requestId, status: entry.status as "ownership_ambiguous", reason: entry.reason })));
     },
     async findActiveDeveloperExecution(input) {
       return database.authQuery((db) => db.prepare("SELECT id AS executionId, session_ref AS sessionRef FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status IN ('starting', 'running', 'cancelling') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId) as { executionId: string; sessionRef: string } | undefined) ?? null;
@@ -528,30 +569,34 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       return { successorTaskId: input.successorTaskId, successorWorkflowId: input.successorWorkflowId, predecessorTaskId: input.predecessorTaskId, projectRevisionId: current.projectRevisionId, creationRevision: input.acceptedRevision };
     },
     async runLeadPlanning(input) {
-      const result = await withCapacity(input, "lead", () => (agent?.runLeadPlanning ?? defaultAgent.runLeadPlanning.bind(defaultAgent))(input));
+      const result = await invokeAgent(input, () => (agent?.runLeadPlanning ?? defaultAgent.runLeadPlanning.bind(defaultAgent))(input));
       const leadEvidenceArtifactSha256 = artifactSha256(input.companyId, result.leadEvidenceArtifactId);
       const leadOutputArtifactSha256 = artifactSha256(input.companyId, result.leadOutputArtifactId);
-      return { ...result, ...(leadEvidenceArtifactSha256 ? { leadEvidenceArtifactSha256 } : {}), ...(leadOutputArtifactSha256 ? { leadOutputArtifactSha256 } : {}), leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) };
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, { ...result, ...(leadEvidenceArtifactSha256 ? { leadEvidenceArtifactSha256 } : {}), ...(leadOutputArtifactSha256 ? { leadOutputArtifactSha256 } : {}), leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) });
     },
     async runSupplementalReview(input) {
-      return withCapacity(input, "review", () => (agent?.runSupplementalReview ?? defaultAgent.runSupplementalReview.bind(defaultAgent))(input));
+      const result = await invokeAgent(input, () => (agent?.runSupplementalReview ?? defaultAgent.runSupplementalReview.bind(defaultAgent))(input));
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.executionId, sessionRef: result.sessionRef }, result);
     },
     async consolidateLeadPlan(input) {
-      const result = await withCapacity(input, "lead", () => (agent?.consolidateLeadPlan ?? defaultAgent.consolidateLeadPlan.bind(defaultAgent))(input));
+      const result = await invokeAgent(input, () => (agent?.consolidateLeadPlan ?? defaultAgent.consolidateLeadPlan.bind(defaultAgent))(input));
       const leadEvidenceArtifactSha256 = artifactSha256(input.companyId, result.leadEvidenceArtifactId);
       const leadOutputArtifactSha256 = artifactSha256(input.companyId, result.leadOutputArtifactId);
-      return { ...result, ...(leadEvidenceArtifactSha256 ? { leadEvidenceArtifactSha256 } : {}), ...(leadOutputArtifactSha256 ? { leadOutputArtifactSha256 } : {}), leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) };
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, { ...result, ...(leadEvidenceArtifactSha256 ? { leadEvidenceArtifactSha256 } : {}), ...(leadOutputArtifactSha256 ? { leadOutputArtifactSha256 } : {}), leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) });
     },
     async reviewDelivery(input: WorkflowDeliveryReviewActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.subject.developerExecutionId);
       const serviceInput = { ...input, worktreePath };
-      const result = await withCapacity(input, "review", async () => normalizeReviewResult(await (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(serviceInput), serviceInput));
-      if (result.outcome === "blocked") return result;
+      const result = await invokeAgent(input, async () => normalizeReviewResult(await (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(serviceInput), serviceInput));
+      if (result.outcome === "blocked") return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.executionId, sessionRef: result.sessionRef, worktreePath }, result);
       const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, result.review.opinionArtifactId, "delivery-review");
-      return DeliveryReviewActivityResultSchema.parse({ ...result, review: { ...result.review, summary: SafeSummarySchema.parse(result.review.summary), reviewArtifact } });
+      const completed = DeliveryReviewActivityResultSchema.parse({ ...result, review: { ...result.review, summary: SafeSummarySchema.parse(result.review.summary), reviewArtifact } });
+      if (completed.outcome !== "completed") throw new Error("Completed delivery review normalization produced a blocked result");
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: completed.review.leadExecutionId, sessionRef: completed.review.leadSessionRef, worktreePath }, completed);
     },
     async planDeliveryRepair(input) {
-      return withCapacity(input, "lead", () => (agent?.planDeliveryRepair ?? defaultAgent.planDeliveryRepair.bind(defaultAgent))(input));
+      const result = await invokeAgent(input, () => (agent?.planDeliveryRepair ?? defaultAgent.planDeliveryRepair.bind(defaultAgent))(input));
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef, worktreePath: input.worktreePath }, result);
     },
     async publishRelease(input: PublishReleaseActivityInput) {
       let identity = { repository: "", branchName: input.branchName, headSha: input.subjectCommit, headTree: input.subjectTree };
@@ -701,7 +746,8 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       }
     },
     async planCiRepair(input) {
-      return withCapacity(input, "lead", () => (agent?.planCiRepair ?? defaultAgent.planCiRepair.bind(defaultAgent))(input));
+      const result = await invokeAgent(input, () => (agent?.planCiRepair ?? defaultAgent.planCiRepair.bind(defaultAgent))(input));
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, result);
     },
     async finalReview(input: WorkflowFinalReviewActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
@@ -720,12 +766,12 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       const developerSessionRef = database.authQuery((db) => db.prepare("SELECT session_ref AS sessionRef FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND delivery_artifact_id = ? AND evidence_artifact_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId, input.deliveryArtifactId, input.evidenceArtifactId) as { sessionRef: string } | undefined)?.sessionRef;
       if (!developerSessionRef) throw new AgentFailure("scoped-input-missing", "Final review requires the exact Developer session");
       const reviewInput = { ...input, worktreePath, roleProfiles: input.roleProfiles, reviewKind: "final" as const, subject: { planRevision: input.planRevision, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree, developerExecutionId: input.developerExecutionId, deliveryArtifactId: input.deliveryArtifactId, developerEvidenceArtifactId: input.evidenceArtifactId, leadSessionRef: input.leadSessionRef, developerSessionRef }, supersedesReviewId: null };
-      const review = await withCapacity(input, "review", () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(reviewInput));
+      const review = await invokeAgent(input, () => (agent?.reviewDelivery ?? defaultAgent.reviewDelivery.bind(defaultAgent))(reviewInput));
       const normalized = normalizeReviewResult(review, reviewInput);
       if (normalized.outcome !== "completed") throw new AgentFailure(normalized.code, normalized.summary);
       const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, normalized.review.opinionArtifactId, "delivery-review");
       const evidenceArtifactSha256 = artifactSha256(input.companyId, normalized.review.evidenceArtifactId);
-      return { finalReviewId: normalized.review.reviewId, leadExecutionId: normalized.review.leadExecutionId, leadSessionRef: normalized.review.leadSessionRef, opinionArtifactId: normalized.review.opinionArtifactId, evidenceArtifactId: normalized.review.evidenceArtifactId, ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), reviewArtifact, outcome: normalized.review.opinion, summary: SafeSummarySchema.parse(normalized.review.summary), findings: normalized.review.findings, repairPlan: normalized.review.repairPlan, repairPlanArtifactId: normalized.review.repairPlanArtifactId ?? null, repairPlanSha256: normalized.review.repairPlanSha256 ?? null };
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: normalized.review.leadExecutionId, sessionRef: normalized.review.leadSessionRef, worktreePath }, { finalReviewId: normalized.review.reviewId, leadExecutionId: normalized.review.leadExecutionId, leadSessionRef: normalized.review.leadSessionRef, opinionArtifactId: normalized.review.opinionArtifactId, evidenceArtifactId: normalized.review.evidenceArtifactId, ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), reviewArtifact, outcome: normalized.review.opinion, summary: SafeSummarySchema.parse(normalized.review.summary), findings: normalized.review.findings, repairPlan: normalized.review.repairPlan, repairPlanArtifactId: normalized.review.repairPlanArtifactId ?? null, repairPlanSha256: normalized.review.repairPlanSha256 ?? null });
     },
     async acceptDelivery(input: AcceptDeliveryActivityInput & { decision?: "accept" | "request_changes" | "cancel" }) {
       const context = database.authQuery((db) => db.prepare("SELECT pr.normalized_json AS normalizedJson FROM forge_tasks t JOIN forge_project_revisions pr ON pr.id = t.project_revision_id AND pr.id = ? AND pr.state = 'accepted' WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?").get(input.projectRevisionId, input.taskId, input.companyId, input.workflowId) as { normalizedJson: string } | undefined);
@@ -752,13 +798,15 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     async planMergeConflict(input: WorkflowMergeConflictPlanActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input);
       const rawInput: MergeConflictPlanActivityInput = { ...input, worktreePath };
-      return withCapacity(input, "lead", () => (agent?.planMergeConflict ?? defaultAgent.planMergeConflict.bind(defaultAgent))(rawInput));
+      const result = await invokeAgent(input, () => (agent?.planMergeConflict ?? defaultAgent.planMergeConflict.bind(defaultAgent))(rawInput));
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef, worktreePath }, result);
     },
     async resolveMergeConflict(input: WorkflowMergeConflictResolutionActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
       const rawInput: MergeConflictResolutionActivityInput = { ...input, worktreePath };
       const operation = developer.runMergeConflictResolution ? developer.runMergeConflictResolution.bind(developer) : defaultDeveloper.runMergeConflictResolution.bind(defaultDeveloper);
-      return withCapacity(input, "developer", () => operation(rawInput));
+      const result = await invokeAgent(input, () => operation(rawInput));
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath }, result);
     },
     async resolveMergeConflictSupervised(input) {
       return runSupervised<MergeConflictResolutionActivityResult>(input, async (service) => {
@@ -768,7 +816,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     },
     async runDeveloperExecution(input) {
       const operation = developer.run ? developer.run.bind(developer) : defaultDeveloper.run.bind(defaultDeveloper);
-      const result = await withCapacity(input, "developer", () => operation(input));
+      const result = await invokeAgent(input, () => operation(input));
       if (input.executionId && result.developerExecutionId !== input.executionId) throw new Error("Developer execution identity did not match the durable Workflow operation");
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
@@ -776,7 +824,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       const deliveryArtifactSha256 = artifactSha256(input.companyId, safeResult.deliveryArtifactId);
       const evidenceArtifactSha256 = artifactSha256(input.companyId, safeResult.evidenceArtifactId);
       const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, "agent_contradiction", "developer_delivery_blocked", safeResult.deliverySummary) : undefined;
-      return { ...safeResult, ...(deliveryArtifactSha256 ? { deliveryArtifactSha256 } : {}), ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) };
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, ...(deliveryArtifactSha256 ? { deliveryArtifactSha256 } : {}), ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) });
     },
     async runDeveloperExecutionSupervised(input) {
       return runSupervised<WorkflowDeveloperExecutionResult>(input, async (service) => {
@@ -811,12 +859,12 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
       }
       if (!blockingFindings || !repairPlan) throw new Error("Delivery review repair evidence is unavailable");
       const serviceInput = { ...input, worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree!, blockingFindings, repairPlan };
-      const result = await withCapacity(input, "developer", async () => normalizeRepairResult(await (developer.runRepair ?? defaultDeveloper.runRepair.bind(defaultDeveloper))(serviceInput), serviceInput));
+      const result = await invokeAgent(input, async () => normalizeRepairResult(await (developer.runRepair ?? defaultDeveloper.runRepair.bind(defaultDeveloper))(serviceInput), serviceInput));
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;
       const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, "verification_unrecoverable", "developer_repair_blocked", safeResult.summary) : undefined;
-      return { ...safeResult, ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), summary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.summary)) };
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), summary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.summary)) });
     },
     async runDeveloperRepairSupervised(input) {
       return runSupervised<WorkflowDeveloperRepairResult>(input, async (service) => {
@@ -841,15 +889,15 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     async runCiRepair(input: WorkflowCiRepairActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);
       const operation = developer.runCiRepair ? developer.runCiRepair.bind(developer) : defaultDeveloper.runCiRepair.bind(defaultDeveloper);
-      const result = await withCapacity(input, "developer", () => operation({ ...input, worktreePath }));
+      const result = await invokeAgent(input, () => operation({ ...input, worktreePath }));
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;
       if (safeResult.outcome === "blocked") {
         const attention = await putAttentionEvidence(input, "verification_unrecoverable", "ci_repair_blocked", safeResult.summary);
-        return { ...safeResult, attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 };
+        return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 });
       }
-      return safeResult;
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, safeResult);
     },
     async cancelDeveloperExecution(input) {
       const result = await cancelDeveloperExecution(database, input.executionId);
@@ -858,6 +906,27 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
         return { ...result, attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 };
       }
       return result;
+    },
+    async cancelCapacityExecution(input) {
+      const request = capacity.inspect(input.requestId);
+      if (request.status === "queued" || request.status === "rate_limited") {
+        capacity.cancelQueued(input.requestId, "workflow cancellation");
+        return { status: "cancelled" as const };
+      }
+      if (request.status === "ownership_ambiguous") return { status: "ownership_ambiguous" as const, ...(request.executionId ? { executionId: request.executionId } : {}), reason: "ownership-ambiguous" };
+      if (request.status !== "active" || !request.executionKind || !request.executionId) {
+        capacity.markOwnershipAmbiguous(input.requestId, "Active capacity has no provable external execution owner");
+        return { status: "ownership_ambiguous" as const, reason: "ownership-missing" };
+      }
+      if (request.executionKind === "agent") {
+        const result = await cancelAgentExecution(database, request.executionId);
+        return { ...result, executionId: request.executionId };
+      }
+      const result = await cancelDeveloperExecution(database, request.executionId);
+      if (result.status === "ownership_ambiguous" || result.status === "termination_failed") {
+        return { status: "ownership_ambiguous" as const, executionId: request.executionId, reason: result.reasonCode };
+      }
+      return { status: "cancelled" as const, executionId: request.executionId };
     },
     async observeDeveloperExecution(input) {
       const lease = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).get(input.executionId);

@@ -284,6 +284,7 @@ export async function createGitCommandGuard(runtimeRoot: string, guardParent = r
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const gitBin = process.env.FORGE_GIT_BIN?.trim() || execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   if (!gitBin) throw new WorktreeFailure("git-unavailable", "Git is unavailable for guarded Developer execution");
+  const quotedGitBin = `'${gitBin.replaceAll("'", `'"'"'`)}'`;
   const gitGuard = `#!/bin/sh
 for arg in "$@"; do
   case "$arg" in
@@ -291,7 +292,7 @@ for arg in "$@"; do
     --amend|-D|-d|--force|-f) echo "Forge Developer policy blocked destructive git option $arg" >&2; exit 125 ;;
   esac
 done
-exec "$FORGE_GIT_REAL_BIN" "$@"
+exec ${quotedGitBin} "$@"
 `;
   const ghGuard = `#!/bin/sh
 echo "Forge Developer policy blocks provider-side GitHub mutation" >&2

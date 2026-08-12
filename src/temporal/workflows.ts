@@ -18,10 +18,13 @@ import {
   type AcceptDeliveryActivityInput,
   type ArtifactPointer,
   type ContinueWorkCommand,
+  type CiRepairPlanActivityResult,
   type DeliveryBlockerActivities,
+  type DeliveryRepairPlanResult,
   type DeliveryReviewActivityResult,
   type DeliveryWorkflowBlockCode,
   type DeveloperRepairActivityResult,
+  type FinalReviewActivityResult,
   type IssueActivities,
   type IssueBlocker,
   type IssueBlockerAction,
@@ -29,6 +32,8 @@ import {
   type IssueWorkflowInput,
   type IssueWorkflowState,
   type LegacyDeveloperRepairResult,
+  type LeadPlanningResult,
+  type MergeConflictPlanActivityResult,
   type PlanCommandInput,
   type PlanRevisionCommand,
   type PublishReleaseActivityInput,
@@ -36,13 +41,18 @@ import {
   type RecordProgressInput,
   type ReconcileTargetBaseActivityResult,
   type StartPlanningInput,
+  type SupplementalReviewResult,
   type TargetBaseCheckpoint,
+  type WorkflowCiRepairActivityResult,
+  type WorkflowDeliveryReviewResult,
+  type WorkflowDeveloperExecutionResult,
   type WorkflowDeveloperRepairResult,
 } from "./issue-contracts.js";
 import { assertContinuationStateWithinLimit, assertPayloadWithinLimit, WORKFLOW_HISTORY_EVENT_LIMIT } from "./policy.js";
 import { isRetryableReleaseFailure } from "../release-failures.js";
 import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "./target-base.js";
 import { developerExecutionId } from "./deterministic-id.js";
+import type { CapacityOperation, CapacityRole } from "../capacity-contracts.js";
 
 const { recordProbeStarted } = proxyActivities<ProbeActivities>({
   startToCloseTimeout: "1 minute",
@@ -51,7 +61,6 @@ const { recordProbeStarted } = proxyActivities<ProbeActivities>({
 const { projectIssueState: projectIssueStateActivity } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
 });
-
 async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> {
   return projectIssueStateActivity(IssueProjectionEventSchema.parse({
     schemaVersion: 1,
@@ -60,15 +69,27 @@ async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkfl
     state,
   }));
 }
+
+const EXTERNAL_AGENT_RETRY_POLICY = {
+  maximumAttempts: 3,
+  initialInterval: "1 second",
+  maximumInterval: "30 seconds",
+  nonRetryableErrorTypes: ["rate-limited"],
+};
 const { runLeadPlanning } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
+  heartbeatTimeout: "15 seconds",
+  retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { runSupplementalReview, consolidateLeadPlan } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
+  heartbeatTimeout: "15 seconds",
+  retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { runDeveloperExecution } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
-  retry: { maximumAttempts: 1 },
+  heartbeatTimeout: "15 seconds",
+  retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { runDeveloperExecutionSupervised, runDeveloperRepairSupervised, resolveMergeConflictSupervised } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
@@ -85,6 +106,10 @@ const { observeDeveloperExecution } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
   retry: { maximumAttempts: 1 },
 });
+const { cancelCapacityExecution } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "1 minute",
+  retry: { maximumAttempts: 1 },
+});
 const { recordPlanDecision } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
 });
@@ -95,7 +120,8 @@ const { preparePlanRevision } = proxyActivities<IssueActivities>({ startToCloseT
 const { createSuccessor } = proxyActivities<IssueActivities>({ startToCloseTimeout: "10 minutes", retry: { maximumAttempts: 5, initialInterval: "1 second", maximumInterval: "30 seconds" } });
 const { reviewDelivery } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
-  retry: { maximumAttempts: 1 },
+  heartbeatTimeout: "15 seconds",
+  retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { recordDeliveryBlocker } = proxyActivities<DeliveryBlockerActivities>({
   startToCloseTimeout: "1 minute",
@@ -103,7 +129,8 @@ const { recordDeliveryBlocker } = proxyActivities<DeliveryBlockerActivities>({
 });
 const { runDeveloperRepair } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
-  retry: { maximumAttempts: 1 },
+  heartbeatTimeout: "15 seconds",
+  retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { recordDeliveryDecision } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
@@ -119,11 +146,13 @@ const { reconcileTargetBase } = proxyActivities<IssueActivities>({
 });
 const { planMergeConflict } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
-  retry: { maximumAttempts: 1 },
+  heartbeatTimeout: "15 seconds",
+  retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { resolveMergeConflict } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
-  retry: { maximumAttempts: 1 },
+  heartbeatTimeout: "15 seconds",
+  retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { reconcileCi } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "2 minutes",
@@ -139,7 +168,8 @@ const { runCiRepair } = proxyActivities<IssueActivities>({
 });
 const { finalReview } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
-  retry: { maximumAttempts: 1 },
+  heartbeatTimeout: "15 seconds",
+  retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 const { planDeliveryRepair } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
@@ -157,6 +187,26 @@ const { reconcileMerge } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "2 minutes",
   retry: { maximumAttempts: 1 },
 });
+const { requestCapacity, tryAcquireCapacity, inspectCapacity, requeueCapacity, cancelCapacity, finalizeCapacity, rateLimitCapacity, reconcileCapacityOwnership } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "1 minute",
+  retry: { maximumAttempts: 5, initialInterval: "1 second", maximumInterval: "15 seconds" },
+});
+
+function isoEpochMillis(value: string): number {
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?Z$/.exec(value);
+  if (!match) return Number.NaN;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const adjustedYear = year - (month <= 2 ? 1 : 0);
+  const era = Math.floor(adjustedYear / 400);
+  const yearOfEra = adjustedYear - era * 400;
+  const monthOfYear = month + (month > 2 ? -3 : 9);
+  const dayOfYear = Math.floor((153 * monthOfYear + 2) / 5) + day - 1;
+  const dayOfEra = yearOfEra * 365 + Math.floor(yearOfEra / 4) - Math.floor(yearOfEra / 100) + dayOfYear;
+  const days = era * 146097 + dayOfEra - 719468;
+  return days * 86_400_000 + Number(match[4]) * 3_600_000 + Number(match[5]) * 60_000 + Number(match[6]) * 1_000 + Number((match[7] ?? "").padEnd(3, "0") || 0);
+}
 
 const MAX_RECONCILIATION_ATTEMPTS = 20;
 
@@ -208,6 +258,7 @@ export const requestDeliveryChangesUpdate = defineUpdate<IssueWorkflowState, [Pl
 export const cancelIssueUpdate = defineUpdate<IssueWorkflowState, [PlanCommandInput]>("cancelIssue");
 export const reconcileAcceptanceUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("reconcileAcceptance");
 export const reconcileMergeUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("reconcileMerge");
+export const retryCapacityUpdate = defineUpdate<IssueWorkflowState, [StartPlanningInput]>("retryCapacity");
 const leadPlanningPatch = "forge-lead-planning-v1";
 const planGovernancePatch = "forge-plan-governance-v1";
 const planningProjectionIntegrityPatch = "forge-planning-projection-integrity-v1";
@@ -228,8 +279,12 @@ function compactStateForContinuation(state: IssueWorkflowState): IssueWorkflowSt
   for (const key of ["worktreePath", "deliveryBlockingFindings", "deliveryRepairPlan", "forwardMergeConflictFiles", "forwardMergeConflictDiff", "conflictFiles", "conflictDiff"]) delete compact[key];
   return IssueWorkflowStateSchema.parse(compact);
 }
+const durableCapacityPatch = "durable-capacity-v1";
 
 function permanentActivityFailure(error: unknown): { code: string; summary: string; category?: IssueBlocker["category"]; evidenceArtifactId?: string; evidenceSha256?: string } | undefined {
+  if (error instanceof ApplicationFailure && error.nonRetryable) {
+    return { code: error.type ?? "permanent-activity-failure", summary: error.message || "The invocation cannot complete without a configuration change." };
+  }
   if (!(error instanceof ActivityFailure) || !(error.cause instanceof ApplicationFailure) || !error.cause.nonRetryable) return undefined;
   const detail = error.cause.details?.[0];
   if (detail && typeof detail === "object") {
@@ -390,6 +445,14 @@ export function reviewApprovedState(state: IssueWorkflowState, result: Completed
   return repairRequiredState(state, result, state.repairCycle ?? 0);
 }
 
+function rateLimitFailure(error: unknown): { retryAt?: string } | undefined {
+  if (!(error instanceof ActivityFailure) || !(error.cause instanceof ApplicationFailure) || error.cause.type !== "rate-limited") return undefined;
+  const detail = error.cause.details?.[0];
+  if (!detail || typeof detail !== "object") return {};
+  const retryAt = (detail as Record<string, unknown>).retryAt;
+  return typeof retryAt === "string" ? { retryAt } : {};
+}
+
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);
@@ -507,6 +570,117 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(issueStateQuery, () => state);
   const captureInitialProjectionState = patched(captureInitialProjectionStatePatch);
   const initialProjectionState = state;
+  const projectCapacityState = async (capacity: IssueWorkflowState["capacity"], pendingAction?: string): Promise<number> => {
+    const changed = JSON.stringify(state.capacity) !== JSON.stringify(capacity) || (pendingAction !== undefined && state.pendingAction !== pendingAction);
+    if (!changed) return state.revision;
+    state = IssueWorkflowStateSchema.parse({ ...state, capacity, ...(capacity === null ? { capacityBlocker: null } : {}), ...(pendingAction !== undefined ? { pendingAction } : {}), revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    const projectedRevision = state.revision;
+    await projectIssueState(state);
+    return projectedRevision;
+  };
+  const acquireExternalTurn = async <T>(spec: { operation: CapacityOperation; role: CapacityRole; profileId?: string | undefined; sessionRef?: string | null | undefined; worktreePath?: string | null | undefined }, run: (capacityRequestId?: string) => Promise<T>, executionId: (result: T) => string | undefined): Promise<T> => {
+    if (!patched(durableCapacityPatch)) return run(undefined);
+    if (!spec.profileId) throw ApplicationFailure.nonRetryable("profile_unavailable", "profile_unavailable", { operation: spec.operation, role: spec.role });
+    const turnRevision = state.revision;
+    const expectedPhase = state.phase;
+    const commandsBeforeWait = state.allowedCommands;
+    let observedRevision = state.revision;
+    const isCurrent = (): boolean => state.phase === expectedPhase && state.revision === observedRevision;
+    const assertCurrent = (): void => { if (!isCurrent()) throw new Error("External turn became stale"); };
+    const abandonStaleRequest = async (): Promise<void> => {
+      const current = await inspectCapacity({ requestId: request.id });
+      if (["queued", "rate_limited", "active", "ownership_ambiguous"].includes(current.status)) {
+        await cancelCapacityExecution({ requestId: request.id });
+      }
+    };
+    const request = await requestCapacity({ logicalTurnKey: `${state.workflowId}:${turnRevision}:${spec.operation}`, companyId: state.companyId, taskId: state.issueId, workflowId: state.workflowId, projectRevisionId: state.projectRevisionId, workflowRevision: turnRevision, operation: spec.operation, role: spec.role, profileId: spec.profileId, sessionRef: spec.sessionRef ?? null, worktreePath: spec.worktreePath ?? null });
+    if (!isCurrent()) {
+      await abandonStaleRequest();
+      throw new Error("External turn became stale");
+    }
+    for (;;) {
+      if (!isCurrent()) {
+        await abandonStaleRequest();
+        throw new Error("External turn became stale before admission");
+      }
+      const admission = await tryAcquireCapacity({ requestId: request.id, expectedWorkflowRevision: turnRevision });
+      if (!isCurrent()) {
+        await abandonStaleRequest();
+        throw new Error("External turn became stale after admission");
+      }
+      if ((admission.status === "queued" || admission.status === "rate_limited") && state.allowedCommands.some((command) => !["cancel_issue", "cancel_development"].includes(command))) {
+        const waitingCommands = state.allowedCommands.filter((command) => command === "cancel_issue" || command === "cancel_development");
+        state = IssueWorkflowStateSchema.parse({ ...state, allowedCommands: waitingCommands, revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        observedRevision = state.revision;
+        await projectIssueState(state);
+      }
+      observedRevision = await projectCapacityState(admission.publicState, admission.status === "queued" ? "Waiting for external capacity" : admission.status === "rate_limited" ? "Waiting for provider reset" : state.pendingAction ?? undefined);
+      if (!isCurrent()) {
+        await abandonStaleRequest();
+        throw new Error("External turn became stale after projection");
+      }
+      if (admission.status === "active") {
+        if (state.allowedCommands.length !== commandsBeforeWait.length || state.allowedCommands.some((command, index) => command !== commandsBeforeWait[index])) {
+          state = IssueWorkflowStateSchema.parse({ ...state, allowedCommands: commandsBeforeWait, revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+          observedRevision = state.revision;
+          await projectIssueState(state);
+        }
+        assertCurrent();
+        try {
+          const result = await run(request.id);
+          assertCurrent();
+          const current = await inspectCapacity({ requestId: request.id });
+          assertCurrent();
+          const resultExecutionId = executionId(result);
+          if (current.executionId && resultExecutionId && current.executionId !== resultExecutionId) throw ApplicationFailure.nonRetryable("capacity_owner_mismatch", "capacity_owner_mismatch", { requestId: request.id });
+          const ownerId = current.executionId;
+          await finalizeCapacity({ requestId: request.id, expectedExecutionId: ownerId ?? request.id, terminalReason: ownerId ? "completed" : "failed_before_start" });
+          assertCurrent();
+          observedRevision = await projectCapacityState(null);
+          return result;
+        } catch (error) {
+          if (!isCurrent()) throw error;
+          const current = await inspectCapacity({ requestId: request.id });
+          const rateLimit = rateLimitFailure(error);
+          if (rateLimit && current.executionId) {
+            const limited = await rateLimitCapacity({ requestId: request.id, executionId: current.executionId, ...(rateLimit.retryAt ? { retryAt: rateLimit.retryAt } : {}) });
+            if (limited.status === "exhausted") {
+              const blocker = { category: "capacity_exhausted" as const, summary: "External turn capacity was exhausted.", nextAction: "Retry capacity or cancel the issue.", resumeOperation: spec.operation };
+              state = IssueWorkflowStateSchema.parse({ ...state, capacity: { ...admission.publicState, status: "exhausted", position: null, reason: null, retryAt: null, rateLimitAttempts: limited.rateLimitAttempts }, capacityBlocker: blocker, allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: "Capacity retry required", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+              observedRevision = state.revision;
+              await projectIssueState(state);
+              throw ApplicationFailure.nonRetryable("capacity_exhausted", "capacity_exhausted", blocker);
+            }
+            observedRevision = await projectCapacityState({ ...admission.publicState, status: "rate_limited", position: null, reason: "rate_limit_reset", retryAt: limited.retryAt, rateLimitAttempts: limited.rateLimitAttempts }, "Waiting for provider reset");
+            continue;
+          }
+          await finalizeCapacity({ requestId: request.id, expectedExecutionId: current.executionId ?? request.id, terminalReason: current.executionId ? "process_failed" : "failed_before_start" });
+          throw error;
+        }
+      }
+      if (admission.status === "exhausted" || admission.status === "ownership_ambiguous") {
+        const category = admission.status === "exhausted" ? "capacity_exhausted" : "ownership_ambiguous";
+        state = IssueWorkflowStateSchema.parse({ ...state, capacity: admission.publicState, capacityBlocker: { category, summary: category === "capacity_exhausted" ? "External turn capacity was exhausted." : "Forge cannot prove external process ownership.", nextAction: category === "capacity_exhausted" ? "Retry capacity or cancel the issue." : "Verify ownership before retrying or cancelling.", resumeOperation: spec.operation }, allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: category === "capacity_exhausted" ? "Capacity retry required" : "Ownership verification required", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        await projectIssueState(state);
+        throw ApplicationFailure.nonRetryable(category, category, state.capacityBlocker);
+      }
+      const retryDelay = admission.status === "rate_limited" && admission.publicState.retryAt
+        ? Math.max(1_000, isoEpochMillis(admission.publicState.retryAt) - Date.now())
+        : 5_000;
+      await sleep(retryDelay);
+      if (!isCurrent()) {
+        await abandonStaleRequest();
+        throw new Error("External turn became stale while waiting for capacity");
+      }
+      if (admission.status === "rate_limited") {
+        await requeueCapacity({ requestId: request.id });
+        if (!isCurrent()) {
+          await abandonStaleRequest();
+          throw new Error("External turn became stale while requeueing capacity");
+        }
+      }
+    }
+  };
   setHandler(startPlanningUpdate, async (rawInput) => {
     if (captureInitialProjectionState) await condition(() => initialProjectionComplete);
     assertPayloadWithinLimit("startPlanning command", rawInput);
@@ -531,37 +705,49 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (patched(leadPlanningPatch)) {
       let leadResult;
       try {
-        leadResult = await runLeadPlanning({
-          taskId: validatedInput.issueId,
-          companyId: validatedInput.companyId,
-          workflowId: validatedInput.workflowId,
-          projectId: validatedInput.projectId,
-          projectRevisionId: validatedInput.projectRevisionId,
-          briefArtifactId: validatedInput.briefArtifactId,
-          imageArtifactIds: validatedInput.imageArtifactIds,
-          roleProfiles: validatedInput.roleProfiles,
-          revision: next.revision,
-          ...(next.revisionRequestId ? { revisionRequestId: next.revisionRequestId } : {}),
-          ...(next.revisionRequestId && next.leadSessionRef ? { resumeLeadSessionRef: next.leadSessionRef } : {}),
-        });
+        leadResult = await acquireExternalTurn<LeadPlanningResult>(
+          { operation: "lead_planning", role: "lead", profileId: validatedInput.roleProfiles.lead },
+          (capacityRequestId) => runLeadPlanning({
+            taskId: validatedInput.issueId,
+            companyId: validatedInput.companyId,
+            workflowId: validatedInput.workflowId,
+            projectId: validatedInput.projectId,
+            projectRevisionId: validatedInput.projectRevisionId,
+            briefArtifactId: validatedInput.briefArtifactId,
+            imageArtifactIds: validatedInput.imageArtifactIds,
+            roleProfiles: validatedInput.roleProfiles,
+            revision: next.revision,
+            ...(next.revisionRequestId ? { revisionRequestId: next.revisionRequestId } : {}),
+            ...(next.revisionRequestId && next.leadSessionRef ? { resumeLeadSessionRef: next.leadSessionRef } : {}),
+            ...(capacityRequestId ? { capacityRequestId } : {}),
+          }),
+          (result) => result.leadExecutionId,
+        );
       } catch (error) {
+        if (state.phase === "cancelled") return state;
+        if (state.capacityBlocker) return state;
         const failure = permanentActivityFailure(error);
         if (!failure) throw error;
+        const failureBase = patched(durableCapacityPatch) ? state : next;
+        const failureRevision = failureBase.revision + 1;
         state = IssueWorkflowStateSchema.parse({
-          ...next,
+          ...failureBase,
+          capacity: null,
+          capacityBlocker: null,
           phase: "failed",
-          revision: next.revision + 1,
+          revision: failureRevision,
           owner: "human",
           allowedCommands: reviseContinueEnabled ? ["start_planning", "continue_work", "cancel_issue"] : ["start_planning", "cancel_issue"],
           pendingAction: failure.summary,
           blocker: failure.category ? humanBlocker(failure.category, failure.summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : null,
           stateChangedAt: new Date().toISOString(),
-          lastEventId: `${state.workflowId}:${next.revision + 1}`,
+          lastEventId: `${state.workflowId}:${failureRevision}`,
         });
         await projectIssueState(state);
         return state;
       }
-      state = IssueWorkflowStateSchema.parse({ ...next, ...leadResult, ...(distinctPlanningStates ? { revision: next.revision + 1, lastEventId: `${next.workflowId}:${next.revision + 1}` } : {}), planRevision: next.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, preservedWorktreeCompatibility: leadResult.preservedWorktreeCompatibility ?? null, supplementalReviewUsed: false, blocker: null, stateChangedAt: new Date().toISOString() });
+      const planningBase = patched(durableCapacityPatch) ? state : next;
+      state = IssueWorkflowStateSchema.parse({ ...planningBase, ...leadResult, ...(distinctPlanningStates ? { revision: planningBase.revision + 1, lastEventId: `${planningBase.workflowId}:${planningBase.revision + 1}` } : {}), planRevision: next.revision, planMaterial: leadResult.material, materialCategories: leadResult.materialCategories, preservedWorktreeCompatibility: leadResult.preservedWorktreeCompatibility ?? null, supplementalReviewUsed: false, blocker: null, stateChangedAt: new Date().toISOString() });
       if (state.revisionRequestId && state.revisedExecutionCoordinates?.disposition === "reuse" && state.preservedWorktreeCompatibility !== true) {
         state = IssueWorkflowStateSchema.parse({ ...state, phase: "delivery_blocked", owner: "human", allowedCommands: ["revise_plan", "cancel_issue"], pendingAction: "Choose a new exact-base worktree for the incompatible revised plan", blockerCode: "preserved-worktree-incompatible" });
         await projectIssueState(state);
@@ -596,8 +782,16 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(requestSupplementalReviewUpdate, async (rawInput) => {
     assertPayloadWithinLimit("supplemental review command", rawInput);
     const command = validatePlanCommand(rawInput);
-    const review = await runSupplementalReview({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, imageArtifactIds: validatedInput.imageArtifactIds, roleProfiles: validatedInput.roleProfiles, revision: state.planRevision ?? state.revision, leadOutputArtifactId: state.leadOutputArtifactId!, leadEvidenceArtifactId: state.leadEvidenceArtifactId! });
-    const consolidated = await consolidateLeadPlan({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, imageArtifactIds: validatedInput.imageArtifactIds, roleProfiles: validatedInput.roleProfiles, revision: state.revision + 1, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, supplementalReviewArtifactId: review.reviewArtifactId });
+    const review = await acquireExternalTurn<SupplementalReviewResult>(
+      { operation: "supplemental_review", role: "reviewer", profileId: validatedInput.roleProfiles.reviewer },
+      (capacityRequestId) => runSupplementalReview({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, imageArtifactIds: validatedInput.imageArtifactIds, roleProfiles: validatedInput.roleProfiles, revision: state.planRevision ?? state.revision, leadOutputArtifactId: state.leadOutputArtifactId!, leadEvidenceArtifactId: state.leadEvidenceArtifactId!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+      (result) => result.executionId,
+    );
+    const consolidated = await acquireExternalTurn<LeadPlanningResult>(
+      { operation: "lead_consolidation", role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: state.leadSessionRef },
+      (capacityRequestId) => consolidateLeadPlan({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, imageArtifactIds: validatedInput.imageArtifactIds, roleProfiles: validatedInput.roleProfiles, revision: state.revision + 1, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, supplementalReviewArtifactId: review.reviewArtifactId, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+      (result) => result.leadExecutionId,
+    );
     state = IssueWorkflowStateSchema.parse({ ...state, ...consolidated, revision: state.revision + 1, phase: "approval", owner: "human", allowedCommands: addRevisionCommand(["approve_plan", "reject_plan", "cancel_issue"]), pendingAction: "Approve final plan", lastEventId: `${state.workflowId}:${state.revision + 1}`, supplementalReviewUsed: true, supplementalReviewArtifactId: review.reviewArtifactId, planMaterial: consolidated.material, materialCategories: consolidated.materialCategories, planRevision: state.planRevision ?? state.revision, blocker: humanBlocker("member_authorization", "Approve final plan", [{ command: "approve_plan", label: "Approve plan", requiresNote: false, destructive: false }, { command: "reject_plan", label: "Request plan changes", requiresNote: true, destructive: false }], evidencePointer(consolidated.leadOutputArtifactId, consolidated.leadOutputArtifactSha256, "lead-plan")), stateChangedAt: new Date().toISOString() });
     await projectIssueState(state);
     void command;
@@ -636,10 +830,15 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const recoverDeveloperFailures = supervisedDeveloperTurns ? false : patched(developerFailureRecoveryPatch);
     let outcome: Awaited<ReturnType<typeof runDeveloperExecutionSupervised>> | { status: "completed"; result: Awaited<ReturnType<typeof runDeveloperExecution>>; resultHash: string };
     try {
-      outcome = supervisedDeveloperTurns
-        ? await runDeveloperExecutionSupervised({ ...legacyInput, developerTurnExecutionId: executionId, developerAttempt, turnKind: "implementation" })
-        : { status: "completed" as const, result: await runDeveloperExecution({ ...legacyInput, executionId }), resultHash: "legacy" };
+      outcome = await acquireExternalTurn(
+        { operation: "developer_execution", role: "developer", profileId: validatedInput.roleProfiles.developer },
+        (capacityRequestId) => supervisedDeveloperTurns
+          ? runDeveloperExecutionSupervised({ ...legacyInput, developerTurnExecutionId: executionId, developerAttempt, turnKind: "implementation", ...(capacityRequestId ? { capacityRequestId } : {}) })
+          : runDeveloperExecution({ ...legacyInput, executionId, ...(capacityRequestId ? { capacityRequestId } : {}) }).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),
+        (value) => value.status === "completed" ? value.result.developerExecutionId : value.developerExecutionId,
+      );
     } catch (error) {
+      if (state.activeOperation?.commandId !== command.commandId || state.phase !== "development") return state;
       if (supervisedDeveloperTurns || !recoverDeveloperFailures) throw error;
       const recovered = await withStateMutation(() => {
         if (state.activeOperation?.commandId !== command.commandId || state.phase !== "development") return false;
@@ -687,9 +886,13 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     });
     await projectIssueState(state);
     const legacyInput = { taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, ...(state.revisionRequestId ? { revisionRequestId: state.revisionRequestId } : {}), supersedesExecutionId, reuseWorktree: true };
-    const outcome = supervisedDeveloperTurns
-      ? await runDeveloperExecutionSupervised({ ...legacyInput, developerTurnExecutionId: executionId, developerAttempt, turnKind: "implementation" })
-      : { status: "completed" as const, result: await runDeveloperExecution({ ...legacyInput, executionId }), resultHash: "legacy" };
+    const outcome = await acquireExternalTurn(
+      { operation: "developer_execution", role: "developer", profileId: validatedInput.roleProfiles.developer, sessionRef: state.developerSessionRef, worktreePath: state.worktreePath },
+      (capacityRequestId) => supervisedDeveloperTurns
+        ? runDeveloperExecutionSupervised({ ...legacyInput, developerTurnExecutionId: executionId, developerAttempt, turnKind: "implementation", ...(capacityRequestId ? { capacityRequestId } : {}) })
+        : runDeveloperExecution({ ...legacyInput, executionId, ...(capacityRequestId ? { capacityRequestId } : {}) }).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),
+      (value) => value.status === "completed" ? value.result.developerExecutionId : value.developerExecutionId,
+    );
     const applied = await withStateMutation(() => {
       if (state.activeOperation?.commandId !== command.commandId || state.phase !== "development") return false;
       if (outcome.status === "completed") {
@@ -722,7 +925,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     try {
       const subject = { planRevision: state.planRevision ?? state.revision, targetBaseSha: state.targetBaseSha!, subjectCommit: state.resultCommit!, subjectTree: state.resultTree!, developerExecutionId: state.developerExecutionId!, deliveryArtifactId: state.deliveryArtifactId!, developerEvidenceArtifactId: state.developerEvidenceArtifactId!, leadSessionRef: state.leadSessionRef!, developerSessionRef: state.developerSessionRef! };
       const common = { taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadOutputArtifactId: state.leadOutputArtifactId!, branchName: state.branchName! };
-      result = await reviewDelivery({ ...common, subject, worktreePath: state.worktreePath!, supersedesReviewId: state.deliveryReviewSupersedesId ?? null }) as unknown as DeliveryReviewActivityResult | LegacyReviewResult;
+      result = await acquireExternalTurn<DeliveryReviewActivityResult | LegacyReviewResult>(
+        { operation: "delivery_review", role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: state.leadSessionRef, worktreePath: state.worktreePath },
+        (capacityRequestId) => reviewDelivery({ ...common, subject, worktreePath: state.worktreePath!, supersedesReviewId: state.deliveryReviewSupersedesId ?? null, ...(capacityRequestId ? { capacityRequestId } : {}) }) as unknown as Promise<DeliveryReviewActivityResult | LegacyReviewResult>,
+        (value) => "attemptId" in value ? (value.outcome === "completed" ? value.review.leadExecutionId : value.executionId) : undefined,
+      );
     } catch {
       let evidenceArtifactId: string | null = null;
       try { evidenceArtifactId = (await recordDeliveryBlocker({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, operation: "review" })).artifactId; } catch { /* Keep the fixed state transition if blocker recording itself is unavailable. */ }
@@ -800,9 +1007,13 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     };
     let outcome: Awaited<ReturnType<typeof runDeveloperRepairSupervised>> | { status: "completed"; result: WorkflowDeveloperRepairResult | LegacyDeveloperRepairResult; resultHash: string };
     try {
-      outcome = supervisedDeveloperTurns
-        ? await runDeveloperRepairSupervised({ ...repairInput, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "repair" })
-        : { status: "completed" as const, result: await runDeveloperRepair(repairInput) as unknown as WorkflowDeveloperRepairResult | LegacyDeveloperRepairResult, resultHash: "legacy" };
+      outcome = await acquireExternalTurn(
+        { operation: "developer_repair", role: "developer", profileId: validatedInput.roleProfiles.developer, sessionRef: state.developerSessionRef, worktreePath: state.worktreePath },
+        (capacityRequestId) => supervisedDeveloperTurns
+          ? runDeveloperRepairSupervised({ ...repairInput, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "repair", ...(capacityRequestId ? { capacityRequestId } : {}) })
+          : (runDeveloperRepair({ ...repairInput, ...(capacityRequestId ? { capacityRequestId } : {}) }) as unknown as Promise<WorkflowDeveloperRepairResult | LegacyDeveloperRepairResult>).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),
+        (value) => value.status === "completed" ? value.result.developerExecutionId : value.developerExecutionId,
+      );
     } catch {
       let evidenceArtifactId: string | null = null;
       try { evidenceArtifactId = (await recordDeliveryBlocker({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, operation: "repair" })).artifactId; } catch { /* Keep the fixed state transition if blocker recording itself is unavailable. */ }
@@ -861,7 +1072,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (!(await runTargetBaseCheckpoint("pre_final_review"))) return state;
     let result;
     try {
-      result = await finalReview({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, roleProfiles: validatedInput.roleProfiles, releaseId: state.releaseId, deliveryReviewId: state.deliveryReviewId!, ciRunId: state.ciRunId, ...(state.releaseRepository && state.baseBranch && state.pullRequestNumber ? { pullRequestNumber: state.pullRequestNumber, repository: state.releaseRepository, baseBranch: state.baseBranch } : {}), planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef, leadOutputArtifactId: state.leadOutputArtifactId, developerExecutionId: state.developerExecutionId, deliveryArtifactId: state.deliveryArtifactId, evidenceArtifactId: state.developerEvidenceArtifactId, ...(state.worktreePath ? { worktreePath: state.worktreePath } : {}), branchName: state.branchName, targetBaseSha: state.targetBaseSha, subjectCommit: state.resultCommit, subjectTree: state.resultTree });
+      result = await acquireExternalTurn<FinalReviewActivityResult>(
+        { operation: "final_review", role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: state.leadSessionRef, worktreePath: state.worktreePath },
+        (capacityRequestId) => finalReview({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, roleProfiles: validatedInput.roleProfiles, releaseId: state.releaseId!, deliveryReviewId: state.deliveryReviewId!, ciRunId: state.ciRunId!, ...(state.releaseRepository && state.baseBranch && state.pullRequestNumber ? { pullRequestNumber: state.pullRequestNumber, repository: state.releaseRepository, baseBranch: state.baseBranch } : {}), planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, developerExecutionId: state.developerExecutionId!, deliveryArtifactId: state.deliveryArtifactId!, evidenceArtifactId: state.developerEvidenceArtifactId!, ...(state.worktreePath ? { worktreePath: state.worktreePath } : {}), branchName: state.branchName!, targetBaseSha: state.targetBaseSha!, subjectCommit: state.resultCommit!, subjectTree: state.resultTree!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (review) => review.leadExecutionId,
+      );
     } catch (error) {
       const failure = permanentActivityFailure(error);
       const summary = failure?.summary ?? "Final review is temporarily unavailable; retry the exact review or request changes";
@@ -876,27 +1091,32 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     } : undefined;
     if (result.outcome === "blocking") {
       try {
-        const planned = await planDeliveryRepair({
+        const planned = await acquireExternalTurn<DeliveryRepairPlanResult>(
+          { operation: "delivery_repair_plan", role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: state.leadSessionRef, worktreePath: state.worktreePath },
+          (capacityRequestId) => planDeliveryRepair({
           taskId: validatedInput.issueId,
           companyId: validatedInput.companyId,
           workflowId: validatedInput.workflowId,
           projectId: validatedInput.projectId,
           projectRevisionId: validatedInput.projectRevisionId,
           source: "final_review_blocking",
-          leadSessionRef: state.leadSessionRef,
+          leadSessionRef: state.leadSessionRef!,
           planRevision: state.planRevision ?? state.revision,
           releaseId: state.releaseId,
           deliveryReviewId: state.deliveryReviewId,
           finalReviewId: result.finalReviewId,
           ciRunId: state.ciRunId,
           evidenceArtifactIds: [result.evidenceArtifactId, result.opinionArtifactId],
-          branchName: state.branchName,
+          branchName: state.branchName!,
           worktreePath: state.worktreePath ?? ".",
-          targetBaseSha: state.targetBaseSha,
-          subjectCommit: state.resultCommit,
-          subjectTree: state.resultTree,
+          targetBaseSha: state.targetBaseSha!,
+          subjectCommit: state.resultCommit!,
+          subjectTree: state.resultTree!,
           findings: result.findings,
-        });
+          ...(capacityRequestId ? { capacityRequestId } : {}),
+          }),
+          (plan) => plan.leadExecutionId,
+        );
         repairPlan = { planArtifactId: planned.planArtifactId, planSha256: planned.planSha256, findings: planned.findings };
       } catch {
         state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["record_delivery_decision", "cancel_issue"], pendingAction: "Final-review repair planning failed; inspect the recorded evidence", finalReviewId: result.finalReviewId, finalReviewOutcome: result.outcome, finalReviewSummary: result.summary, finalReviewOpinionArtifactId: result.opinionArtifactId, finalReviewEvidenceArtifactId: result.evidenceArtifactId, finalReviewFindings: result.findings, blocker: humanBlocker("agent_exhausted", result.summary, [{ command: "record_delivery_decision", label: "Record delivery decision", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.reviewArtifact.artifactId, result.reviewArtifact.sha256, "delivery-review")), stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
@@ -926,7 +1146,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_repairing", owner: "lead", allowedCommands: [], pendingAction: "Developer repairing the exact failed CI result", blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
     await projectIssueState(state);
     try {
-      const result = await runCiRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, ...(releaseId ? { releaseId } : {}), projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, ciRunId, ciAttemptId, repairPlanId, repairPlanArtifactId, repairPlanEvidenceArtifactId, failedHeadSha, priorDeveloperExecutionId, priorDeveloperSessionRef, branchName, priorCommit, priorTree });
+      const result = await acquireExternalTurn<WorkflowCiRepairActivityResult>(
+        { operation: "ci_repair_execution", role: "developer", profileId: validatedInput.roleProfiles.developer, sessionRef: priorDeveloperSessionRef, worktreePath: state.worktreePath },
+        (capacityRequestId) => runCiRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, ...(releaseId ? { releaseId } : {}), projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, ciRunId, ciAttemptId, repairPlanId, repairPlanArtifactId, repairPlanEvidenceArtifactId, failedHeadSha, priorDeveloperExecutionId, priorDeveloperSessionRef, branchName, priorCommit, priorTree, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (repair) => repair.developerExecutionId,
+      );
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? addRevisionCommand(["review_delivery", "cancel_issue"]) : addRevisionCommand(["request_delivery_changes", "cancel_issue"]), pendingAction: result.outcome === "completed" ? "Fresh Lead delivery review required after CI repair" : "CI repair is blocked", developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.outcome === "completed" ? "clean" : "dirty", deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.summary, developerOutcome: result.outcome === "completed" ? "completed" : "blocked", deliveryReviewId: result.outcome === "completed" ? null : state.deliveryReviewId, releaseId: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, ciRepairDeveloperExecutionId: result.developerExecutionId, ciRepairDeveloperSessionRef: result.developerSessionRef, blocker: result.outcome === "blocked" ? humanBlocker("verification_unrecoverable", result.summary, [{ command: "request_delivery_changes", label: "Request delivery changes", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.attentionEvidenceArtifactId, result.attentionEvidenceSha256, "attention-evidence")) : null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
     } catch (error) {
       const failure = permanentActivityFailure(error);
@@ -966,7 +1190,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_repair_planning", owner: "lead", allowedCommands: [], pendingAction: "Lead diagnosis of exact-head CI failure", lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
       try {
-        const plan = await planCiRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, leadSessionRef, ciRunId: result.runId, ciAttemptId, failedHeadSha: expectedHeadSha, evidenceArtifactId, requiredChecks: [], localVerification: [] });
+        const plan = await acquireExternalTurn<CiRepairPlanActivityResult>(
+          { operation: "ci_repair_plan", role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: leadSessionRef },
+          (capacityRequestId) => planCiRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, leadSessionRef, ciRunId: result.runId, ciAttemptId, failedHeadSha: expectedHeadSha, evidenceArtifactId, requiredChecks: [], localVerification: [], ...(capacityRequestId ? { capacityRequestId } : {}) }),
+          (repairPlan) => repairPlan.leadExecutionId,
+        );
         state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ci_repair_required", owner: "lead", allowedCommands: [], pendingAction: "Developer repairing the exact failed CI result", ciRepairPlanId: plan.planId, ciRepairPlanArtifactId: plan.planArtifactId, ciRepairPlanEvidenceArtifactId: plan.evidenceArtifactId, ciRepairPlanSummary: plan.summary, ciRepairLeadExecutionId: plan.leadExecutionId, ciRepairLeadSessionRef: plan.leadSessionRef, lastEventId: `${state.workflowId}:${state.revision + 1}` });
         await projectIssueState(state);
         return runExactCiRepairTurn();
@@ -1040,8 +1268,14 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_reviewing", owner: "lead", allowedCommands: [], pendingAction: "Lead conflict-resolution plan", targetBaseSha: result.targetBaseSha ?? state.targetBaseSha, forwardMergeId: result.forwardMergeId ?? null, forwardMergePriorHead: result.priorHead ?? state.resultCommit, forwardMergeTargetBaseSha: result.targetBaseSha ?? state.targetBaseSha, ...(result.mergeConflictEvidence ? { mergeConflictEvidence: result.mergeConflictEvidence } : {}), ...(legacyConflict ? { forwardMergeConflictFiles: result.conflictFiles ?? [], forwardMergeConflictDiff: result.conflictDiff ?? null } : {}), lastEventId: `${state.workflowId}:${state.revision + 1}` });
       await projectIssueState(state);
       try {
-        const legacyPlanInput = { taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, branchName: state.branchName!, priorHead: state.forwardMergePriorHead!, targetBaseSha: state.forwardMergeTargetBaseSha!, ...(state.mergeConflictEvidence ? { conflictEvidence: state.mergeConflictEvidence } : { conflictFiles: state.forwardMergeConflictFiles ?? [], conflictDiff: state.forwardMergeConflictDiff ?? "" }), ...(state.forwardMergeId ? { forwardMergeId: state.forwardMergeId } : {}) } as unknown as Parameters<typeof planMergeConflict>[0];
-        const plan = await planMergeConflict(legacyPlanInput);
+        const plan = await acquireExternalTurn<MergeConflictPlanActivityResult>(
+          { operation: "merge_conflict_plan", role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: state.leadSessionRef, worktreePath: state.worktreePath },
+          (capacityRequestId) => {
+            const legacyPlanInput = { taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, branchName: state.branchName!, priorHead: state.forwardMergePriorHead!, targetBaseSha: state.forwardMergeTargetBaseSha!, ...(state.mergeConflictEvidence ? { conflictEvidence: state.mergeConflictEvidence } : { conflictFiles: state.forwardMergeConflictFiles ?? [], conflictDiff: state.forwardMergeConflictDiff ?? "" }), ...(state.forwardMergeId ? { forwardMergeId: state.forwardMergeId } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) } as unknown as Parameters<typeof planMergeConflict>[0];
+            return planMergeConflict(legacyPlanInput);
+          },
+          (result) => result.leadExecutionId,
+        );
         state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_required", owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, lastEventId: `${state.workflowId}:${state.revision + 1}` });
       } catch {
         state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["cancel_issue"], pendingAction: "Lead conflict-resolution planning failed; inspect the recorded evidence", lastEventId: `${state.workflowId}:${state.revision + 1}` });
@@ -1078,9 +1312,13 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await projectIssueState(state);
     try {
       const mergeInput = { taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, planRevision, ...prior };
-      const outcome = supervisedDeveloperTurns
-        ? await resolveMergeConflictSupervised({ ...mergeInput, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "merge_conflict_resolution" })
-        : { status: "completed" as const, result: await resolveMergeConflict(mergeInput), resultHash: "legacy" };
+      const outcome = await acquireExternalTurn(
+        { operation: "merge_conflict_resolution", role: "developer", profileId: validatedInput.roleProfiles.developer, sessionRef: prior.developerSessionRef, worktreePath: state.worktreePath },
+        (capacityRequestId) => supervisedDeveloperTurns
+          ? resolveMergeConflictSupervised({ ...mergeInput, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "merge_conflict_resolution", ...(capacityRequestId ? { capacityRequestId } : {}) })
+          : resolveMergeConflict({ ...mergeInput, ...(capacityRequestId ? { capacityRequestId } : {}) }).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),
+        (value) => value.status === "completed" ? value.result.developerExecutionId : value.developerExecutionId,
+      );
       if (outcome.status !== "completed") {
         const applied = await withStateMutation(() => {
           if (state.activeOperation?.commandId !== command.commandId) return false;
@@ -1151,8 +1389,16 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await projectIssueState(state);
     const ciFindings = (state.deliveryBlockingFindings ?? []).filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
     const repairFindings = ciFindings.length ? ciFindings : [{ findingId: `ci_failure_${state.revision}`, severity: "blocking" as const, rationale: `Required CI did not pass: ${priorDelivery.ciOutcome ?? "failed"}`, evidenceRef: state.ciRunId ?? "CI reconciliation", disposition: "open" as const, repairInstruction: "Resolve the exact-head CI failure and rerun the required checks." }];
-    const repairPlan = await planDeliveryRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, source: "ci_failure", leadSessionRef: priorDelivery.leadSessionRef, planRevision: state.planRevision ?? state.revision, releaseId: state.releaseId, deliveryReviewId: state.deliveryReviewId, ciRunId: state.ciRunId, evidenceArtifactIds: [state.developerEvidenceArtifactId, state.finalReviewEvidenceArtifactId].filter((id): id is string => Boolean(id)), branchName: priorDelivery.branchName, worktreePath: priorDelivery.worktreePath, targetBaseSha: priorDelivery.targetBaseSha, subjectCommit: priorDelivery.subjectCommit, subjectTree: priorDelivery.subjectTree, findings: repairFindings });
-    const result = await runDeveloperRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: priorDelivery.leadSessionRef, developerSessionRef: priorDelivery.developerSessionRef, developerExecutionId: priorDelivery.developerExecutionId, reviewId: priorDelivery.reviewId, repairAuthority: "ci_failure", cycle, repairCycleLimit: validatedInput.repairCycleLimit, worktreePath: priorDelivery.worktreePath, branchName: priorDelivery.branchName, targetBaseSha: priorDelivery.targetBaseSha, subjectCommit: priorDelivery.subjectCommit, subjectTree: priorDelivery.subjectTree, blockingFindings: repairFindings, repairPlanArtifactId: repairPlan.planArtifactId, repairPlanSha256: repairPlan.planSha256 });
+    const repairPlan = await acquireExternalTurn<DeliveryRepairPlanResult>(
+      { operation: "delivery_repair_plan", role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: priorDelivery.leadSessionRef, worktreePath: priorDelivery.worktreePath },
+      (capacityRequestId) => planDeliveryRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, source: "ci_failure", leadSessionRef: priorDelivery.leadSessionRef, planRevision: state.planRevision ?? state.revision, releaseId: state.releaseId, deliveryReviewId: state.deliveryReviewId, ciRunId: state.ciRunId, evidenceArtifactIds: [state.developerEvidenceArtifactId, state.finalReviewEvidenceArtifactId].filter((id): id is string => Boolean(id)), branchName: priorDelivery.branchName, worktreePath: priorDelivery.worktreePath, targetBaseSha: priorDelivery.targetBaseSha, subjectCommit: priorDelivery.subjectCommit, subjectTree: priorDelivery.subjectTree, findings: repairFindings, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+      (plan) => plan.leadExecutionId,
+    );
+    const result = await acquireExternalTurn<WorkflowDeveloperRepairResult>(
+      { operation: "developer_repair", role: "developer", profileId: validatedInput.roleProfiles.developer, sessionRef: priorDelivery.developerSessionRef, worktreePath: priorDelivery.worktreePath },
+      (capacityRequestId) => runDeveloperRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: priorDelivery.leadSessionRef, developerSessionRef: priorDelivery.developerSessionRef, developerExecutionId: priorDelivery.developerExecutionId, reviewId: priorDelivery.reviewId, repairAuthority: "ci_failure", cycle, repairCycleLimit: validatedInput.repairCycleLimit, worktreePath: priorDelivery.worktreePath, branchName: priorDelivery.branchName, targetBaseSha: priorDelivery.targetBaseSha, subjectCommit: priorDelivery.subjectCommit, subjectTree: priorDelivery.subjectTree, blockingFindings: repairFindings, repairPlanArtifactId: repairPlan.planArtifactId, repairPlanSha256: repairPlan.planSha256, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+      (repair) => repair.developerExecutionId,
+    );
     const nextPhase = result.outcome === "completed" ? "delivery_ready" : "delivery_blocked";
     state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: nextPhase, owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], pendingAction: result.outcome === "completed" ? "Fresh Lead delivery review required" : "Member decision required", developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, worktreePath: state.worktreePath, branchName: result.branchName, targetBaseSha: result.subject.targetBaseSha, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.outcome === "completed" ? result.deliveryArtifactId : state.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.outcome === "completed" ? result.summary : state.deliverySummary, developerOutcome: result.outcome, repairCycle: result.cycle, activeOperation: null, deliveryReviewId: result.outcome === "completed" ? null : state.deliveryReviewId, deliveryRepairPlan: null, deliveryRepairPlanArtifactId: repairPlan.planArtifactId, deliveryRepairPlanSha256: repairPlan.planSha256, deliveryRepairAuthority: result.outcome === "completed" ? null : "ci_failure", releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
     await projectIssueState(state);
@@ -1186,7 +1432,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       const note = command.note?.trim() || "Member requested changes to the exact delivery";
       const finding = { findingId: `member_requested_changes_${state.revision}`, severity: "blocking" as const, rationale: note, evidenceRef: result.reasonArtifactId ?? "member acceptance decision", disposition: "open" as const, repairInstruction: note };
       try {
-        const planned = await planDeliveryRepair({
+        const planned = await acquireExternalTurn<DeliveryRepairPlanResult>(
+          { operation: "delivery_repair_plan", role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: state.leadSessionRef, worktreePath: state.worktreePath },
+          (capacityRequestId) => planDeliveryRepair({
           taskId: validatedInput.issueId,
           companyId: validatedInput.companyId,
           workflowId: validatedInput.workflowId,
@@ -1205,10 +1453,13 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
           branchName: state.branchName ?? "delivery",
           worktreePath: state.worktreePath ?? ".",
           targetBaseSha: state.targetBaseSha!,
-          subjectCommit: state.expectedHeadSha,
-          subjectTree: state.expectedHeadTree,
+          subjectCommit: state.expectedHeadSha!,
+          subjectTree: state.expectedHeadTree!,
           findings: [finding],
-        });
+          ...(capacityRequestId ? { capacityRequestId } : {}),
+          }),
+          (plan) => plan.leadExecutionId,
+        );
         memberRepairPlan = planned;
       } catch {
         state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["request_delivery_changes", "cancel_issue"], pendingAction: "Member-requested repair planning failed; inspect the recorded evidence", acceptanceId: result.acceptanceId, acceptanceStatus: result.status, acceptanceReasonArtifactId: result.reasonArtifactId ?? null, acceptanceBlockerEvidenceArtifactId: result.evidenceArtifactId ?? null, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
@@ -1248,10 +1499,53 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (command.expectedRevision !== state.revision || state.phase !== "manual_merge") throw new Error("Merge reconciliation is not available in the current phase");
     return reconcileMergeTurn();
   });
+  const cancelQueuedCapacity = async (): Promise<void> => {
+    if (!state.capacity || !["queued", "rate_limited"].includes(state.capacity.status)) return;
+    await cancelCapacity({ requestId: state.capacity.requestId, reason: "workflow phase changed" });
+    state = IssueWorkflowStateSchema.parse({ ...state, capacity: null, revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    await projectIssueState(state);
+  };
+  const cancelCurrentCapacity = async (): Promise<{ status: "cancelled" | "ownership_ambiguous"; executionId?: string | undefined }> => {
+    if (!state.capacity) return { status: "cancelled" };
+    if (["queued", "rate_limited"].includes(state.capacity.status)) {
+      await cancelQueuedCapacity();
+      return { status: "cancelled" };
+    }
+    if (state.capacity.status === "active" || state.capacity.status === "ownership_ambiguous") {
+      return cancelCapacityExecution({ requestId: state.capacity.requestId });
+    }
+    return { status: "ownership_ambiguous" };
+  };
+  const preserveAmbiguousCapacity = async (): Promise<void> => {
+    if (!state.capacity) return;
+    const capacity = { ...state.capacity, status: "ownership_ambiguous" as const, position: null, reason: null, retryAt: null };
+    const blocker = { category: "ownership_ambiguous" as const, summary: "Forge cannot prove the cancelled external process is terminal.", nextAction: "Verify ownership before releasing capacity.", resumeOperation: state.capacity.operation };
+    state = IssueWorkflowStateSchema.parse({ ...state, capacity, capacityBlocker: blocker, owner: "human", allowedCommands: [], pendingAction: "External ownership verification required", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    await projectIssueState(state);
+  };
+  const settleCancelledCapacity = async (executionId: string): Promise<"settled" | "ambiguous" | "none"> => {
+    if (!state.capacity) return "none";
+    const request = await inspectCapacity({ requestId: state.capacity.requestId });
+    if (request.status === "active" && request.executionId === executionId) {
+      await finalizeCapacity({ requestId: request.id, expectedExecutionId: executionId, terminalReason: "cancelled" });
+      state = IssueWorkflowStateSchema.parse({ ...state, capacity: null, capacityBlocker: null, revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      await projectIssueState(state);
+      return "settled";
+    }
+    if (request.status === "ownership_ambiguous" || request.status === "active") {
+      const capacity = { ...state.capacity, status: "ownership_ambiguous" as const, position: null, reason: null, retryAt: null };
+      const blocker = { category: "ownership_ambiguous" as const, summary: "Forge cannot prove the cancelled external process is terminal.", nextAction: "Verify ownership before releasing capacity.", resumeOperation: state.capacity.operation };
+      state = IssueWorkflowStateSchema.parse({ ...state, capacity, capacityBlocker: blocker, owner: "human", allowedCommands: [], pendingAction: "External ownership verification required", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      await projectIssueState(state);
+      return "ambiguous";
+    }
+    return "none";
+  };
   setHandler(cancelIssueUpdate, async (rawInput) => {
     if (captureInitialProjectionState) await condition(() => initialProjectionComplete);
     const command = PlanCommandInputSchema.parse(rawInput);
     if (command.expectedRevision !== state.revision || ["done", "cancelled"].includes(state.phase)) throw new Error("Issue cancellation is not available in the current phase");
+    let ownershipAmbiguous = false;
     if (state.developerExecutionId && ["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling", "ownership_ambiguous"].includes(state.developerRecoveryStatus ?? "")) {
       const cancellation = await cancelDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, executionId: state.developerExecutionId });
       if (cancellation.status === "completed_before_cancellation") {
@@ -1261,13 +1555,17 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       }
       if (!["cancelled", "cancelled_confirmed", "interrupted"].includes(cancellation.status)) {
         const summary = "summary" in cancellation ? cancellation.summary : "Forge could not confirm Developer termination.";
+        ownershipAmbiguous = true;
         state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: addRevisionCommand(["verify_developer_ownership", "cancel_issue"]), pendingAction: summary, ...recoveryFields("ownership_ambiguous", "reasonCode" in cancellation ? cancellation.reasonCode : "developer-termination-unconfirmed", summary, state.developerLastHeartbeatAt ?? null), activeOperation: null, lastEventId: `${state.workflowId}:${state.revision + 1}` });
         await projectIssueState(state);
         return state;
       }
-    } else if (state.phase === "development" && state.developerExecutionId) {
-      const cancellation = await cancelDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, executionId: state.developerExecutionId });
-      if (cancellation.status !== "cancelled") throw new Error("Developer ownership must be precisely cancelled before issue cancellation");
+      if (state.capacity) await settleCancelledCapacity(state.developerExecutionId);
+    } else {
+      const cancellation = await cancelCurrentCapacity();
+      if (cancellation.executionId) await settleCancelledCapacity(cancellation.executionId);
+      ownershipAmbiguous = cancellation.status === "ownership_ambiguous";
+      if (ownershipAmbiguous) await preserveAmbiguousCapacity();
     }
     let acceptanceStatus = state.acceptanceStatus;
     let acceptanceReasonArtifactId = state.acceptanceReasonArtifactId;
@@ -1279,31 +1577,81 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       const decision = await recordDeliveryDecision({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, actorUserId: command.actorUserId, note: command.note });
       state = IssueWorkflowStateSchema.parse({ ...state, deliveryDecisionArtifactId: decision.artifactId });
     }
-    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: reviseContinueEnabled ? ["continue_work"] : [], pendingAction: "Issue cancelled", acceptanceStatus, acceptanceReasonArtifactId, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: reviseContinueEnabled ? ["continue_work"] : [], pendingAction: ownershipAmbiguous ? "Issue cancelled; operator must verify external ownership" : "Issue cancelled", acceptanceStatus, acceptanceReasonArtifactId, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
     await projectIssueState(state);
     return state;
   });
   setHandler(cancelDevelopmentUpdate, async (rawInput) => {
     assertPayloadWithinLimit("cancel development command", rawInput);
     const command = StartPlanningInputSchema.parse(rawInput);
-    if (commandAlreadyProcessed(command.commandId)) return state;
-    if (!state.developerExecutionId) {
+    if (!patched(durableCapacityPatch)) {
+      if (commandAlreadyProcessed(command.commandId)) return state;
+      if (!state.developerExecutionId) {
+        await withStateMutation(() => {
+          if (state.revision !== command.expectedRevision || state.phase !== "development") throw new Error("Developer cancellation was superseded by another command");
+          state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${state.workflowId}:${state.revision + 1}`, activeOperation: null });
+          markCommandProcessed(command.commandId);
+          if (shouldContinueAsNew(state.revision)) continuationRequested = true;
+        });
+        await projectIssueState(state);
+        return state;
+      }
+      const executionId = state.developerExecutionId;
       await withStateMutation(() => {
         if (state.revision !== command.expectedRevision || state.phase !== "development") throw new Error("Developer cancellation was superseded by another command");
-        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${state.workflowId}:${state.revision + 1}`, activeOperation: null });
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: [], pendingAction: "Cancelling Developer turn", lastEventId: `${state.workflowId}:${state.revision + 1}`, ...recoveryFields("cancellation_requested", null, "Cancellation was sent to the recorded Developer supervisor.", state.developerLastHeartbeatAt ?? null), activeOperation: null });
         markCommandProcessed(command.commandId);
+      });
+      await projectIssueState(state);
+      const result = await cancelDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, executionId });
+      await withStateMutation(() => {
+        if (result.status === "completed_before_cancellation") {
+          if (!applyCompletedDeveloperResult(result.result, "Developer result won the cancellation race and was claimed.")) throw new Error("Completed Developer result is invalid");
+          return;
+        }
+        const cancelled = result.status === "cancelled" || result.status === "cancelled_confirmed";
+        const interrupted = result.status === "interrupted";
+        const ambiguous = result.status === "ownership_ambiguous" || result.status === "termination_failed";
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: addRevisionCommand(cancelled || interrupted ? ["retry_development", "cancel_issue"] : ambiguous ? ["verify_developer_ownership", "cancel_issue"] : ["retry_development", "cancel_issue"]), pendingAction: cancelled ? "Developer turn cancelled; preserved work is available for retry" : interrupted ? result.summary : ambiguous ? result.summary : "Developer completed before cancellation; retry is disabled until the result is reconciled", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerOutcome: null, ...recoveryFields(cancelled ? "cancelled" : interrupted ? "interrupted" : ambiguous ? "ownership_ambiguous" : "result_pending_claim", "reasonCode" in result ? result.reasonCode : null, cancelled ? "Developer termination was confirmed; the worktree was preserved." : "summary" in result ? result.summary : "The Developer result won the cancellation race.", state.developerLastHeartbeatAt ?? null), activeOperation: null });
         if (shouldContinueAsNew(state.revision)) continuationRequested = true;
       });
       await projectIssueState(state);
+      void command;
       return state;
     }
+    if (commandAlreadyProcessed(command.commandId)) return state;
     const executionId = state.developerExecutionId;
+    const hasCapacityOwnership = state.capacity !== null;
     await withStateMutation(() => {
       if (state.revision !== command.expectedRevision || state.phase !== "development") throw new Error("Developer cancellation was superseded by another command");
-      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: [], pendingAction: "Cancelling Developer turn", lastEventId: `${state.workflowId}:${state.revision + 1}`, ...recoveryFields("cancellation_requested", null, "Cancellation was sent to the recorded Developer supervisor.", state.developerLastHeartbeatAt ?? null), activeOperation: null });
+      state = IssueWorkflowStateSchema.parse({
+        ...state,
+        revision: state.revision + 1,
+        phase: executionId || hasCapacityOwnership ? "delivery_blocked" : "ready_for_development",
+        owner: executionId || hasCapacityOwnership ? "human" : "lead",
+        allowedCommands: executionId || hasCapacityOwnership ? [] : ["start_development", "cancel_issue"],
+        pendingAction: executionId || hasCapacityOwnership ? "Cancelling Developer turn" : "Start development",
+        lastEventId: `${state.workflowId}:${state.revision + 1}`,
+        ...(executionId || hasCapacityOwnership ? recoveryFields("cancellation_requested", null, "Cancellation was sent to the recorded Developer supervisor.", state.developerLastHeartbeatAt ?? null) : {}),
+        activeOperation: null,
+      });
       markCommandProcessed(command.commandId);
+      if (!executionId && !hasCapacityOwnership && shouldContinueAsNew(state.revision)) continuationRequested = true;
     });
     await projectIssueState(state);
+    if (!executionId && !hasCapacityOwnership) return state;
+    if (!executionId) {
+      const cancellation = await cancelCurrentCapacity();
+      if (cancellation.status === "ownership_ambiguous") {
+        await preserveAmbiguousCapacity();
+      } else {
+        await withStateMutation(() => {
+          state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: "Start development", lastEventId: `${state.workflowId}:${state.revision + 1}`, activeOperation: null });
+        });
+      }
+      await projectIssueState(state);
+      return state;
+    }
     const result = await cancelDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, executionId });
     await withStateMutation(() => {
       if (result.status === "completed_before_cancellation") {
@@ -1316,6 +1664,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: addRevisionCommand(cancelled || interrupted ? ["retry_development", "cancel_issue"] : ambiguous ? ["verify_developer_ownership", "cancel_issue"] : ["retry_development", "cancel_issue"]), pendingAction: cancelled ? "Developer turn cancelled; preserved work is available for retry" : interrupted ? result.summary : ambiguous ? result.summary : "Developer completed before cancellation; retry is disabled until the result is reconciled", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerOutcome: null, ...recoveryFields(cancelled ? "cancelled" : interrupted ? "interrupted" : ambiguous ? "ownership_ambiguous" : "result_pending_claim", "reasonCode" in result ? result.reasonCode : null, cancelled ? "Developer termination was confirmed; the worktree was preserved." : "summary" in result ? result.summary : "The Developer result won the cancellation race.", state.developerLastHeartbeatAt ?? null), activeOperation: null });
       if (shouldContinueAsNew(state.revision)) continuationRequested = true;
     });
+    if (["cancelled", "cancelled_confirmed", "interrupted"].includes(result.status) && state.capacity) await settleCancelledCapacity(executionId);
+    if ((result.status === "ownership_ambiguous" || result.status === "termination_failed") && state.capacity) await preserveAmbiguousCapacity();
     await projectIssueState(state);
     void command;
     return state;
@@ -1395,6 +1745,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(rejectPlanUpdate, async (rawInput) => {
     assertPayloadWithinLimit("plan revision command", rawInput);
     const command = PlanCommandInputSchema.parse(rawInput);
+    const capacityCancellation = state.phase === "development" && state.developerExecutionId ? { status: "cancelled" as const } : await cancelCurrentCapacity();
     if (state.phase === "development") {
       const cancellation = await cancelDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, executionId: state.developerExecutionId! });
       if (cancellation.status === "completed_before_cancellation") {
@@ -1408,6 +1759,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         await projectIssueState(state);
         return state;
       }
+      if (state.capacity) await settleCancelledCapacity(state.developerExecutionId!);
+    } else if (capacityCancellation.status === "ownership_ambiguous") {
+      await preserveAmbiguousCapacity();
+      return state;
     }
     if (command.expectedRevision !== state.revision) throw new Error("Stale workflow revision");
     state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "planning", owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${state.workflowId}:${state.revision + 1}`, planRevision: null, planMaterial: null, materialCategories: [], supplementalReviewUsed: false, supplementalReviewArtifactId: null, decisionId: null, blocker: null, stateChangedAt: new Date().toISOString() });
@@ -1422,6 +1777,136 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     if (!state.planMaterial) throw new Error("Routine plans do not require revision");
     if (state.phase === "development" && !state.developerExecutionId) throw new Error("Active Developer execution is unavailable for cancellation");
   } });
+  const resumeCapacityOperation = async (operation: CapacityOperation): Promise<IssueWorkflowState> => {
+    if (operation === "lead_planning") {
+      const result = await acquireExternalTurn<LeadPlanningResult>(
+        { operation, role: "lead", profileId: validatedInput.roleProfiles.lead },
+        (capacityRequestId) => runLeadPlanning({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, imageArtifactIds: validatedInput.imageArtifactIds, roleProfiles: validatedInput.roleProfiles, revision: state.revision, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (value) => value.leadExecutionId,
+      );
+      state = IssueWorkflowStateSchema.parse({ ...state, ...result, planRevision: state.revision, planMaterial: result.material, materialCategories: result.materialCategories, supplementalReviewUsed: false, phase: result.material ? "approval" : "ready_for_development", owner: result.material ? "human" : "lead", allowedCommands: result.material ? ["approve_plan", "reject_plan", "cancel_issue"] : ["start_development", "cancel_issue"], pendingAction: result.material ? "Approve final plan" : "Start development", lastEventId: `${state.workflowId}:${state.revision + 1}`, revision: state.revision + 1 });
+      await projectIssueState(state);
+      return state;
+    }
+    if (operation === "developer_execution") {
+      const result = await acquireExternalTurn<WorkflowDeveloperExecutionResult>(
+        { operation, role: "developer", profileId: validatedInput.roleProfiles.developer, sessionRef: state.developerSessionRef, worktreePath: state.worktreePath },
+        (capacityRequestId) => runDeveloperExecution({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, supersedesExecutionId: state.developerExecutionId ?? undefined, reuseWorktree: Boolean(state.worktreePath), ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (value) => value.developerExecutionId,
+      );
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ["review_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], pendingAction: result.outcome === "completed" ? "Lead delivery review" : "Resolve Developer blocker", lastEventId: `${state.workflowId}:${state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome });
+      await projectIssueState(state);
+      return state;
+    }
+    if (operation === "supplemental_review") {
+      if (state.phase !== "approval" || !state.planMaterial || !state.leadOutputArtifactId || !state.leadEvidenceArtifactId || !state.leadSessionRef || !validatedInput.roleProfiles.reviewer) throw new Error("Supplemental review prerequisites changed; start the review command again");
+      const review = await acquireExternalTurn<SupplementalReviewResult>(
+        { operation, role: "reviewer", profileId: validatedInput.roleProfiles.reviewer },
+        (capacityRequestId) => runSupplementalReview({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, imageArtifactIds: validatedInput.imageArtifactIds, roleProfiles: validatedInput.roleProfiles, revision: state.planRevision ?? state.revision, leadOutputArtifactId: state.leadOutputArtifactId!, leadEvidenceArtifactId: state.leadEvidenceArtifactId!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (result) => result.executionId,
+      );
+      const consolidated = await acquireExternalTurn<LeadPlanningResult>(
+        { operation: "lead_consolidation", role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: state.leadSessionRef },
+        (capacityRequestId) => consolidateLeadPlan({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, imageArtifactIds: validatedInput.imageArtifactIds, roleProfiles: validatedInput.roleProfiles, revision: state.revision + 1, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, supplementalReviewArtifactId: review.reviewArtifactId, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (result) => result.leadExecutionId,
+      );
+      state = IssueWorkflowStateSchema.parse({ ...state, ...consolidated, revision: state.revision + 1, phase: "approval", owner: "human", allowedCommands: ["approve_plan", "reject_plan", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${state.workflowId}:${state.revision + 1}`, supplementalReviewUsed: true, supplementalReviewArtifactId: review.reviewArtifactId, planMaterial: consolidated.material, materialCategories: consolidated.materialCategories, planRevision: state.planRevision ?? state.revision });
+      await projectIssueState(state);
+      return state;
+    }
+    if (operation === "lead_consolidation") {
+      if (state.phase !== "approval" || !state.planMaterial || !state.leadOutputArtifactId || !state.leadSessionRef || !state.supplementalReviewArtifactId) throw new Error("Lead consolidation prerequisites changed; request supplemental review again");
+      const consolidated = await acquireExternalTurn<LeadPlanningResult>(
+        { operation, role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: state.leadSessionRef },
+        (capacityRequestId) => consolidateLeadPlan({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, imageArtifactIds: validatedInput.imageArtifactIds, roleProfiles: validatedInput.roleProfiles, revision: state.revision + 1, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, supplementalReviewArtifactId: state.supplementalReviewArtifactId!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (result) => result.leadExecutionId,
+      );
+      state = IssueWorkflowStateSchema.parse({ ...state, ...consolidated, revision: state.revision + 1, phase: "approval", owner: "human", allowedCommands: ["approve_plan", "reject_plan", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${state.workflowId}:${state.revision + 1}`, supplementalReviewUsed: true, planMaterial: consolidated.material, materialCategories: consolidated.materialCategories, planRevision: state.planRevision ?? state.revision });
+      await projectIssueState(state);
+      return state;
+    }
+    if (operation === "delivery_review") {
+      if (state.phase !== "reviewing_delivery" || !state.developerExecutionId || !state.developerSessionRef || !state.worktreePath || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree || !state.deliveryArtifactId || !state.developerEvidenceArtifactId || !state.leadSessionRef || !state.leadOutputArtifactId || !validatedInput.roleProfiles.lead) throw new Error("Delivery review prerequisites changed; start delivery review again");
+      const result = await acquireExternalTurn<WorkflowDeliveryReviewResult>(
+        { operation, role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: state.leadSessionRef, worktreePath: state.worktreePath },
+        (capacityRequestId) => reviewDelivery({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadOutputArtifactId: state.leadOutputArtifactId!, worktreePath: state.worktreePath!, branchName: state.branchName!, subject: { planRevision: state.planRevision ?? state.revision, targetBaseSha: state.targetBaseSha!, subjectCommit: state.resultCommit!, subjectTree: state.resultTree!, developerExecutionId: state.developerExecutionId!, deliveryArtifactId: state.deliveryArtifactId!, developerEvidenceArtifactId: state.developerEvidenceArtifactId!, leadSessionRef: state.leadSessionRef!, developerSessionRef: state.developerSessionRef! }, supersedesReviewId: state.deliveryReviewSupersedesId ?? null, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (review) => review.outcome === "completed" ? review.review.leadExecutionId : review.executionId,
+      );
+      state = result.outcome === "blocked" ? reviewBlockedState(state, result) : repairRequiredState(state, result, validatedInput.repairCycleLimit);
+      await projectIssueState(state);
+      return state;
+    }
+    if (operation === "developer_repair") {
+      const cycle = (state.repairCycle ?? 0) + 1;
+      if (state.phase !== "repair_required" || cycle > validatedInput.repairCycleLimit || !state.deliveryReviewId || (!state.deliveryReviewArtifact && (!state.deliveryRepairPlan || !(state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open"))) || !state.developerExecutionId || !state.developerSessionRef || !state.branchName || !state.targetBaseSha || !state.resultCommit || !state.resultTree || !state.leadSessionRef || !validatedInput.roleProfiles.developer) throw new Error("Developer repair prerequisites changed; start delivery repair again");
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: `Developer repair cycle ${cycle}`, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      await projectIssueState(state);
+      const result = await acquireExternalTurn<WorkflowDeveloperRepairResult>(
+        { operation, role: "developer", profileId: validatedInput.roleProfiles.developer, sessionRef: state.developerSessionRef, worktreePath: state.worktreePath },
+        (capacityRequestId) => runDeveloperRepair({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, planRevision: state.planRevision ?? state.revision, roleProfiles: validatedInput.roleProfiles, leadSessionRef: state.leadSessionRef!, developerSessionRef: state.developerSessionRef!, developerExecutionId: state.developerExecutionId!, reviewId: state.deliveryReviewId!, repairAuthority: state.deliveryRepairAuthority ?? "delivery_review", cycle, repairCycleLimit: validatedInput.repairCycleLimit, ...(state.worktreePath ? { worktreePath: state.worktreePath } : {}), branchName: state.branchName!, targetBaseSha: state.targetBaseSha!, subjectCommit: state.resultCommit!, subjectTree: state.resultTree!, ...(state.deliveryReviewArtifact ? { reviewArtifact: state.deliveryReviewArtifact } : state.deliveryRepairPlanArtifactId && state.deliveryRepairPlanSha256 ? { repairPlanArtifactId: state.deliveryRepairPlanArtifactId, repairPlanSha256: state.deliveryRepairPlanSha256 } : { blockingFindings: state.deliveryBlockingFindings ?? [], repairPlan: state.deliveryRepairPlan! }), ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (repair) => repair.developerExecutionId,
+      );
+      state = result.outcome === "completed" ? repairedDeliveryAwaitingFreshReviewState(state, result) : repairBlockedState(state, result, validatedInput.repairCycleLimit);
+      await projectIssueState(state);
+      return state;
+    }
+    if (operation === "merge_conflict_plan") {
+      if (state.phase !== "merge_conflict_reviewing" || !state.leadSessionRef || !state.leadOutputArtifactId || !state.worktreePath || !state.branchName || !state.forwardMergeId || !state.forwardMergePriorHead || !state.forwardMergeTargetBaseSha || !state.forwardMergeConflictArtifact || typeof state.forwardMergeConflictFileCount !== "number" || !validatedInput.roleProfiles.lead) throw new Error("Conflict-plan prerequisites changed; publish the draft again to revalidate the merge");
+      try {
+        const plan = await acquireExternalTurn<MergeConflictPlanActivityResult>(
+          { operation, role: "lead", profileId: validatedInput.roleProfiles.lead, sessionRef: state.leadSessionRef, worktreePath: state.worktreePath },
+          (capacityRequestId) => planMergeConflict({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectId: validatedInput.projectId, projectRevisionId: validatedInput.projectRevisionId, briefArtifactId: validatedInput.briefArtifactId, planRevision: state.planRevision ?? state.revision, leadSessionRef: state.leadSessionRef!, leadOutputArtifactId: state.leadOutputArtifactId!, worktreePath: state.worktreePath!, branchName: state.branchName!, forwardMergeId: state.forwardMergeId!, priorHead: state.forwardMergePriorHead!, targetBaseSha: state.forwardMergeTargetBaseSha!, conflictArtifact: state.forwardMergeConflictArtifact!, conflictFileCount: state.forwardMergeConflictFileCount!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+          (result) => result.leadExecutionId,
+        );
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_required", owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      } catch {
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["cancel_issue"], pendingAction: "Lead conflict-resolution planning failed; inspect the recorded evidence", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      }
+      await projectIssueState(state);
+      return state;
+    }
+    if (operation === "merge_conflict_resolution") {
+      if (state.phase !== "merge_conflict_required" || !state.mergeResolutionPlanArtifactId || !state.developerExecutionId || !state.developerSessionRef || !state.worktreePath || !state.branchName || !state.forwardMergeId || !state.forwardMergePriorHead || !state.forwardMergeTargetBaseSha || !state.forwardMergeConflictArtifact || typeof state.forwardMergeConflictFileCount !== "number" || !validatedInput.roleProfiles.developer) throw new Error("Conflict-resolution prerequisites changed; revalidate the Lead plan and Developer worktree");
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_resolving", owner: "lead", allowedCommands: [], pendingAction: "Developer resolving forward-merge conflicts", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      await projectIssueState(state);
+      try {
+        const result = await acquireExternalTurn<Awaited<ReturnType<typeof resolveMergeConflict>>>(
+          { operation, role: "developer", profileId: validatedInput.roleProfiles.developer, sessionRef: state.developerSessionRef, worktreePath: state.worktreePath },
+          (capacityRequestId) => resolveMergeConflict({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, planRevision: state.planRevision ?? state.revision, forwardMergeId: state.forwardMergeId!, developerExecutionId: state.developerExecutionId!, developerSessionRef: state.developerSessionRef!, worktreePath: state.worktreePath!, branchName: state.branchName!, priorHead: state.forwardMergePriorHead!, targetBaseSha: state.forwardMergeTargetBaseSha!, conflictArtifact: state.forwardMergeConflictArtifact!, conflictFileCount: state.forwardMergeConflictFileCount!, planArtifactId: state.mergeResolutionPlanArtifactId!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+          (resolution) => resolution.developerExecutionId,
+        );
+        if ("outcome" in result && result.outcome === "verification_blocked") {
+          state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "delivery_blocked", owner: "lead", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], pendingAction: result.summary, targetBaseOutcome: "blocked", targetBaseBlockerCode: result.code, targetBaseBlockerOwner: "lead", targetBaseBlockerRetryable: true, targetBaseBlockerSummary: result.summary, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: "clean", developerEvidenceArtifactId: result.verificationArtifact.id, developerOutcome: "blocked", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        } else {
+          const successfulResult = result as Extract<typeof result, { deliveryArtifactId: string }>;
+          state = applyTargetBaseRevalidation(state, { outcome: "revalidated", checkId: state.forwardMergeId!, checkpoint: state.targetBaseCheckpoint ?? "pre_release", expectedBaseSha: state.targetBaseSha!, observedBaseSha: state.forwardMergeTargetBaseSha!, priorHead: state.forwardMergePriorHead!, priorTree: state.forwardMergePriorTree!, headSha: successfulResult.resultCommit, headTree: successfulResult.resultTree, developerExecutionId: successfulResult.developerExecutionId, deliveryArtifact: { id: successfulResult.deliveryArtifactId, sha256: successfulResult.deliveryArtifactSha256, kind: "forward-merge-delivery" }, verificationArtifact: { id: successfulResult.verificationArtifactId, sha256: successfulResult.verificationArtifactSha256, kind: "forward-merge-verification" } });
+          state = IssueWorkflowStateSchema.parse({ ...state, developerSessionRef: successfulResult.developerSessionRef, deliverySummary: successfulResult.summary, developerEvidenceArtifactId: successfulResult.verificationArtifactId, mergeResolutionDeveloperExecutionId: successfulResult.developerExecutionId, mergeResolutionDeveloperSessionRef: successfulResult.developerSessionRef });
+        }
+      } catch {
+        state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution is incomplete; retry the same owned turn", lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      }
+      await projectIssueState(state);
+      return state;
+    }
+    if (operation === "final_review") return runFinalReviewTurn();
+    throw new Error(`Capacity retry for ${operation} requires the original phase command to revalidate its inputs`);
+  };
+  setHandler(retryCapacityUpdate, async (rawInput) => {
+    const command = StartPlanningInputSchema.parse(rawInput);
+    if (command.expectedRevision !== state.revision || !state.capacityBlocker || !state.allowedCommands.includes("retry_capacity")) throw new Error("Capacity retry is not available in the current state");
+    if (state.capacityBlocker.category === "ownership_ambiguous") await reconcileCapacityOwnership({});
+    if (state.capacity) {
+      const request = await inspectCapacity({ requestId: state.capacity.requestId });
+      if (["active", "ownership_ambiguous"].includes(request.status)) throw new Error("Capacity ownership must be reconciled before retry");
+    }
+    const operation = state.capacityBlocker.resumeOperation;
+    const nextPhase = operation === "lead_planning" ? "planning" : operation === "developer_execution" ? "development" : operation === "delivery_review" ? "reviewing_delivery" : operation === "developer_repair" ? "repair_required" : operation === "final_review" ? "final_review" : operation === "merge_conflict_resolution" ? "merge_conflict_required" : operation === "merge_conflict_plan" ? "merge_conflict_reviewing" : "approval";
+    const nextCommands = nextPhase === "planning" ? [] : nextPhase === "development" ? ["cancel_development", "cancel_issue"] : nextPhase === "reviewing_delivery" ? [] : nextPhase === "final_review" ? [] : nextPhase === "repair_required" ? ["cancel_issue"] : nextPhase === "merge_conflict_required" ? ["cancel_issue"] : nextPhase === "merge_conflict_reviewing" ? ["cancel_issue"] : ["cancel_issue"];
+    state = IssueWorkflowStateSchema.parse({ ...state, capacity: null, capacityBlocker: null, phase: nextPhase, owner: nextPhase === "approval" ? "human" : "lead", allowedCommands: nextCommands, pendingAction: `Retry ${operation.replaceAll("_", " ")}`, revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    await projectIssueState(state);
+    void command;
+    return resumeCapacityOperation(operation);
+  });
   setHandler(recordProgressUpdate, async (rawInput) => {
     assertPayloadWithinLimit("recordProgress command", rawInput);
     const command = RecordProgressInputSchema.parse(rawInput);
@@ -1465,7 +1950,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       const sleepingRevision = state.revision;
       const sleepingReleaseId = state.releaseId;
       const sleepingHeadSha = state.expectedHeadSha;
-      const pollAt = state.ciNextPollAt ? Date.parse(state.ciNextPollAt) : Date.now();
+      const pollAt = state.ciNextPollAt ? isoEpochMillis(state.ciNextPollAt) : Date.now();
       const delay = Math.max(0, pollAt - Date.now());
       if (delay > 0) await sleep(delay);
       if (state.phase !== "ci_waiting" || state.revision !== sleepingRevision || state.releaseId !== sleepingReleaseId || state.expectedHeadSha !== sleepingHeadSha) continue;

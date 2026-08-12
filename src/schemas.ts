@@ -25,6 +25,8 @@ export const ForgeEnvironmentSchema = z.object({
   FORGE_DELIVERY_REPAIR_LIMIT: z.string().regex(/^\d+$/).optional(),
   FORGE_CODEX_CAPACITY: z.string().regex(/^\d+$/).optional(),
   FORGE_DEVELOPMENT_AUTO_LOGIN: z.literal("1").optional(),
+  FORGE_CODEX_WAIT_LIMIT_MS: z.string().regex(/^\d+$/).optional(),
+  FORGE_CODEX_RATE_LIMIT_ATTEMPTS: z.string().regex(/^\d+$/).optional(),
 }).passthrough();
 
 export const ForgeConfigSchema = z.object({
@@ -45,7 +47,9 @@ export const ForgeConfigSchema = z.object({
   temporalApiKey: z.string().min(1).optional(),
   taskQueue: z.string().min(1),
   deliveryRepairCycleLimit: z.number().int().min(0).max(5),
-  externalTurnCapacity: z.number().int().min(1).max(64),
+  externalTurnCapacity: z.number().int().min(1).max(32),
+  externalTurnWaitLimitMs: z.number().int().min(60_000).max(86_400_000),
+  externalTurnRateLimitAttempts: z.number().int().min(1).max(20),
   installationId: z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/),
   developmentAutoLogin: z.boolean(),
 }).superRefine((config, context) => {

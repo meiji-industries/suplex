@@ -79,7 +79,7 @@ function relativeTime(timestamp: string): string {
   return `${Math.floor(elapsed / 60_000)}m ago`;
 }
 
-type ApiProfile = { id: string; name: string; model: string; reasoningLevel: string; servicePriority: string; capacity: number };
+type ApiProfile = { id: string; name: string; model: string; reasoningLevel: string; servicePriority: string; capacity: number | null; effectiveCapacity: number };
 type ApiModel = { id: string; displayName: string; description: string; status: "active" | "retired"; sortOrder: number };
 type ApiCheck = { name: string; status: string; conclusion?: string };
 type ApiInvitation = { id: string; kind: "bootstrap" | "user" | "recovery"; displayName: string; expiresAt: string; status: "active" | "expired" | "consumed" | "replaced"; createdAt: string };
@@ -195,7 +195,9 @@ function AdminView(): ReactElement {
   const [profileModel, setProfileModel] = useState("gpt-5.6-sol");
   const [profileReasoning, setProfileReasoning] = useState("medium");
   const [profilePriority, setProfilePriority] = useState("standard");
-  const [profileCapacity, setProfileCapacity] = useState("2");
+  const [profileCapacity, setProfileCapacity] = useState("");
+  const [capacityLanes, setCapacityLanes] = useState<Array<{ profileId: string; activeCount: number; queuedCount: number }>>([]);
+  const [capacityEdits, setCapacityEdits] = useState<Record<string, string>>({});
   const [modelId, setModelId] = useState("");
   const [modelName, setModelName] = useState("");
   const [inviteToken, setInviteToken] = useState("");
@@ -206,18 +208,20 @@ function AdminView(): ReactElement {
 
   const reload = useCallback(async (): Promise<void> => {
     try {
-      const [userList, invitationList, credentialList, profileList, modelList] = await Promise.all([
+      const [userList, invitationList, credentialList, profileList, modelList, laneList] = await Promise.all([
         readJson<{ users: ApiUser[] }>("/api/admin/users"),
         readJson<{ invitations: ApiInvitation[] }>("/api/admin/invitations"),
         readJson<{ credentials: ApiCredential[] }>("/api/admin/credentials"),
         readJson<{ profiles: ApiProfile[] }>("/api/profiles").catch(() => ({ profiles: [] })),
         readJson<{ models: ApiModel[] }>("/api/admin/models").catch(() => ({ models: [] })),
+        readJson<{ lanes: Array<{ profileId: string; activeCount: number; queuedCount: number }> }>("/api/admin/capacity").catch(() => ({ lanes: [] })),
       ]);
       setUsers(userList.users);
       setInvitations(invitationList.invitations);
       setCredentials(credentialList.credentials);
       setProfiles(profileList.profiles);
       setModels(modelList.models);
+      setCapacityLanes(laneList.lanes);
       const activeModels = modelList.models.filter((model) => model.status === "active");
       setProfileModel((current) => activeModels.some((model) => model.id === current) ? current : activeModels[0]?.id ?? "");
     } catch (reason) {
@@ -245,7 +249,11 @@ function AdminView(): ReactElement {
     } catch { setError("Unable to copy invitation"); }
   };
   const createProfile = async (): Promise<void> => {
-    try { await readJson("/api/admin/profiles", { method: "POST", body: JSON.stringify({ name: profileName, model: profileModel, reasoningLevel: profileReasoning, servicePriority: profilePriority, capacity: Number(profileCapacity) }) }); setProfileName(""); await reload(); } catch { setError("Unable to create profile"); }
+    try { await readJson("/api/admin/profiles", { method: "POST", body: JSON.stringify({ name: profileName, model: profileModel, reasoningLevel: profileReasoning, servicePriority: profilePriority, capacity: profileCapacity.trim() === "" ? null : Number(profileCapacity) }) }); setProfileName(""); await reload(); } catch { setError("Unable to create profile"); }
+  };
+  const updateCapacity = async (profile: ApiProfile): Promise<void> => {
+    const raw = capacityEdits[profile.id] ?? (profile.capacity === null ? "" : String(profile.capacity));
+    try { await readJson(`/api/admin/profiles/${encodeURIComponent(profile.id)}/capacity`, { method: "PATCH", body: JSON.stringify({ capacity: raw.trim() === "" ? null : Number(raw) }) }); await reload(); } catch { setError("Unable to update capacity"); }
   };
   const createModel = async (): Promise<void> => {
     try {
@@ -349,10 +357,10 @@ function AdminView(): ReactElement {
               <Field><FieldLabel htmlFor="profile-model">Model</FieldLabel><Select value={profileModel || null} onValueChange={(value) => setProfileModel(value ?? "")}><SelectTrigger id="profile-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{models.filter((model) => model.status === "active").map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field>
               <Field><FieldLabel htmlFor="profile-reasoning">Reasoning level</FieldLabel><Select value={profileReasoning} onValueChange={(value) => setProfileReasoning(value ?? "medium")}><SelectTrigger id="profile-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem></SelectContent></Select></Field>
               <Field><FieldLabel htmlFor="profile-priority">Service priority</FieldLabel><Select value={profilePriority} onValueChange={(value) => setProfilePriority(value ?? "standard")}><SelectTrigger id="profile-priority"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="standard">Standard</SelectItem><SelectItem value="priority">Priority</SelectItem></SelectContent></Select></Field>
-              <Field><FieldLabel htmlFor="profile-capacity">Capacity</FieldLabel><Input id="profile-capacity" inputMode="numeric" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><FieldDescription>Maximum concurrent work slots.</FieldDescription></Field>
+              <Field><FieldLabel htmlFor="profile-capacity">Capacity override</FieldLabel><Input id="profile-capacity" inputMode="numeric" placeholder="Default" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><FieldDescription>Blank inherits the host default.</FieldDescription></Field>
               <Button size="sm" onClick={() => void createProfile()} disabled={!profileName.trim() || !profileModel}>Create profile</Button>
             </FieldGroup>
-            <div className="text-xs">{profiles.map((profile) => <div className="flex min-h-9 items-center justify-between gap-3" key={profile.id}><span className="font-medium">{profile.name}</span><span className="truncate text-[11px] text-muted-foreground">{profile.model} · {profile.reasoningLevel} · {profile.servicePriority} · {profile.capacity} slots</span></div>)}</div>
+            <div className="text-xs">{profiles.map((profile) => { const lane = capacityLanes.find((item) => item.profileId === profile.id); const edit = capacityEdits[profile.id] ?? (profile.capacity === null ? "" : String(profile.capacity)); return <div className="flex min-h-9 flex-wrap items-center justify-between gap-2" key={profile.id}><span className="font-medium">{profile.name}</span><span className="flex items-center gap-2 text-[11px] text-muted-foreground"><span>{profile.capacity === null ? `Default · ${profile.effectiveCapacity} slots effective` : `Override · ${profile.capacity} slots`} · {lane?.activeCount ?? 0} active / {lane?.queuedCount ?? 0} queued</span><Input aria-label={`${profile.name} capacity`} inputMode="numeric" placeholder="Default" value={edit} onChange={(event) => setCapacityEdits((current) => ({ ...current, [profile.id]: event.target.value }))} /><Button size="sm" variant="ghost" onClick={() => void updateCapacity(profile)}>Save</Button></span></div>; })}</div>
           </section>
           <section className="bg-background p-4">
             <div className="mb-1 flex items-center justify-between"><span className="text-xs font-semibold">Model catalog</span><span className="text-[11px] text-muted-foreground">Database backed</span></div>
@@ -709,7 +717,7 @@ async function fileAsImage(file: File): Promise<{ filename: string; mimeType: st
   });
 }
 
-type TaskPlanAction = "request-supplemental-review" | "approve-plan" | "reject-plan" | "start-development" | "retry-development" | "cancel-development" | "verify-developer-ownership" | "review-delivery" | "repair-delivery" | "record-delivery-decision" | "publish-draft" | "resolve-merge-conflict" | "retry-target-base-reconciliation" | "retry-forward-merge-verification" | "reconcile-ci" | "repair-ci" | "final-review" | "accept-delivery" | "request-delivery-changes" | "reconcile-acceptance" | "reconcile-merge" | "cancel";
+type TaskPlanAction = "request-supplemental-review" | "approve-plan" | "reject-plan" | "start-development" | "retry-development" | "cancel-development" | "verify-developer-ownership" | "review-delivery" | "repair-delivery" | "record-delivery-decision" | "publish-draft" | "resolve-merge-conflict" | "retry-target-base-reconciliation" | "retry-forward-merge-verification" | "reconcile-ci" | "repair-ci" | "final-review" | "accept-delivery" | "request-delivery-changes" | "reconcile-acceptance" | "reconcile-merge" | "retry-capacity" | "cancel";
 type PlanRevisionInput = { worktreeDisposition: "reuse" | "new"; reason: string; exactBaseSha?: string };
 
 function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork }: { task: ApiTask; busy: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void> }): ReactElement {
@@ -736,6 +744,7 @@ function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, 
       {task.allowedCommands.includes("review_delivery") ? <Button size="sm" onClick={() => void onPlanAction("review-delivery")} disabled={disabled}>{busy ? "Reviewing…" : "LGTM"}</Button> : null}
       {task.allowedCommands.includes("repair_delivery") ? <Button size="sm" onClick={() => void onPlanAction("repair-delivery")} disabled={disabled}>{busy ? "Repairing…" : "Repair delivery"}</Button> : null}
       {task.allowedCommands.includes("record_delivery_decision") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("record-delivery-decision", "Member decision recorded")} disabled={disabled}>Record decision</Button> : null}
+      {task.allowedCommands.includes("retry_capacity") ? <Button size="sm" onClick={() => void onPlanAction("retry-capacity")} disabled={disabled}>Retry capacity</Button> : null}
       {task.allowedCommands.includes("publish_draft") ? <Button size="sm" onClick={() => void onPlanAction("publish-draft")} disabled={disabled}>{busy ? "Publishing…" : task.release?.status === "blocked" ? "Retry release" : "Publish draft"}</Button> : null}
       {task.allowedCommands.includes("resolve_merge_conflict") ? <Button size="sm" onClick={() => void onPlanAction("resolve-merge-conflict")} disabled={disabled}>{busy ? "Resolving…" : "Resolve conflicts"}</Button> : null}
       {task.allowedCommands.includes("retry_target_base_reconciliation") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("retry-target-base-reconciliation")} disabled={disabled}>{busy ? "Retrying…" : "Retry reconciliation"}</Button> : null}
@@ -845,6 +854,7 @@ function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onSta
                 <div aria-live="polite" className="text-[11px] text-muted-foreground">{task.projection.status === "lagging" ? `Projection lag: r${task.projection.projectedRevision} → r${task.projection.authoritativeRevision}` : `Projection current · r${task.projection.projectedRevision}`}</div>
                 <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} />
                 <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action === "cancel-issue" ? "cancel" : action)} />
+                {task.capacity ? <div className="text-xs text-muted-foreground">{task.capacity.status === "queued" ? `Queued${task.capacity.position ? ` · position ${task.capacity.position}` : ""}` : task.capacity.status === "rate_limited" ? `Waiting for profile reset${task.capacity.retryAt ? ` · ${relativeTime(task.capacity.retryAt)}` : ""}` : task.capacity.status === "active" ? `Running · ${task.capacity.profileName}` : task.capacity.status === "exhausted" ? "Capacity exhausted" : "Ownership needs verification"}</div> : null}
                 {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
               </div>
             </header>

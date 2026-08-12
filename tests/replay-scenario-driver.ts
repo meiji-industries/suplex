@@ -4,6 +4,7 @@ import type { NativeConnection } from "@temporalio/worker";
 import { Worker } from "@temporalio/worker";
 
 import type { DurableArtifactReference, IssueActivities, IssueWorkflowInput, IssueWorkflowState } from "../src/temporal/issue-contracts.js";
+import type { CapacityRequestSnapshot, WorkflowCapacityState } from "../src/capacity-contracts.js";
 import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, continueWorkUpdate, issueStateQuery, issueWorkflow, publishDraftUpdate, reconcileAcceptanceUpdate, reconcileMergeUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, revisePlanUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, startDevelopmentUpdate, startPlanningUpdate } from "../src/temporal/workflows.js";
 import { buildProductionWorkflowBundle, temporalDataConverter } from "../src/temporal/workflow-bundle.js";
 
@@ -74,6 +75,8 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
   const ciAttempts = new Map<string, number>();
   const developmentAttempts = new Map<string, number>();
   const scenarioByExecutionId = new Map<string, ReplayScenario>();
+  const capacityRequests = new Map<string, CapacityRequestSnapshot>();
+  const capacityState = (request: CapacityRequestSnapshot): WorkflowCapacityState => ({ requestId: request.id, logicalTurnKey: request.logicalTurnKey, workflowRevision: request.workflowRevision, operation: request.operation, role: request.role, profileId: request.profileId, laneKey: request.laneKey, status: request.status, position: null, reason: request.waitReason, requestedAt: request.requestedAt, retryAt: request.retryAt, rateLimitAttempts: request.rateLimitAttempts });
   const scenarioFor = (workflowId: string): ReplayScenario => replayScenarios.find((scenario) => workflowId.endsWith(scenario))!;
   const activities: IssueActivities = {
     async projectIssueState(event) {
@@ -94,7 +97,7 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
     },
     async runSupplementalReview() { throw new Error("Supplemental review is not used by replay scenarios"); },
     async consolidateLeadPlan() { throw new Error("Plan consolidation is not used by replay scenarios"); },
-    async planDeliveryRepair(activityInput) { return { planId: `repair-plan-${activityInput.workflowId}`, planArtifactId: `repair-plan-artifact-${activityInput.workflowId}`, planSha256: "a".repeat(64), evidenceArtifactId: `repair-plan-evidence-${activityInput.workflowId}`, leadSessionRef: activityInput.leadSessionRef, summary: "Controlled repair plan", findings: activityInput.findings }; },
+    async planDeliveryRepair(activityInput) { return { planId: `repair-plan-${activityInput.workflowId}`, leadExecutionId: `repair-plan-execution-${activityInput.workflowId}`, planArtifactId: `repair-plan-artifact-${activityInput.workflowId}`, planSha256: "a".repeat(64), evidenceArtifactId: `repair-plan-evidence-${activityInput.workflowId}`, leadSessionRef: activityInput.leadSessionRef, summary: "Controlled repair plan", findings: activityInput.findings }; },
     async recordPlanDecision(activityInput) { return { decisionId: `decision-${activityInput.workflowId}-${activityInput.planRevision}` }; },
     async runDeveloperExecution(activityInput) {
       const scenario = scenarioFor(activityInput.workflowId);
@@ -188,6 +191,51 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
     async planMergeConflict(activityInput) { return { planId: "conflict-plan", planArtifactId: "conflict-plan-artifact", evidenceArtifactId: "conflict-plan-evidence", leadExecutionId: "conflict-plan-execution", leadSessionRef: activityInput.leadSessionRef, summary: "Controlled conflict plan" }; },
     async resolveMergeConflict() { throw new Error("Conflict resolution is not used by replay scenarios"); },
     async resolveMergeConflictSupervised() { throw new Error("Conflict resolution is not used by replay scenarios"); },
+    async requestCapacity(activityInput) {
+      const requestedAt = "2026-08-12T00:00:00.000Z";
+      const request: CapacityRequestSnapshot = { id: `capacity-${activityInput.logicalTurnKey}`, logicalTurnKey: activityInput.logicalTurnKey, companyId: activityInput.companyId, taskId: activityInput.taskId, workflowId: activityInput.workflowId, projectRevisionId: activityInput.projectRevisionId, workflowRevision: activityInput.workflowRevision, operation: activityInput.operation, role: activityInput.role, profileId: activityInput.profileId, provider: "codex", model: "fixture-model", reasoningLevel: "medium", servicePriority: "standard", laneKey: `codex:${activityInput.profileId}`, requestedCapacity: 2, status: "queued", waitReason: null, skipReason: null, sessionRef: activityInput.sessionRef ?? null, worktreePath: activityInput.worktreePath ?? null, executionKind: null, executionId: null, requestedAt, deadlineAt: "2099-01-01T00:00:00.000Z", acquiredAt: null, heartbeatAt: null, retryAt: null, cancelledAt: null, releasedAt: null, updatedAt: requestedAt, rateLimitAttempts: 0, terminalReason: null };
+      capacityRequests.set(request.id, request);
+      return request;
+    },
+    async tryAcquireCapacity(activityInput) {
+      const request = capacityRequests.get(activityInput.requestId)!;
+      const active = { ...request, status: "active" as const, acquiredAt: request.requestedAt };
+      capacityRequests.set(active.id, active);
+      return { status: "active", publicState: capacityState(active) };
+    },
+    async inspectCapacity(activityInput) { return capacityRequests.get(activityInput.requestId)!; },
+    async requeueCapacity(activityInput) {
+      const request = capacityRequests.get(activityInput.requestId)!;
+      const queued = { ...request, status: "queued" as const, waitReason: null, retryAt: null };
+      capacityRequests.set(queued.id, queued);
+      return queued;
+    },
+    async cancelCapacity(activityInput) {
+      const request = capacityRequests.get(activityInput.requestId)!;
+      const cancelled = { ...request, status: "cancelled" as const, cancelledAt: request.updatedAt, releasedAt: request.updatedAt, terminalReason: "cancelled" as const };
+      capacityRequests.set(cancelled.id, cancelled);
+      return cancelled;
+    },
+    async finalizeCapacity(activityInput) {
+      const request = capacityRequests.get(activityInput.requestId)!;
+      const released = { ...request, status: "released" as const, releasedAt: request.updatedAt, terminalReason: activityInput.terminalReason };
+      capacityRequests.set(released.id, released);
+      return released;
+    },
+    async rateLimitCapacity(activityInput) {
+      const request = capacityRequests.get(activityInput.requestId)!;
+      const limited = { ...request, status: "rate_limited" as const, retryAt: activityInput.retryAt ?? "2099-01-01T00:00:00.000Z", rateLimitAttempts: request.rateLimitAttempts + 1, terminalReason: "rate_limited" as const };
+      capacityRequests.set(limited.id, limited);
+      return limited;
+    },
+    async reconcileCapacityOwnership() { return []; },
+    async cancelCapacityExecution(activityInput) {
+      const request = capacityRequests.get(activityInput.requestId);
+      if (!request) return { status: "cancelled" };
+      const cancelled = { ...request, status: "cancelled" as const, cancelledAt: request.updatedAt, releasedAt: request.updatedAt, terminalReason: "cancelled" as const };
+      capacityRequests.set(cancelled.id, cancelled);
+      return { status: "cancelled", ...(request.executionId ? { executionId: request.executionId } : {}) };
+    },
   };
 
   function projectionsForRelease(releaseId: string): string {
@@ -202,7 +250,7 @@ export async function runReplayScenarioCorpus(input: { client: WorkflowClient; c
       const workflowId = `fixture-${scenario}`;
       projections.set(workflowId, []);
       developerGates.set(workflowId, deferred());
-      const workflowInput: IssueWorkflowInput = { workflowId, companyId: "fixture-company", projectId: "fixture-project", issueId: `fixture-issue-${scenario}`, projectRevisionId: "fixture-project-revision", briefArtifactId: "fixture-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: {}, supplementalReview: false, ...(scenario === "continue_as_new" ? { continueAsNewAfter: 2 } : {}) };
+      const workflowInput: IssueWorkflowInput = { workflowId, companyId: "fixture-company", projectId: "fixture-project", issueId: `fixture-issue-${scenario}`, projectRevisionId: "fixture-project-revision", briefArtifactId: "fixture-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { lead: "fixture-profile", developer: "fixture-profile" }, supplementalReview: false, ...(scenario === "continue_as_new" ? { continueAsNewAfter: 2 } : {}) };
       const handle = await input.client.start(issueWorkflow, { workflowId, taskQueue: input.taskQueue, args: [workflowInput] });
       let state = await waitForState(handle, (candidate) => candidate.phase === "backlog");
       state = await handle.executeUpdate(startPlanningUpdate, { args: [command(state.revision, `${scenario}-plan-1`)], updateId: `${scenario}-plan-1` });

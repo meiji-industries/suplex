@@ -10,6 +10,7 @@ import type { CiService } from "./ci.js";
 import type { ReleaseService } from "./github-release.js";
 import type { ForgeDatabase } from "./database.js";
 import type { ForgeConfig } from "./config.js";
+import type { CapacityManager } from "./capacity.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
 import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
@@ -42,6 +43,7 @@ export interface AppDependencies {
   database?: ForgeDatabase;
   rebuild?: ProjectionRebuildService;
   logger?: Logger | false;
+  capacity?: CapacityManager;
   https?: { key: Buffer; cert: Buffer };
   frontendDevelopment?: {
     transformIndexHtml(url: string, html: string): Promise<string>;
@@ -89,7 +91,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
   void app.register(health, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config });
   if (auth) {
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
-    void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}), ...(rebuild ? { rebuild } : {}) });
+    void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}), ...(rebuild ? { rebuild } : {}), ...(dependencies.capacity ? { capacity: dependencies.capacity } : {}) });
   }
   if (!dependencies.frontendDevelopment) void app.register(assets, { prefix: "/assets" });
 }

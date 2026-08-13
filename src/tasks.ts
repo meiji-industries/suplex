@@ -5,7 +5,7 @@ import { AuthFailure, AuthService } from "./auth.js";
 import type { CheckConclusion, CheckStatus, CiOutcome, CiOwner } from "./ci.js";
 import type { ForgeConfig } from "./config.js";
 import { ArtifactFailure, ArtifactManifestEntrySchema, ArtifactStore, type ArtifactManifestEntry, type PlannedArtifact, type StoredArtifact } from "./artifacts.js";
-import { LeadOutputSchema, SupplementalReviewSchema, type LeadOutput, type SupplementalReview } from "./codex-lead.js";
+import { PersistedLeadOutputSchema, SupplementalReviewSchema, type PersistedLeadOutput, type SupplementalReview } from "./codex-lead.js";
 import { CapacityManager } from "./capacity.js";
 import type { PublicCapacityStatus } from "./capacity-contracts.js";
 import { ForgeDatabase, projectionStateHash } from "./database.js";
@@ -260,7 +260,7 @@ export interface TaskDeliveryReviewHistoryEntry {
 export interface PlanArtifactView {
   subject: PlanSubject;
   summary: string;
-  content: LeadOutput;
+  content: PersistedLeadOutput;
   createdAt: string;
   status: "current" | "superseded";
 }
@@ -455,7 +455,7 @@ export interface ForgeTask {
     outputSha256: string;
     evidenceArtifactId: string;
     evidenceSha256: string;
-    content: LeadOutput;
+    content: PersistedLeadOutput;
   };
   targetBaseReconciliation: {
     checkId: string | null;
@@ -1609,7 +1609,7 @@ export class TaskService {
       if (planRow.artifactSha256 !== planRow.storedSha256) return [];
       try {
         const subject = PlanSubjectSchema.parse({ companyId: row.company_id, issueId: row.id, workflowId: row.workflow_id, originalPlanRevision: planRow.originalPlanRevision, outputId: planRow.id, outputRevision: planRow.outputRevision, finalVersion: planRow.finalVersion, artifactId: planRow.artifactId, artifactSha256: planRow.artifactSha256, leadSessionRef: planRow.leadSessionRef, leadExecutionId: planRow.leadExecutionId, evidenceManifestArtifactId: planRow.evidenceManifestArtifactId, evidenceManifestSha256: planRow.evidenceManifestSha256 });
-        const content = LeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: planRow.storagePath, sha256: planRow.storedSha256 }).toString("utf8")));
+        const content = PersistedLeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: planRow.storagePath, sha256: planRow.storedSha256 }).toString("utf8")));
         return [{ subject, summary: planRow.summary, content, createdAt: planRow.createdAt, status: samePlanSubject(subject, finalSubject!) ? "current" : "superseded" }];
       } catch {
         return [];
@@ -1848,7 +1848,7 @@ export class TaskService {
       FROM forge_issue_outputs o JOIN forge_artifacts a ON a.id = o.output_artifact_id JOIN forge_artifacts e ON e.id = o.evidence_artifact_id
       WHERE o.task_id = ? AND o.company_id = ? ORDER BY o.revision DESC LIMIT 1`).get(taskId, companyId) as LeadOutputRow | undefined);
     if (!row) return undefined;
-    const content = LeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
+    const content = PersistedLeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
     return { kind: row.kind, summary: row.summary, sessionRef: row.session_ref, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, outputSha256: row.output_sha256, evidenceArtifactId: row.evidence_artifact_id, evidenceSha256: row.evidence_sha256, content };
   }
 

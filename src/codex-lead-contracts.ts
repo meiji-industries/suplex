@@ -92,6 +92,26 @@ export const DecisionBlockerSchema = z.object({
 
 export const LeadOutputSchema = z.discriminatedUnion("kind", [LeadPlanSchema, DecisionBlockerSchema]);
 export const LeadOutputJsonSchema = z.toJSONSchema(LeadOutputSchema);
+
+// Lead plans are persisted as immutable artifacts. Plans written before exact
+// plan authority did not record repository paths or materiality evidence, so
+// projection readers must be able to display those historical artifacts after
+// an upgrade. New provider output continues to use LeadOutputSchema above.
+const PersistedLegacyLeadPlanSchema = z.object({
+  ...LeadPlanSchema.shape,
+  affectedPaths: z.array(z.string().min(1).max(1_000)).max(128).default([]),
+  materiality: z.array(z.object({
+    category: PlanMaterialCategorySchema,
+    rationale: z.string().min(1).max(500),
+    evidenceRefs: z.array(z.string().min(1).max(1_000)).min(1).max(8),
+  }).strict()).max(6).default([]),
+}).strict().superRefine((value, context) => {
+  if (value.affectedPaths.length || value.materiality.length) {
+    context.addIssue({ code: "custom", message: "Legacy persisted plans may only omit affected paths and materiality evidence" });
+  }
+});
+
+export const PersistedLeadOutputSchema = z.union([LeadOutputSchema, PersistedLegacyLeadPlanSchema]);
 const generatedLeadOutputJsonSchema = LeadOutputJsonSchema as { oneOf?: Array<Record<string, unknown>> } & Record<string, unknown>;
 const leadOutputVariants = generatedLeadOutputJsonSchema.oneOf ?? [];
 const leadOutputPropertyEntries = new Map<string, unknown>();
@@ -121,6 +141,7 @@ export const CodexLeadOutputJsonSchema = {
 export type LeadPlan = z.infer<typeof LeadPlanSchema>;
 export type DecisionBlocker = z.infer<typeof DecisionBlockerSchema>;
 export type LeadOutput = z.infer<typeof LeadOutputSchema>;
+export type PersistedLeadOutput = z.infer<typeof PersistedLeadOutputSchema>;
 
 export const LeadSessionRefSchema = durableId;
 

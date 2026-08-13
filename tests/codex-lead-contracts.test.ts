@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { LeadOutputJsonSchema, LeadOutputSchema } from "../src/codex-lead-contracts.js";
+import { LeadOutputJsonSchema, LeadOutputSchema, PersistedLeadOutputSchema } from "../src/codex-lead-contracts.js";
 import { SafeSummarySchema, toSafeSummary } from "../src/temporal/issue-contracts.js";
 
 test("multiline and multibyte Lead summaries fit bounded Temporal state", () => {
@@ -33,4 +33,21 @@ test("Lead contracts are strict and step numbering is contiguous", () => {
   const branches = (LeadOutputJsonSchema as { oneOf?: Array<{ additionalProperties?: boolean }> }).oneOf ?? [];
   expect(branches).toHaveLength(2);
   expect(branches.every((branch) => branch.additionalProperties === false)).toBe(true);
+});
+
+test("persisted Lead plans from before materiality evidence remain readable", () => {
+  const legacyPlan = {
+    kind: "plan" as const,
+    summary: "Historical plan",
+    reproduction: null,
+    rootCauseAnalysis: "Recorded before path evidence.",
+    steps: [{ number: 1, instruction: "Inspect the seam", verification: "Review the result" }],
+    compatibilityAnalysis: "No compatibility change.",
+    operationalAnalysis: "No operational change.",
+    verificationStrategy: "Review the result.",
+    unresolvedTechnicalQuestions: [],
+    materialCategories: [],
+  };
+  expect(LeadOutputSchema.safeParse(legacyPlan).success).toBe(false);
+  expect(PersistedLeadOutputSchema.parse(legacyPlan)).toMatchObject({ affectedPaths: [], materiality: [] });
 });

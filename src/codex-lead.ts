@@ -39,7 +39,7 @@ const LeadReviewResponseSchema = z.object({
   reviewResponse: z.string().min(1).max(20_000),
   result: LeadOutputSchema,
 }).strict();
-export { DecisionBlockerSchema, LeadOutputSchema, LeadPlanSchema, LeadPlanningActivityInputSchema } from "./codex-lead-contracts.js";
+export { DecisionBlockerSchema, LeadOutputSchema, LeadPlanSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type PersistedLeadOutput } from "./codex-lead-contracts.js";
 export type { DecisionBlocker, LeadOutput, LeadPlan, LeadPlanningActivityInput, LeadPlanningResult, LegacyLeadPlanningResult } from "./codex-lead-contracts.js";
 export const SupplementalReviewSchema = z.object({
   kind: z.literal("review"),

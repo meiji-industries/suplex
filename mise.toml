@@ -49,6 +49,15 @@ FORGE_TEMPORAL_TARGET = "local"
 FORGE_TEMPORAL_ADDRESS = "127.0.0.1:7233"
 FORGE_TEMPORAL_NAMESPACE = "forge-dev"
 
+[tasks."db:migrate"]
+description = "Apply pending SQLite database migrations"
+run = "mise exec -- node --import tsx src/cli.ts migrate"
+
+[tasks."db:migrate".env]
+FORGE_TEMPORAL_TARGET = "local"
+FORGE_TEMPORAL_ADDRESS = "127.0.0.1:7233"
+FORGE_TEMPORAL_NAMESPACE = "forge-dev"
+
 [tasks.watch]
 description = "Rebuild the frontend when source files change"
 run = "pnpm exec vite build --watch"

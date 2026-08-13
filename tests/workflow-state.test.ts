@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { DeliveryReviewActivityResultSchema, DeveloperRepairActivityResultSchema, IssueWorkflowStateSchema } from "../src/temporal/issue-contracts.js";
+import { DeliveryReviewActivityResultSchema, DeveloperRepairActivityResultSchema, IssueWorkflowStateSchema, SafeSummarySchema, toSafeSummary } from "../src/temporal/issue-contracts.js";
 import { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "../src/temporal/workflows.js";
 
 const subject = { planRevision: 1, targetBaseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40), developerExecutionId: "developer_1", deliveryArtifactId: "artifact_delivery", developerEvidenceArtifactId: "artifact_evidence", leadSessionRef: "session_lead", developerSessionRef: "session_developer" };
@@ -9,6 +9,22 @@ const blockingFinding = { findingId: "finding_blocking", severity: "blocking" as
 function state() {
   return IssueWorkflowStateSchema.parse({ workflowId: "workflow_1", companyId: "company_1", projectId: "project_1", issueId: "task_1", projectRevisionId: "revision_1", phase: "delivery_ready", revision: 10, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Lead delivery review", lastEventId: "workflow_1:10", continuationCount: 0, lastSummaryHash: null, leadSessionRef: subject.leadSessionRef, leadOutputArtifactId: "artifact_plan", developerExecutionId: subject.developerExecutionId, developerSessionRef: subject.developerSessionRef, worktreePath: "/worktree", branchName: "forge/issue/task_1", targetBaseSha: subject.targetBaseSha, resultCommit: subject.subjectCommit, resultTree: subject.subjectTree, dirtyState: "clean", deliveryArtifactId: subject.deliveryArtifactId, developerEvidenceArtifactId: subject.developerEvidenceArtifactId, repairCycle: 0, releaseId: "release_1", expectedHeadSha: subject.subjectCommit, expectedHeadTree: subject.subjectTree, ciRunId: "ci_1", ciAttempt: 2, ciOutcome: "passed", finalReviewId: "final_review_1", finalReviewOutcome: "approved", acceptanceId: "acceptance_1", acceptedHeadSha: subject.subjectCommit, mergeOutcome: "open" });
 }
+
+test("safe summaries are normalized before entering workflow state", () => {
+  expect(toSafeSummary("  Review approved.\r\n  Ready to ship.  ")).toBe("Review approved. Ready to ship.");
+  expect(() => toSafeSummary(" \r\n ")).toThrow();
+
+  const longAscii = "Approved because the implementation matches the plan. ".repeat(10);
+  const compactAscii = toSafeSummary(longAscii);
+  expect(compactAscii.endsWith("…")).toBe(true);
+  expect(new TextEncoder().encode(compactAscii).byteLength).toBeLessThanOrEqual(240);
+  expect(SafeSummarySchema.parse(compactAscii)).toBe(compactAscii);
+
+  const compactUnicode = toSafeSummary("✅".repeat(100));
+  expect(new TextEncoder().encode(compactUnicode).byteLength).toBeLessThanOrEqual(240);
+  expect(compactUnicode.endsWith("…")).toBe(true);
+  expect(compactUnicode).not.toContain("�");
+});
 
 test("delivery workflow constructors keep blockers retryable and approvals exact", () => {
   const initial = state();

@@ -11,7 +11,7 @@ export function createDeliveryReviewActivities(ctx: ActivityContext): DeliveryRe
       const result = await invokeAgent(input, async () => normalizeReviewResult(await (agent?.reviewDelivery ? agent.reviewDelivery(serviceInput) : defaultAgent.reviewDelivery(serviceInput, agentRuntime())), serviceInput));
       if (result.outcome === "blocked") return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.executionId, sessionRef: result.sessionRef, worktreePath }, result);
       const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, result.review.opinionArtifactId, "delivery-review");
-      const completed = DeliveryReviewActivityResultSchema.parse({ ...result, review: { ...result.review, summary: SafeSummarySchema.parse(result.review.summary), reviewArtifact } });
+      const completed = DeliveryReviewActivityResultSchema.parse({ ...result, review: { ...result.review, summary: SafeSummarySchema.parse(normalizeSafeSummary(result.review.summary)), reviewArtifact } });
       if (completed.outcome !== "completed") throw new Error("Completed delivery review normalization produced a blocked result");
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: completed.review.leadExecutionId, sessionRef: completed.review.leadSessionRef, worktreePath }, completed);
     },

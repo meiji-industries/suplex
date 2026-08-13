@@ -14,6 +14,14 @@ Create one with:
 pnpm migration:new add release status
 ```
 
+Apply pending migrations to the configured local database with:
+
+```bash
+mise run db:migrate
+```
+
+The command exits unsuccessfully unless the resulting schema is current.
+
 Separate statements with `--> statement-breakpoint`. Never rename or edit a
 migration after it has been applied. The runtime records each migration by its
 timestamp and SHA-256 hash, so independently-created migrations can merge and

@@ -42,10 +42,23 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "help") {
-    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|start|stop|restart> [--foreground]\n");
+    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|rebuild-projections|migrate|start|stop|restart> [--foreground]\n");
     return;
   }
   const config = loadConfig();
+  if (command === "migrate") {
+    const database = new ForgeDatabase(config.databasePath);
+    try {
+      const status = database.schemaStatus();
+      if (status.state !== "current") {
+        throw new Error(`Database schema is ${status.state} after migration (${status.applied.length}/${status.expected.length} migrations applied)`);
+      }
+      process.stdout.write(`Database schema is current (${status.applied.length}/${status.expected.length} migrations applied)\n`);
+    } finally {
+      database.close();
+    }
+    return;
+  }
   if (command === "backup" || command === "verify-backup" || command === "restore") {
     const service = new BackupService(config);
     const archive = process.argv[3];

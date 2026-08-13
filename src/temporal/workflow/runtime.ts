@@ -185,8 +185,13 @@ export function createAcquireExternalTurn(
           assertCurrent();
           const resultExecutionId = executionId(result);
           if (current.executionId && resultExecutionId && current.executionId !== resultExecutionId) throw ApplicationFailure.nonRetryable("capacity_owner_mismatch", "capacity_owner_mismatch", { requestId: request.id });
+          if (current.status === "ownership_ambiguous") {
+            observedRevision = await options.projectCapacityState({ ...admission.publicState, status: "ownership_ambiguous", position: null, reason: null, retryAt: null }, "Ownership verification required");
+            return result;
+          }
           const ownerId = current.executionId;
-          await finalizeCapacity({ requestId: request.id, expectedExecutionId: ownerId ?? request.id, terminalReason: ownerId ? "completed" : "failed_before_start" });
+          const resultStatus = result && typeof result === "object" && "status" in result ? (result as { status?: unknown }).status : undefined;
+          await finalizeCapacity({ requestId: request.id, expectedExecutionId: ownerId ?? request.id, terminalReason: ownerId ? resultStatus && resultStatus !== "completed" ? "process_failed" : "completed" : "failed_before_start" });
           assertCurrent();
           observedRevision = await options.projectCapacityState(null);
           return result;

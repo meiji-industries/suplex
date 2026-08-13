@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 import { redact } from "./logging.js";
-import { createGitCommandGuard, type GitCommandGuard } from "./worktrees.js";
+import { createGitCommandGuard, type GitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
 
 const execFileAsync = promisify(execFile);
 const tail = (value: string): string => value.length > 64 * 1024 ? value.slice(-64 * 1024) : value;
@@ -109,7 +109,7 @@ export async function runPinnedVerification(input: PinnedVerificationInput, depe
       let signal: string | null = null;
       let timedOut = false;
       try {
-        const result = await execute(argv[0]!, [...argv.slice(1)], { cwd: input.worktreePath, env: guard.env, timeout: index === 0 ? 10 * 60_000 : 20 * 60_000, maxBuffer: 128 * 1024, shell: false });
+        const result = await execute(argv[0]!, [...argv.slice(1)], { cwd: input.worktreePath, env: withWorktreeMiseTrust(guard.env, input.worktreePath), timeout: index === 0 ? 10 * 60_000 : 20 * 60_000, maxBuffer: 128 * 1024, shell: false });
         stdout = result.stdout;
         stderr = result.stderr;
       } catch (error) {

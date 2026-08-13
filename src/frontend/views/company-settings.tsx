@@ -84,7 +84,7 @@ export function CompanySettingsView(): ReactElement {
         <SettingRow label="Company ID" description="Unique identifier.">
           <code className="select-all text-xs text-muted-foreground">{company.id}</code>
         </SettingRow>
-        <SettingRow label="Created" description={new Date(company.createdAt).toLocaleDateString()}>
+        <SettingRow label="Created">
           <span className="text-xs text-muted-foreground">{new Date(company.createdAt).toLocaleDateString()}</span>
         </SettingRow>
       </SettingsSection>

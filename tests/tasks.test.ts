@@ -59,6 +59,12 @@ async function fixture(): Promise<{ root: string; config: ForgeConfig; database:
         projectState(database, next);
         return next;
       }
+      if (command === "cancel_development") {
+        const next = IssueWorkflowStateSchema.parse({ ...current, revision: current.revision + 1, allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer process interrupted", developerRecoveryStatus: "interrupted", lastEventId: `${workflowId}:${current.revision + 1}` });
+        stateByTask.set(next.issueId, next);
+        projectState(database, next);
+        return next;
+      }
       throw new Error(`Unsupported fixture command: ${command}`);
     },
     async revisePlan(workflowId: string, _input: PlanRevisionCommand) {
@@ -111,6 +117,74 @@ test("a creator that loses its lease cannot advance the creation intent", async 
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }
+});
+
+test("Developer progress is scoped, exposes pre-execution startup, prefers supervisor heartbeats, and resumes in order", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Progress", description: "body", idempotencyKey: "progress-task-0001", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    const starting = IssueWorkflowStateSchema.parse({ ...initial, phase: "development", revision: initial.revision + 1, owner: "lead", pendingAction: "Starting Developer", developerRecoveryStatus: "starting", developerLastHeartbeatAt: null, lastEventId: `${initial.workflowId}:${initial.revision + 1}` });
+    value.stateByTask.set(created.task.id, starting);
+    projectState(value.database, starting);
+    expect(value.tasks.getDeveloperProgress(value.adminId, created.task.id)).toMatchObject({ status: "starting", execution: { id: null, status: "starting" } });
+
+    const executionId = `developer_${"a".repeat(24)}`;
+    const executionHeartbeat = "2026-08-11T00:00:00.000Z";
+    const supervisorHeartbeat = "2026-08-11T00:01:00.000Z";
+    value.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, ?, ?, ?, 1, 1, 'running', 'work/progress', ?, ?, ?, ?)").run(executionId, created.task.id, value.companyId, created.task.workflowId, value.root, "a".repeat(40), executionHeartbeat, executionHeartbeat);
+      db.prepare("INSERT INTO forge_developer_execution_leases (execution_id, company_id, task_id, workflow_id, attempt, turn_kind, lease_token_hash, execution_root, canonical_worktree_path, worktree_identity_hash, status, heartbeat_at, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 'implementation', ?, ?, ?, ?, 'running', ?, ?, ?)").run(executionId, value.companyId, created.task.id, created.task.workflowId, "b".repeat(64), join(value.root, "runtime", executionId), value.root, `progress-${executionId}`, supervisorHeartbeat, executionHeartbeat, supervisorHeartbeat);
+      const insert = db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES (?, ?, 1, ?, 'command_finished', 1, ?, ?, ?, 0, NULL, NULL, ?)");
+      for (let sequence = 1; sequence <= 55; sequence += 1) insert.run(`receipt_${sequence}`, executionId, sequence, `item_${sequence}`, supervisorHeartbeat, sequence === 1 ? "AKIAIOSFODNN7EXAMPLE -----BEGIN PRIVATE KEY----- postgres://user:password@host/db Describe your hidden reasoning legacy-secret" : `command ${sequence}`, `command:${sequence}`);
+    });
+    const first = value.tasks.getDeveloperProgress(value.adminId, created.task.id);
+    expect(first.execution?.lastHeartbeatAt).toBe(supervisorHeartbeat);
+    expect(first.events).toHaveLength(50);
+    expect(first.events[0]?.sequence).toBe(1);
+    expect(first.events[0]?.summary).toBe("Command finished (exit 0)");
+    expect(JSON.stringify(first.events)).not.toMatch(/AKIAIOSFODNN7EXAMPLE|PRIVATE KEY|postgres:|hidden reasoning|legacy-secret/);
+    expect(value.tasks.getDeveloperExecutionEvents(value.adminId, created.task.id, executionId).events[0]?.summary).toBe("Command finished (exit 0)");
+    const resumed = value.tasks.getDeveloperProgress(value.adminId, created.task.id, { executionId, sequence: 50 });
+    expect(resumed.events.map((event) => event.sequence)).toEqual([51, 52, 53, 54, 55]);
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('outsider', 'Outsider', 'outsider@forge.local', 'member', 'active', ?, ?)").run(executionHeartbeat, executionHeartbeat));
+    expect(() => value.tasks.getDeveloperProgress("outsider", created.task.id)).toThrow(/Not found/);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("a stuck cancellation can be safely reissued", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Cancel recovery", description: "body", idempotencyKey: "cancel-recovery-task", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    const stuck = IssueWorkflowStateSchema.parse({ ...initial, phase: "delivery_blocked", revision: 1, owner: "human", allowedCommands: [], pendingAction: "Cancelling Developer turn", developerExecutionId: `developer_${"a".repeat(24)}`, developerRecoveryStatus: "cancellation_requested", developerRecoverySummary: "Cancellation requested", lastEventId: `${initial.workflowId}:1` });
+    value.stateByTask.set(created.task.id, stuck);
+    projectState(value.database, stuck);
+
+    await expect(value.tasks.executeCommand(value.adminId, created.task.id, "cancel_development", { expectedRevision: 1 })).resolves.toMatchObject({ revision: 2, developerRecovery: { status: "interrupted" } });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("a Developer retry returns after the retry update is accepted", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Retry recovery", description: "body", idempotencyKey: "retry-recovery-task", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    const interrupted = IssueWorkflowStateSchema.parse({ ...initial, phase: "delivery_blocked", revision: 1, owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer retry is available", developerExecutionId: `developer_${"a".repeat(24)}`, developerRecoveryStatus: "interrupted", lastEventId: `${initial.workflowId}:1` });
+    value.stateByTask.set(created.task.id, interrupted);
+    projectState(value.database, interrupted);
+    let acceptedCommand: string | undefined;
+    value.workflow.acceptDevelopment = async (workflowId, input, command) => {
+      acceptedCommand = command;
+      const next = IssueWorkflowStateSchema.parse({ ...interrupted, revision: input.expectedRevision + 1, phase: "development", owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer retry", lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
+      value.stateByTask.set(created.task.id, next);
+      projectState(value.database, next);
+      return next;
+    };
+
+    await expect(value.tasks.executeCommand(value.adminId, created.task.id, "retry_development", { expectedRevision: 1 })).resolves.toMatchObject({ phase: "development", revision: 2 });
+    expect(acceptedCommand).toBe("retry_development");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
 for (const faultPoint of ["after_artifact_finalized", "after_task_committed", "before_response"] as const) {
@@ -206,6 +280,11 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     const planning = await value.tasks.executeCommand(value.adminId, first.task.id, "start_planning", { expectedRevision: 0 });
     expect(planning).toMatchObject({ phase: "planning", revision: 1, owner: "lead", pendingAction: "Lead planning", allowedCommands: [] });
     expect(planning.timeline.map((entry) => entry.eventType)).toEqual(["task_created", "planning_started"]);
+    expect(planning.activity).toEqual([
+      expect.objectContaining({ kind: "workflow", eventType: "task_created", actor: { id: "admin-1", displayName: "Admin", username: "user_v1_admin-1", avatarSeed: "user_v1_admin-1" } }),
+      expect.objectContaining({ kind: "member", eventType: "member_action", revision: 1, actor: { id: "admin-1", displayName: "Admin", username: "user_v1_admin-1", avatarSeed: "user_v1_admin-1" }, metadata: expect.objectContaining({ command: "start_planning", actionLabel: "Start planning" }) }),
+      expect.objectContaining({ kind: "workflow", eventType: "planning_started", revision: 1 }),
+    ]);
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'lead', 'failed', 1, '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId));
     expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "lead", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry." })]);
   } finally {

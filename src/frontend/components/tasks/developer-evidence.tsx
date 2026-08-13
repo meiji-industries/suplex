@@ -36,28 +36,6 @@ export function DevelopmentStatus({ execution }: { execution: DeveloperExecution
   );
 }
 
-export function PlanStepProgress({ execution, events }: { execution: DeveloperExecutionView; events: DeveloperExecutionEventView[] }): ReactElement {
-  const terminal = new Map<number, string>();
-  for (const event of events) if (event.stepNumber !== null && ["step_completed", "step_blocked"].includes(event.kind)) terminal.set(event.stepNumber, event.kind === "step_completed" ? "completed" : "blocked");
-  return (
-    <section className="space-y-2" data-plan-step-progress>
-      <h3 className="text-xs font-semibold">Plan step progress</h3>
-      {execution.verificationCommands?.length ? <ol className="grid gap-2 text-xs">{execution.verificationCommands.map((step) => <li className="grid gap-1 sm:grid-cols-[5rem_minmax(0,1fr)] sm:gap-3" key={step.stepNumber}><div className="font-medium">Step {step.stepNumber} · {terminal.get(step.stepNumber) ?? (execution.currentStep === step.stepNumber ? "active" : "pending")}</div><div className="min-w-0 break-words text-muted-foreground">{step.commands.length ? step.commands.join(" · ") : "No required command"}</div></li>)}</ol> : <p className="text-xs text-muted-foreground">No immutable verification commands were recorded.</p>}
-    </section>
-  );
-}
-
-export function VerificationReceiptList({ events }: { events: DeveloperExecutionEventView[] }): ReactElement | null {
-  const receipts = events.filter((event) => ["command_finished", "test_result", "file_change", "step_blocked"].includes(event.kind));
-  if (!receipts.length) return null;
-  return (
-    <section className="space-y-2" data-verification-receipts>
-      <h3 className="text-xs font-semibold">Verification receipts</h3>
-      <div className="grid gap-1">{receipts.map((event) => <div className="grid min-h-8 min-w-0 items-center gap-1 border-l-2 border-border pl-2 text-xs sm:grid-cols-[4rem_4rem_minmax(0,1fr)_3rem] sm:gap-2" key={event.eventId}><span>#{event.sequence}</span><span>step {event.stepNumber ?? "—"}</span><code className="break-words whitespace-pre-wrap">{event.summary}</code><span className={event.exitCode !== null && event.exitCode !== 0 ? "font-medium text-destructive" : "text-muted-foreground"}>{event.kind === "step_blocked" ? "blocked" : event.kind === "file_change" ? "changed" : event.exitCode === null ? "—" : `exit ${event.exitCode}`}</span></div>)}</div>
-    </section>
-  );
-}
-
 export function DeliveryReportPanel({ taskId, execution }: { taskId: string; execution: DeveloperExecutionView }): ReactElement | null {
   const links = [
     ["Manifest", execution.manifestArtifactId],
@@ -75,6 +53,6 @@ export function DeliveryReportPanel({ taskId, execution }: { taskId: string; exe
   );
 }
 
-export function DeveloperEvidence({ taskId, execution, events }: { taskId: string; execution: DeveloperExecutionView; events: DeveloperExecutionEventView[] }): ReactElement {
-  return <div className="space-y-5"><DevelopmentStatus execution={execution} /><PlanStepProgress execution={execution} events={events} /><VerificationReceiptList events={events} /><DeliveryReportPanel taskId={taskId} execution={execution} /></div>;
+export function DeveloperEvidence({ taskId, execution }: { taskId: string; execution: DeveloperExecutionView }): ReactElement {
+  return <div className="space-y-5"><DevelopmentStatus execution={execution} /><DeliveryReportPanel taskId={taskId} execution={execution} /></div>;
 }

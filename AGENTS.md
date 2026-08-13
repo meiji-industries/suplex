@@ -34,13 +34,14 @@ with the Playwright browser proof at desktop and narrow viewport sizes.
 
 ## Dev workflow
 
-`mise run dev` embeds Vite in Fastify. Frontend changes use Vite HMR and React
-Fast Refresh; backend changes restart the affected Node development process.
-Before runtime or browser verification, run `mise run dev:status` and reuse the
-shared supervisor. Use `mise run dev:restart` for a fresh API/worker and
-`mise run down` for cooperative shutdown. Use `mise run dev:recover` only when
-status is `orphaned`; never use direct process signals or Forge lifecycle
-commands around the supervisor.
+`mise run dev` runs Temporal, the Forge API, and the worker as one foreground
+command; Vite is embedded in Fastify. Frontend changes use Vite HMR and React
+Fast Refresh; backend changes restart the API/worker automatically via
+`tsx watch` — no restart command is needed. Before runtime or browser
+verification, run `mise run dev:status` and reuse a stack that is already
+listening. Ctrl-C in the dev terminal stops everything; `mise run down` stops
+a stack from elsewhere; `mise run dev:recover` force-kills anything still
+holding the dev ports.
 
 Start the development stack with:
 

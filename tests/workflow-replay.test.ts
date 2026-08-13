@@ -253,6 +253,13 @@ test("payload boundaries count UTF-8 and aggregate converter output and reject s
   expect(() => encodedPayloadSize({ metadata: {}, data: new Uint8Array(), externalPayloads: [{}] } as never)).toThrow(PayloadPolicyViolation);
 });
 
+test("payload policy admits only the structured Developer authorization envelope", () => {
+  const authorization = { authorizationId: "plan_auth_123", taskId: "task_123", companyId: "company_123", projectId: "project_123", workflowId: "workflow_123", planRevision: 1, planArtifactId: "artifact_123", planSha256: "a".repeat(64), authorizationKind: "human_approval", approvalDecisionId: "decision_123", authorizedAt: "2026-08-13T00:00:00.000Z" };
+  expect(() => assertEncodedPayloadBoundary("activityArguments", [{ authorization }], PAYLOAD_POLICY.activityArguments)).not.toThrow();
+  expect(() => assertEncodedPayloadBoundary("activityArguments", [{ authorization: { ...authorization, secret: "nope" } }], PAYLOAD_POLICY.activityArguments)).toThrow(PayloadPolicyViolation);
+  expect(() => assertEncodedPayloadBoundary("activityArguments", [{ authorization: { ...authorization, planSha256: "not-a-sha", authorizedAt: "not-a-date" } }], PAYLOAD_POLICY.activityArguments)).toThrow(PayloadPolicyViolation);
+});
+
 test("history normalization is byte-stable and canonicalizes approved worker metadata", () => {
   const input = {
     events: [{

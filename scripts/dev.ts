@@ -293,7 +293,8 @@ function startService(name: string, command: string, args: string[], log: WriteS
   const child = spawn(command, args, {
     cwd: process.cwd(),
     env: { ...process.env, ...environment },
-    stdio: ["inherit", "pipe", "pipe"],
+    // Development services are file-driven; only the supervisor owns terminal input.
+    stdio: ["ignore", "pipe", "pipe"],
     // Keep terminal interrupts on the supervisor. It forwards one signal to
     // each service instead of every process in the tree receiving Ctrl+C and
     // forwarding it again to its own children.
@@ -346,16 +347,14 @@ async function stopService(service: DevService, signal: NodeJS.Signals): Promise
   await service.exited;
 }
 
-function forgeEnvironment(ports: DevPorts): NodeJS.ProcessEnv {
+export function forgeEnvironment(ports: DevPorts): NodeJS.ProcessEnv {
   return {
     ...(ports.forge === undefined ? {} : { FORGE_PORT: String(ports.forge) }),
     FORGE_TEMPORAL_TARGET: "local",
     FORGE_TEMPORAL_ADDRESS: `127.0.0.1:${ports.temporal}`,
     FORGE_TEMPORAL_NAMESPACE: "forge-dev",
-    FORGE_DEVELOPMENT_WATCH: "1",
     FORGE_FRONTEND_DEV_SERVER: "1",
     FORGE_DEVELOPMENT_AUTO_LOGIN: "1",
-    FORGE_REPOSITORY_ROOT: process.cwd(),
   };
 }
 
@@ -402,7 +401,8 @@ export async function superviseDevStack(ports: DevPorts, runtimeRoot: string, op
     return shutdown;
   };
 
-  const interrupt = (): void => void stopServices("SIGINT", 0);
+  // Ctrl+C belongs to the supervisor, which cooperatively stops its services.
+  const interrupt = (): void => void stopServices("SIGTERM", 0);
   const terminate = (): void => void stopServices("SIGTERM", 0);
   process.on("SIGINT", interrupt);
   process.on("SIGTERM", terminate);

@@ -89,6 +89,19 @@ test("INV-04 PID/start mismatch blocks cancellation without a signal", async () 
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("missing Developer process marks the lease and execution interrupted", async () => {
+  const value = await fixture();
+  try {
+    const id = `developer_${"e".repeat(24)}`;
+    const repository = lease(value.database, value.root, id, 1);
+    repository.setSupervisorIdentity(id, identity(301));
+    repository.setChildIdentity(id, identity(302));
+    expect(await cancelDeveloperExecution(value.database, id, controller(new Map(), []))).toMatchObject({ status: "interrupted", reasonCode: "developer-child-missing" });
+    expect(await cancelDeveloperExecution(value.database, id, controller(new Map(), []))).toMatchObject({ status: "interrupted", reasonCode: "developer-child-missing" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(id))).toEqual({ status: "interrupted" });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("INV-09 restore recovery is projection-read-only and invalidates local process ownership", async () => {
   const value = await fixture();
   try {

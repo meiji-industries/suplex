@@ -9,6 +9,7 @@ import type { PlanCommandInput } from "../../temporal/issue-contracts.js";
 import { routedIssueCommands, type IssueCommand } from "../../commands/registry.js";
 import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, HttpPlanDecisionBodySchema, ResolveDecisionBlockerBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, PlanRevisionBodySchema, TaskBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
+import developmentEvents from "./development-events.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;
@@ -26,6 +27,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const { tasks } = options;
   const taskResponse = { response: { 200: TaskResponseSchema } };
+  await app.register(developmentEvents, { tasks });
 
   typed.get("/api/tasks", { schema: { response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id) }));
   typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId) }));

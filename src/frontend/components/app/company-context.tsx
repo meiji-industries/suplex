@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { flushSync } from "react-dom";
 
 import { companySettingsPath, readJson, withCompany, type ApiCompany, type ApiUser, type CompanyStatus } from "../../lib/api.js";
+import { navigate } from "../../lib/navigation.js";
 
 const activeCompanyStorageKey = "forge.activeCompanyId";
 const companiesStorageKey = "forge.companies";
@@ -18,6 +19,7 @@ export type CompanyContextValue = {
   renameCompany: (companyId: string, name: string) => Promise<ApiCompany>;
   setCompanyIssueCode: (companyId: string, issueCode: string | null) => Promise<ApiCompany>;
   setCompanyStatus: (companyId: string, status: CompanyStatus) => Promise<ApiCompany>;
+  updateProfile: (profile: { displayName: string; username: string; avatarSeed: string }) => Promise<ApiUser>;
   reloadCompanies: () => Promise<void>;
 };
 
@@ -123,7 +125,7 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     const detailRoot = isScopedDetailPath(window.location.pathname, selected.id);
     window.localStorage.setItem(activeCompanyStorageKey, selected.id);
     if (detailRoot?.startsWith("/companies/")) {
-      window.location.assign(withCompany(detailRoot, selected.id));
+      navigate(withCompany(detailRoot, selected.id));
       return;
     }
     flushSync(() => setCurrentCompany(selected));
@@ -156,6 +158,12 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     return updated;
   }, [reloadCompanies]);
 
+  const updateProfile = useCallback(async (profile: { displayName: string; username: string; avatarSeed: string }): Promise<ApiUser> => {
+    const result = await readJson<{ user: ApiUser }>("/api/auth/me", { method: "PATCH", body: JSON.stringify(profile) });
+    setUser(result.user);
+    return result.user;
+  }, []);
+
   const value = useMemo<CompanyContextValue>(() => ({
     ...(user ? { user } : {}),
     companies,
@@ -167,8 +175,9 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     renameCompany,
     setCompanyIssueCode,
     setCompanyStatus,
+    updateProfile,
     reloadCompanies,
-  }), [companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, selectCompany, setCompanyIssueCode, setCompanyStatus, user]);
+  }), [companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, selectCompany, setCompanyIssueCode, setCompanyStatus, updateProfile, user]);
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;
 }
 

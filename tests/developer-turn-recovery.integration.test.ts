@@ -61,7 +61,7 @@ test("INV-02/INV-03/INV-05/INV-06 competing supervisors preserve one child, grow
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 3 }); }
 });
 
-test("INV-01/INV-02 retry starts the same turn after worker loss before supervisor spawn", async () => {
+test("INV-01/INV-02 retry starts the same turn after worker loss before supervisor spawn and streams evidence once", async () => {
   const root = await mkdtemp(join("/tmp", "fg-pre-spawn-"));
   const config = createTestConfig(root);
   const database = new ForgeDatabase(config.databasePath);
@@ -81,10 +81,23 @@ test("INV-01/INV-02 retry starts the same turn after worker loss before supervis
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, 'task_pre_spawn', 'company_pre_spawn', ?, 1, 1, 'starting', 'forge/issue/task_pre_spawn', ?, ?, ?, ?)").run(executionId, workflowId, worktreePath, "a".repeat(40), now, now);
     });
     const fixture = fileURLToPath(new URL("./fixtures/developer-turn-child.mjs", import.meta.url));
-    const input = { database, config, executionId, developerAttempt: 1, planRevision: 1, turnKind: "implementation" as const, companyId: "company_pre_spawn", taskId: "task_pre_spawn", workflowId, canonicalWorktreePath: worktreePath, worktreeIdentityHash: "w".repeat(64), command: process.execPath, args: [fixture, "--duration", "100", "--output", outputPath, "--launch-count", launchCountPath], cwd: root, env: { PATH: process.env.PATH ?? "" } };
+    const input = { database, config, executionId, developerAttempt: 1, planRevision: 1, turnKind: "implementation" as const, companyId: "company_pre_spawn", taskId: "task_pre_spawn", workflowId, canonicalWorktreePath: worktreePath, worktreeIdentityHash: "w".repeat(64), command: process.execPath, args: [fixture, "--duration", "700", "--output", outputPath, "--launch-count", launchCountPath, "--stderr-noise", "true"], cwd: root, env: { PATH: process.env.PATH ?? "" } };
     await expect(runDeveloperTurn({ ...input, spawnSupervisor: () => { throw new Error("simulated worker loss before supervisor spawn"); } })).rejects.toThrow("simulated worker loss");
-    const result = await runDeveloperTurn(input);
+    const streamed: string[] = [];
+    let sawLiveLine!: () => void;
+    const liveLine = new Promise<void>((resolve) => { sawLiveLine = resolve; });
+    let completed = false;
+    const running = runDeveloperTurn({ ...input, onLine: async (line) => { streamed.push(line); sawLiveLine(); } }).finally(() => { completed = true; });
+    await liveLine;
+    expect(completed).toBe(false);
+    expect(streamed).toHaveLength(1);
+    const result = await running;
     expect(result.terminal).toBe("result");
+    expect(streamed).toContainEqual(expect.stringContaining('"kind":"heartbeat"'));
+    expect(streamed).not.toContain("non-JSON stderr diagnostic");
+    expect(result.lines).toEqual([]);
+    const spooled = (await readFile(join(config.runtimeRoot, "developer-executions", executionId, "events.jsonl"), "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line) as { stream: string; line: string }).filter((event) => event.stream === "stdout").map((event) => event.line);
+    expect(streamed).toEqual(spooled);
     expect((await readFile(launchCountPath, "utf8")).trim().split(/\r?\n/)).toHaveLength(1);
   } finally { database.close(); await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); }
 });

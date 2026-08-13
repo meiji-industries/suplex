@@ -277,7 +277,12 @@ export class CapacityManager {
 
   bindExecutionInTransaction(db: import("better-sqlite3").Database, requestId: string, owner: CapacityExecutionOwner): CapacityRequestSnapshot {
     const validated = CapacityExecutionOwnerSchema.parse(owner);
-    const request = this.inspectInTransaction(db, requestId);
+    let request = this.inspectInTransaction(db, requestId);
+    if (request.status === "ownership_ambiguous" && !request.executionKind && !request.executionId && !request.sessionRef && !request.worktreePath) {
+      const now = new Date().toISOString();
+      db.prepare("UPDATE forge_capacity_requests SET status = 'active', terminal_reason = NULL, skip_reason = NULL, heartbeat_at = ?, updated_at = ? WHERE id = ? AND status = 'ownership_ambiguous' AND execution_kind IS NULL AND execution_id IS NULL AND session_ref IS NULL AND worktree_path IS NULL").run(now, now, requestId);
+      request = this.inspectInTransaction(db, requestId);
+    }
     if (request.status !== "active") throw new CapacityFailure("invalid-status");
     if (request.executionId && (request.executionId !== validated.executionId || request.executionKind !== validated.executionKind)) throw new CapacityFailure("stale-owner");
     if (request.sessionRef && validated.sessionRef && request.sessionRef !== validated.sessionRef) throw new CapacityFailure("stale-owner");
@@ -404,18 +409,18 @@ export class CapacityManager {
 
   statusForTask(taskId: string): PublicCapacityStatus | null {
     return this.database.authQuery((db) => {
-      const raw = db.prepare(`SELECT c.*, p.name AS profile_name FROM forge_capacity_requests c LEFT JOIN forge_profiles p ON p.id = c.profile_id WHERE c.task_id = ? AND c.status IN ('queued', 'active', 'rate_limited', 'ownership_ambiguous', 'exhausted') ORDER BY c.requested_at DESC, c.id DESC LIMIT 1`).get(taskId) as (Record<string, unknown> & { profile_name: string | null }) | undefined;
+      const raw = db.prepare(`SELECT c.*, p.name AS profile_name, p.avatar_seed FROM forge_capacity_requests c LEFT JOIN forge_profiles p ON p.id = c.profile_id WHERE c.task_id = ? AND c.status IN ('queued', 'active', 'rate_limited', 'ownership_ambiguous', 'exhausted') ORDER BY c.requested_at DESC, c.id DESC LIMIT 1`).get(taskId) as (Record<string, unknown> & { profile_name: string | null; avatar_seed: string | null }) | undefined;
       if (!raw || !raw.profile_name) return null;
       const request = row(raw);
       const position = request.status === "queued" ? this.positionInTransaction(db, request.id) : null;
-      return PublicCapacityStatusSchema.parse({ profileId: request.profileId, profileName: raw.profile_name, status: request.status, position, reason: request.waitReason, requestedAt: request.requestedAt, retryAt: request.retryAt });
+      return PublicCapacityStatusSchema.parse({ profileId: request.profileId, profileName: raw.profile_name, avatarSeed: raw.avatar_seed, status: request.status, position, reason: request.waitReason, requestedAt: request.requestedAt, retryAt: request.retryAt });
     });
   }
 
   listAdminLanes(): AdminCapacityLane[] {
-    return this.database.authQuery((db) => (db.prepare("SELECT id, name, capacity FROM forge_profiles ORDER BY name, id").all() as Array<{ id: string; name: string; capacity: number | null }>).map((profile) => {
+    return this.database.authQuery((db) => (db.prepare("SELECT id, name, avatar_seed, capacity FROM forge_profiles ORDER BY name, id").all() as Array<{ id: string; name: string; avatar_seed: string; capacity: number | null }>).map((profile) => {
       const counts = db.prepare("SELECT SUM(status = 'active' OR status = 'ownership_ambiguous') AS active_count, SUM(status = 'queued') AS queued_count, SUM(status = 'rate_limited') AS rate_limited_count, MIN(CASE WHEN status = 'queued' THEN requested_at END) AS oldest_queued_at FROM forge_capacity_requests WHERE lane_key = ?").get(`codex:${profile.id}`) as { active_count: number | null; queued_count: number | null; rate_limited_count: number | null; oldest_queued_at: string | null };
-      return { profileId: profile.id, profileName: profile.name, provider: "codex" as const, capacity: profile.capacity, effectiveCapacity: profile.capacity ?? this.config.externalTurnCapacity, activeCount: Number(counts.active_count ?? 0), queuedCount: Number(counts.queued_count ?? 0), rateLimitedCount: Number(counts.rate_limited_count ?? 0), oldestQueuedAt: counts.oldest_queued_at };
+      return { profileId: profile.id, profileName: profile.name, avatarSeed: profile.avatar_seed, provider: "codex" as const, capacity: profile.capacity, effectiveCapacity: profile.capacity ?? this.config.externalTurnCapacity, activeCount: Number(counts.active_count ?? 0), queuedCount: Number(counts.queued_count ?? 0), rateLimitedCount: Number(counts.rate_limited_count ?? 0), oldestQueuedAt: counts.oldest_queued_at };
     }));
   }
 

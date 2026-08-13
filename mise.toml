@@ -17,49 +17,89 @@ FORGE_BIND_ADDRESS = "127.0.0.1"
 _.path = "./node_modules/.bin"
 
 [tasks.dev]
-description = "Run Temporal and Forge with Vite HMR and backend live reload"
-run = "mise exec -- node --import tsx scripts/dev.ts"
+description = "Run Temporal, the Forge API, and the worker; tsx watch restarts backend on change"
+run = [{ tasks = ["temporal", "server", "worker"] }]
 
 [tasks.down]
-description = "Request a cooperative stop from the shared development supervisor"
-run = "mise exec -- node --import tsx scripts/dev.ts stop"
+description = "Stop this checkout's dev stack (prefer Ctrl-C in the dev terminal)"
+run = '''
+FP=${CONDUCTOR_PORT:-4111}
+TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
+UI=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+2))}; UI=${UI:-8233}
+PIDS=$(lsof -ti:$FP,$TP,$UI 2>/dev/null | sort -u)
+if [ -z "$PIDS" ]; then echo "nothing listening on $FP/$TP/$UI"; exit 0; fi
+for p in $PIDS; do g=$(ps -o pgid= -p "$p" | tr -d ' '); [ -n "$g" ] && kill -TERM -"$g" 2>/dev/null; done
+echo "sent SIGTERM to dev stack"
+'''
 
 [tasks."dev:status"]
-description = "Report the shared development supervisor state"
-run = "mise exec -- node --import tsx scripts/dev.ts status"
+description = "Show what is listening on this checkout's dev ports"
+run = '''
+FP=${CONDUCTOR_PORT:-4111}
+TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
+UI=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+2))}; UI=${UI:-8233}
+lsof -nP -iTCP:$FP -iTCP:$TP -iTCP:$UI -sTCP:LISTEN || echo "dev stack not running (ports $FP/$TP/$UI free)"
+'''
 
 [tasks."dev:restart"]
-description = "Request a Forge API and worker restart while keeping Temporal running"
-run = "mise exec -- node --import tsx scripts/dev.ts restart"
+description = "No-op: tsx watch restarts the API and worker on file save"
+run = "echo 'Backend restarts automatically on file change (tsx watch); press Return in the dev terminal to force a rerun.'"
 
 [tasks."dev:recover"]
-description = "Recover proven orphaned development processes for this checkout"
-run = "mise exec -- node --import tsx scripts/down.ts"
+description = "Force-kill anything still holding this checkout's dev ports"
+run = '''
+FP=${CONDUCTOR_PORT:-4111}
+TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
+UI=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+2))}; UI=${UI:-8233}
+PIDS=$(lsof -ti:$FP,$TP,$UI 2>/dev/null | sort -u)
+if [ -z "$PIDS" ]; then echo "nothing listening on $FP/$TP/$UI"; exit 0; fi
+for p in $PIDS; do g=$(ps -o pgid= -p "$p" | tr -d ' '); [ -n "$g" ] && kill -KILL -"$g" 2>/dev/null; done
+echo "force-killed dev stack"
+'''
 
 [tasks.worktree]
 description = "Install pinned tools and dependencies for a development worktree"
 run = "mise install"
 
-[tasks.dev.env]
-FORGE_TEMPORAL_TARGET = "local"
-FORGE_TEMPORAL_ADDRESS = "127.0.0.1:7233"
-FORGE_TEMPORAL_NAMESPACE = "forge-dev"
-FORGE_DEVELOPMENT_WATCH = "1"
-FORGE_FRONTEND_DEV_SERVER = "1"
-FORGE_DEVELOPMENT_AUTO_LOGIN = "1"
-
 [tasks.temporal]
 description = "Start the local Temporal development server"
-run = "mkdir -p .forge/dev && exec temporal server start-dev --db-filename .forge/dev/temporal.db --namespace forge-dev --search-attribute CompanyId=Keyword --search-attribute ProjectId=Keyword --search-attribute IssueId=Keyword"
+run = '''
+TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
+UI=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+2))}; UI=${UI:-8233}
+mkdir -p .forge/dev
+exec temporal server start-dev --port "$TP" --ui-port "$UI" --db-filename .forge/dev/temporal.db --namespace forge-dev --search-attribute CompanyId=Keyword --search-attribute ProjectId=Keyword --search-attribute IssueId=Keyword
+'''
 
 [tasks.server]
-description = "Start the Forge server in the foreground"
-run = "pnpm run dev"
+description = "Forge API under tsx watch (waits for Temporal, embeds Vite HMR)"
+run = '''
+TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
+until nc -z 127.0.0.1 "$TP" 2>/dev/null; do sleep 0.5; done
+export FORGE_PORT=${CONDUCTOR_PORT:-4111}
+export FORGE_TEMPORAL_ADDRESS="127.0.0.1:$TP"
+exec tsx watch --clear-screen=false --exclude "./src/frontend/**" src/server.ts
+'''
 
 [tasks.server.env]
 FORGE_TEMPORAL_TARGET = "local"
-FORGE_TEMPORAL_ADDRESS = "127.0.0.1:7233"
 FORGE_TEMPORAL_NAMESPACE = "forge-dev"
+FORGE_FRONTEND_DEV_SERVER = "1"
+FORGE_DEVELOPMENT_AUTO_LOGIN = "1"
+
+[tasks.worker]
+description = "Forge Temporal worker under tsx watch (waits for Temporal)"
+run = '''
+TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
+until nc -z 127.0.0.1 "$TP" 2>/dev/null; do sleep 0.5; done
+export FORGE_TEMPORAL_ADDRESS="127.0.0.1:$TP"
+exec tsx watch --clear-screen=false --exclude "./src/frontend/**" src/worker.ts
+'''
+
+[tasks.worker.env]
+FORGE_TEMPORAL_TARGET = "local"
+FORGE_TEMPORAL_NAMESPACE = "forge-dev"
+FORGE_FRONTEND_DEV_SERVER = "1"
+FORGE_DEVELOPMENT_AUTO_LOGIN = "1"
 
 [tasks."db:migrate"]
 description = "Apply pending SQLite database migrations"

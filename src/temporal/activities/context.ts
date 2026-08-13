@@ -299,9 +299,9 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
         args: invocation.args,
         cwd: invocation.cwd,
         env,
+        onStart: invocation.onStart,
+        onLine: invocation.onLine,
       });
-      const lease = leases.get(input.developerTurnExecutionId);
-      if (lease?.child) await invocation.onStart(lease.child.pid, lease.child.startTime);
       for (const line of terminal.lines) await invocation.onLine(line);
       if (terminal.terminal !== "result") throw new SupervisedDeveloperTerminalError(terminal);
       return { exitCode: terminal.exitCode ?? -1, stderr: terminal.exitSignal ? `Developer process exited with ${terminal.exitSignal}` : "" };
@@ -335,6 +335,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     } catch (error) {
       if (error instanceof SupervisedDeveloperTerminalError) {
         const status = error.result.terminal === "interrupted" ? "interrupted" as const : "ownership_ambiguous" as const;
+        if (status === "ownership_ambiguous" && input.capacityRequestId) capacity.markOwnershipAmbiguous(input.capacityRequestId, "Developer supervisor ownership could not be confirmed");
         return { status, developerExecutionId: input.developerTurnExecutionId, reasonCode: status === "interrupted" ? "developer-worker-lost" : "developer-ownership-ambiguous", summary: status === "interrupted" ? "The Developer process ended before Forge could claim a result." : "Forge cannot prove ownership of the previous Developer process.", lastHeartbeatAt: error.result.lastHeartbeatAt };
       }
       if (error instanceof AgentFailure) {

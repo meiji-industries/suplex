@@ -621,6 +621,7 @@ test("Developer execution creates an isolated delivery commit and stores an exac
   });
   const runner: LeadProcessRunner = async (invocation) => {
     expect(invocation.args).toEqual(expect.arrayContaining([
+      "-c", "sandbox_workspace_write.network_access=true",
       "--add-dir", await realpath(join(value.root, "repo", ".git", "worktrees", "task_1")),
       "--add-dir", await realpath(join(value.root, "repo", ".git")),
     ]));
@@ -773,17 +774,25 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
   const sessions = new Map([["session_lead", "raw-lead"], ["session_developer", "raw-developer"]]);
   const sessionStore: SessionStore = { async create(raw) { const ref = `session_${raw}`; sessions.set(ref, raw); return ref; }, async read(ref) { return sessions.get(ref) ?? ""; } };
   let reviewRequestPrompt = "";
+  let reviewOutputSchema: unknown;
   let reviewCalls = 0;
   const reviewRunner: LeadProcessRunner = async (invocation) => {
     await invocation.onStart(4701, "2026-08-11T00:00:00.000Z");
-    const request = JSON.parse(await readFile(invocation.args.at(-1)!, "utf8")) as { promptPath: string };
-    if (reviewCalls === 0) reviewRequestPrompt = await readFile(request.promptPath, "utf8");
+    const request = JSON.parse(await readFile(invocation.args.at(-1)!, "utf8")) as { promptPath: string; outputSchemaPath: string; statusPath: string };
+    if (reviewCalls === 0) {
+      reviewRequestPrompt = await readFile(request.promptPath, "utf8");
+      reviewOutputSchema = JSON.parse(await readFile(request.outputSchemaPath, "utf8"));
+    }
     await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-lead" }));
     reviewCalls += 1;
     const reviewOutput = reviewCalls === 1
       ? "not machine-readable"
       : JSON.stringify({ kind: "delivery_review", summary: "One required repair remains.", outcome: "blocking", findings: [{ findingId: "finding_blocking", severity: "blocking", rationale: "The proof marker is incomplete.", evidenceRef: "DELIVERED.md", disposition: "open", repairInstruction: "Complete the proof marker." }, { findingId: "finding_advisory", severity: "advisory", rationale: "The report could be more detailed.", evidenceRef: "delivery report", disposition: "open", repairInstruction: null }], repairPlan: "Complete DELIVERED.md with the required proof text." });
     await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: reviewOutput } }));
+    if (reviewCalls === 2) {
+      await writeFile(request.statusPath, JSON.stringify({ state: "completed", exitCode: 0 }));
+      return { exitCode: 1, stderr: "Lost parent process result" };
+    }
     return { exitCode: 0, stderr: "" };
   };
   try {
@@ -798,6 +807,7 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
     expect(reviewRequestPrompt).toContain(targetBaseSha);
     expect(reviewRequestPrompt).toContain(subjectCommit);
     expect(reviewRequestPrompt).toContain(subjectTree);
+    expect(reviewOutputSchema).toMatchObject({ properties: { kind: { const: "delivery_review" } } });
     expect(value.database.authQuery((db) => db.prepare("SELECT outcome, session_ref, subject_commit FROM forge_delivery_reviews WHERE id = ?").get(completedReview.review.reviewId))).toEqual({ outcome: "blocking", session_ref: "session_lead", subject_commit: subjectCommit });
     const reviewEvidenceRow = value.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_delivery_review_attempts attempt ON attempt.evidence_artifact_id = a.id WHERE attempt.completed_review_id = ?").get(completedReview.review.reviewId) as { storagePath: string; sha256: string });
     const reviewEvidenceText = (await new ArtifactStore(value.config.artifactRoot).read({ companyId: "company_1", storagePath: reviewEvidenceRow.storagePath, sha256: reviewEvidenceRow.sha256 })).toString("utf8");

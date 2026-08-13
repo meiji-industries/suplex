@@ -21,7 +21,7 @@ test("agent time is split by local day and summed per ticket", () => {
       agentInvocations: [invocation("lead-b", "lead", at(11, 0, 15), at(11, 0, 45)), invocation("developer-b", "developer", at(11, 1, 45), null)],
     },
   ];
-  const summary = summarizeAgentTime(tasks, [{ id: "lead-profile", name: "Lead agent" }, { id: "developer-profile", name: "Developer agent" }], [{ id: "project-a", name: "Forge" }], { start: new Date(2026, 7, 10).getTime(), end: new Date(2026, 7, 12).getTime() }, new Date(2026, 7, 11, 2).getTime());
+  const summary = summarizeAgentTime(tasks, [{ id: "lead-profile", name: "Lead agent", avatarSeed: "a".repeat(32) }, { id: "developer-profile", name: "Developer agent", avatarSeed: "b".repeat(32) }], [{ id: "project-a", name: "Forge" }], { start: new Date(2026, 7, 10).getTime(), end: new Date(2026, 7, 12).getTime() }, new Date(2026, 7, 11, 2).getTime());
 
   expect(summary.durationMs).toBe(165 * 60_000);
   expect(summary.ticketTotals.map(({ key, durationMs }) => ({ key, durationMs }))).toEqual([

@@ -6,6 +6,8 @@ export const scenario = {
   activityOverrides: (_context, shared) => ({
     async runDeveloperExecutionSupervised(input) {
       await shared.runDeveloperExecutionSupervised!(input);
+      const request = _context.capacityRequests.get(input.capacityRequestId!);
+      if (request) _context.capacityRequests.set(request.id, { ...request, status: "ownership_ambiguous", executionKind: "developer", executionId: input.developerTurnExecutionId, terminalReason: "ownership_ambiguous" });
       return { status: "ownership_ambiguous" as const, developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-ownership-ambiguous", summary: "Controlled ownership ambiguity.", lastHeartbeatAt: null };
     },
   }),

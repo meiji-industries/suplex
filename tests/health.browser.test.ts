@@ -13,7 +13,8 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
     ready: true,
     checks: [
       { id: "database", label: "SQLite database", status: "healthy", summary: "WAL is enabled", details: { walMode: true } },
-      { id: "gh-auth", label: "GitHub CLI authentication", status: "unhealthy", summary: "Local authentication is unavailable", details: {} },
+      { id: "gh-auth", label: "GitHub CLI authentication", status: "healthy", summary: "Ready", details: {} },
+      { id: "backup", label: "Backup verification", status: "unhealthy", summary: "No verified backup is recorded", details: {} },
     ],
   };
   let currentSnapshot = snapshot;
@@ -41,12 +42,12 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
     await page.goto(`http://127.0.0.1:${address.port}/health`);
     await page.locator("h1").waitFor();
     await page.getByRole("heading", { name: "Owned services", exact: true }).waitFor();
-    const systemHealth = page.getByRole("button", { name: "System health: Degraded", exact: true });
+    const systemHealth = page.getByRole("button", { name: "System health: Healthy", exact: true });
     await systemHealth.waitFor();
-    expect(await systemHealth.getAttribute("data-status")).toBe("amber");
-    expect(await page.locator('[data-status="healthy"]').count()).toBe(1);
+    expect(await systemHealth.getAttribute("data-status")).toBe("green");
+    expect(await page.locator('[data-status="healthy"]').count()).toBe(2);
     expect(await page.locator('[data-status="unhealthy"]').count()).toBe(1);
-    expect(await page.locator('[data-slot="health-row"]').count()).toBe(2);
+    expect(await page.locator('[data-slot="health-row"]').count()).toBe(3);
     expect(await page.locator("body").innerText()).toMatch(/forge\.tailnet\.ts\.net/);
     expect(await page.locator("body").innerText()).not.toMatch(/Truthful readiness/);
 
@@ -69,7 +70,8 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
     await systemHealth.click();
     const healthDialog = page.getByRole("dialog", { name: "System health", exact: true });
     await healthDialog.waitFor();
-    expect(await healthDialog.locator('[data-slot="health-row"]').count()).toBe(2);
+    expect(await healthDialog.locator('[data-slot="health-row"]').count()).toBe(3);
+    expect(await healthDialog.getByRole("button", { name: "Backup verification Degraded", exact: true }).isVisible()).toBe(true);
     await healthDialog.getByRole("button", { name: "Close", exact: true }).click();
 
     currentSnapshot = {
@@ -96,7 +98,7 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
     const desktop = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await desktop.goto(`http://127.0.0.1:${address.port}/health`);
     expect(await desktop.locator("aside").isVisible()).toBe(true);
-    expect(await desktop.locator('[data-slot="health-row"]').count()).toBe(2);
+    expect(await desktop.locator('[data-slot="health-row"]').count()).toBe(3);
     expect(await desktop.getByRole("button", { name: "System health: Healthy", exact: true }).getAttribute("data-status")).toBe("green");
   } finally {
     await browser?.close();

@@ -45,5 +45,6 @@ export function createWorkflowPortFake(options: WorkflowPortFakeOptions): IssueW
     recordProgress: transitionBespoke,
     query: async (workflowId) => states.get(workflowId) ?? initialStateFixture(),
     acceptPlanning: (workflowId, input) => execute("start_planning", workflowId, input),
+    acceptDevelopment: (workflowId, input) => execute("start_development", workflowId, input),
   };
 }

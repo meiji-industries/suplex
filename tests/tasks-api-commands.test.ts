@@ -62,6 +62,9 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state }));
     return state;
   } });
+  let acceptedPlanning = 0;
+  const acceptPlanning = workflow.acceptPlanning!;
+  workflow.acceptPlanning = async (workflowId, input) => { acceptedPlanning += 1; return acceptPlanning(workflowId, input); };
   const tasks = new TaskService(database, auth, projects, config, { workflow });
   const app = createApp({ config, auth, projects, tasks, health: {
     temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }), database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }), artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }), worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }), codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }), ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
@@ -120,6 +123,7 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie, origin }, payload: { expectedRevision: 9 } })).statusCode).toBe(409);
     const started = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie, origin }, payload: { expectedRevision: 0 } });
     expect(started.statusCode).toBe(200);
+    expect(acceptedPlanning).toBe(1);
     expect(started.json()).toMatchObject({ phase: "approval", owner: "human", revision: 1, planMaterial: true });
     const planSubject = { companyId: company.id, issueId: task.id, workflowId: task.workflowId, originalPlanRevision: 1, outputId: "plan-output-api", outputRevision: 1, finalVersion: 1 as const, artifactId: "plan-artifact-api", artifactSha256: "1".repeat(64), leadExecutionId: "lead-execution-api", evidenceManifestArtifactId: "lead-manifest-api", evidenceManifestSha256: "2".repeat(64) };
     const materiality = { categories: ["user_visible_behavior"], artifactId: "materiality-api", artifactSha256: "3".repeat(64) };

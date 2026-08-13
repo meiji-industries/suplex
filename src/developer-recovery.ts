@@ -78,6 +78,11 @@ function activeLeases(database: ForgeDatabase): DeveloperExecutionLease[] {
   return new DeveloperExecutionLeaseRepository(database, "").listActive();
 }
 
+function markExecutionTerminal(database: ForgeDatabase, executionId: string, status: "cancelled" | "interrupted", failureCode: string | null, failureSummary: string | null): void {
+  const now = new Date().toISOString();
+  database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = COALESCE(finished_at, ?), heartbeat_at = ?, failure_code = ?, failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling', 'ownership_ambiguous')").run(status, now, now, failureCode, failureSummary, executionId));
+}
+
 /** Read-only observation. Workflow state changes belong to the Temporal Workflow. */
 export function reconcileRestoredDeveloperExecutions(database: ForgeDatabase): RestoredDeveloperRecoveryReport[] {
   const rows = database.authQuery((db) => db.prepare("SELECT l.execution_id, l.status, c.execution_id AS claim_id FROM forge_developer_execution_leases l LEFT JOIN forge_developer_result_claims c ON c.execution_id = l.execution_id WHERE l.status IN ('reserved', 'supervisor_starting', 'running', 'result_ready', 'cancel_requested', 'cancelling') ORDER BY l.created_at, l.execution_id").all() as Array<{ execution_id: string; status: string; claim_id: string | null }>);
@@ -135,11 +140,20 @@ export async function cancelDeveloperExecution(database: ForgeDatabase, executio
   if (claim) {
     try { return { status: "completed_before_cancellation", executionId, result: JSON.parse(claim.activityResultJson) as never, resultHash: claim.resultHash }; } catch { return { status: "ownership_ambiguous", executionId, reasonCode: "developer-claim-invalid", summary: "Forge cannot validate the completed Developer result." }; }
   }
+  if (current.status === "interrupted") {
+    markExecutionTerminal(database, executionId, "interrupted", "developer-child-missing", "The recorded Developer process is no longer running.");
+    return { status: "interrupted", executionId, reasonCode: "developer-child-missing", summary: "The recorded Developer process is no longer running." };
+  }
+  if (current.status === "terminated") {
+    markExecutionTerminal(database, executionId, "cancelled", null, null);
+    return { status: "cancelled_confirmed", executionId, exitCode: current.exitCode, exitSignal: current.exitSignal, evidenceArtifactId: null };
+  }
   if (!current.supervisor || !current.child) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-ownership-incomplete", summary: "Forge cannot prove ownership of the previous Developer process." };
   const inspection = await controller.inspect(current.child.pid);
   if (!inspection) {
     if (controller.isProcessGroupAlive && await controller.isProcessGroupAlive(current.child.processGroup)) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-child-group-live", summary: "Forge cannot prove ownership of the previous Developer process." };
     repository.setStatus(executionId, "interrupted", ["reserved", "supervisor_starting", "running", "result_ready", "cancel_requested", "cancelling"]);
+    markExecutionTerminal(database, executionId, "interrupted", "developer-child-missing", "The recorded Developer process is no longer running.");
     return { status: "interrupted", executionId, reasonCode: "developer-child-missing", summary: "The recorded Developer process is no longer running." };
   }
   const supervisorInspection = await controller.inspect(current.supervisor.pid);
@@ -183,5 +197,6 @@ export async function cancelDeveloperExecution(database: ForgeDatabase, executio
   }
   repository.recordCancellationEvidence(executionId, "confirmed_exit_at", confirmedExitAt);
   repository.setStatus(executionId, "terminated", ["cancel_requested", "cancelling", "result_ready"]);
+  markExecutionTerminal(database, executionId, "cancelled", null, null);
   return { status: "cancelled_confirmed", executionId, exitCode: result.exitCode, exitSignal: result.exitSignal, evidenceArtifactId: null };
 }

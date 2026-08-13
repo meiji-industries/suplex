@@ -18,5 +18,5 @@ export const releaseFailureCopy: Record<ReleaseFailureCode, string> = {
 };
 
 export function isRetryableReleaseFailure(code: ReleaseFailureCode): boolean {
-  return ["authentication-required", "invalid-provider-response", "remote-head-conflict", "ambiguous-provider-state", "provider-unavailable", "provider-rate-limited", "target-base-drift"].includes(code);
+  return ["authentication-required", "invalid-provider-response", "remote-head-conflict", "ambiguous-provider-state", "provider-unavailable", "provider-rate-limited", "target-base-drift", "public-projection-unsafe"].includes(code);
 }

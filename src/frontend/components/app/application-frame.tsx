@@ -1,17 +1,22 @@
 import { type ReactElement, type ReactNode } from "react";
 
+import { Separator } from "../ui/separator.js";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "../ui/sidebar.js";
 import { AppSidebar } from "./navigation.js";
-import { SystemHealthIndicator } from "./system-health.js";
 
 export function ApplicationFrame({ title, headerActions, headerRight, children }: { title: string; headerActions?: ReactElement | null | undefined; headerRight?: ReactElement | null | undefined; children: ReactNode }): ReactElement {
   return (
-    <SidebarProvider>
+    <SidebarProvider style={{ "--sidebar-width": "18rem", "--header-height": "3rem" } as React.CSSProperties}>
       <AppSidebar />
       <SidebarInset>
-        <header data-app-header className="flex h-10 items-center justify-between border-b px-3 sm:px-4">
-          <div className="flex items-center gap-2"><span className="md:hidden"><SidebarTrigger aria-label="Open navigation" title="Open navigation" /></span><span className="flex size-5 items-center justify-center rounded-[5px] bg-foreground text-[10px] font-bold text-background md:hidden">F</span><h1 className="text-[13px] font-semibold">{title}</h1>{headerActions}</div>
-          <div className="flex items-center gap-1">{headerRight}<SystemHealthIndicator /></div>
+        <header data-app-header className="flex h-(--header-height) shrink-0 items-center gap-2 border-b transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-(--header-height)">
+          <div className="flex w-full items-center gap-1 px-4 lg:gap-2 lg:px-6">
+            <SidebarTrigger className="-ml-1" aria-label="Open navigation" title="Toggle navigation" />
+            <Separator orientation="vertical" className="mx-2 data-[orientation=vertical]:h-4" />
+            <h1 className="text-base font-medium">{title}</h1>
+            {headerActions}
+            <div className="ml-auto flex items-center gap-2">{headerRight}</div>
+          </div>
         </header>
         {children}
       </SidebarInset>

@@ -12,7 +12,7 @@ export type AuthCompanyRow = typeof forgeCompanies.$inferSelect;
 export type AuthSessionRow = typeof forgeSessions.$inferSelect;
 export type AuthAuditRow = typeof forgeAuditEvents.$inferSelect;
 
-export type SessionUserRow = Pick<AuthUserRow, "id" | "displayName" | "username" | "role" | "status"> & { expiresAt: string };
+export type SessionUserRow = Pick<AuthUserRow, "id" | "displayName" | "username" | "avatarSeed" | "role" | "status"> & { expiresAt: string };
 
 export class AuthRepository {
   constructor(private readonly db: AuthDatabase) {}
@@ -49,6 +49,18 @@ export class AuthRepository {
 
   updateUserStatus(userId: string, status: "active" | "revoked", updatedAt: string): void {
     this.db.update(forgeUsers).set({ status, updatedAt }).where(eq(forgeUsers.id, userId)).run();
+  }
+
+  updateUsername(userId: string, username: string, updatedAt: string): void {
+    this.db.update(forgeUsers).set({ username, updatedAt }).where(eq(forgeUsers.id, userId)).run();
+  }
+
+  updateDisplayName(userId: string, displayName: string, updatedAt: string): void {
+    this.db.update(forgeUsers).set({ displayName, updatedAt }).where(eq(forgeUsers.id, userId)).run();
+  }
+
+  updateAvatarSeed(userId: string, avatarSeed: string, updatedAt: string): void {
+    this.db.update(forgeUsers).set({ avatarSeed, updatedAt }).where(eq(forgeUsers.id, userId)).run();
   }
 
   userCompanyIds(userId: string): string[] {
@@ -106,7 +118,7 @@ export class AuthRepository {
   }
 
   findSessionUser(rawHash: string, now: string): SessionUserRow | undefined {
-    return this.db.select({ id: forgeUsers.id, displayName: forgeUsers.displayName, username: forgeUsers.username, role: forgeUsers.role, status: forgeUsers.status, expiresAt: forgeSessions.expiresAt }).from(forgeSessions).innerJoin(forgeUsers, eq(forgeUsers.id, forgeSessions.userId)).where(and(or(eq(forgeSessions.tokenHash, rawHash), and(eq(forgeSessions.legacyTokenHash, rawHash), gt(forgeSessions.legacyTokenExpiresAt, now))), isNull(forgeSessions.revokedAt))).get();
+    return this.db.select({ id: forgeUsers.id, displayName: forgeUsers.displayName, username: forgeUsers.username, avatarSeed: forgeUsers.avatarSeed, role: forgeUsers.role, status: forgeUsers.status, expiresAt: forgeSessions.expiresAt }).from(forgeSessions).innerJoin(forgeUsers, eq(forgeSessions.userId, forgeUsers.id)).where(and(or(eq(forgeSessions.tokenHash, rawHash), and(eq(forgeSessions.legacyTokenHash, rawHash), gt(forgeSessions.legacyTokenExpiresAt, now))), isNull(forgeSessions.revokedAt))).get();
   }
 
   createSession(session: AuthSessionRow): void {

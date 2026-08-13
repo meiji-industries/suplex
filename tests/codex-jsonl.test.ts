@@ -46,3 +46,25 @@ test("persists a distinct test-result receipt for completed test commands", () =
   expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "command_finished", sourceItemId: "test_1", stepNumber: 1, exitCode: 1 }));
   expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "test_result", sourceItemId: "test_1", stepNumber: 1, exitCode: 1 }));
 });
+
+test("redacts credentials before command and test receipts are persisted", () => {
+  const command = "curl -H 'Authorization: Bearer very-secret-token' -H 'X-Api-Key: api-secret' 'https://example.test/?access_token=query-secret'";
+  const parsed = parseCodexJsonl([
+    JSON.stringify({ type: "item.started", item: { id: "secret_1", type: "command_execution", command } }),
+    JSON.stringify({ type: "item.completed", item: { id: "secret_1", type: "command_execution", command, exit_code: 0, aggregated_output: "Basic dXNlcjpzZWNyZXQ=" } }),
+  ], options);
+
+  const visible = parsed.receipts.map((receipt) => receipt.summary).join("\n");
+  expect(visible).toContain("curl");
+  expect(visible).not.toMatch(/very-secret-token|api-secret|query-secret|dXNlcjpzZWNyZXQ=/);
+  expect(visible).toContain("[REDACTED]");
+});
+
+test("uses fixed reconciliation summaries for unknown and error JSONL events", () => {
+  const parsed = parseCodexJsonl([
+    JSON.stringify({ type: "unknown.event", prompt: "private reasoning", aws: "AKIAIOSFODNN7EXAMPLE" }),
+    JSON.stringify({ type: "error", message: "-----BEGIN PRIVATE KEY-----" }),
+  ], options);
+
+  expect(parsed.receipts.map((receipt) => receipt.summary)).toEqual(["Codex event could not be classified", "Codex reported an error"]);
+});

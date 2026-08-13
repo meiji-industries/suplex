@@ -13,6 +13,13 @@ import { redact } from "./logging.js";
 
 const maxEventsBytes = 8 * 1024 * 1024;
 const executionIdPattern = /^developer_[a-f0-9]{24}$/;
+const unixSocketPathLimit = 100;
+
+export function developerSupervisorSocketPath(executionRoot: string): string {
+  const socketPath = join(resolve(executionRoot), "control.sock");
+  if (Buffer.byteLength(socketPath) <= unixSocketPathLimit) return socketPath;
+  return join("/private/tmp", `forge-developer-${createHash("sha256").update(socketPath).digest("hex").slice(0, 24)}.sock`);
+}
 
 function identity(inspection: ProcessInspection): DeveloperSupervisorIdentity {
   return { pid: inspection.pid, processGroup: inspection.processGroup, startTime: inspection.startTime, executable: inspection.executable, argv: inspection.argv, ownerUid: inspection.ownerUid ?? null };
@@ -221,7 +228,7 @@ function socketRequest(socketPath: string, request: DeveloperSupervisorRequest):
 }
 
 export async function requestDeveloperSupervisor(executionRoot: string, request: DeveloperSupervisorRequest): Promise<DeveloperSupervisorResponse | null> {
-  return socketRequest(join(resolve(executionRoot), "control.sock"), DeveloperSupervisorRequestSchema.parse(request));
+  return socketRequest(developerSupervisorSocketPath(executionRoot), DeveloperSupervisorRequestSchema.parse(request));
 }
 
 export function developerSupervisorCommand(): { command: string; args: string[] } {
@@ -243,7 +250,7 @@ export function spawnDeveloperSupervisor(executionRoot: string, token: string, i
 }
 
 async function startSocket(state: SupervisorState): Promise<ReturnType<typeof createServer>> {
-  const socketPath = join(state.executionRoot, "control.sock");
+  const socketPath = developerSupervisorSocketPath(state.executionRoot);
   await rm(socketPath, { force: true });
   const server = createServer((socket: Socket) => {
     let data = "";
@@ -334,19 +341,24 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
   const server = await startSocket(state);
   const heartbeat = setInterval(() => void writeHeartbeat(state), 2_000);
   heartbeat.unref();
-  const writeEvent = async (stream: "stdout" | "stderr", line: string): Promise<void> => {
+  let eventWrite = Promise.resolve();
+  const writeEvent = (stream: "stdout" | "stderr", line: string): Promise<void> => {
     const record = JSON.stringify({ sequence: state.sequence++, at: new Date().toISOString(), stream, line: redact(line) });
-    const bytes = Buffer.byteLength(`${record}\n`);
-    if (state.eventsBytes + bytes > maxEventsBytes) {
-      if (!state.outputTruncated) {
-        state.outputTruncated = true;
-        const marker = JSON.stringify({ sequence: state.sequence++, at: new Date().toISOString(), stream: "supervisor", line: "output_truncated" });
-        if (state.eventsBytes + Buffer.byteLength(`${marker}\n`) <= maxEventsBytes) { await appendLine(join(root, "events.jsonl"), marker); state.eventsBytes += Buffer.byteLength(`${marker}\n`); }
+    const write = eventWrite.then(async () => {
+      const bytes = Buffer.byteLength(`${record}\n`);
+      if (state.eventsBytes + bytes > maxEventsBytes) {
+        if (!state.outputTruncated) {
+          state.outputTruncated = true;
+          const marker = JSON.stringify({ sequence: state.sequence++, at: new Date().toISOString(), stream: "supervisor", line: "output_truncated" });
+          if (state.eventsBytes + Buffer.byteLength(`${marker}\n`) <= maxEventsBytes) { await appendLine(join(root, "events.jsonl"), marker); state.eventsBytes += Buffer.byteLength(`${marker}\n`); }
+        }
+        return;
       }
-      return;
-    }
-    await appendLine(join(root, "events.jsonl"), record);
-    state.eventsBytes += bytes;
+      await appendLine(join(root, "events.jsonl"), record);
+      state.eventsBytes += bytes;
+    });
+    eventWrite = write.catch(() => undefined);
+    return write;
   };
   const readers: Promise<void>[] = [];
   const pendingWrites = new Set<Promise<void>>();

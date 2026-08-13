@@ -1,4 +1,4 @@
-import { Check, ChevronDown, CircleAlert, Plus, RefreshCw, Settings2, Shield, UserRound } from "lucide-react";
+import { Check, CircleAlert, CircleGauge, Plus, RefreshCw, Settings2 } from "lucide-react";
 import { useState, type FormEvent, type ReactElement } from "react";
 
 import { Button } from "../ui/button.js";
@@ -8,7 +8,9 @@ import { DialogClose, DialogContent, DialogFooter, DialogHeader, Dialog as Dialo
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
 import { Field, FieldLabel } from "../ui/field.js";
 import { Input } from "../ui/input.js";
+import { SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar.js";
 import { companyInitials, withCompany } from "../../lib/api.js";
+import { navigate } from "../../lib/navigation.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 
 function ForgeMark(): ReactElement {
@@ -34,7 +36,7 @@ function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     try {
       const created = await context.createCompany(name);
       onOpenChange(false);
-      window.location.assign(withCompany(`/companies/${encodeURIComponent(created.id)}/settings`, created.id));
+      navigate(withCompany(`/companies/${encodeURIComponent(created.id)}/settings`, created.id));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Unable to create company");
     } finally {
@@ -45,7 +47,7 @@ function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChan
     <DialogRoot open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[min(92vw,360px)]" showCloseButton>
           <DialogHeader><DialogTitle>Create company</DialogTitle></DialogHeader>
-          <form onSubmit={(event) => void submit(event)}>
+          <form className="grid gap-3" onSubmit={(event) => void submit(event)}>
             <Field>
               <FieldLabel htmlFor="create-company-name">Company name</FieldLabel>
               <Input id="create-company-name" autoFocus value={name} onChange={(event) => setName(event.target.value)} />
@@ -66,11 +68,10 @@ export function CompanySwitcher(): ReactElement {
   const label = loading ? "Loading companies" : currentCompany?.name ?? "No company";
   return (
     <>
-      <DropdownMenu>
-        <DropdownMenuTrigger aria-label="Switch company" title="Switch company" className="w-full" render={<Button variant="ghost" className="w-full justify-start px-2" />}>
-          {currentCompany ? <span className="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-muted text-[10px] font-semibold text-muted-foreground">{companyInitials(currentCompany.name)}</span> : <ForgeMark />}
-          <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{label}</span>
-          <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
+      <SidebarMenu><SidebarMenuItem><DropdownMenu>
+        <DropdownMenuTrigger aria-label="Switch company" title="Switch company" render={<SidebarMenuButton className="data-[slot=sidebar-menu-button]:p-1.5!" />}>
+          <CircleGauge className="size-5!" />
+          <span className="min-w-0 flex-1 truncate text-base font-semibold">{label}</span>
         </DropdownMenuTrigger>
         <DropdownMenuContent className="w-64" align="start">
               <DropdownMenuGroup>
@@ -87,19 +88,9 @@ export function CompanySwitcher(): ReactElement {
               {error ? <DropdownMenuItem onClick={() => void context.reloadCompanies()}><RefreshCw className="size-3.5 text-muted-foreground" />Retry</DropdownMenuItem> : null}
               {user?.role === "admin" ? <DropdownMenuItem onClick={() => setCreateOpen(true)}><Plus className="size-3.5 text-muted-foreground" />Create company…</DropdownMenuItem> : null}
               {user?.role === "admin" && currentCompany ? <DropdownMenuItem render={<a href={withCompany(`/companies/${encodeURIComponent(currentCompany.id)}/settings`, currentCompany.id)} />}><Settings2 className="size-3.5 text-muted-foreground" />Company settings</DropdownMenuItem> : null}
-              {user?.role === "admin" ? <DropdownMenuItem render={<a href={withCompany("/admin", currentCompany?.id)} />}><Shield className="size-3.5 text-muted-foreground" />Administration</DropdownMenuItem> : null}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem onClick={() => void signOut()}><UserRound className="size-3.5 text-muted-foreground" />Sign out</DropdownMenuItem>
         </DropdownMenuContent>
-      </DropdownMenu>
+      </DropdownMenu></SidebarMenuItem></SidebarMenu>
       <CreateCompanyDialog open={createOpen} onOpenChange={setCreateOpen} />
     </>
   );
-}
-
-async function signOut(): Promise<void> {
-  try { await fetch("/api/auth/sign-out", { method: "POST" }); } finally {
-    window.localStorage.removeItem("forge.activeCompanyId");
-    window.location.assign("/auth");
-  }
 }

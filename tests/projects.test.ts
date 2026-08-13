@@ -117,6 +117,18 @@ test("preserves inherited capacity and applies integer profile overrides", async
   }
 });
 
+test("updates every editable profile setting", async () => {
+  const value = await fixture();
+  try {
+    const profile = value.projects.createProfile(value.adminId, { name: "Editable", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
+    expect(profile.avatarSeed).toMatch(/^[a-f0-9]{32}$/);
+    const avatarSeed = "a".repeat(32);
+    expect(value.projects.updateProfile(value.adminId, profile.id, { name: "Updated", avatarSeed, model: "gpt-5.6-terra", reasoningLevel: "high", servicePriority: "priority", capacity: 4 })).toMatchObject({ id: profile.id, name: "Updated", avatarSeed, model: "gpt-5.6-terra", reasoningLevel: "high", servicePriority: "priority", capacity: 4, effectiveCapacity: 4 });
+  } finally {
+    await close(value);
+  }
+});
+
 test("creates a minimal draft from a GitHub URL under the configured Forge roots", async () => {
   const value = await fixture();
   const provisioned: Array<{ cloneUrl: string; repository: string; repositoryPath: string; worktreeRoot: string }> = [];

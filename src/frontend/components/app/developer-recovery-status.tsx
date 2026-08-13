@@ -1,6 +1,6 @@
-import { Alert, AlertDescription, AlertTitle } from "../ui/alert.js";
 import { Badge } from "../ui/badge.js";
-import type { ReactElement } from "react";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../ui/card.js";
+import type { ReactElement, ReactNode } from "react";
 
 import { DeveloperRecoveryActions, type DeveloperRecoveryAction } from "./developer-recovery-actions.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
@@ -20,21 +20,24 @@ const labels: Record<DeveloperRecoveryView["status"], string> = {
   failed: "Failed",
 };
 
-export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, busy, isAdmin, onAction }: { taskId: string; recovery: DeveloperRecoveryView | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction) => Promise<void> }): ReactElement | null {
+export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, busy, isAdmin, onAction, children }: { taskId: string; recovery: DeveloperRecoveryView | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction) => Promise<void>; children?: ReactNode }): ReactElement | null {
   if (!recovery) return null;
   const ambiguous = recovery.status === "ownership_ambiguous";
   const interrupted = recovery.status === "interrupted";
   const failed = recovery.status === "failed";
   const attention = ambiguous || interrupted || failed;
-  return <>
-    <Alert variant={attention ? "destructive" : "default"}>
-      <AlertTitle>Developer recovery <Badge variant={attention ? "destructive" : "secondary"}>{labels[recovery.status]}</Badge></AlertTitle>
-      <AlertDescription>
-        <p>{ambiguous ? "Forge cannot prove ownership of the previous Developer process. Inspect the host process and worktree, stop it outside Forge if necessary, then recheck ownership." : recovery.summary ?? "Forge is tracking the Developer turn."}</p>
+  const recoveryCommands = ambiguous ? allowedCommands.filter((command) => command === "verify_developer_ownership") : allowedCommands;
+  const hasActions = recoveryCommands.includes("retry_development") || recoveryCommands.includes("cancel_development") || (isAdmin && recoveryCommands.includes("verify_developer_ownership"));
+  return <Card data-developer-recovery role="alert" size="sm">
+      <CardHeader>
+        <CardTitle>Developer recovery <Badge variant={attention ? "destructive" : "secondary"}>{labels[recovery.status]}</Badge></CardTitle>
+        <CardDescription>{ambiguous ? "Forge cannot prove ownership of the previous Developer process. Inspect the host process and worktree, stop it outside Forge if necessary, then recheck ownership." : recovery.summary ?? "Forge is tracking the Developer turn."}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {children}
         {recovery.lastHeartbeatAt ? <p className="mt-1 text-xs">Last heartbeat {new Date(recovery.lastHeartbeatAt).toLocaleString()}</p> : null}
         {recovery.evidenceArtifactId ? <p className="mt-1 text-xs"><a href={`/api/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(recovery.evidenceArtifactId)}`} target="_blank" rel="noreferrer">Open retained evidence</a></p> : null}
-        <DeveloperRecoveryActions allowedCommands={ambiguous ? allowedCommands.filter((command) => command === "verify_developer_ownership") : allowedCommands} busy={busy} isAdmin={isAdmin} onAction={onAction} />
-      </AlertDescription>
-    </Alert>
-  </>;
+      </CardContent>
+      {hasActions ? <CardFooter className="border-t"><DeveloperRecoveryActions allowedCommands={recoveryCommands} busy={busy} isAdmin={isAdmin} onAction={onAction} /></CardFooter> : null}
+    </Card>;
 }

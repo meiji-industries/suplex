@@ -7,6 +7,7 @@ import { relativeTime } from "../../lib/view-shared.js";
 import { Button } from "../ui/button.js";
 import { Collapsible } from "../ui/collapsible.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "../ui/dialog.js";
+import { SidebarMenuButton } from "../ui/sidebar.js";
 
 export type HealthFreshness = "checking" | "current" | "stale";
 export type SystemHealthLevel = "green" | "amber" | "red";
@@ -31,8 +32,9 @@ const icons: Record<string, LucideIcon> = {
 };
 
 export function getSystemHealthLevel(snapshot: HealthSnapshot | undefined, freshness: HealthFreshness): SystemHealthLevel {
-  if (snapshot && (!snapshot.ready || snapshot.checks.some((check) => isOwnedHealthCheck(check.id) && check.status !== "healthy"))) return "red";
-  if (!snapshot || freshness === "stale" || snapshot.checks.length === 0 || snapshot.checks.some((check) => check.status !== "healthy")) return "amber";
+  const rollupChecks = snapshot?.checks.filter((check) => check.id !== "backup") ?? [];
+  if (snapshot && (!snapshot.ready || rollupChecks.some((check) => isOwnedHealthCheck(check.id) && check.status !== "healthy"))) return "red";
+  if (!snapshot || freshness === "stale" || snapshot.checks.length === 0 || rollupChecks.some((check) => check.status !== "healthy")) return "amber";
   return "green";
 }
 
@@ -137,7 +139,7 @@ export function HealthCheckSections({ snapshot, compact = false }: { snapshot: H
   );
 }
 
-export function SystemHealthIndicator(): ReactElement | null {
+export function SystemHealthIndicator({ sidebar = false }: { sidebar?: boolean } = {}): ReactElement | null {
   const health = useContext(SystemHealthContext);
   const [open, setOpen] = useState(false);
   if (!health) return null;
@@ -148,11 +150,14 @@ export function SystemHealthIndicator(): ReactElement | null {
   const checkCount = health.snapshot?.checks.length ?? 0;
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button variant="ghost" size="icon" aria-label={`System health: ${label}`} title={`System health: ${label}`} data-system-health data-status={level} />}>
-        <span className="relative flex size-2">
-          <span className={`absolute -inset-0.5 inline-flex size-3 rounded-full opacity-50 motion-safe:animate-ping ${lightClass}`} />
-          <span className={`relative inline-flex size-2 rounded-full motion-safe:animate-pulse ${lightClass}`} />
+      <DialogTrigger render={sidebar ? <SidebarMenuButton aria-label={`System health: ${label}`} title={`System health: ${label}`} data-system-health data-status={level} /> : <Button variant="ghost" size="icon" aria-label={`System health: ${label}`} title={`System health: ${label}`} data-system-health data-status={level} />}>
+        <span className="flex size-4 shrink-0 items-center justify-center">
+          <span className="relative flex size-2">
+            <span className={`absolute -inset-0.5 inline-flex size-3 rounded-full opacity-50 motion-safe:animate-ping ${lightClass}`} />
+            <span className={`relative inline-flex size-2 rounded-full motion-safe:animate-pulse ${lightClass}`} />
+          </span>
         </span>
+        {sidebar ? <span>{label}</span> : null}
       </DialogTrigger>
       <DialogContent showCloseButton>
         <DialogHeader>

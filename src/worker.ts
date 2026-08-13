@@ -8,6 +8,7 @@ import { StructuredLogger } from "./logging.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { reconcileDeveloperExecutions } from "./developer-recovery.js";
 import { reconcileSuccessorIntents } from "./successor-recovery.js";
+import { reconcileTaskCreationIntents } from "./task-creation-recovery.js";
 import { activityPayloadInterceptors } from "./temporal/payload-boundary-interceptors.js";
 import { buildProductionWorkflowBundle, temporalDataConverter } from "./temporal/workflow-bundle.js";
 import { reconcileAgentExecutions } from "./agent-recovery.js";
@@ -41,11 +42,13 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   let connection: NativeConnection | undefined;
   let worker: Worker | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
+  let creationRecovery: Promise<void> | undefined;
   let shutdown: (() => void) | undefined;
   try {
     await reconcileAgentExecutions(database);
     await reconcileDeveloperExecutions(database);
     await reconcileSuccessorIntents(database, config);
+    await reconcileTaskCreationIntents(database, config);
     new CapacityManager(database, config).reconcileFromLedgers();
     connection = await NativeConnection.connect(temporalConnectionOptions(config));
     worker = await Worker.create({
@@ -73,6 +76,11 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       } else {
         database.unregisterWorker(workerId);
       }
+      if (!creationRecovery) {
+        creationRecovery = reconcileTaskCreationIntents(database, config)
+          .catch((error: unknown) => new StructuredLogger().error("Task creation reconciliation failed", {}, { error: error instanceof Error ? error.message : "unknown error" }))
+          .finally(() => { creationRecovery = undefined; });
+      }
     };
     refreshRegistration();
     heartbeat = setInterval(refreshRegistration, 10_000);
@@ -93,6 +101,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
     if (heartbeat) {
       clearInterval(heartbeat);
     }
+    await creationRecovery;
     database.unregisterWorker(workerId);
     if (shutdown) {
       process.removeListener("SIGTERM", shutdown);
@@ -104,6 +113,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
     if (heartbeat) {
       clearInterval(heartbeat);
     }
+    await creationRecovery;
     worker?.shutdown();
     database.unregisterWorker(workerId);
     if (shutdown) {

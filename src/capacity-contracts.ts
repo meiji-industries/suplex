@@ -134,6 +134,7 @@ export type CapacityExecutionOwner = z.infer<typeof CapacityExecutionOwnerSchema
 export const PublicCapacityStatusSchema = z.object({
   profileId: durableId,
   profileName: z.string().min(1).max(120),
+  avatarSeed: z.string(),
   status: z.enum(["queued", "active", "rate_limited", "ownership_ambiguous", "exhausted"]),
   position: z.number().int().positive().nullable(),
   reason: CapacityWaitReasonSchema.nullable(),
@@ -145,6 +146,7 @@ export type PublicCapacityStatus = z.infer<typeof PublicCapacityStatusSchema>;
 export const AdminCapacityLaneSchema = z.object({
   profileId: durableId,
   profileName: z.string().min(1).max(120),
+  avatarSeed: z.string(),
   provider: z.literal("codex"),
   capacity: z.number().int().min(1).max(32).nullable(),
   effectiveCapacity: z.number().int().min(1).max(32),

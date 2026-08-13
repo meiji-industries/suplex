@@ -272,6 +272,26 @@ export async function acceptIssuePlanning(config: ForgeConfig, workflowId: strin
   }
 }
 
+export async function acceptIssueDevelopment(config: ForgeConfig, workflowId: string, input: StartPlanningInput, command: "start_development" | "retry_development" = "start_development"): Promise<IssueWorkflowState> {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
+  const validatedInput = StartPlanningInputSchema.parse(input);
+  assertPayloadWithinLimit(issueCommands[command].payloadLabel, validatedInput);
+  const temporalClient = await connectTemporal(config);
+  try {
+    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
+    await handle.startUpdate(issueUpdates[command], { args: [validatedInput], waitForStage: WorkflowUpdateStage.ACCEPTED });
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const state = IssueWorkflowStateSchema.parse(await handle.query(issueStateQuery));
+      if (state.revision > validatedInput.expectedRevision) return state;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`${issueCommands[command].label} update was accepted but did not advance Workflow state`);
+  } finally {
+    temporalClient.connection.close();
+  }
+}
+
 export async function resolveIssueDecisionBlocker(config: ForgeConfig, workflowId: string, input: ResolveDecisionBlockerInput): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
   if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");

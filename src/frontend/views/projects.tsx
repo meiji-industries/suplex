@@ -1,6 +1,7 @@
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
 import { Button } from ".././components/ui/button.js";
 import { Badge } from ".././components/ui/badge.js";
+import { Card, CardContent, CardFooter, CardHeader, CardTitle } from ".././components/ui/card.js";
 import { Checkbox } from ".././components/ui/checkbox.js";
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from ".././components/ui/field.js";
 import { Input } from ".././components/ui/input.js";
@@ -8,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from ".././components/ui/dialog.js";
 import { CreateButton } from ".././components/ui/create-button.js";
 import { ApplicationFrame } from ".././components/app/application-frame.js";
+import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
@@ -141,6 +143,7 @@ function ProjectSettingsDialog({
   const [findings, setFindings] = useState<Array<{ field: string; message: string }>>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [manualCheck, setManualCheck] = useState("");
   const [checkOptions, setCheckOptions] = useState<ApiCheck[]>([]);
   const [checksLoading, setChecksLoading] = useState(false);
 
@@ -150,6 +153,7 @@ function ProjectSettingsDialog({
     setFindings([]);
     setError("");
     setBusy(false);
+    setManualCheck("");
     setCheckOptions([]);
     if (project) {
       setChecksLoading(true);
@@ -195,6 +199,13 @@ function ProjectSettingsDialog({
     if (!form) return;
     const checks = form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean);
     setField("requiredChecks", (checks.includes(checkName) ? checks.filter((name) => name !== checkName) : [...checks, checkName]).join(", "));
+  };
+
+  const addManualCheck = (): void => {
+    if (!form || !manualCheck.trim()) return;
+    const checks = form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean);
+    setField("requiredChecks", [...new Set([...checks, manualCheck.trim()])].join(", "));
+    setManualCheck("");
   };
 
   const submit = async (event: FormEvent): Promise<void> => {
@@ -258,13 +269,14 @@ function ProjectSettingsDialog({
               <FieldSet>
                 <FieldLegend variant="label">Required GitHub checks</FieldLegend>
                 {checksLoading ? <FieldDescription>Loading checks from {project.targetBranch}…</FieldDescription> : availableChecks.length ? <FieldGroup data-slot="checkbox-group">{availableChecks.map((check, index) => <Field orientation="horizontal" key={check.name}><Checkbox id={`project-check-${index}`} checked={selectedChecks.includes(check.name)} onCheckedChange={() => toggleCheck(check.name)} /><FieldLabel htmlFor={`project-check-${index}`}>{check.name}{check.conclusion ? ` · ${check.conclusion}` : ""}</FieldLabel></Field>)}</FieldGroup> : <FieldDescription>No check runs were found on {project.targetBranch}. Run the repository workflows once, then reopen settings.</FieldDescription>}
+                <div className="flex gap-2"><Input aria-label="Add required check" placeholder="Exact check name" value={manualCheck} onChange={(event) => setManualCheck(event.target.value)} /><Button type="button" size="sm" variant="outline" disabled={!manualCheck.trim()} onClick={addManualCheck}>Add</Button></div>
                 <FieldDescription>Exact check names fetched from GitHub for the target branch.</FieldDescription>
               </FieldSet>
               <FieldSet>
                 <FieldLegend variant="label">Profiles</FieldLegend>
-                {profiles.length ? <FieldGroup data-slot="checkbox-group">{profiles.map((profile) => <Field orientation="horizontal" key={profile.id}><Checkbox id={`project-profile-${profile.id}`} checked={form.allowedProfileIds.includes(profile.id)} onCheckedChange={() => toggleProfile(profile.id)} /><FieldLabel htmlFor={`project-profile-${profile.id}`}>{profile.name}</FieldLabel></Field>)}</FieldGroup> : <FieldDescription>No Codex profiles configured. <a href={withCompany("/admin/profiles", project.companyId)}>Create a profile</a> before activating this project.</FieldDescription>}
+                {profiles.length ? <FieldGroup data-slot="checkbox-group">{profiles.map((profile) => <Field orientation="horizontal" key={profile.id}><Checkbox id={`project-profile-${profile.id}`} checked={form.allowedProfileIds.includes(profile.id)} onCheckedChange={() => toggleProfile(profile.id)} /><FieldLabel htmlFor={`project-profile-${profile.id}`}><span className="flex items-center gap-2"><ProfileAvatar name={profile.name} seed={profile.avatarSeed} />{profile.name}</span></FieldLabel></Field>)}</FieldGroup> : <FieldDescription>No Codex profiles configured. <a href={withCompany("/admin/profiles", project.companyId)}>Create a profile</a> before activating this project.</FieldDescription>}
               </FieldSet>
-              {(["leadProfile", "developerProfile", "reviewerProfile"] as const).map((key) => <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{key === "leadProfile" ? "Lead default" : key === "developerProfile" ? "Developer default" : "Reviewer default (optional)"}</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None">{(value) => allowedProfiles.find((profile) => profile.id === value)?.name ?? (value ? "Unavailable profile" : "None")}</SelectValue></SelectTrigger><SelectContent><SelectItem value={null}>None</SelectItem>{allowedProfiles.map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>)}</SelectContent></Select></Field>)}
+              {(["leadProfile", "developerProfile", "reviewerProfile"] as const).map((key) => <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{key === "leadProfile" ? "Lead default" : key === "developerProfile" ? "Developer default" : "Reviewer default (optional)"}</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None">{(value) => { const profile = allowedProfiles.find((candidate) => candidate.id === value); return profile ? <span className="flex items-center gap-2"><ProfileAvatar name={profile.name} seed={profile.avatarSeed} />{profile.name}</span> : value ? "Unavailable profile" : "None"; }}</SelectValue></SelectTrigger><SelectContent><SelectItem value={null}>None</SelectItem>{allowedProfiles.map((profile) => <SelectItem key={profile.id} value={profile.id}><ProfileAvatar name={profile.name} seed={profile.avatarSeed} />{profile.name}</SelectItem>)}</SelectContent></Select></Field>)}
               <DialogFooter>{missingRequirements.length ? <span className="mr-auto text-[11px] text-amber-800">Complete the missing requirements to save.</span> : null}<DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || missingRequirements.length > 0}>{busy ? "Saving…" : "Save settings"}</Button></DialogFooter>
             </FieldGroup>
           </form> : null}
@@ -323,13 +335,30 @@ export function ProjectsView(): ReactElement {
   };
 
   return (
-    <ApplicationFrame title="Projects" headerRight={currentCompany?.status === "active" ? <CreateButton onClick={() => setCreateOpen(true)} disabled={!companyId}>Create</CreateButton> : undefined}>
+    <ApplicationFrame title="Projects" headerRight={currentCompany?.status === "active" ? <CreateButton onClick={() => setCreateOpen(true)} disabled={!companyId}>New Project</CreateButton> : undefined}>
       <div className="bg-background text-foreground">
         <section className="p-4">
           {currentCompany && currentCompany.status !== "active" ? <p className="mb-3 text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p> : null}
           {currentCompany ? (
-            <div>
-              {visibleProjects.map((project) => { const requirements = activationRequirements({ requiredChecks: project.requiredChecks, allowedProfileIds: project.allowedProfileIds, leadProfile: project.roleDefaults.lead, developerProfile: project.roleDefaults.developer }); const missingRequirements = requirements.filter((requirement) => !requirement.complete); const ready = missingRequirements.length === 0; return <article className="py-3" key={project.id}><div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-2"><span className="text-[13px] font-medium">{project.name}</span>{project.status === "draft" ? <Badge variant="secondary" data-status="draft"><span className="size-1.5 rounded-full bg-amber-500" />Draft</Badge> : <Badge variant="secondary" data-status={project.status}>{project.status}</Badge>}<span className="text-[11px] text-muted-foreground">revision {project.configurationRevision}</span></div><div className="flex flex-wrap gap-1.5">{project.status === "draft" && ready ? <Button size="sm" onClick={() => void changeStatus(project.id, "activate")}>Activate</Button> : null}{project.status === "needs-reactivation" || project.status === "paused" ? <Button size="sm" onClick={() => void changeStatus(project.id, "reactivate")}>Reactivate</Button> : null}{project.status === "active" || project.status === "needs-reactivation" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "pause")}>Pause</Button> : null}{project.status !== "archived" ? <Button variant={project.status === "draft" && !ready ? "default" : "ghost"} size="sm" onClick={() => setSettingsProject(project)}>Configure</Button> : null}{project.status !== "archived" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "archive")}>Archive</Button> : null}<a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></div><div className="mt-2 grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Revision hash {project.configurationIdentity ? `${project.configurationIdentity.slice(0, 8)}…` : "unaccepted"}</span><span>Base {project.baseBranch} · {project.baseSha ? `${project.baseSha.slice(0, 8)}…` : "unaccepted"}</span><span>Target {project.targetBranch} · {project.targetSha ? `${project.targetSha.slice(0, 8)}…` : "unaccepted"}</span><span>{project.requiredChecks.length} required checks</span><span>Defaults: Lead {project.roleDefaults.lead ?? "—"} · Developer {project.roleDefaults.developer ?? "—"}</span>{project.status === "draft" && missingRequirements.length ? <span className="font-medium text-amber-700 sm:col-span-2">{missingRequirements.length} activation requirements missing: {missingRequirements.map((requirement) => requirement.label).join(" · ")}</span> : null}</div></article>; })}
+            <div className="grid gap-3">
+              {visibleProjects.map((project) => {
+                const requirements = activationRequirements({ requiredChecks: project.requiredChecks, allowedProfileIds: project.allowedProfileIds, leadProfile: project.roleDefaults.lead, developerProfile: project.roleDefaults.developer });
+                const missingRequirements = requirements.filter((requirement) => !requirement.complete);
+                const ready = missingRequirements.length === 0;
+                return (
+                  <article key={project.id}>
+                    <Card size="sm">
+                    <CardHeader>
+                      <CardTitle><div className="flex min-w-0 flex-wrap items-center gap-2"><span className="text-[13px]">{project.name}</span>{project.status === "draft" ? <Badge variant="secondary" data-status="draft"><span className="size-1.5 rounded-full bg-amber-500" />Draft</Badge> : <Badge variant="secondary" data-status={project.status}>{project.status}</Badge>}<span className="text-[11px] font-normal text-muted-foreground">revision {project.configurationRevision}</span></div></CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Revision hash {project.configurationIdentity ? `${project.configurationIdentity.slice(0, 8)}…` : "unaccepted"}</span><span>Base {project.baseBranch} · {project.baseSha ? `${project.baseSha.slice(0, 8)}…` : "unaccepted"}</span><span>Target {project.targetBranch} · {project.targetSha ? `${project.targetSha.slice(0, 8)}…` : "unaccepted"}</span><span>{project.requiredChecks.length} required checks</span><span>Defaults: Lead {project.roleDefaults.lead ?? "—"} · Developer {project.roleDefaults.developer ?? "—"}</span>{project.status === "draft" && missingRequirements.length ? <span className="font-medium text-amber-700 sm:col-span-2">{missingRequirements.length} activation requirements missing: {missingRequirements.map((requirement) => requirement.label).join(" · ")}</span> : null}</div>
+                    </CardContent>
+                    <CardFooter className="border-t"><div className="flex w-full flex-wrap justify-end gap-1.5">{project.status === "draft" && ready ? <Button size="sm" onClick={() => void changeStatus(project.id, "activate")}>Activate</Button> : null}{project.status === "needs-reactivation" || project.status === "paused" ? <Button size="sm" onClick={() => void changeStatus(project.id, "reactivate")}>Reactivate</Button> : null}{project.status === "active" || project.status === "needs-reactivation" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "pause")}>Pause</Button> : null}{project.status !== "archived" ? <Button variant={project.status === "draft" && !ready ? "default" : "ghost"} size="sm" onClick={() => setSettingsProject(project)}>Configure</Button> : null}{project.status !== "archived" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "archive")}>Archive</Button> : null}<a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></CardFooter>
+                    </Card>
+                  </article>
+                );
+              })}
               {!loading && loadedCompanyId === companyId && visibleProjects.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">No projects configured.</div> : null}
             </div>
           ) : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}

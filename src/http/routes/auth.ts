@@ -6,6 +6,7 @@ import type { ForgeConfig } from "../../config.js";
 import { LEGACY_SESSION_COOKIE_NAME, SESSION_COOKIE_NAME } from "../../auth-identifiers.js";
 import type { FastifyReply } from "fastify";
 import { AuthEnvelopeSchema, AuthOptionsResponseSchema, AuthStatusResponseSchema, ErrorResponseSchema, SignOutResponseSchema, TokenBodySchema, RegistrationVerificationBodySchema, AuthenticationVerificationBodySchema } from "../contracts/common.js";
+import { ProfileBodySchema } from "../contracts/auth.js";
 import { authenticatedUser, clearSessionCookies, setSessionCookie, sessionUser } from "../session.js";
 
 export interface AuthRoutesOptions {
@@ -13,9 +14,10 @@ export interface AuthRoutesOptions {
   config: ForgeConfig;
 }
 
-export const authMe: FastifyPluginAsync = async (app) => {
+export const authMe: FastifyPluginAsync<Pick<AuthRoutesOptions, "auth">> = async (app, options) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   typed.get("/me", { schema: { response: { 200: AuthEnvelopeSchema } } }, async (request, reply) => reply.send({ user: authenticatedUser(request) }));
+  typed.patch("/me", { schema: { body: ProfileBodySchema, response: { 200: AuthEnvelopeSchema } } }, async (request, reply) => reply.send({ user: options.auth.updateProfile(authenticatedUser(request).id, request.body) }));
 };
 
 const authRoutes: FastifyPluginAsync<AuthRoutesOptions> = async (app, options) => {

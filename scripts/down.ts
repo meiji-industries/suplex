@@ -113,14 +113,14 @@ export async function down(): Promise<void> {
   const projectRoot = await realpath(process.cwd());
   const root = runtimeRoot();
   const [status, lock] = await Promise.all([inspectDevStatus(root), inspectDevLock(root)]);
-  if (status.state !== "orphaned") {
+  const processGroups = await developmentProcessGroups(projectRoot);
+  if (status.state !== "orphaned" && !(status.state === "stopped" && processGroups.length > 0)) {
     throw new Error(`Development recovery requires orphaned status; current status is ${status.state}`);
   }
   if (lock.kind === "ambiguous" || lock.kind === "live") throw new Error("Development ownership is ambiguous; refusing recovery");
   const registryPath = join(root, "owned-processes.json");
   await stopRecordedProcesses(registryPath);
 
-  const processGroups = await developmentProcessGroups(projectRoot);
   if (processGroups.length > 0) {
     for (const processGroup of processGroups) signalGroup(processGroup, "SIGTERM");
     const survivors = await waitForGroups(processGroups, shutdownTimeoutMs);

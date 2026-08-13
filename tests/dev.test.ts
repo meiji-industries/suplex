@@ -4,9 +4,13 @@ import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { acquireDevLock, inspectDevStatus, readDevControlRequest, requestDevControl, resolveDevPorts, superviseDevStack } from "../scripts/dev.js";
+import { acquireDevLock, forgeEnvironment, inspectDevStatus, readDevControlRequest, requestDevControl, resolveDevPorts, superviseDevStack } from "../scripts/dev.js";
 import { isForgeDevelopmentCommand, parseProcessList } from "../scripts/down.js";
 import type { OwnedProcess, ProcessController, ProcessInspection } from "../src/process-manager.js";
+
+test("development uses the configured repository root instead of the checkout", () => {
+  expect(forgeEnvironment({ temporal: 7233, temporalUi: 8233 })).not.toHaveProperty("FORGE_REPOSITORY_ROOT");
+});
 
 function makeOwner(pid = 4101): OwnedProcess {
   return {

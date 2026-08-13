@@ -1024,7 +1024,7 @@ export class AgentService {
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
       throw failure;
     }
-    const schemaPath = await this.ensureLeadSchema();
+    const schemaPath = await this.ensureDeliveryReviewSchema();
     const active = this.activeCapacityExecution(input, "lead");
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
@@ -1046,7 +1046,7 @@ export class AgentService {
       const runTurn = async (turn: number, prompt: string): Promise<void> => {
         evidenceLines.push(JSON.stringify({ type: "forge.review-turn-start", turn }));
         const wrapper = await this.prepareTurnWrapper(executionId, leadProfile, worktreePath, schemaPath, prompt, { resumeSessionRef: leadSessionRef, sessionRef: leadSessionRef });
-        const result = await this.processRunner({
+        const observed = await this.processRunner({
           command: wrapper.command,
           args: wrapper.args,
           cwd: worktreePath,
@@ -1066,6 +1066,7 @@ export class AgentService {
             await this.databaseHeartbeat(executionId, "running", evidenceLines.length);
           },
         });
+        const result = await this.completedTurnResult(observed, wrapper);
         if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, outputLines, leadProfile.model);
         evidenceLines.push(JSON.stringify({ type: "forge.review-turn-end", turn }));
       };
@@ -1439,6 +1440,24 @@ export class AgentService {
     await writeFile(filename, JSON.stringify(CodexLeadOutputJsonSchema), { encoding: "utf8", mode: 0o600 });
     await chmod(filename, 0o600);
     return filename;
+  }
+
+  private async ensureDeliveryReviewSchema(): Promise<string> {
+    const directory = join(this.config.runtimeRoot, "schemas");
+    const filename = join(directory, "delivery-review.schema.json");
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await writeFile(filename, JSON.stringify(z.toJSONSchema(DeliveryReviewSchema)), { encoding: "utf8", mode: 0o600 });
+    await chmod(filename, 0o600);
+    return filename;
+  }
+
+  private async completedTurnResult(result: LeadProcessResult, wrapper: PreparedAgentTurnWrapper): Promise<LeadProcessResult> {
+    if (result.exitCode === 0) return result;
+    try {
+      const status = JSON.parse(await readFile(wrapper.statusPath, "utf8")) as { state?: unknown; exitCode?: unknown };
+      if (status.state === "completed" && status.exitCode === 0) return { ...result, exitCode: 0 };
+    } catch { /* The observed process result remains authoritative when no terminal wrapper status exists. */ }
+    return result;
   }
 
   private async repositoryEvidence(repositoryPath: string): Promise<string> {

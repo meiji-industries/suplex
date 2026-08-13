@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, readFile, readdir, realpath, rm, rmdir, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { relative, resolve, sep } from "node:path";
@@ -139,13 +139,13 @@ export class DeveloperEvidenceBuilder {
     const repositoryPath = resolve(projectRevision.repositoryPath);
     const worktreeRoot = resolve(projectRevision.worktreeRoot);
     if (!safeWithin(this.config.repositoryRoot, repositoryPath) || !safeWithin(this.config.worktreeRoot, worktreeRoot)) throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "The accepted project paths are outside Forge roots");
-    for (const rawPath of contextResult.data.repositoryInstructionPaths) {
+    for (const [index, rawPath] of contextResult.data.repositoryInstructionPaths.entries()) {
       const repositoryPathEntry = normalizeRepositoryInstructionPath(rawPath);
       const result = await execFileAsync("git", ["show", `${projectRevision.targetSha}:${repositoryPathEntry}`], { cwd: repositoryPath, timeout: 15_000, maxBuffer: 8 * 1024 * 1024 });
       const bytes = Buffer.from(result.stdout, "utf8");
-      entries.push({ kind: "repository_instruction", artifactId: null, repositoryPath: repositoryPathEntry, sha256: createHash("sha256").update(bytes).digest("hex"), byteSize: bytes.length, stagedFilename: `repository-instruction-${randomBytes(6).toString("hex")}.txt`, planStepNumbers: referencedSteps(repositoryPathEntry, true) });
+      entries.push({ kind: "repository_instruction", artifactId: null, repositoryPath: repositoryPathEntry, sha256: createHash("sha256").update(bytes).digest("hex"), byteSize: bytes.length, stagedFilename: `repository-instruction-${index + 1}.txt`, planStepNumbers: referencedSteps(repositoryPathEntry, false) });
     }
-    const manifest = EvidenceManifestSchema.parse({ version: 1, authorizedPlan: subject, projectRevision, entries, contradictionRule: "stop_before_unrelated_edits", verificationCommands: steps.map((step) => ({ stepNumber: step.number, commands: step.verificationCommands })), createdAt: new Date().toISOString() });
+    const manifest = EvidenceManifestSchema.parse({ version: 1, authorizedPlan: subject, projectRevision, entries, contradictionRule: "stop_before_unrelated_edits", verificationCommands: steps.map((step) => ({ stepNumber: step.number, commands: step.verificationCommands })), createdAt: subject.authorizedAt });
     const artifact = await this.artifacts.put(subject.companyId, "developer-evidence-manifest", { filename: `${rawSubject.executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(manifest, null, 2), "utf8") });
     this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
     return { manifest, artifact, gitPresentation };
@@ -178,7 +178,10 @@ export class DeveloperEvidenceBuilder {
       if (createHash("sha256").update(bytes).digest("hex") !== entry.sha256) throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "Staged evidence bytes do not match the immutable manifest");
       const path = resolve(directory, entry.stagedFilename);
       if (!safeWithin(directory, path)) throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "Staged evidence escaped the execution directory");
-      await writeFile(path, bytes, { encoding: "utf8", mode: 0o400 });
+      if (existingMarker !== undefined) {
+        const staged = await readFile(path).catch(() => undefined);
+        if (!staged || !staged.equals(bytes)) throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "The existing staged Developer context does not match its immutable manifest");
+      } else await writeFile(path, bytes, { encoding: "utf8", mode: 0o400 });
       relativePaths.push(`.forge-context/${executionId}/${entry.stagedFilename}`);
       if (entry.kind === "image") imagePaths.push(path);
     }

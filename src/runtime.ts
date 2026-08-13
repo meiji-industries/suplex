@@ -1,7 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, open, rm } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 
 import type { ForgeConfig } from "./config.js";
 import { connectTemporal, ensureTemporalFoundation } from "./temporal/service.js";
@@ -82,25 +81,13 @@ async function waitForProcessIdentity(pid: number, attempts = 10, delayMs = 50):
   return undefined;
 }
 
-export function forgeProcessArguments(script: string, watch: boolean, tsxCli?: string): string[] {
-  if (!watch) return ["--import", "tsx", script];
-  const cli = tsxCli ?? fileURLToPath(import.meta.resolve("tsx/cli"));
-  return [
-    cli,
-    "watch",
-    "--clear-screen=false",
-    "--exclude", "./dist/**/*",
-    "--exclude", "./node_modules/**/*",
-    "--exclude", "./src/frontend/**/*",
-    "--exclude", "./tests/**/*",
-    script,
-  ];
+export function forgeProcessArguments(script: string): string[] {
+  return ["--import", "tsx", script];
 }
 
 async function spawnForgeProcess(name: string, script: string, config: ForgeConfig, runtimeRoot: string, foreground: boolean): Promise<{ child: ChildProcess; owned: OwnedProcess }> {
   const command = process.execPath;
-  const watch = process.env.FORGE_DEVELOPMENT_WATCH === "1";
-  const args = forgeProcessArguments(script, watch);
+  const args = forgeProcessArguments(script);
   const logHandle = foreground ? undefined : await open(`${runtimeRoot}/${name}.log`, "a", 0o600);
   const child = spawn(command, args, {
     cwd: process.cwd(),

@@ -4,6 +4,7 @@ export const forgeUsers = sqliteTable("forge_users", {
   id: text("id").primaryKey(),
   displayName: text("display_name").notNull(),
   username: text("username").notNull(),
+  avatarSeed: text("avatar_seed").notNull().default(""),
   role: text("role", { enum: ["admin", "member"] }).notNull(),
   status: text("status", { enum: ["pending", "active", "revoked"] }).notNull(),
   createdAt: text("created_at").notNull(),

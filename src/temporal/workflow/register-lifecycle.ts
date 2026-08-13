@@ -49,6 +49,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     }
     return "none";
   };
+  const developerCancellationAvailable = (): boolean => ctx.state.phase === "development" || (ctx.state.phase === "delivery_blocked" && (ctx.state.developerRecoveryStatus === "cancellation_requested" || (ctx.state.developerRecoveryStatus === "interrupted" && ctx.state.capacity !== null)));
   setHandler(issueUpdates.cancel_issue, async (rawInput) => {
     if (!ctx.exactPlanAuthorityEnabled && ctx.captureInitialProjectionState) await condition(() => ctx.initialProjectionComplete);
     if (ctx.initialProjectionBarrierEnabled) await ctx.initialProjection;
@@ -103,7 +104,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
       if (!ctx.state.developerExecutionId) {
         await ctx.withStateMutation(() => {
-          if (ctx.state.revision !== command.expectedRevision || ctx.state.phase !== "development") throw new Error("Developer cancellation was superseded by another command");
+          if (ctx.state.revision !== command.expectedRevision || !developerCancellationAvailable()) throw new Error("Developer cancellation was superseded by another command");
           ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, activeOperation: null });
           ctx.markCommandProcessed(command.commandId);
           if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
@@ -113,7 +114,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       }
       const executionId = ctx.state.developerExecutionId;
       await ctx.withStateMutation(() => {
-        if (ctx.state.revision !== command.expectedRevision || ctx.state.phase !== "development") throw new Error("Developer cancellation was superseded by another command");
+        if (ctx.state.revision !== command.expectedRevision || !developerCancellationAvailable()) throw new Error("Developer cancellation was superseded by another command");
         ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: [], pendingAction: "Cancelling Developer turn", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("cancellation_requested", null, "Cancellation was sent to the recorded Developer supervisor.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
         ctx.markCommandProcessed(command.commandId);
       });
@@ -138,7 +139,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     const executionId = ctx.state.developerExecutionId;
     const hasCapacityOwnership = ctx.state.capacity !== null;
     await ctx.withStateMutation(() => {
-      if (ctx.state.revision !== command.expectedRevision || ctx.state.phase !== "development") throw new Error("Developer cancellation was superseded by another command");
+      if (ctx.state.revision !== command.expectedRevision || !developerCancellationAvailable()) throw new Error("Developer cancellation was superseded by another command");
       ctx.state = IssueWorkflowStateSchema.parse({
         ...ctx.state,
         revision: ctx.state.revision + 1,
@@ -194,7 +195,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     const command = StartPlanningInputSchema.parse(rawInput);
     if (ctx.commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    if (ctx.state.phase !== "development") throw new Error("Developer cancellation is not available in the current phase");
+    if (!developerCancellationAvailable()) throw new Error("Developer cancellation is not available in the current phase");
   } });
   ctx.cancelCurrentCapacity = cancelCurrentCapacity;
   ctx.preserveAmbiguousCapacity = preserveAmbiguousCapacity;

@@ -1,5 +1,6 @@
 import { parsePatchFiles } from "@pierre/diffs";
 import { FileDiff, Virtualizer } from "@pierre/diffs/react";
+import { FileTree, useFileTree, useFileTreeSelection } from "@pierre/trees/react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 
 import { readJson } from "../../lib/api.js";
@@ -8,6 +9,10 @@ import { Skeleton } from "../ui/skeleton.js";
 import type { TaskDeveloperDiffResponse } from "../../../http/contracts/tasks.js";
 
 type ApiDeveloperDiff = TaskDeveloperDiffResponse;
+
+type ParsedFile = ReturnType<typeof parsePatchFiles>[number]["files"][number];
+
+export type DeveloperDiffProps = { taskId: string; executionId: string; onFileCount?: (count: number) => void };
 
 function useAppThemeType(): "light" | "dark" {
   const readTheme = (): "light" | "dark" => document.documentElement.classList.contains("dark") ? "dark" : "light";
@@ -22,7 +27,27 @@ function useAppThemeType(): "light" | "dark" {
   return themeType;
 }
 
-export default function DeveloperDiff({ taskId, executionId }: { taskId: string; executionId: string }): ReactElement {
+function DiffTree({ files, themeType }: { files: ParsedFile[]; themeType: "light" | "dark" }): ReactElement {
+  const { model } = useFileTree({
+    flattenEmptyDirectories: true,
+    initialExpansion: "open",
+    initialSelectedPaths: [files[0]!.name],
+    paths: files.map((file) => file.name),
+    search: true,
+  });
+  const selectedPaths = useFileTreeSelection(model);
+  const selectedFile = files.find((file) => file.name === selectedPaths.at(-1)) ?? files[0]!;
+  const options = useMemo(() => ({ diffStyle: "unified" as const, overflow: "scroll" as const, stickyHeader: true, themeType }), [themeType]);
+
+  return <div className="grid overflow-hidden rounded-md border border-border bg-background lg:grid-cols-[14rem_minmax(0,1fr)]">
+    <FileTree model={model} aria-label="Changed files" className="h-48 border-b border-border lg:h-[36rem] lg:border-r lg:border-b-0" style={{ colorScheme: themeType }} />
+    <Virtualizer className="h-[36rem] overflow-auto" contentClassName="p-2">
+      <FileDiff fileDiff={selectedFile} options={options} disableWorkerPool />
+    </Virtualizer>
+  </div>;
+}
+
+export default function DeveloperDiff({ taskId, executionId, onFileCount }: DeveloperDiffProps): ReactElement {
   const [diff, setDiff] = useState<ApiDeveloperDiff>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -41,22 +66,20 @@ export default function DeveloperDiff({ taskId, executionId }: { taskId: string;
   }, [taskId, executionId]);
 
   const files = useMemo(() => diff?.patch ? parsePatchFiles(diff.patch, executionId, true).flatMap((patch) => patch.files) : [], [diff?.patch, executionId]);
-  const options = useMemo(() => ({ diffStyle: "unified" as const, overflow: "scroll" as const, stickyHeader: true, themeType }), [themeType]);
+  useEffect(() => { if (diff) onFileCount?.(files.length); }, [diff, files.length, onFileCount]);
   if (loading) return <div className="space-y-2" aria-busy="true" aria-label="Loading Developer diff"><Skeleton className="h-5 w-36" /><Skeleton className="h-40 w-full" /></div>;
   if (error) return <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>;
   if (!diff || files.length === 0) return <p className="text-xs text-muted-foreground">No changes from the target base.</p>;
 
   return (
     <div data-task-developer-diff className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground">
-        <span>{files.length} {files.length === 1 ? "file" : "files"}</span>
-        <code>{diff.baseSha.slice(0, 8)} → {diff.headSha.slice(0, 8)}</code>
+      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
+        <span>Showing changes</span>
+        {diff.repository ? <a className="text-foreground underline underline-offset-2" href={`https://github.com/${diff.repository}/commit/${diff.baseSha}`} target="_blank" rel="noreferrer">{diff.baseSha.slice(0, 8)}</a> : <code className="text-foreground">{diff.baseSha.slice(0, 8)}</code>}
+        <span>to</span>
+        {diff.repository ? <a className="text-foreground underline underline-offset-2" href={`https://github.com/${diff.repository}/commit/${diff.headSha}`} target="_blank" rel="noreferrer">{diff.headSha.slice(0, 8)}</a> : <code className="text-foreground">{diff.headSha.slice(0, 8)}</code>}
       </div>
-      <div className="overflow-hidden rounded-md border border-border bg-background">
-        <Virtualizer className="max-h-[36rem] overflow-auto" contentClassName="space-y-2 p-2">
-          {files.map((file, index) => <FileDiff key={`${file.name}-${index}`} fileDiff={file} options={options} disableWorkerPool />)}
-        </Virtualizer>
-      </div>
+      <DiffTree files={files} themeType={themeType} />
     </div>
   );
 }

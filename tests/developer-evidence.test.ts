@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -19,16 +19,22 @@ test("Developer evidence admits only the exact supplemental review that was avai
   const worktreeRoot = join(root, "worktrees");
   await mkdir(repositoryPath, { recursive: true });
   await mkdir(worktreeRoot, { recursive: true });
+  await run("git", ["init", "-b", "main"], { cwd: repositoryPath });
+  await run("git", ["config", "user.name", "Forge Test"], { cwd: repositoryPath });
+  await run("git", ["config", "user.email", "forge@example.test"], { cwd: repositoryPath });
+  await writeFile(join(repositoryPath, "AGENTS.md"), "Developer instructions\n", "utf8");
+  await run("git", ["add", "AGENTS.md"], { cwd: repositoryPath });
+  await run("git", ["-c", "commit.gpgsign=false", "commit", "-m", "fixture"], { cwd: repositoryPath });
   const config = createTestConfig(root, { repositoryRoot: join(root, "repositories"), worktreeRoot });
   const database = new ForgeDatabase(config.databasePath);
   try {
     const artifacts = new ArtifactStore(config.artifactRoot);
     const brief = await artifacts.put("company_1", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from("Task brief") });
     const supplemental = await artifacts.put("company_1", "supplemental-review", { filename: "review.json", mimeType: "application/json", bytes: Buffer.from('{"summary":"Exact review used by Lead"}') });
-    const planValue = { steps: [{ number: 1, verificationCommands: ["pnpm test"] }], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [supplemental.id], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: { [supplemental.id]: [1] } } };
+    const planValue = { steps: [{ number: 1, verificationCommands: ["pnpm test"] }], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [supplemental.id], imageArtifactIds: [], repositoryInstructionPaths: ["AGENTS.md"], artifactStepNumbers: { [supplemental.id]: [1] } } };
     const plan = await artifacts.put("company_1", "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify(planValue)) });
     const now = "2026-08-12T00:00:00.000Z";
-    const commitSha = "a".repeat(40);
+    const commitSha = (await run("git", ["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
     database.authQuery((db) => {
       db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('user_1', 'Forge Test', 'forge-test', 'admin', 'active', ?, ?)").run(now, now);
       db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company_1', 'Company One', 'active', ?)").run(now);
@@ -40,8 +46,12 @@ test("Developer evidence admits only the exact supplemental review that was avai
       db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES ('authorization_1', 'task_1', 'company_1', 'project_1', 'workflow_1', 1, ?, ?, 'routine_auto', NULL, ?)").run(plan.id, plan.sha256, now);
     });
     const subject = { authorizationId: "authorization_1", taskId: "task_1", companyId: "company_1", projectId: "project_1", workflowId: "workflow_1", planRevision: 1, planArtifactId: plan.id, planSha256: plan.sha256, authorizationKind: "routine_auto" as const, approvalDecisionId: null, authorizedAt: now };
-    const result = await new DeveloperEvidenceBuilder(database, config).build({ subject, executionId: "execution_1" });
+    const builder = new DeveloperEvidenceBuilder(database, config);
+    const result = await builder.build({ subject, executionId: "execution_1" });
+    const retry = await builder.build({ subject, executionId: "execution_1" });
+    expect(retry.manifest).toEqual(result.manifest);
     expect(result.manifest.entries).toContainEqual(expect.objectContaining({ kind: "evidence", artifactId: supplemental.id, planStepNumbers: [1] }));
+    expect(result.manifest.entries).toContainEqual(expect.objectContaining({ kind: "repository_instruction", repositoryPath: "AGENTS.md", planStepNumbers: [1] }));
     expect(result.gitPresentation).toEqual({ branchSlug: "task", pullRequestTitle: "Task", pullRequestDescription: "Task." });
   } finally {
     database.close();
@@ -57,7 +67,7 @@ test("staged Developer evidence is immutable and rejects a mismatched retry dire
     await run("git", ["config", "user.email", "forge@example.test"], { cwd: root });
     await (await import("node:fs/promises")).writeFile(join(root, "AGENTS.md"), "verification instructions\n", "utf8");
     await run("git", ["add", "AGENTS.md"], { cwd: root });
-    await run("git", ["commit", "-m", "fixture"], { cwd: root });
+    await run("git", ["-c", "commit.gpgsign=false", "commit", "-m", "fixture"], { cwd: root });
     const targetSha = (await run("git", ["rev-parse", "HEAD"], { cwd: root })).stdout.trim();
     const bytes = await readFile(join(root, "AGENTS.md"));
     const manifest = {
@@ -73,6 +83,7 @@ test("staged Developer evidence is immutable and rejects a mismatched retry dire
     const first = await builder.stage(manifest, root, "execution_1");
     expect(await readFile(join(first.directory, "instructions.txt"), "utf8")).toBe("verification instructions\n");
     expect((await run("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: root })).stdout).toBe("");
+    await expect(builder.stage(manifest, root, "execution_1")).resolves.toMatchObject({ directory: first.directory });
     await expect(builder.stage({ ...manifest, createdAt: "2026-08-11T00:01:00.000Z" }, root, "execution_1")).rejects.toMatchObject({ code: "evidence-manifest-invalid" } satisfies Partial<DeveloperEvidenceFailure>);
     await builder.cleanup(root, "execution_1");
     await expect(readFile(join(root, ".forge-context", ".gitignore"), "utf8")).rejects.toThrow();

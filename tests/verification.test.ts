@@ -17,7 +17,8 @@ test("runs setup before verification and returns bounded redacted evidence", asy
     verificationCommand: "pnpm test",
   }, {
     guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
-    execute: async (command, args) => {
+    execute: async (command, args, options) => {
+      expect(options.env.MISE_TRUSTED_CONFIG_PATHS).toContain("/worktrees/task-1");
       calls.push(`${command} ${args.join(" ")}`);
       return { stdout: `Bearer gho_secret ${"x".repeat(70_000)}`, stderr: "" };
     },

@@ -22,7 +22,7 @@ function receipt(sequence: number, kind: "command_finished" | "test_result", sum
   };
 }
 
-test("projects reconciled Developer evidence into reviewer-facing PR sections", () => {
+test("projects only public delivery fields from reconciled Developer evidence", () => {
   const projection = releaseDeliveryProjection({
     kind: "developer-reconciliation",
     report: {
@@ -47,8 +47,6 @@ test("projects reconciled Developer evidence into reviewer-facing PR sections", 
     summary: "Improved the Git publishing experience.",
     changes: ["Generate readable branch names and useful pull request copy."],
     filesChanged: ["src/github-release.ts"],
-    commandsRun: ["pnpm test"],
-    testResults: ["12 tests passed"],
   });
 });
 

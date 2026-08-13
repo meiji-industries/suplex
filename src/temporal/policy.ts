@@ -1,5 +1,7 @@
 import { defaultPayloadConverter, type Payload } from "@temporalio/common";
 
+import { AuthorizedPlanSubjectSchema } from "../developer-contracts.js";
+
 export const WORKFLOW_PAYLOAD_LIMIT_BYTES = 32 * 1024;
 export const WORKFLOW_HISTORY_EVENT_LIMIT = 5_000;
 export const WORKFLOW_CONTINUE_STATE_LIMIT_BYTES = 8 * 1024;
@@ -23,6 +25,14 @@ export type PayloadBoundary = keyof typeof PAYLOAD_POLICY;
 const allowedIdentityKeys = new Set(["artifactId", "requestHash", "workflowId", "issueId", "companyId", "projectId", "projectRevisionId"]);
 const forbiddenKey = /^(?:prompt|source|log|rawDiff|conflictDiff|taskBody|description|authorization|password|token|credential|secret|privateKey|apiKey)$/i;
 const forbiddenValue = /-----BEGIN [^-]+-----|\beyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\b|(?:bearer|basic)\s+[a-z0-9+/=_-]{16,}/i;
+const authorizationKeys = new Set(["authorizationId", "taskId", "companyId", "projectId", "workflowId", "planRevision", "planArtifactId", "planSha256", "authorizationKind", "approvalDecisionId", "authorizedAt"]);
+
+function approvedAuthorizationEnvelope(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).some((key) => !authorizationKeys.has(key))) return false;
+  return AuthorizedPlanSubjectSchema.safeParse(record).success;
+}
 
 function byteLength(value: Uint8Array | string | null | undefined): number {
   return value == null ? 0 : typeof value === "string" ? new TextEncoder().encode(value).byteLength : value.byteLength;
@@ -54,6 +64,7 @@ function assertSafeValue(value: unknown, path = "value"): void {
     return;
   }
   for (const [key, child] of Object.entries(value)) {
+    if (key === "authorization" && approvedAuthorizationEnvelope(child)) { assertSafeValue(child, `${path}.${key}`); continue; }
     if (!allowedIdentityKeys.has(key) && forbiddenKey.test(key)) throw new PayloadPolicyViolation(path, 0, 0);
     assertSafeValue(child, `${path}.${key}`);
   }

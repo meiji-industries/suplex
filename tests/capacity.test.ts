@@ -69,6 +69,20 @@ test("uses the current host default when an override is cleared", async () => {
   }
 });
 
+test("reclaims an ambiguous admission that never bound an execution", async () => {
+  const value = await fixture();
+  try {
+    const capacity = new CapacityManager(value.database, value.config);
+    const request = capacity.request(input("task-a", "unbound-retry"));
+    expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
+    capacity.markOwnershipAmbiguous(request.id, "worker restarted before execution registration");
+    expect(capacity.bindExecution(request.id, { executionKind: "developer", executionId: "developer-retry", worktreePath: "/tmp/retry" })).toMatchObject({ status: "active", executionId: "developer-retry" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("does not release an Agent slot while its execution is cancelling", async () => {
   const value = await fixture();
   try {

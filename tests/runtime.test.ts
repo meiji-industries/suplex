@@ -45,18 +45,9 @@ test("probes the actual health page for startup readiness", () => {
   expect(readinessProbePath()).toBe("/health");
 });
 
-test("development children use tsx watch without following frontend or generated files", () => {
-  expect(forgeProcessArguments("src/server.ts", true, "/workspace/node_modules/tsx/dist/cli.mjs")).toEqual([
-    "/workspace/node_modules/tsx/dist/cli.mjs",
-    "watch",
-    "--clear-screen=false",
-    "--exclude", "./dist/**/*",
-    "--exclude", "./node_modules/**/*",
-    "--exclude", "./src/frontend/**/*",
-    "--exclude", "./tests/**/*",
-    "src/server.ts",
-  ]);
-  expect(forgeProcessArguments("src/worker.ts", false)).toEqual(["--import", "tsx", "src/worker.ts"]);
+test("development children use tsx only as a TypeScript loader", () => {
+  expect(forgeProcessArguments("src/server.ts")).toEqual(["--import", "tsx", "src/server.ts"]);
+  expect(forgeProcessArguments("src/worker.ts")).toEqual(["--import", "tsx", "src/worker.ts"]);
 });
 
 test("probes the local backend when Tailscale Serve owns HTTPS", () => {

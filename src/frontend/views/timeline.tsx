@@ -8,6 +8,7 @@ import { Skeleton } from "../components/ui/skeleton.js";
 import { Tabs, TabsList, TabsTrigger } from "../components/ui/tabs.js";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip.js";
 import { ApplicationFrame } from "../components/app/application-frame.js";
+import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import { useCompanyContext } from "../components/app/company-context.js";
 import { readJson, withCompany } from "../lib/api.js";
 import type { ApiProfile, ApiProject, ApiTask } from "../lib/view-shared.js";
@@ -26,6 +27,7 @@ type WorkInterval = {
   projectName: string;
   agentKey: string;
   agentName: string;
+  avatarSeed?: string;
   role: AgentRole;
   status: string;
   attempt: number;
@@ -38,6 +40,7 @@ type WorkInterval = {
 type WorkLane = {
   key: string;
   name: string;
+  avatarSeed?: string;
   roles: AgentRole[];
   intervals: WorkInterval[];
   durationMs: number;
@@ -141,8 +144,8 @@ function addTotal(totals: Map<string, WorkTotal>, key: string, label: string, se
   }
 }
 
-export function summarizeAgentTime(tasks: TimelineTask[], profiles: Pick<ApiProfile, "id" | "name">[], projects: Pick<ApiProject, "id" | "name">[], range: { start: number; end: number }, now: number): WorkTimelineSummary {
-  const profileNames = new Map(profiles.map((profile) => [profile.id, profile.name]));
+export function summarizeAgentTime(tasks: TimelineTask[], profiles: Pick<ApiProfile, "id" | "name" | "avatarSeed">[], projects: Pick<ApiProject, "id" | "name">[], range: { start: number; end: number }, now: number): WorkTimelineSummary {
+  const profileMap = new Map(profiles.map((profile) => [profile.id, profile]));
   const projectNames = new Map(projects.map((project) => [project.id, project.name]));
   const intervals: WorkInterval[] = [];
   const ticketTotals = new Map<string, WorkTotal>();
@@ -165,7 +168,8 @@ export function summarizeAgentTime(tasks: TimelineTask[], profiles: Pick<ApiProf
         taskTitle: task.title,
         projectName: projectNames.get(task.projectId) ?? "Unknown project",
         agentKey,
-        agentName: profileId ? profileNames.get(profileId) ?? titleCase(invocation.role) : titleCase(invocation.role),
+        agentName: profileId ? profileMap.get(profileId)?.name ?? titleCase(invocation.role) : titleCase(invocation.role),
+        ...(profileId && profileMap.get(profileId)?.avatarSeed ? { avatarSeed: profileMap.get(profileId)!.avatarSeed } : {}),
         role: invocation.role,
         status: invocation.status,
         attempt: invocation.attempt,
@@ -188,7 +192,7 @@ export function summarizeAgentTime(tasks: TimelineTask[], profiles: Pick<ApiProf
   intervals.sort((left, right) => left.start - right.start || left.end - right.end || left.id.localeCompare(right.id));
   const laneMap = new Map<string, WorkLane>();
   for (const interval of intervals) {
-    const lane = laneMap.get(interval.agentKey) ?? { key: interval.agentKey, name: interval.agentName, roles: [], intervals: [], durationMs: 0, trackCount: 1 };
+    const lane = laneMap.get(interval.agentKey) ?? { key: interval.agentKey, name: interval.agentName, ...(interval.avatarSeed ? { avatarSeed: interval.avatarSeed } : {}), roles: [], intervals: [], durationMs: 0, trackCount: 1 };
     if (!lane.roles.includes(interval.role)) lane.roles.push(interval.role);
     lane.intervals.push(interval);
     lane.durationMs += interval.durationMs;
@@ -388,7 +392,7 @@ function WorkChart({ summary, overview, range, fullRange, companyId, now, onRang
             return (
               <div key={lane.key} className="flex border-b border-border/55 last:border-b-0" style={{ minHeight: laneHeight }}>
                 <div className="flex w-52 shrink-0 items-center gap-2 border-r border-border/70 px-3 sm:px-4">
-                  <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{lane.name[0]?.toUpperCase()}</span>
+                  {lane.avatarSeed ? <ProfileAvatar name={lane.name} seed={lane.avatarSeed} /> : <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{lane.name[0]?.toUpperCase()}</span>}
                   <span className="min-w-0">
                     <span className="block truncate text-xs font-medium">{lane.name}</span>
                     <span className="block truncate text-[11px] text-muted-foreground">{lane.roles.map(titleCase).join(" / ")} · {lane.intervals.length}× · {formatDuration(lane.durationMs)}</span>

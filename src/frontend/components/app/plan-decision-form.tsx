@@ -1,14 +1,41 @@
+import { useRef, useState } from "react";
+import { Send } from "lucide-react";
+
 import { Button } from "../ui/button.js";
-import { Input } from "../ui/input.js";
-import { Field, FieldLabel } from "../ui/field.js";
+import { Field, FieldError, FieldLabel } from "../ui/field.js";
+import { Textarea } from "../ui/textarea.js";
 import type { PublicPlanDecisionSubject } from "../../../plan-governance.js";
 import type { TaskCommandEndpoint } from "../../../task-commands.js";
 import { useCommandForm } from "./use-command-form.js";
 
 export interface DecisionCommandView { endpoint: TaskCommandEndpoint; expectedRevision: number; subject: PublicPlanDecisionSubject; idempotency?: string }
 
-export function PlanDecisionForm({ command, actionLabel, busy, onSubmit, error }: { command: DecisionCommandView; actionLabel: string; busy: boolean; onSubmit: (payload: { subject: PublicPlanDecisionSubject; expectedRevision: number; note: string; idempotencyKey: string }) => Promise<void>; error?: string }) {
-  const { value: note, setValue: setNote, errorRef, submit } = useCommandForm({ error, initialIdempotencyKey: command.idempotency, onSubmit: (value, idempotencyKey) => onSubmit({ subject: command.subject, expectedRevision: command.expectedRevision, note: value, idempotencyKey }) });
-  const noteId = `plan-decision-note-${actionLabel.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
-  return <form className="space-y-2" onSubmit={(event) => void submit(event)} aria-busy={busy} data-plan-decision-form><Field><FieldLabel htmlFor={noteId}>Decision note</FieldLabel><Input id={noteId} value={note} onChange={(event) => setNote(event.target.value)} maxLength={1_000} required placeholder="Explain this decision" /></Field>{error ? <p ref={errorRef} role="alert" tabIndex={-1} className="text-xs text-destructive">{error}</p> : null}<Button type="submit" size="sm" disabled={busy || !note.trim()}>{busy ? "Saving…" : actionLabel}</Button></form>;
+type DecisionPayload = { command: DecisionCommandView; note: string; idempotencyKey: string };
+type DecisionAction = "approve" | "reject" | "changes";
+
+export function PlanDecisionForm({ approveCommand, revisionCommand, busy, onSubmit, error }: { approveCommand?: DecisionCommandView; revisionCommand?: DecisionCommandView; busy: boolean; onSubmit: (payload: DecisionPayload) => Promise<void>; error?: string }) {
+  const [changesOpen, setChangesOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<DecisionAction | null>(null);
+  const approveKey = useRef(approveCommand?.idempotency ?? crypto.randomUUID());
+  const rejectKey = useRef(revisionCommand?.idempotency ?? crypto.randomUUID());
+  const submitDecision = async (action: DecisionAction, payload: DecisionPayload): Promise<void> => {
+    setPendingAction(action);
+    try { await onSubmit(payload); } finally { setPendingAction(null); }
+  };
+  const { value: changes, setValue: setChanges, errorRef, submit } = useCommandForm({ error, initialIdempotencyKey: revisionCommand?.idempotency, onSubmit: async (note, idempotencyKey) => { if (revisionCommand) await submitDecision("changes", { command: revisionCommand, note, idempotencyKey }); } });
+  const disabled = busy || pendingAction !== null;
+  const canRequestChanges = Boolean(revisionCommand) && !disabled && Boolean(changes.trim());
+  const sendButton = <Button type="submit" size="icon-sm" disabled={!canRequestChanges} aria-label="Send requested changes" title="Send requested changes"><Send /></Button>;
+  const status = pendingAction === "approve" ? "Approval submitted · Updating task…" : pendingAction === "reject" ? "Rejection submitted · Updating task…" : pendingAction === "changes" ? "Change request submitted · Updating task…" : null;
+
+  return <div className="space-y-3" aria-busy={busy || pendingAction !== null} data-plan-decision-form>
+    <div className="flex flex-wrap gap-2">
+      {approveCommand ? <Button type="button" size="sm" disabled={disabled} onClick={() => void submitDecision("approve", { command: approveCommand, note: "Plan approved.", idempotencyKey: approveKey.current })}>{pendingAction === "approve" ? "Approving…" : "Approve Plan"}</Button> : null}
+      {revisionCommand ? <Button type="button" size="sm" variant="destructive" disabled={disabled} onClick={() => void submitDecision("reject", { command: revisionCommand, note: "Plan rejected.", idempotencyKey: rejectKey.current })}>{pendingAction === "reject" ? "Rejecting…" : "Reject Plan"}</Button> : null}
+      {revisionCommand ? <Button type="button" size="sm" variant="outline" disabled={disabled} aria-expanded={changesOpen} onClick={() => setChangesOpen((open) => !open)}>Request Changes</Button> : null}
+    </div>
+    {status ? <p role="status" className="text-[11px] text-muted-foreground">{status}</p> : null}
+    {changesOpen ? <form className="max-w-xl" onSubmit={(event) => void submit(event)}><Field><FieldLabel htmlFor="plan-requested-changes">Requested changes</FieldLabel><div className="relative"><Textarea id="plan-requested-changes" value={changes} onChange={(event) => setChanges(event.target.value)} onKeyDown={(event) => { if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || !canRequestChanges) return; event.preventDefault(); event.currentTarget.form?.requestSubmit(); }} maxLength={1_000} required placeholder="Describe the changes you want" className="pb-10" disabled={busy} /><div className="absolute right-2 bottom-2">{sendButton}</div></div></Field></form> : null}
+    {error ? <FieldError ref={errorRef} tabIndex={-1}>{error}</FieldError> : null}
+  </div>;
 }

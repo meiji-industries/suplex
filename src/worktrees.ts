@@ -1,7 +1,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { access, chmod, constants, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
-import { join, relative, resolve, sep } from "node:path";
+import { delimiter, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import type { ForgeDatabase } from "./database.js";
@@ -390,6 +390,10 @@ export interface GitCommandGuard {
   gitRealBin?: string;
   env: NodeJS.ProcessEnv;
   cleanup(): Promise<void>;
+}
+
+export function withWorktreeMiseTrust(env: NodeJS.ProcessEnv, worktreePath: string): NodeJS.ProcessEnv {
+  return { ...env, MISE_TRUSTED_CONFIG_PATHS: [env.MISE_TRUSTED_CONFIG_PATHS, worktreePath].filter(Boolean).join(delimiter) };
 }
 
 export async function createGitCommandGuard(runtimeRoot: string, optionsOrParent: { authorizedStepNumbers?: number[] } | string = {}): Promise<GitCommandGuard> {

@@ -68,6 +68,10 @@ test("API enrollment and authorization fail closed before company details are re
     const adminCookie = sessionCookie(enrolled);
     expect(adminCookie).toContain(`${SESSION_COOKIE_NAME}=`);
     expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: adminCookie } })).statusCode).toBe(200);
+    const usernameUpdate = await app.inject({ method: "PATCH", url: "/api/auth/me", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { displayName: "API Admin Renamed", username: "api-admin", avatarSeed: "api-admin-avatar" } });
+    expect(usernameUpdate.json()).toMatchObject({ user: { displayName: "API Admin Renamed", username: "api-admin", avatarSeed: "api-admin-avatar" } });
+    expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: adminCookie } })).json()).toMatchObject({ user: { avatarSeed: "api-admin-avatar" } });
+    expect((await app.inject({ method: "PATCH", url: "/api/auth/me", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { username: "!" } })).json()).toEqual({ error: "Username must be 2–64 characters and use letters, numbers, dots, hyphens, underscores, or @" });
 
     const companyAResponse = await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "API A" } });
     const companyA = companyAResponse.json() as { id: string; issueCode: string | null };
@@ -88,6 +92,8 @@ test("API enrollment and authorization fail closed before company details are re
     const memberCeremony = memberOptions.json() as { challengeId: string };
     const memberEnrolled = await app.inject({ method: "POST", url: "/api/auth/invitation/verify", payload: { token: invite.token, challengeId: memberCeremony.challengeId, response: { id: "member-api-credential", type: "public-key" } } });
     const memberCookie = sessionCookie(memberEnrolled);
+    expect((await app.inject({ method: "PATCH", url: "/api/auth/me", headers: { cookie: memberCookie, origin: config.reachableAddress }, payload: { username: "api-admin" } })).statusCode).toBe(409);
+    expect((await app.inject({ method: "PATCH", url: "/api/auth/me", headers: { cookie: memberCookie, origin: config.reachableAddress }, payload: { username: "api-member" } })).json()).toMatchObject({ user: { username: "api-member" } });
 
     const memberRename = await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: memberCookie, origin: config.reachableAddress }, payload: { name: "Member rename" } });
     expect(memberRename.statusCode).toBe(404);
@@ -109,6 +115,7 @@ test("API enrollment and authorization fail closed before company details are re
     expect((await app.inject({ method: "GET", url: "/api/admin/invitations", headers: { cookie: memberCookie } })).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: `/companies/${companyA.id}/settings`, headers: { cookie: adminCookie } })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: `/companies/${companyA.id}/settings`, headers: { cookie: memberCookie } })).statusCode).toBe(404);
+    expect((await app.inject({ method: "GET", url: "/profile", headers: { cookie: memberCookie } })).statusCode).toBe(200);
     expect((await app.inject({ method: "GET", url: `/api/companies/${companyA.id}`, headers: { cookie: memberCookie } })).statusCode).toBe(200);
     const crossScope = await app.inject({ method: "GET", url: `/api/companies/${companyB.id}`, headers: { cookie: memberCookie } });
     expect(crossScope.statusCode).toBe(404);

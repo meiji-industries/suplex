@@ -47,8 +47,8 @@ export function SettingsTableGroup({ label, count, columnCount, children }: { la
   );
 }
 
-export function SettingsTableRow({ size = "compact", children }: { size?: "compact" | "member"; children: ReactNode }): ReactElement {
-  return <tr className={cn("text-[13px] [&>td]:transition-colors hover:[&>td]:bg-black/[0.025] [&>td:first-child]:rounded-l-lg [&>td:last-child]:rounded-r-lg", size === "member" ? "h-[50px]" : "h-11")}>{children}</tr>;
+export function SettingsTableRow({ size = "compact", className, ...props }: ComponentProps<"tr"> & { size?: "compact" | "member" }): ReactElement {
+  return <tr className={cn("text-[13px] [&>td]:transition-colors hover:[&>td]:bg-black/[0.025] [&>td:first-child]:rounded-l-lg [&>td:last-child]:rounded-r-lg", props.onClick && "cursor-pointer focus-visible:outline-none focus-visible:[&>td]:bg-black/[0.04]", size === "member" ? "h-[50px]" : "h-11", className)} {...props} />;
 }
 
 export function SettingsTableCell({ className, ...props }: TdHTMLAttributes<HTMLTableCellElement>): ReactElement {

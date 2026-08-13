@@ -42,6 +42,22 @@ const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
     if (!(await requirePageSession(request, reply))) return reply;
     return sendHtml(request, reply, renderApplicationPage("admin", assetMode));
   });
+  app.get("/admin/models", async (request, reply) => {
+    if (!(await requirePageSession(request, reply))) return reply;
+    return sendHtml(request, reply, renderApplicationPage("admin", assetMode));
+  });
+  app.get("/admin/companies", async (request, reply) => {
+    if (!(await requirePageSession(request, reply))) return reply;
+    return sendHtml(request, reply, renderApplicationPage("admin", assetMode));
+  });
+  app.get("/admin/invitations", async (request, reply) => {
+    if (!(await requirePageSession(request, reply))) return reply;
+    return sendHtml(request, reply, renderApplicationPage("admin", assetMode));
+  });
+  app.get("/admin/passkeys", async (request, reply) => {
+    if (!(await requirePageSession(request, reply))) return reply;
+    return sendHtml(request, reply, renderApplicationPage("admin", assetMode));
+  });
   app.get<{ Params: { companyId: string } }>("/companies/:companyId/settings", async (request, reply) => {
     const user = auth ? await sessionUser(auth, request, reply, options.config) : undefined;
     if (auth && !user) return reply.redirect("/auth");
@@ -54,6 +70,10 @@ const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
       }
     }
     return sendHtml(request, reply, renderApplicationPage("company-settings", assetMode));
+  });
+  app.get("/profile", async (request, reply) => {
+    if (!(await requirePageSession(request, reply))) return reply;
+    return sendHtml(request, reply, renderApplicationPage("profile", assetMode));
   });
   app.get("/projects", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;

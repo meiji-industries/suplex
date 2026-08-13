@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 
 import { buildDraftPullRequestProjection, createGithubReleasePort, GithubReleaseFailure, type GithubCommandSpec, type GithubCommandResult } from "../src/github-release.js";
+import { isRetryableReleaseFailure } from "../src/release-failures.js";
 
 const baseSha = "a".repeat(40);
 const headSha = "b".repeat(40);
@@ -157,4 +158,8 @@ Implemented the approved release presentation.
   ]) {
     expect(() => buildDraftPullRequestProjection({ taskTitle: "Safe title", ...input })).toThrowError(GithubReleaseFailure);
   }
+});
+
+test("allows a corrected unsafe public projection to be retried", () => {
+  expect(isRetryableReleaseFailure("public-projection-unsafe")).toBe(true);
 });

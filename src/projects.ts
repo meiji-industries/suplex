@@ -41,6 +41,7 @@ export class ProjectFailure extends Error {
 export interface CodexProfile {
   id: string;
   name: string;
+  avatarSeed: string;
   provider: "codex";
   model: string;
   reasoningLevel: ReasoningLevel;
@@ -50,6 +51,8 @@ export interface CodexProfile {
   createdAt: string;
   updatedAt: string;
 }
+
+type ProfileInput = { name: string; avatarSeed?: string | undefined; model: string; reasoningLevel: ReasoningLevel; servicePriority: ServicePriority; capacity?: number | null };
 
 export type ModelStatus = "active" | "retired";
 
@@ -166,6 +169,7 @@ interface ProjectRow {
 interface ProfileRow {
   id: string;
   name: string;
+  avatar_seed: string;
   provider: "codex";
   model: string;
   reasoning_level: ReasoningLevel;
@@ -191,6 +195,7 @@ const branchPattern = /^(?![./])(?!.*(?:\.\.|\.$|\.lock$|\/\/|\s|[~^:?*\[\\]))[A
 const checkPattern = /^[\p{L}\p{N}][\p{L}\p{N} ._:/()\[\]-]{0,119}$/u;
 const secretPattern = /(?:gh[pousr]_|github_pat_|token\s*=|password\s*=|secret\s*=|BEGIN [A-Z ]+ PRIVATE KEY|sk-[A-Za-z0-9])/i;
 const modelIdPattern = /^[a-z0-9][a-z0-9._-]{1,119}$/;
+const avatarSeedPattern = /^[a-f0-9]{32}$/;
 const approvedSetupCommands = new Set(["pnpm install", "pnpm install --frozen-lockfile", "npm install", "npm ci", "yarn install", "yarn install --immutable", "bun install", "mise run setup", "cargo fetch --locked"]);
 const approvedVerificationCommands = new Set(["pnpm test", "pnpm typecheck", "pnpm lint", "npm test", "npm run typecheck", "npm run lint", "yarn test", "yarn typecheck", "yarn lint", "bun test", "mise run test", "mise run typecheck", "mise run lint", "cargo test", "make test", "make check"]);
 
@@ -275,6 +280,7 @@ function publicProfile(row: ProfileRow, config: Pick<ForgeConfig, "externalTurnC
   return {
     id: row.id,
     name: row.name,
+    avatarSeed: row.avatar_seed,
     provider: row.provider,
     model: row.model,
     reasoningLevel: row.reasoning_level,
@@ -548,29 +554,54 @@ export class ProjectService {
     this.repositoryProvisioner = options.repositoryProvisioner ?? defaultRepositoryProvisioner();
   }
 
-  createProfile(actorUserId: string, input: { name: string; model: string; reasoningLevel: ReasoningLevel; servicePriority: ServicePriority; capacity?: number | null }): CodexProfile {
-    const actor = this.requireAdmin(actorUserId);
-    void actor;
+  private validateProfileInput(input: ProfileInput): Omit<Required<ProfileInput>, "avatarSeed"> & { avatarSeed?: string } {
     const name = input.name.trim();
     const model = input.model.trim();
+    const capacity = input.capacity ?? null;
     if (!namePattern.test(name)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-name", "name", "Profile name is invalid")]);
     const catalogModel = this.database.authQuery((db) => db.prepare("SELECT model_id FROM forge_models WHERE model_id = ? AND status = 'active'").get(model) as { model_id: string } | undefined);
     if (!modelIdPattern.test(model) || secretPattern.test(model) || !catalogModel) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-model", "model", "Select an active model from the catalog")]);
     if (!["low", "medium", "high"].includes(input.reasoningLevel)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-reasoning", "reasoningLevel", "Reasoning level is invalid")]);
     if (!["standard", "priority"].includes(input.servicePriority)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-priority", "servicePriority", "Service priority is invalid")]);
-    if (input.capacity !== null && input.capacity !== undefined && (!Number.isInteger(input.capacity) || input.capacity < 1 || input.capacity > 32)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-capacity", "capacity", "Capacity must be an integer from 1 to 32")]);
+    if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 32)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-capacity", "capacity", "Capacity must be an integer from 1 to 32")]);
+    if (input.avatarSeed !== undefined && !avatarSeedPattern.test(input.avatarSeed)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-avatar", "avatarSeed", "Avatar seed is invalid")]);
+    return { name, ...(input.avatarSeed ? { avatarSeed: input.avatarSeed } : {}), model, reasoningLevel: input.reasoningLevel, servicePriority: input.servicePriority, capacity };
+  }
+
+  createProfile(actorUserId: string, input: ProfileInput): CodexProfile {
+    const actor = this.requireAdmin(actorUserId);
+    void actor;
+    const profileInput = this.validateProfileInput(input);
     const now = this.now().toISOString();
-    const profile = { id: identifier("profile"), name, provider: "codex" as const, model, reasoningLevel: input.reasoningLevel, capacity: input.capacity ?? null, servicePriority: input.servicePriority, effectiveCapacity: input.capacity ?? this.config.externalTurnCapacity, createdAt: now, updatedAt: now };
+    const profile = { id: identifier("profile"), name: profileInput.name, avatarSeed: profileInput.avatarSeed ?? randomBytes(16).toString("hex"), provider: "codex" as const, model: profileInput.model, reasoningLevel: profileInput.reasoningLevel, capacity: profileInput.capacity, servicePriority: profileInput.servicePriority, effectiveCapacity: profileInput.capacity ?? this.config.externalTurnCapacity, createdAt: now, updatedAt: now };
     try {
       this.database.authTransaction((db) => {
-        db.prepare(`INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, ?, 'codex', ?, ?, ?, ?, ?, ?)`)
-          .run(profile.id, profile.name, profile.model, profile.reasoningLevel, profile.servicePriority, profile.capacity, now, now);
+        db.prepare(`INSERT INTO forge_profiles (id, name, avatar_seed, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, ?, ?, 'codex', ?, ?, ?, ?, ?, ?)`)
+          .run(profile.id, profile.name, profile.avatarSeed, profile.model, profile.reasoningLevel, profile.servicePriority, profile.capacity, now, now);
         this.auth.recordAuditEventInTransaction(db, actorUserId, "profile_created", undefined, undefined, { profileId: profile.id });
       });
     } catch {
       throw new ProjectFailure("Profile configuration is invalid", [finding("duplicate-name", "name", "Profile name is already in use")]);
     }
     return profile;
+  }
+
+  updateProfile(actorUserId: string, profileId: string, input: ProfileInput): CodexProfile {
+    this.requireAdmin(actorUserId);
+    const profileInput = this.validateProfileInput(input);
+    const now = this.now().toISOString();
+    try {
+      const changed = this.database.authTransaction((db) => {
+        const result = db.prepare("UPDATE forge_profiles SET name = ?, avatar_seed = COALESCE(?, avatar_seed), model = ?, reasoning_level = ?, service_priority = ?, capacity = ?, updated_at = ? WHERE id = ?").run(profileInput.name, profileInput.avatarSeed ?? null, profileInput.model, profileInput.reasoningLevel, profileInput.servicePriority, profileInput.capacity, now, profileId);
+        if (result.changes !== 1) throw new ProjectFailure("Profile not found", [], 404);
+        this.auth.recordAuditEventInTransaction(db, actorUserId, "profile_updated", undefined, undefined, { profileId });
+        return db.prepare("SELECT * FROM forge_profiles WHERE id = ?").get(profileId) as ProfileRow;
+      });
+      return publicProfile(changed, this.config);
+    } catch (error) {
+      if (error instanceof ProjectFailure) throw error;
+      throw new ProjectFailure("Profile configuration is invalid", [finding("duplicate-name", "name", "Profile name is already in use")], 409);
+    }
   }
 
   listProfiles(actorUserId: string): CodexProfile[] {

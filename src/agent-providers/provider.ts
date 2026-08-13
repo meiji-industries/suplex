@@ -36,6 +36,7 @@ export interface AgentTurnRequest {
   prompt: string;
   resumeSessionId?: string | undefined;
   profile?: AgentProfileSettings | undefined;
+  networkAccess?: boolean | undefined;
   addDirectories?: string[] | undefined;
   imagePaths?: string[] | undefined;
 }
@@ -88,6 +89,7 @@ export interface AgentTranscriptOptions {
   attempt: number;
   worktreePath?: string;
   authorizedStepNumbers?: number[];
+  state?: unknown;
 }
 
 export interface AgentTranscript {
@@ -95,6 +97,7 @@ export interface AgentTranscript {
   threadId?: string;
   finalReport?: unknown;
   malformedLines: number;
+  parserState?: unknown;
 }
 
 export interface AgentReadinessProbe {

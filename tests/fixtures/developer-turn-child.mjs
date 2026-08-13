@@ -14,6 +14,7 @@ const forkDuration = Number(args.get("fork-duration") ?? duration + 500);
 const crash = args.get("crash") === "true";
 const malformedJson = args.get("malformed-json") === "true";
 const truncatedJson = args.get("truncated-json") === "true";
+const stderrNoise = args.get("stderr-noise") === "true";
 
 if (launchCount) writeFileSync(launchCount, `${process.pid}\n`, { flag: "wx" });
 const write = (value) => {
@@ -22,6 +23,7 @@ const write = (value) => {
   if (output) appendFileSync(output, line);
 };
 write({ kind: "heartbeat", status: "started", pid: process.pid });
+if (stderrNoise) process.stderr.write("non-JSON stderr diagnostic\\n");
 if (ignoreTerm) process.on("SIGTERM", () => {
   if (ignoreTermDuration > 0) setTimeout(() => process.exit(0), ignoreTermDuration).unref();
   else setInterval(() => undefined, 1_000).unref();

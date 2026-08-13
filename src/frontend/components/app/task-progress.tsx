@@ -1,6 +1,8 @@
-import { CheckIcon, CircleIcon, PlayIcon } from "lucide-react";
+import { CheckIcon, CircleIcon, LoaderCircle } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { cn } from "../../lib/utils.js";
+import { ProfileAvatar } from "./profile-avatar.js";
 import { Timeline, TimelineContent, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "../ui/timeline.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
@@ -11,6 +13,9 @@ const stages = [
 ] as const;
 
 type ProgressEvent = Pick<TaskResponse["timeline"][number], "metadata" | "createdAt">;
+type AgentInvocation = TaskResponse["agentInvocations"][number];
+type ActiveCapacity = NonNullable<TaskResponse["capacity"]>;
+type DeveloperLiveness = { status: string; lastHeartbeatAt: string | null };
 
 function taskProgressStep(phase: string, canRetryDevelopment: boolean): number {
   if (["backlog", "planning", "approval", "failed"].includes(phase)) return 1;
@@ -28,14 +33,33 @@ function stageStart(timeline: ProgressEvent[], minimumStep: number): string | un
   return timeline.find((event) => typeof event.metadata.phase === "string" && taskProgressStep(event.metadata.phase, false) >= minimumStep)?.createdAt;
 }
 
-export function TaskProgress({ phase, allowedCommands, createdAt, updatedAt, timeline }: { phase: string; allowedCommands: string[]; createdAt: string; updatedAt: string; timeline: ProgressEvent[] }) {
+function activeDuration(startedAt: string, now: number): string {
+  const elapsedSeconds = Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1_000));
+  return `${Math.floor(elapsedSeconds / 60)}m ${elapsedSeconds % 60}s`;
+}
+
+function activeAgent(phase: string, invocations: AgentInvocation[]): AgentInvocation | undefined {
+  const role = phase === "planning" ? "lead" : ["ready_for_development", "development", "repair_required"].includes(phase) ? "developer" : "lead";
+  return [...invocations].reverse().find((invocation) => invocation.role === role && ["starting", "running", "cancelling"].includes(invocation.status));
+}
+
+export function TaskProgress({ phase, allowedCommands, createdAt, updatedAt, timeline, agentInvocations, activeCapacity, developerLiveness }: { phase: string; allowedCommands: string[]; createdAt: string; updatedAt: string; timeline: ProgressEvent[]; agentInvocations: AgentInvocation[]; activeCapacity?: ActiveCapacity | undefined; developerLiveness?: DeveloperLiveness | undefined }) {
   const currentStep = taskProgressStep(phase, allowedCommands.includes("retry_development"));
   const terminal = ["accepted", "manual_merge", "done", "cancelled"].includes(phase);
   const stageStarts: Array<string | undefined> = [createdAt, stageStart(timeline, 2), stageStart(timeline, 3)];
+  const [now, setNow] = useState(() => Date.now());
+  const buildLive = phase === "development" && Boolean(developerLiveness?.lastHeartbeatAt) && ["starting", "running", "active", "reconnecting", "cancellation_requested", "cancelling"].includes(developerLiveness?.status ?? "") && now - Date.parse(developerLiveness!.lastHeartbeatAt!) <= 15_000;
+  const ticking = !terminal && (currentStep !== 2 || buildLive);
+  useEffect(() => {
+    if (!ticking) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [ticking]);
+  const agent = activeAgent(phase, agentInvocations) ?? activeCapacity;
 
   return (
     <section aria-label="Task progress" data-task-progress>
-      <Timeline value={currentStep} orientation="horizontal">
+      <Timeline value={currentStep} orientation="vertical">
         {stages.map((stage) => {
           const status = stage.step < currentStep || (terminal && stage.step === currentStep) ? "completed" : stage.step === currentStep ? "current" : "upcoming";
           const startedAt = stageStarts[stage.step - 1] ?? updatedAt;
@@ -43,12 +67,12 @@ export function TaskProgress({ phase, allowedCommands, createdAt, updatedAt, tim
           const duration = status === "completed"
             ? elapsedLabel("Done in", startedAt, nextStartedAt ?? updatedAt)
             : status === "current"
-              ? elapsedLabel("In progress ·", startedAt, new Date().toISOString())
+              ? activeDuration(startedAt, ticking ? now : Date.parse(updatedAt))
               : "Not started";
           return (
-            <TimelineItem key={stage.step} step={stage.step} aria-current={status === "current" ? "step" : undefined}>
-              <TimelineHeader>
-                <TimelineSeparator className="bg-input! group-data-[orientation=horizontal]/timeline:-top-6 group-data-[orientation=horizontal]/timeline:left-2.5 group-data-[orientation=horizontal]/timeline:w-[calc(100%-2.25rem)]" />
+            <TimelineItem className="gap-1" key={stage.step} step={stage.step} aria-current={status === "current" ? "step" : undefined}>
+              <TimelineHeader className="flex items-center gap-2">
+                <TimelineSeparator />
                 <TimelineTitle>{stage.title}</TimelineTitle>
                 <TimelineIndicator className={cn(
                   "flex size-6 items-center justify-center border-none",
@@ -56,10 +80,12 @@ export function TaskProgress({ phase, allowedCommands, createdAt, updatedAt, tim
                   status === "current" && "bg-primary text-primary-foreground",
                   status === "upcoming" && "bg-muted text-muted-foreground",
                 )}>
-                  {status === "completed" ? <CheckIcon className="size-3.5" /> : status === "current" ? <PlayIcon className="size-3" /> : <CircleIcon className="size-3" />}
+                  {status === "completed" ? <CheckIcon className="size-3.5" /> : status === "current" && ticking ? <LoaderCircle className="size-3 animate-spin" /> : <CircleIcon className="size-3" />}
                 </TimelineIndicator>
               </TimelineHeader>
-              <TimelineContent className="text-xs">{duration}</TimelineContent>
+              <TimelineContent className="text-xs">
+                {status === "current" ? <div className="flex items-center gap-1">{agent?.profileName ? <ProfileAvatar name={agent.profileName} seed={agent.avatarSeed ?? agent.profileName} size="xs" /> : null}<span>{agent?.profileName ?? "In progress"}</span><span>·</span><span className="tabular-nums">{duration}</span></div> : <div className="tabular-nums">{duration}</div>}
+              </TimelineContent>
             </TimelineItem>
           );
         })}

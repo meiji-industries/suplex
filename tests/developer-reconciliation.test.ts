@@ -44,6 +44,21 @@ test("reconciliation allowlists only read-only staged-context bootstrap commands
   expect(valid.outcome).toBe("completed");
   const unsafe = { ...bootstrapFinished, summary: "/bin/zsh -lc 'touch escaped.txt'\n" };
   expect(reconcileDeveloperDelivery(input({ receipts: [bootstrapStarted, unsafe, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).mismatches).toContain("receipt-outside-step");
+  const compoundStarted = { ...bootstrapStarted, summary: "/bin/zsh -lc \"find .forge-context -type f -print -exec sh -c 'sed -n 1,20p $1' _ {} \\; && git status --short\"" };
+  const compoundFinished = { ...bootstrapFinished, summary: `${compoundStarted.summary}\n` };
+  expect(reconcileDeveloperDelivery(input({ receipts: [compoundStarted, compoundFinished, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).outcome).toBe("completed");
+  const checksummedStarted = { ...bootstrapStarted, summary: "/bin/zsh -lc 'sha256sum -c .forge-context/execution/.manifest.sha256 && file .forge-context/execution/brief.bin && sed -n 1,20p .forge-context/execution/brief.bin'" };
+  const checksummedFinished = { ...bootstrapFinished, summary: `${checksummedStarted.summary}\n` };
+  expect(reconcileDeveloperDelivery(input({ receipts: [checksummedStarted, checksummedFinished, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).outcome).toBe("completed");
+  const loopStarted = { ...bootstrapStarted, summary: "/bin/zsh -lc 'for path in .forge-context/execution/a .forge-context/execution/b; do echo \"$path\"; cat \"$path\"; done'" };
+  const loopFinished = { ...bootstrapFinished, summary: `${loopStarted.summary}\n` };
+  expect(reconcileDeveloperDelivery(input({ receipts: [loopStarted, loopFinished, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).outcome).toBe("completed");
+});
+
+test("reconciliation accepts successful combined verification commands", () => {
+  const verificationCommands = [{ stepNumber: 1, commands: ["pnpm test", "git diff --check"] }];
+  const combined = { ...receipt("command_finished", 2, 0), summary: "/bin/zsh -lc 'pnpm test && git diff --check'\npassed" };
+  expect(reconcileDeveloperDelivery(input({ receipts: [receipt("step_started", 1), combined, receipt("step_completed", 3)], verificationCommands, manifest: { ...manifest, verificationCommands } })).outcome).toBe("completed");
 });
 
 test("reconciliation blocks omitted or blocked authorized steps", () => {

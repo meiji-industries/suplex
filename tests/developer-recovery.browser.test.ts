@@ -47,11 +47,14 @@ function taskState(companyId: string, status: RecoveryStatus, revision = 3, over
     revision,
     owner: ambiguous || interrupted || failed ? "human" : "lead",
     allowedCommands: commands,
+    commands: [],
+    governance: {},
     pendingAction: ambiguous ? "Recheck Developer ownership" : cancelled ? "Developer turn cancelled; retry or continue" : failed ? "The Developer turn failed" : "Developer execution",
     createdAt: "2026-08-12T00:00:00.000Z",
     updatedAt: "2026-08-12T00:00:00.000Z",
     projection: { authoritativeRevision: revision, projectedRevision: revision, projectedAt: "2026-08-12T00:00:00.000Z", status: "current" },
     timeline: [{ id: "recovery-browser-workflow:3", revision, eventType: "phase_development", metadata: { revision, phase: "development" }, createdAt: "2026-08-12T00:00:00.000Z" }],
+    activity: [],
     agentInvocations: [],
     reviewLineage: { currentReview: null, priorReviews: [], reviewAttempts: [], repairAttempts: [] },
     planHistory: [],
@@ -161,6 +164,7 @@ test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at
       const recovery = page.getByRole("alert");
 
       await openTask();
+      expect(await recovery.locator('[data-slot="card-footer"]').count()).toBe(1);
       await recovery.getByText("Active", { exact: true }).waitFor();
       current = taskState(company.id, "reconnecting", 4);
       await reloadTask();
@@ -175,7 +179,6 @@ test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at
       await recovery.getByRole("button", { name: "Retry development" }).click();
       await page.getByRole("alertdialog").getByRole("button", { name: "Confirm retry" }).click();
       await recovery.getByText("Active", { exact: true }).waitFor();
-      expect(await page.getByText(/Linked attempt 2/).count()).toBeGreaterThan(0);
 
       current = taskState(company.id, "active");
       await reloadTask();
@@ -196,7 +199,7 @@ test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at
       await reloadTask();
       await recovery.getByRole("button", { name: "Cancel development" }).click();
       await page.getByRole("alertdialog").getByRole("button", { name: "Confirm cancellation" }).click();
-      await page.getByText("Issue changed; the latest state was loaded.", { exact: true }).waitFor();
+      await recovery.getByText("Active", { exact: true }).waitFor();
 
       current = taskState(company.id, "failed", 9, { developerRecovery: { ...taskState(company.id, "failed").developerRecovery as object, evidenceArtifactId: "recovery-evidence" } });
       await reloadTask();

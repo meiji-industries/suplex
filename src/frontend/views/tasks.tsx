@@ -7,7 +7,7 @@ import { InlineAttachmentPicker } from ".././components/ui/inline-attachment-pic
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".././components/ui/select.js";
 import { Textarea } from ".././components/ui/textarea.js";
 import { Skeleton } from ".././components/ui/skeleton.js";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from ".././components/ui/dialog.js";
+import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from ".././components/ui/dialog.js";
 import { Kanban, KanbanBoard, KanbanColumn, KanbanColumnContent } from ".././components/reui/kanban.js";
 import { Badge as ReuiBadge } from ".././components/reui/badge.js";
 import { Tabs, TabsList, TabsTrigger } from ".././components/ui/tabs.js";
@@ -15,6 +15,7 @@ import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { TaskStatus, TaskStatusIcon, taskStatusAppearance } from ".././components/app/task-status.js";
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
+import { navigate } from ".././lib/navigation.js";
 import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES as blockedTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
 import { CheckCircle2, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, Filter, Layers3, ListFilter, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
@@ -39,10 +40,9 @@ function taskListDate(timestamp: string): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
-function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, projects, projectId, onProjectChange, title, onTitleChange, description, onDescriptionChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
+function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId, onProjectChange, title, onTitleChange, description, onDescriptionChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  companyName: string | undefined;
   companyStatus: CompanyStatus | undefined;
   projects: ApiProject[];
   projectId: string;
@@ -64,10 +64,9 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
       <DialogContent className="max-h-[85vh] w-[min(92vw,520px)] overflow-y-auto" showCloseButton>
         <DialogHeader>
           <DialogTitle>New task</DialogTitle>
-          <DialogDescription>{companyName ? `Create in ${companyName}.` : "Select a company to create a task."}</DialogDescription>
         </DialogHeader>
         {active ? (
-          <form onSubmit={(event) => { event.preventDefault(); void onSubmit(); }}>
+          <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); void onSubmit(); }}>
             <FieldGroup>
               <Field><FieldLabel htmlFor="task-project">Project</FieldLabel><Select value={projectId || null} onValueChange={(value) => onProjectChange(value ?? "")}><SelectTrigger id="task-project"><SelectValue placeholder="Select a project">{(value) => projects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Select a project")}</SelectValue></SelectTrigger><SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select></Field>
               <Field><FieldLabel htmlFor="task-title">Task title</FieldLabel><Input id="task-title" autoFocus value={title} onChange={(event) => onTitleChange(event.target.value)} /></Field>
@@ -190,7 +189,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     setBusy(true); setCreateError("");
     try {
       const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, idempotencyKey: crypto.randomUUID() }) });
-      window.location.assign(withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId));
+      navigate(withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId));
     } catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setCreateError(reason instanceof Error ? reason.message : "Unable to create task"); }
     finally { setBusy(false); }
   };
@@ -248,7 +247,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
   if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
-  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} />;
+  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} onRefresh={reload} />;
 
   if (mode === "board") {
     return (
@@ -310,7 +309,6 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
               <TabsTrigger value="all">All tasks <span className="text-[11px] text-muted-foreground">{visibleTasks.length}</span></TabsTrigger>
             </TabsList>
           </Tabs>
-          <a className="shrink-0 text-[11px] text-muted-foreground hover:text-foreground" href={withCompany("/board", companyId)}>Open board</a>
         </div>
         {error ? <div className="p-3 sm:p-4"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
         {!scopeLoaded && !error ? <div className="space-y-px p-2" aria-label="Loading tasks" aria-busy="true"><Skeleton className="h-8 w-full" /><Skeleton className="h-9 w-full" /><Skeleton className="h-9 w-full" /></div> : null}
@@ -350,7 +348,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
           })}
         </div> : null}
         {!currentCompany && scopeLoaded ? <div className="px-4 py-8 text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</div> : null}
-        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); }} companyName={currentCompany?.name} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={setProjectId} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} />
+        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); }} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={setProjectId} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} />
       </div>
     </ApplicationFrame>
   );

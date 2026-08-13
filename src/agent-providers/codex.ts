@@ -11,7 +11,7 @@ import { defaultProcessController, type ProcessController, type ProcessInspectio
 import { FileSessionStore } from "../session-store.js";
 import type { CommandRunner } from "../provider-readiness.js";
 import { CodexReadinessProbe } from "./codex-readiness.js";
-import { parseCodexJsonl } from "./codex-jsonl.js";
+import { parseCodexJsonl, type CodexJsonlParserState } from "./codex-jsonl.js";
 import { CodexTurnSupervisor, sanitizeCodexLine } from "./codex-turn-supervisor.js";
 import { prepareCodexTurnWrapper } from "./codex-turn-wrapper.js";
 import { catalogSupportsCodexTurn } from "./codex-turn.js";
@@ -269,6 +269,7 @@ function buildTurnArgs(request: AgentTurnRequest): string[] {
     "--skip-git-repo-check",
     "--sandbox",
     "workspace-write",
+    ...(request.networkAccess ? ["-c", "sandbox_workspace_write.network_access=true"] : []),
     ...(request.addDirectories ?? []).flatMap((directory) => ["--add-dir", directory]),
     ...(request.profile ? profileArgs(request.profile) : []),
     ...(request.imagePaths ?? []).flatMap((path) => ["--image", path]),
@@ -308,7 +309,8 @@ export const codexProvider: AgentProvider = {
     }
   },
   parseExecutionTranscript(lines: Iterable<string>, options: AgentTranscriptOptions): AgentTranscript {
-    return parseCodexJsonl(lines, options);
+    const { state, ...input } = options;
+    return parseCodexJsonl(lines, { ...input, ...(state ? { state: state as CodexJsonlParserState } : {}) });
   },
   readinessProbe(command?: string, runner?: CommandRunner) {
     return runner

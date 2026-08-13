@@ -16,7 +16,7 @@ import { CapacityManager } from "./capacity.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import type { GithubReleasePort } from "./github-release.js";
-import { createGitCommandGuard, WorktreeManager } from "./worktrees.js";
+import { createGitCommandGuard, withWorktreeMiseTrust, WorktreeManager } from "./worktrees.js";
 import { activateOwnedWorktree, reserveOwnedWorktree } from "./worktrees.js";
 import { DeveloperEvidenceBuilder } from "./developer-evidence.js";
 import { collectDeveloperGitObservation, reconcileDeveloperDelivery } from "./developer-reconciliation.js";
@@ -374,9 +374,9 @@ export class DeveloperService {
       try {
         const result = await this.processRunner({
           command: this.command,
-          args: this.provider.buildTurnArgs({ prompt, profile, addDirectories: metadataDirectories }),
+          args: this.provider.buildTurnArgs({ prompt, profile, networkAccess: true, addDirectories: metadataDirectories }),
           cwd: worktree.worktreePath,
-          env: guard.env,
+          env: withWorktreeMiseTrust(guard.env, worktree.worktreePath),
           detached: true,
           onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); },
           onLine: async (line) => {
@@ -434,6 +434,8 @@ export class DeveloperService {
       for (const receipt of receipts) {
         db.prepare("INSERT OR IGNORE INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(receipt.eventId, executionId, receipt.attempt, receipt.sequence, receipt.kind, receipt.stepNumber, receipt.sourceItemId, receipt.occurredAt, receipt.summary, receipt.exitCode, receipt.artifactId, receipt.artifactSha256, receipt.idempotencyKey);
       }
+      const step = [...receipts].reverse().find((receipt) => receipt.stepNumber !== null)?.stepNumber ?? null;
+      db.prepare("UPDATE forge_developer_executions SET current_step = COALESCE(?, current_step), heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(step, this.now().toISOString(), executionId);
     });
   }
 
@@ -470,12 +472,20 @@ export class DeveloperService {
     const worktreeRoot = await scopedRepository(this.config.worktreeRoot, project.worktreeRoot);
     const existingOwned = this.database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName FROM forge_issue_worktrees WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status <> 'released'").get(input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string } | undefined);
     const owned = reserveOwnedWorktree(this.database, { taskId: input.taskId, companyId: input.companyId, projectId: input.projectId, workflowId: input.workflowId, repositoryRoot: repositoryPath, worktreeRoot, worktreePath: existingOwned?.worktreePath ?? resolve(worktreeRoot, input.taskId), branchName: existingOwned?.branchName ?? buildGitBranchName({ branchSlug: evidence.gitPresentation.branchSlug, taskId: input.taskId }), startingSha: project.targetSha });
-    const inspection = await this.worktrees.materialize(owned);
+    const inspection = input.reuseWorktree && owned.status === "active"
+      ? await this.worktrees.inspectOwned(owned)
+      : await this.worktrees.materialize(owned);
+    if (input.reuseWorktree && owned.status === "active") {
+      await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha: owned.startingSha, branchName: owned.branchName });
+      if (inspection.dirtyState !== "clean") throw new AgentFailure("worktree-unsafe", "Preserved Developer worktree is not clean");
+    }
     const activeWorktree = owned.status === "active" ? owned : activateOwnedWorktree(this.database, inspection);
     const startingTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: activeWorktree.worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
     const before = await this.observeProvider({ companyId: input.companyId, executionId, phase: "before", cwd: repositoryPath, repository: project.repositoryIdentity });
     if (!before.observation) throw new AgentFailure("provider-observation-unavailable", "GitHub branch and pull-request state could not be observed before development");
     const beforeObservation = before.observation;
+    const registeredExecution = this.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_developer_executions WHERE id = ?").get(executionId));
+    if (!registeredExecution) await evidenceBuilder.cleanup(activeWorktree.worktreePath, executionId);
     const staged = await evidenceBuilder.stage(evidence.manifest, activeWorktree.worktreePath, executionId);
     const guard = await createGitCommandGuard(this.config.runtimeRoot, { authorizedStepNumbers: evidence.manifest.verificationCommands.map((step) => step.stepNumber) });
     const startedAt = this.now().toISOString();
@@ -486,19 +496,29 @@ export class DeveloperService {
       db.prepare("INSERT OR IGNORE INTO forge_developer_execution_truth (execution_id, authorization_id, worktree_lease_id, manifest_artifact_id, manifest_sha256, boundary_mode, before_provider_artifact_id, before_provider_sha256, starting_commit, starting_tree) VALUES (?, ?, ?, ?, ?, 'owner_controlled_observed', ?, ?, ?, ?)").run(executionId, authorization.authorizationId, activeWorktree.leaseId, evidence.artifact.id, evidence.artifact.sha256, before.artifact.id, beforeObservation.sha256, inspection.head ?? activeWorktree.startingSha, startingTree);
     });
     const steps = evidence.manifest.verificationCommands.map((step) => `${step.stepNumber}: ${step.commands.join(" && ") || "(file/Git state verification)"}`).join("\n");
-    const prompt = `You are Forge's Developer. Execute only the authorized final plan in this isolated worktree. The final plan is staged at .forge-context/${executionId}/final-plan.json. Read only the other files under that exact execution directory. Stop before editing if repository facts contradict the plan. Run each forge-step marker as its own standalone shell command. Run forge-step start <number> exactly once at the beginning of each numbered step, then forge-step complete <number> or forge-step block <number> after verification. Required verification commands:\n${steps}\nDo not push, create PRs, merge, rebase, amend, reset, clean, force, or use provider mutation. Make exactly one ordinary local commit directly on the accepted starting SHA, leave the worktree clean, and return only the schema-bound delivery JSON.`;
+    const prompt = `You are Forge's Developer. Execute only the authorized final plan in this isolated worktree. The final plan is staged at .forge-context/${executionId}/final-plan.json. Read only the other files under that exact execution directory. Stop before editing if repository facts contradict the plan. If this retry finds a clean commit directly on the accepted starting SHA that already implements the plan, verify that existing commit instead of creating a duplicate. Run each forge-step marker as its own standalone shell command. Run forge-step start <number> exactly once at the beginning of each numbered step, then forge-step complete <number> or forge-step block <number> after verification. Required verification commands:\n${steps}\nDo not push, create PRs, merge, rebase, amend, reset, clean, force, or use provider mutation. Leave the worktree clean and return exactly one JSON object with no markdown fences or commentary matching: {"kind":"delivery","summary":"...","steps":[{"number":1,"status":"completed","filesChanged":[],"commandsRun":[],"testResults":[],"notes":"..."}],"authorizedStepsNotCompleted":[],"resultCommit":"40+ hex","resultTree":"40+ hex","dirtyState":"clean","blocker":null}. Include every approved step number exactly once, concrete files, commands, test outcomes, and the exact resulting commit/tree.`;
     const outputLines: string[] = [];
     let sessionRef: string | undefined;
     let rawSessionId: string | undefined;
+    let parserState: unknown;
     try {
       const result = await this.processRunner({
         command: this.command,
-        args: this.provider.buildTurnArgs({ prompt, profile, imagePaths: staged.imagePaths }),
+        args: this.provider.buildTurnArgs({ prompt, profile, networkAccess: true, imagePaths: staged.imagePaths }),
         cwd: activeWorktree.worktreePath,
-        env: guard.env,
+        env: withWorktreeMiseTrust(guard.env, activeWorktree.worktreePath),
         detached: true,
         onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); },
-        onLine: async (line) => { outputLines.push(line); const event = this.provider.parseEvent(line); if (event.threadId && rawSessionId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer returned a different session identity"); if (event.threadId && !rawSessionId) { rawSessionId = event.threadId; sessionRef = await this.sessionStore.create(rawSessionId); } await this.heartbeat(executionId); },
+        onLine: async (line) => {
+          outputLines.push(line);
+          const incremental = this.provider.parseExecutionTranscript([line], { executionId, attempt, worktreePath: activeWorktree.worktreePath, authorizedStepNumbers: evidence.manifest.verificationCommands.map((step) => step.stepNumber), ...(parserState ? { state: parserState } : {}) });
+          parserState = incremental.parserState;
+          this.persistDeveloperReceipts(executionId, incremental.receipts);
+          const event = this.provider.parseEvent(line);
+          if (event.threadId && rawSessionId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer returned a different session identity");
+          if (event.threadId && !rawSessionId) { rawSessionId = event.threadId; sessionRef = await this.sessionStore.create(rawSessionId); }
+          await this.heartbeat(executionId);
+        },
       });
       const parsed = this.provider.parseExecutionTranscript(outputLines, { executionId, attempt, worktreePath: activeWorktree.worktreePath, authorizedStepNumbers: evidence.manifest.verificationCommands.map((step) => step.stepNumber) });
       if (parsed.threadId && rawSessionId && parsed.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer returned conflicting session identities");
@@ -579,7 +599,7 @@ export class DeveloperService {
         command: this.command,
         args: this.provider.buildTurnArgs({ prompt: this.mergeConflictResolutionPrompt(plan, input, conflict), resumeSessionId: rawSessionId, profile }),
         cwd: input.worktreePath,
-        env: guard.env,
+        env: withWorktreeMiseTrust(guard.env, input.worktreePath),
         detached: true,
         onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); },
         onLine: async (line) => {
@@ -720,7 +740,7 @@ export class DeveloperService {
           command: this.command,
           args: this.provider.buildTurnArgs({ prompt: repairPrompt, resumeSessionId: rawSessionId, profile }),
           cwd: worktreePath,
-          env: guard.env,
+          env: withWorktreeMiseTrust(guard.env, worktreePath),
           detached: true,
           onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); },
           onLine: async (line) => {
@@ -865,7 +885,7 @@ export class DeveloperService {
     const evidenceLines = [JSON.stringify({ type: "forge.ci-repair-context", ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, failedHeadSha: input.failedHeadSha, plan: redact(planText), evidence: redact(evidenceText) })];
     const outputLines: string[] = [];
     try {
-      const result = await this.processRunner({ command: this.command, args: this.provider.buildTurnArgs({ prompt: this.ciRepairPrompt(planText, { branchName: input.branchName, worktreePath, priorCommit: input.priorCommit, priorTree: input.priorTree }), resumeSessionId: rawSessionId }), cwd: worktreePath, env: guard.env, detached: true, onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); }, onLine: async (line) => { const event = this.provider.parseEvent(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair returned a different Developer session identity"); evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.heartbeat(executionId); } });
+      const result = await this.processRunner({ command: this.command, args: this.provider.buildTurnArgs({ prompt: this.ciRepairPrompt(planText, { branchName: input.branchName, worktreePath, priorCommit: input.priorCommit, priorTree: input.priorTree }), resumeSessionId: rawSessionId }), cwd: worktreePath, env: withWorktreeMiseTrust(guard.env, worktreePath), detached: true, onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); }, onLine: async (line) => { const event = this.provider.parseEvent(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair returned a different Developer session identity"); evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.heartbeat(executionId); } });
       if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, outputLines);
       const report = parseRepairReport(outputLines, this.provider);
       const gitState = await this.worktrees.inspectDelivery(worktreePath);

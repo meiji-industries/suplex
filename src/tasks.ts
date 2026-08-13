@@ -13,7 +13,7 @@ import { canonicalJson } from "./canonical-json.js";
 import { redact } from "./logging.js";
 import { ProjectFailure, ProjectService, type ProjectRole } from "./projects.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
-import { acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, reviseIssuePlan, startIssueWorkflow } from "./temporal/service.js";
+import { acceptIssueDevelopment, acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, reviseIssuePlan, startIssueWorkflow } from "./temporal/service.js";
 import { issueCommands } from "./commands/registry.js";
 import { createInitialIssueWorkflowState, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "./temporal/issue-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
@@ -42,6 +42,29 @@ export class TaskFailure extends Error {
     this.findings = findings;
     this.statusCode = statusCode;
     this.current = current;
+  }
+}
+
+function publicDeveloperSummary(kind: string, stepNumber: number | null, summary: string, exitCode: number | null): string {
+  const step = stepNumber ? `Step ${stepNumber}` : "Step";
+  switch (kind) {
+    case "step_started": return `${step} started`;
+    case "step_completed": return `${step} completed`;
+    case "step_blocked": return `${step} blocked`;
+    case "command_started": return "Command started";
+    case "command_finished": return `Command finished${exitCode === null ? "" : ` (exit ${exitCode})`}`;
+    case "test_result": return `Test finished${exitCode === null ? "" : ` (exit ${exitCode})`}`;
+    case "file_change": {
+      const path = String(redact(summary)).trim();
+      if (path.startsWith("/")) return "File changed: [path]";
+      return /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(path) && !path.split("/").includes("..") ? `File changed: ${path}` : "File changed";
+    }
+    case "git_snapshot": return "Git snapshot recorded";
+    case "provider_observation": return "Provider observation recorded";
+    case "process_started": return "Developer process started";
+    case "process_finished": return "Developer process finished";
+    case "reconciliation": return "Developer reconciliation event";
+    default: return "Developer activity";
   }
 }
 
@@ -76,6 +99,11 @@ export interface TaskTimelineEntry {
   createdAt: string;
 }
 
+export interface TaskActivityEntry extends TaskTimelineEntry {
+  kind: "workflow" | "member";
+  actor?: { id: string; displayName: string; username: string; avatarSeed: string } | undefined;
+}
+
 export interface TaskAgentInvocation {
   id: string;
   role: "lead" | "reviewer" | "developer";
@@ -90,6 +118,7 @@ export interface TaskAgentInvocation {
   evidenceArtifactId: string | null;
   profileId?: string | null;
   profileName?: string | null;
+  avatarSeed?: string | null;
   model?: string | null;
   reasoningLevel?: string | null;
   servicePriority?: string | null;
@@ -344,6 +373,7 @@ export interface ForgeTask {
   createdAt: string;
   updatedAt: string;
   timeline: TaskTimelineEntry[];
+  activity: TaskActivityEntry[];
   agentInvocations: TaskAgentInvocation[];
   capacity: PublicCapacityStatus | null;
   planHistory: TaskPlanHistoryEntry[];
@@ -579,6 +609,7 @@ export interface TaskEvent {
 export interface TaskDeveloperDiff {
   patch: string;
   branchName: string;
+  repository: string | undefined;
   baseSha: string;
   headSha: string;
 }
@@ -592,6 +623,7 @@ export interface IssueWorkflowPort {
   recordProgress(workflowId: string, input: RecordProgressInput): Promise<IssueWorkflowState>;
   query(workflowId: string): Promise<IssueWorkflowState>;
   acceptPlanning?(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState>;
+  acceptDevelopment?(workflowId: string, input: StartPlanningInput, command?: "start_development" | "retry_development"): Promise<IssueWorkflowState>;
 }
 
 export interface TaskCommandPayload {
@@ -699,6 +731,7 @@ interface AgentInvocationRow {
   evidence_artifact_id: string | null;
   profile_id: string | null;
   profile_name: string | null;
+  avatar_seed: string | null;
   resolved_model: string | null;
   resolved_reasoning_level: string | null;
   resolved_service_priority: string | null;
@@ -836,6 +869,7 @@ export class TaskService {
       start: (input) => startIssueWorkflow(config, input),
       execute: (command, workflowId, input) => executeIssueCommand(config, workflowId, command, input),
       acceptPlanning: (workflowId, input) => acceptIssuePlanning(config, workflowId, input),
+      acceptDevelopment: (workflowId, input, command) => acceptIssueDevelopment(config, workflowId, input, command),
       revisePlan: (workflowId, input) => reviseIssuePlan(config, workflowId, input),
       continueWork: (workflowId, input) => continueIssueWork(config, workflowId, input),
       resolveDecisionBlocker: (workflowId, input) => resolveIssueDecisionBlocker(config, workflowId, input),
@@ -941,7 +975,7 @@ export class TaskService {
         branchName: execution.branchName,
         worktreePath: worktree.worktreePath,
       });
-      return { patch: diff.patch, branchName: execution.branchName, baseSha: execution.targetBaseSha, headSha: diff.headSha };
+      return { patch: diff.patch, branchName: execution.branchName, repository: project.repository, baseSha: execution.targetBaseSha, headSha: diff.headSha };
     } catch (error) {
       if (error instanceof WorktreeFailure) throw new TaskFailure(error.message, [finding(error.code, "developerExecution", error.message)], 409);
       throw error;
@@ -1221,7 +1255,8 @@ export class TaskService {
     this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
     try {
       const input: ResolveDecisionBlockerInput = { expectedRevision, actorUserId, answerArtifactId: artifact.id, answerSha256: artifact.sha256 };
-      await this.workflow.resolveDecisionBlocker(task.workflowId, input);
+      const state = await this.workflow.resolveDecisionBlocker(task.workflowId, input);
+      this.recordTaskCommand(task, actorUserId, "resolve_decision_blocker", state.revision);
     } catch (error) {
       this.database.authTransaction((db) => db.prepare("DELETE FROM forge_artifacts WHERE id = ? AND company_id = ?").run(artifact.id, task.companyId));
       await this.artifacts.remove({ companyId: artifact.companyId, storagePath: artifact.storagePath });
@@ -1238,7 +1273,8 @@ export class TaskService {
     if (descriptor.family === "bespoke") throw new TaskFailure("This command requires its dedicated action", [finding("workflow-unavailable", "workflow", "The durable issue workflow is unavailable")], 503, task);
     const expectedRevision = payload.expectedRevision;
     if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
-    if (!task.allowedCommands.includes(command)) {
+    const retryingCancellation = command === "cancel_development" && task.developerRecovery?.status === "cancellation_requested";
+    if (!task.allowedCommands.includes(command) && !retryingCancellation) {
       const message = command === "start_planning" ? "Planning cannot start from the current state" : command === "record_delivery_decision" ? "A delivery decision is not available" : descriptor.family === "start" ? "Plan action is not available" : "Task action is not available";
       throw new TaskFailure(message, [finding("illegal-command", "phase", message)], 409, task);
     }
@@ -1256,7 +1292,12 @@ export class TaskService {
       ? { expectedRevision, actorUserId, ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}), ...(command !== "start_planning" && task.planArtifactSha256 ? { planArtifactSha256: task.planArtifactSha256 } : {}) }
       : planInput;
     try {
-      await this.workflow.execute(command, task.workflowId, input);
+      const state = command === "start_planning" && this.workflow.acceptPlanning
+        ? await this.workflow.acceptPlanning(task.workflowId, { expectedRevision, actorUserId })
+        : (command === "start_development" || command === "retry_development") && this.workflow.acceptDevelopment
+          ? await this.workflow.acceptDevelopment(task.workflowId, input as StartPlanningInput, command)
+        : await this.workflow.execute(command, task.workflowId, input);
+      this.recordTaskCommand(task, actorUserId, command, state.revision);
       if (command === "start_planning") await this.waitForProjection(taskId, expectedRevision + 1);
       return this.getTask(actorUserId, taskId);
     } catch (error) {
@@ -1272,6 +1313,7 @@ export class TaskService {
     if (input.expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before revising the plan")], 409, task);
     try {
       const state = await this.workflow.revisePlan(task.workflowId, input);
+      this.recordTaskCommand(task, actorUserId, "revise_plan", state.revision);
       this.projectState(state);
       return this.getTask(actorUserId, taskId);
     } catch (error) {
@@ -1316,6 +1358,7 @@ export class TaskService {
     const workflowInput: PlanCommandInput = { expectedRevision: boundInput.expectedRevision, actorUserId, ...(boundInput.subject ? { subject: boundInput.subject } : {}), idempotencyKey: boundInput.idempotencyKey, ...(isBlocker ? { answerStagingRef: staged.ref, answerSha256: staged.sha256, expectedWorkflowRevision: boundInput.expectedWorkflowRevision ?? boundInput.expectedRevision, blockerSubject: boundInput.blockerSubject } : { noteStagingRef: staged.ref, noteSha256: staged.sha256 }) };
     try {
       const state = await this.workflow.execute(commandName, task.workflowId, workflowInput);
+      this.recordTaskCommand(task, actorUserId, commandName, state.revision);
       this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state });
       return this.getTask(actorUserId, taskId);
     } catch (error) {
@@ -1340,6 +1383,7 @@ export class TaskService {
     }
     try {
       const state = await this.workflow.continueWork(original.workflowId, { expectedRevision, actorUserId, reason });
+      this.recordTaskCommand(original, actorUserId, "continue_work", state.revision);
       this.projectState(state);
       const successorId = state.successorReference?.successorTaskId ?? state.successorTaskId;
       if (!successorId) throw new TaskFailure("Continue work is awaiting reconciliation", [finding("successor-reconciliation", "workflow", "The successor is being reconciled; retry this request")], 503, original);
@@ -1358,6 +1402,10 @@ export class TaskService {
 
   private projectState(state: IssueWorkflowState): void {
     this.database.projectIssueEvent({ schemaVersion: 1, runId: state.workflowId, eventId: state.lastEventId, state });
+  }
+
+  private recordTaskCommand(task: ForgeTask, actorUserId: string, command: IssueCommand, revision: number): void {
+    this.auth.recordAuditEvent(actorUserId, "task_command", undefined, task.companyId, { taskId: task.id, workflowId: task.workflowId, command, actionLabel: issueCommands[command].label, revision: String(revision) });
   }
 
   async getTaskImage(actorUserId: string, taskId: string, artifactId: string): Promise<{ artifact: TaskImage; bytes: Buffer }> {
@@ -1385,7 +1433,27 @@ export class TaskService {
       FROM forge_developer_execution_events ev JOIN forge_developer_executions e ON e.id = ev.execution_id AND e.task_id = ? AND e.company_id = ?
       WHERE ev.execution_id = ? ORDER BY ev.sequence DESC LIMIT ?`).all(task.id, task.companyId, executionId, boundedLimit + 1) as Array<{ event_id: string; sequence: number; kind: string; step_number: number | null; occurred_at: string; summary: string; exit_code: number | null; artifact_id: string | null }>);
     if (!rows.length) throw new TaskFailure("Not found", [], 404);
-    return { events: rows.slice(0, boundedLimit).reverse().map((row) => ({ eventId: row.event_id, sequence: row.sequence, kind: row.kind, stepNumber: row.step_number, occurredAt: row.occurred_at, summary: row.summary.replace(/(^|[\s("'=])\/[^\s,)"']+/g, "$1[path]"), exitCode: row.exit_code, artifactId: row.artifact_id })), hasMore: rows.length > boundedLimit };
+    return { events: rows.slice(0, boundedLimit).reverse().map((row) => ({ eventId: row.event_id, sequence: row.sequence, kind: row.kind, stepNumber: row.step_number, occurredAt: row.occurred_at, summary: publicDeveloperSummary(row.kind, row.step_number, row.summary, row.exit_code), exitCode: row.exit_code, artifactId: row.artifact_id })), hasMore: rows.length > boundedLimit };
+  }
+
+  getDeveloperProgress(actorUserId: string, taskId: string, after?: { executionId: string; sequence: number }): { status: string; execution: { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; currentStep: number | null } | null; events: DeveloperExecutionEvent[] } {
+    const task = this.getTask(actorUserId, taskId);
+    const execution = this.database.authQuery((db) => db.prepare(`SELECT e.id, e.status, e.started_at AS startedAt, e.finished_at AS finishedAt,
+      COALESCE(l.heartbeat_at, e.heartbeat_at) AS lastHeartbeatAt, e.current_step AS currentStep
+      FROM forge_developer_executions e LEFT JOIN forge_developer_execution_leases l
+        ON l.execution_id = e.id AND l.task_id = e.task_id AND l.company_id = e.company_id AND l.workflow_id = e.workflow_id
+      WHERE e.task_id = ? AND e.company_id = ? ORDER BY e.attempt DESC, e.started_at DESC LIMIT 1`).get(task.id, task.companyId) as { id: string; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; currentStep: number | null } | undefined);
+    if (!execution) {
+      const snapshot = this.database.authQuery((db) => db.prepare("SELECT state_json AS stateJson FROM forge_workflow_snapshots WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY revision DESC LIMIT 1").get(task.id, task.companyId, task.workflowId) as { stateJson: string } | undefined);
+      const state = snapshot ? IssueWorkflowStateSchema.safeParse(json<unknown>(snapshot.stateJson, null)).data : undefined;
+      const recovery = state?.developerRecoveryStatus ?? task.developerRecovery?.status;
+      const heartbeat = state?.developerLastHeartbeatAt ?? task.developerRecovery?.lastHeartbeatAt ?? null;
+      const status = recovery === "starting" ? "starting" : recovery === "cancelling" || recovery === "cancellation_requested" ? "cancelling" : recovery === "active" || recovery === "reconnecting" || recovery === "result_pending_claim" ? "running" : recovery === "failed" || recovery === "interrupted" || recovery === "ownership_ambiguous" ? "failed" : task.capacity?.status === "queued" ? "queued" : task.capacity?.status === "rate_limited" ? "rate_limited" : "idle";
+      return status === "idle" ? { status, execution: null, events: [] } : { status, execution: { id: null, status, startedAt: state?.stateChangedAt ?? task.updatedAt, finishedAt: null, lastHeartbeatAt: heartbeat, currentStep: null }, events: [] };
+    }
+    const rows = this.database.authQuery((db) => db.prepare(`SELECT event_id, sequence, kind, step_number, occurred_at, summary, exit_code, artifact_id
+      FROM forge_developer_execution_events WHERE execution_id = ? AND (? IS NULL OR ? <> ? OR sequence > ?) ORDER BY sequence LIMIT 50`).all(execution.id, after?.executionId ?? null, after?.executionId ?? null, execution.id, after?.sequence ?? 0) as Array<{ event_id: string; sequence: number; kind: string; step_number: number | null; occurred_at: string; summary: string; exit_code: number | null; artifact_id: string | null }>);
+    return { status: execution.status, execution, events: rows.map((row) => ({ eventId: row.event_id, sequence: row.sequence, kind: row.kind, stepNumber: row.step_number, occurredAt: row.occurred_at, summary: publicDeveloperSummary(row.kind, row.step_number, row.summary, row.exit_code), exitCode: row.exit_code, artifactId: row.artifact_id })) };
   }
 
   async getTaskReviewArtifact(actorUserId: string, taskId: string, artifactId: string): Promise<{ artifact: { artifactId: string; filename: string; mimeType: string; byteSize: number }; bytes: Buffer }> {
@@ -1720,13 +1788,33 @@ export class TaskService {
     const workflowState = this.workflowStateForTask(row);
     const reviewLineage = this.reviewLineage(row, workflowState);
     const timeline = this.database.authQuery((db) => db.prepare("SELECT id, revision, event_type, metadata_json, created_at FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision, id").all(row.id) as TimelineRow[]).map((entry) => ({ id: entry.id, revision: entry.revision, eventType: entry.event_type, metadata: parseMetadata(entry.metadata_json), createdAt: entry.created_at }));
+    const memberRows = this.database.authQuery((db) => db.prepare(`SELECT a.id, a.action, a.metadata_json, a.created_at, u.id AS actor_id, u.display_name AS actor_name, u.username AS actor_username, u.avatar_seed AS actor_avatar_seed
+      FROM forge_audit_events a JOIN forge_users u ON u.id = a.actor_user_id
+      WHERE a.company_id = ? AND json_extract(a.metadata_json, '$.taskId') = ? AND a.action IN ('task_created', 'task_command')
+      ORDER BY a.created_at, a.id`).all(row.company_id, row.id) as Array<{ id: string; action: string; metadata_json: string; created_at: string; actor_id: string; actor_name: string; actor_username: string; actor_avatar_seed: string }>);
+    const creator = memberRows.find((entry) => entry.action === "task_created");
+    const commandActivity: TaskActivityEntry[] = memberRows.filter((entry) => entry.action === "task_command").map((entry) => {
+      const metadata = parseMetadata(entry.metadata_json);
+      return { id: entry.id, revision: Number(metadata.revision), eventType: "member_action", metadata, createdAt: entry.created_at, kind: "member" as const, actor: { id: entry.actor_id, displayName: entry.actor_name, username: entry.actor_username, avatarSeed: entry.actor_avatar_seed || entry.actor_username } };
+    }).filter((entry) => Number.isInteger(entry.revision));
+    const commandKeys = new Set(commandActivity.map((entry) => `${entry.actor?.id}:${entry.revision}:${String(entry.metadata.command)}`));
+    const decisionActivity = this.database.authQuery((db) => db.prepare(`SELECT d.id, d.plan_revision, d.decision, d.actor_user_id, d.expected_workflow_revision, d.created_at, u.display_name, u.username, u.avatar_seed
+      FROM forge_plan_decisions d JOIN forge_users u ON u.id = d.actor_user_id
+      WHERE d.task_id = ? AND d.company_id = ? ORDER BY d.created_at, d.id`).all(row.id, row.company_id) as Array<{ id: string; plan_revision: number; decision: "approve" | "request_revision" | "reject"; actor_user_id: string; expected_workflow_revision: number | null; created_at: string; display_name: string; username: string; avatar_seed: string }>).flatMap((entry): TaskActivityEntry[] => {
+      const command: IssueCommand = entry.decision === "approve" ? "approve_plan" : entry.decision === "request_revision" ? "request_plan_revision" : "reject_plan";
+      const revision = (entry.expected_workflow_revision ?? entry.plan_revision) + 1;
+      if (commandKeys.has(`${entry.actor_user_id}:${revision}:${command}`)) return [];
+      return [{ id: `plan-decision-${entry.id}`, revision, eventType: "member_action", metadata: { command, actionLabel: issueCommands[command].label }, createdAt: entry.created_at, kind: "member", actor: { id: entry.actor_user_id, displayName: entry.display_name, username: entry.username, avatarSeed: entry.avatar_seed || entry.username } }];
+    });
+    const activity: TaskActivityEntry[] = [...timeline.map((entry): TaskActivityEntry => ({ ...entry, kind: "workflow", ...(entry.eventType === "task_created" && creator ? { actor: { id: creator.actor_id, displayName: creator.actor_name, username: creator.actor_username, avatarSeed: creator.actor_avatar_seed || creator.actor_username } } : {}) })), ...commandActivity, ...decisionActivity]
+      .sort((left, right) => left.revision - right.revision || (left.kind === right.kind ? left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id) : left.kind === "member" ? -1 : 1));
     const agentInvocations = this.database.authQuery((db) => db.prepare(`SELECT e.id, e.role, e.status, e.attempt, e.session_ref, e.started_at, e.finished_at, e.failure_code, e.failure_summary, e.evidence_artifact_id,
-        e.profile_id, p.name AS profile_name, e.resolved_model, e.resolved_reasoning_level, e.resolved_service_priority
+        e.profile_id, p.name AS profile_name, p.avatar_seed, e.resolved_model, e.resolved_reasoning_level, e.resolved_service_priority
       FROM forge_agent_executions e LEFT JOIN forge_profiles p ON p.id = e.profile_id
       WHERE e.task_id = ? AND e.company_id = ?
       UNION ALL
       SELECT d.id, 'developer' AS role, d.status, d.attempt, d.session_ref, d.started_at, d.finished_at, d.failure_code, d.failure_summary, d.evidence_artifact_id,
-        d.profile_id, p.name AS profile_name, NULL AS resolved_model, NULL AS resolved_reasoning_level, NULL AS resolved_service_priority
+        d.profile_id, p.name AS profile_name, p.avatar_seed, NULL AS resolved_model, NULL AS resolved_reasoning_level, NULL AS resolved_service_priority
       FROM forge_developer_executions d LEFT JOIN forge_profiles p ON p.id = d.profile_id
       WHERE d.task_id = ? AND d.company_id = ?
       ORDER BY 6, 1`).all(row.id, row.company_id, row.id, row.company_id) as AgentInvocationRow[]).map((invocation) => ({
@@ -1743,6 +1831,7 @@ export class TaskService {
         evidenceArtifactId: invocation.evidence_artifact_id,
         profileId: invocation.profile_id,
         profileName: invocation.profile_name,
+        avatarSeed: invocation.avatar_seed,
         model: invocation.resolved_model,
         reasoningLevel: invocation.resolved_reasoning_level,
         servicePriority: invocation.resolved_service_priority,
@@ -1819,7 +1908,7 @@ export class TaskService {
     const governanceView = { ...(this.planGovernanceView(row, workflowState) ?? {}), ...(workflowState.originalPlanSubject !== undefined ? { originalPlanSubject: workflowState.originalPlanSubject } : {}), ...(workflowState.finalPlanSubject !== undefined ? { finalPlanSubject: workflowState.finalPlanSubject } : {}), ...(workflowState.materialityEvidence !== undefined ? { materialityEvidence: workflowState.materialityEvidence } : {}), ...(workflowState.supplementalReviewSubject !== undefined ? { supplementalReviewSubject: workflowState.supplementalReviewSubject } : {}), ...(workflowState.planBlockerSubject !== undefined ? { planBlockerSubject: workflowState.planBlockerSubject } : {}), ...(workflowState.planDecisionReceipt !== undefined ? { planDecisionReceipt: workflowState.planDecisionReceipt } : {}), ...(workflowState.planBlockerResponseReceipt !== undefined ? { planBlockerResponseReceipt: workflowState.planBlockerResponseReceipt } : {}) };
     const profiles = parseProfiles(row.role_profiles_json);
     const commands = taskCommandDescriptors(allowedCommands, { expectedRevision: row.projection_revision, ...(profiles.reviewer ? { reviewerProfileId: profiles.reviewer } : {}), ...(workflowState.originalPlanSubject !== undefined ? { originalPlanSubject: workflowState.originalPlanSubject } : {}), ...(workflowState.finalPlanSubject !== undefined ? { finalPlanSubject: workflowState.finalPlanSubject } : {}), ...(workflowState.materialityEvidence !== undefined ? { materialityEvidence: workflowState.materialityEvidence } : {}), ...(workflowState.planBlockerSubject !== undefined ? { planBlockerSubject: workflowState.planBlockerSubject } : {}) });
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: profiles, supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, capacity, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), timeline, agentInvocations, targetBaseReconciliation, reviewLineage, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, ...(planAuthorization ? { planAuthorizationId: planAuthorization.id, planArtifactSha256: planAuthorization.plan_sha256 } : {}), planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: parseMaterialCategories(governance.material_categories_json), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(deliveryGate ? { deliveryGate } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status === "completed" && !developerExecution.reconciliationArtifactId ? "unverified" : developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.reconciliationArtifactId ?? developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, reconciliationArtifactId: developerExecution.reconciliationArtifactId, manifestArtifactId: developerExecution.manifestArtifactId, rawReportArtifactId: developerExecution.rawReportArtifactId, beforeProviderArtifactId: developerExecution.beforeProviderArtifactId, afterProviderArtifactId: developerExecution.afterProviderArtifactId, boundaryMode: developerExecution.boundaryMode ?? undefined, providerObservation: developerExecution.beforeProviderSha256 && developerExecution.afterProviderSha256 ? developerExecution.beforeProviderSha256 === developerExecution.afterProviderSha256 ? "matching" : "different" : "unavailable", startingCommit: developerExecution.startingCommit, startingTree: developerExecution.startingTree, verificationCommands, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(ci ? { ci } : {}) };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: profiles, supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, capacity, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), timeline, activity, agentInvocations, targetBaseReconciliation, reviewLineage, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, ...(planAuthorization ? { planAuthorizationId: planAuthorization.id, planArtifactSha256: planAuthorization.plan_sha256 } : {}), planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: parseMaterialCategories(governance.material_categories_json), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(deliveryGate ? { deliveryGate } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status === "completed" && !developerExecution.reconciliationArtifactId ? "unverified" : developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.reconciliationArtifactId ?? developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, reconciliationArtifactId: developerExecution.reconciliationArtifactId, manifestArtifactId: developerExecution.manifestArtifactId, rawReportArtifactId: developerExecution.rawReportArtifactId, beforeProviderArtifactId: developerExecution.beforeProviderArtifactId, afterProviderArtifactId: developerExecution.afterProviderArtifactId, boundaryMode: developerExecution.boundaryMode ?? undefined, providerObservation: developerExecution.beforeProviderSha256 && developerExecution.afterProviderSha256 ? developerExecution.beforeProviderSha256 === developerExecution.afterProviderSha256 ? "matching" : "different" : "unavailable", startingCommit: developerExecution.startingCommit, startingTree: developerExecution.startingTree, verificationCommands, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(ci ? { ci } : {}) };
 /* Superseded by the richer projection above.
     return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), ...(typeof reconciliationState.leadInputManifestArtifactId === "string" ? { leadInputManifestArtifactId: reconciliationState.leadInputManifestArtifactId } : {}), ...(typeof reconciliationState.leadInputManifestSha256 === "string" ? { leadInputManifestSha256: reconciliationState.leadInputManifestSha256 } : {}), ...(typeof reconciliationState.leadEvidenceSha256 === "string" ? { leadEvidenceSha256: reconciliationState.leadEvidenceSha256 } : {}), ...(typeof reconciliationState.leadOutputSha256 === "string" ? { leadOutputSha256: reconciliationState.leadOutputSha256 } : {}), ...(typeof reconciliationState.blockedCategory === "string" ? { blockedCategory: reconciliationState.blockedCategory as ForgeTask["blockedCategory"] } : {}), ...(reconciliationState.blockedResumePhase === "planning" ? { blockedResumePhase: reconciliationState.blockedResumePhase } : {}), ...(typeof reconciliationState.blockerArtifactId === "string" ? { blockerArtifactId: reconciliationState.blockerArtifactId } : {}), ...(typeof reconciliationState.blockerArtifactSha256 === "string" ? { blockerArtifactSha256: reconciliationState.blockerArtifactSha256 } : {}), timeline, agentInvocations, targetBaseReconciliation, reviewLineage, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(deliveryGate ? { deliveryGate } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
 */

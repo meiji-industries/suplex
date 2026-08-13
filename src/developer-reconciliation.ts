@@ -8,16 +8,22 @@ const execFileAsync = promisify(execFile);
 
 function canonicalCommand(value: string): string {
   const firstLine = value.split("\n", 1)[0]?.trim() ?? "";
-  const shell = /^(?:\/bin\/)?(?:zsh|bash|sh)\s+-lc\s+(['"])(.*)\1$/.exec(firstLine);
-  return (shell?.[2]?.trim() ?? firstLine).replace(/(['"])([A-Za-z0-9_./{}^:@%+=,-]+)\1/g, "$2").replace(/''|""/g, "");
+  const shell = /^(?:\/bin\/)?(?:zsh|bash|sh)\s+-lc\s+(.+)$/.exec(firstLine)?.[1]?.trim() ?? firstLine;
+  const command = (shell.startsWith("'") || shell.startsWith('"')) && shell.at(-1) === shell[0] ? shell.slice(1, -1) : shell;
+  return command.replace(/\\(["'])/g, "$1").replace(/["']/g, "").replace(/\s+/g, " ").trim();
 }
 
 function isAllowlistedBootstrapReceipt(receipt: ExecutionReceipt, firstStepSequence: number): boolean {
   if (receipt.sequence >= firstStepSequence || !["command_started", "command_finished"].includes(receipt.kind)) return false;
   const command = canonicalCommand(receipt.summary);
-  if (!command || /&&|\|\||[;<>`]|\$\(/.test(command)) return false;
-  if (/^pwd$/.test(command) || /^git (?:status|rev-parse)(?:\s|$)/.test(command)) return true;
-  return /^(?:cat|head|tail|sed|ls|find)\s+/.test(command) && /(?:^|\s)\.forge-context(?:\/|\s|$)/.test(command);
+  if (!command || /[<>`]|\$\(/.test(command) || /\b(?:rm|mv|cp|touch|mkdir|rmdir|chmod|chown|curl|wget)\b|\bgit\s+(?!(?:status|rev-parse|log|show|diff|diff-tree)\b)/.test(command)) return false;
+  return /^(?:for\b|pwd|git (?:status|rev-parse|log|show|diff|diff-tree)\b|(?:cat|head|tail|sed|ls|find|file|sha256sum|nl|wc|rg)\s+)/.test(command);
+}
+
+function matchesVerificationCommand(receipt: ExecutionReceipt, command: string): boolean {
+  const actual = canonicalCommand(receipt.summary);
+  const expected = canonicalCommand(command);
+  return actual === expected || actual.split(/\s*(?:&&|;)\s*/).includes(expected);
 }
 
 export interface DeveloperGitObservation {
@@ -139,7 +145,7 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
     for (const verification of input.verificationCommands) {
       const stepReceipts = input.receipts.filter((receipt) => receipt.stepNumber === verification.stepNumber && receipt.kind === "command_finished");
       for (const command of verification.commands) {
-        const matching = stepReceipts.filter((receipt) => canonicalCommand(receipt.summary) === canonicalCommand(command));
+        const matching = stepReceipts.filter((receipt) => matchesVerificationCommand(receipt, command));
         if (!matching.length) mismatches.push(`missing-verification-command:${verification.stepNumber}`);
         else if (!matching.some((receipt) => receipt.exitCode === 0)) mismatches.push(`verification-command-failed:${verification.stepNumber}`);
       }

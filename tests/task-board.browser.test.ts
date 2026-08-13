@@ -81,8 +81,25 @@ test("the task board shows its workflow lanes on desktop and narrow viewports", 
       expect(await iconPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true); await iconPage.close();
       database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'backlog' WHERE task_id = ?").run(taskId));
       await page.close(); page = await context.newPage(); await page.goto(`${baseUrl}/tasks?company=${encodeURIComponent(company.id)}`); await page.locator("[data-task-list]").getByText("Browser board task", { exact: true }).waitFor();
+      await page.evaluate(() => { (window as Window & { forgeNavigationMarker?: string }).forgeNavigationMarker = "still-mounted"; });
       await page.getByRole("link", { name: "Board", exact: true }).click(); await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
+      expect(await page.evaluate(() => (window as Window & { forgeNavigationMarker?: string }).forgeNavigationMarker)).toBe("still-mounted");
+      await page.getByRole("link", { name: "Board", exact: true }).click();
+      expect(await page.evaluate(() => (window as Window & { forgeNavigationMarker?: string }).forgeNavigationMarker)).toBe("still-mounted");
       expect(await page.getByText("Backlog", { exact: true }).isVisible()).toBe(true); for (const phase of ["Planning", "Development", "Reviewing", "Waiting for CI", "Final review", "Done"]) expect(await page.getByText(phase, { exact: true }).isVisible()).toBe(true);
+      await page.goBack(); await page.locator("[data-task-list]").getByText("Browser board task", { exact: true }).waitFor();
+      await page.getByRole("link", { name: /Browser board task/ }).first().click(); await page.waitForURL(new RegExp(`/tasks/${taskId}`));
+      expect(await page.evaluate(() => (window as Window & { forgeNavigationMarker?: string }).forgeNavigationMarker)).toBe("still-mounted");
+      expect(await page.evaluate(() => {
+        const link = document.createElement("a");
+        link.href = "/api/tasks/example/artifacts/example";
+        document.body.append(link);
+        const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+        link.dispatchEvent(event);
+        link.remove();
+        return event.defaultPrevented;
+      })).toBe(false);
+      await page.getByRole("link", { name: "Board", exact: true }).click(); await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
       const boardTask = page.getByRole("button", { name: /Browser board task/ }); await boardTask.waitFor(); expect(await boardTask.isVisible()).toBe(true);
       expect(await boardTask.textContent()).toContain("BRD-1");
       await page.setViewportSize({ width: 390, height: 844 }); await page.reload(); await page.getByRole("heading", { name: "Board", exact: true }).waitFor();

@@ -30,6 +30,8 @@ export interface DeveloperTurnRunInput {
   controller?: ProcessController;
   spawnSupervisor?: typeof spawnDeveloperSupervisor;
   onMilestone?: (status: "active" | "reconnecting" | "result_pending_claim" | "cancellation_requested" | "cancelling") => Promise<void>;
+  onStart?: (pid: number, startedAt: string) => Promise<void>;
+  onLine?: (line: string) => Promise<void>;
 }
 
 export interface DeveloperTurnRunResult {
@@ -68,7 +70,7 @@ async function readEvents(root: string): Promise<string[]> {
   try {
     const raw = await readFile(join(root, "events.jsonl"), "utf8");
     return raw.split(/\r?\n/).filter(Boolean).flatMap((line) => {
-      try { const value = JSON.parse(line) as { line?: unknown }; return typeof value.line === "string" ? [value.line] : []; } catch { return []; }
+      try { const value = JSON.parse(line) as { stream?: unknown; line?: unknown }; return value.stream === "stdout" && typeof value.line === "string" ? [value.line] : []; } catch { return []; }
     });
   } catch { return []; }
 }
@@ -102,7 +104,7 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
   }
   const leaseResult = repo.reserve({ executionId: input.executionId, companyId: input.companyId, taskId: input.taskId, workflowId: input.workflowId, attempt: input.developerAttempt, turnKind: input.turnKind, canonicalWorktreePath: input.canonicalWorktreePath, worktreeIdentityHash: input.worktreeIdentityHash, leaseToken: token });
   const lease = leaseResult.lease;
-  const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId: lease.executionId, command: input.command, args: input.args, cwd: input.cwd, env: Object.fromEntries(Object.entries(input.env).filter(([key]) => key === "PATH" || key === "FORGE_GIT_REAL_BIN" || key === "FORGE_GIT_GUARD_DIR")) });
+  const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId: lease.executionId, command: input.command, args: input.args, cwd: input.cwd, env: Object.fromEntries(Object.entries(input.env).filter(([key]) => key === "PATH" || key === "FORGE_GIT_REAL_BIN" || key === "FORGE_GIT_GUARD_DIR" || key === "MISE_TRUSTED_CONFIG_PATHS")) });
   await writeExclusiveOrVerify(join(root, "invocation.json"), `${JSON.stringify(invocation)}\n`);
   try { await writeFile(join(root, "events.jsonl"), "", { flag: "wx", mode: 0o600 }); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
@@ -118,22 +120,36 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
   let lastStatus: "active" | "reconnecting" = lease.status === "reserved" ? "active" : "reconnecting";
   await input.onMilestone?.(lastStatus);
   let lastHeartbeat = lease.heartbeatAt;
+  let startedChildPid: number | undefined;
+  let streamedLines = 0;
+  const streamEvents = async (): Promise<void> => {
+    if (!input.onLine) return;
+    // ponytail: reread the bounded 8 MiB spool; add byte-offset checkpoints only if this polling becomes measurable.
+    const lines = await readEvents(root);
+    while (streamedLines < lines.length) await input.onLine!(lines[streamedLines++]!);
+  };
+  const completedResult = async (): Promise<DeveloperTurnRunResult | undefined> => {
+    try {
+      const parsed = validateSupervisorResult(await readJson(join(root, lease.resultPath)));
+      const output = await readFile(join(root, parsed.outputPath));
+      if (createHash("sha256").update(output).digest("hex") !== parsed.outputSha256) throw new Error("Developer supervisor output hash is invalid");
+      repo.recordResultReady(lease.executionId, { resultHash: parsed.resultHash, exitCode: parsed.exitCode, exitSignal: parsed.exitSignal, outputTruncated: parsed.outputTruncated });
+      await input.onMilestone?.("result_pending_claim");
+      await streamEvents();
+      return { executionId: lease.executionId, resultHash: parsed.resultHash, exitCode: parsed.exitCode, exitSignal: parsed.exitSignal, lines: input.onLine ? [] : await readEvents(root), outputTruncated: parsed.outputTruncated, terminal: "result", lastHeartbeatAt: repo.get(lease.executionId)?.heartbeatAt ?? lastHeartbeat };
+    } catch (error) {
+      if (error instanceof SyntaxError || error instanceof Error && /ENOENT|invalid|expected|received/i.test(error.message)) return undefined;
+      throw error;
+    }
+  };
   const noSupervisorSince = Date.now();
   try {
     for (;;) {
+      await streamEvents();
       const current = repo.get(lease.executionId);
       if (!current) throw new Error("Developer execution lease disappeared");
-      const resultPath = join(root, current.resultPath);
-      try {
-        const parsed = validateSupervisorResult(await readJson(resultPath));
-        const output = await readFile(join(root, parsed.outputPath));
-        if (createHash("sha256").update(output).digest("hex") !== parsed.outputSha256) throw new Error("Developer supervisor output hash is invalid");
-        repo.recordResultReady(lease.executionId, { resultHash: parsed.resultHash, exitCode: parsed.exitCode, exitSignal: parsed.exitSignal, outputTruncated: parsed.outputTruncated });
-        await input.onMilestone?.("result_pending_claim");
-        return { executionId: lease.executionId, resultHash: parsed.resultHash, exitCode: parsed.exitCode, exitSignal: parsed.exitSignal, lines: await readEvents(root), outputTruncated: parsed.outputTruncated, terminal: "result", lastHeartbeatAt: repo.get(lease.executionId)?.heartbeatAt ?? lastHeartbeat };
-      } catch (error) {
-        if (!(error instanceof SyntaxError) && !(error instanceof Error && /ENOENT|invalid|expected|received/i.test(error.message))) throw error;
-      }
+      const result = await completedResult();
+      if (result) return result;
       const snapshot = await readJson(join(root, "supervisor.json")).then((value) => DeveloperSupervisorSnapshotSchema.parse(value)).catch(() => undefined);
       if (snapshot?.supervisor && !current.supervisor) repo.setSupervisorIdentity(lease.executionId, snapshot.supervisor);
       if (snapshot?.child && !current.child) repo.setChildIdentity(lease.executionId, snapshot.child);
@@ -142,11 +158,17 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
       try { response = await requestDeveloperSupervisor(root, { version: 1, command: "status", executionId: lease.executionId, leaseToken: token }); } catch { response = null; }
       if (response && "child" in response && response.child) {
         repo.setChildIdentity(lease.executionId, identityForLease(response.child));
+        if (startedChildPid !== response.child.pid) { startedChildPid = response.child.pid; await input.onStart?.(response.child.pid, response.child.startTime); }
         lastHeartbeat = response.heartbeatAt;
         await heartbeat(current, repo, 0);
       }
-      if (response && response.status === "ownership_ambiguous") return { executionId: lease.executionId, resultHash: "", exitCode: null, exitSignal: null, lines: await readEvents(root), outputTruncated: false, terminal: "ownership_ambiguous", lastHeartbeatAt: lastHeartbeat };
+      if (response && response.status === "ownership_ambiguous") return { executionId: lease.executionId, resultHash: "", exitCode: null, exitSignal: null, lines: input.onLine ? [] : await readEvents(root), outputTruncated: false, terminal: "ownership_ambiguous", lastHeartbeatAt: lastHeartbeat };
       if (!response) {
+        // The result file is the durable completion authority. Re-read it
+        // after a failed socket request: the supervisor may have exited in
+        // the narrow interval since the loop's first check.
+        const result = await completedResult();
+        if (result) return result;
         const latest = repo.get(lease.executionId);
         // The supervisor persists its own identity before it creates the
         // control socket and launches/persists the child. Treat that whole
@@ -158,7 +180,7 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
         }
         if (latest?.child) {
           const child = await controller.inspect(latest.child.pid);
-          if (child && compareProcessIdentity({ name: "developer", pid: latest.child.pid, command: latest.child.argv.join(" "), startedAt: latest.child.startTime, processGroup: latest.child.processGroup, startTime: latest.child.startTime, executable: latest.child.executable, argv: latest.child.argv, ...(latest.child.ownerUid !== null ? { ownerUid: latest.child.ownerUid } : {}) }, child).kind === "exact_match") return { executionId: lease.executionId, resultHash: "", exitCode: null, exitSignal: null, lines: await readEvents(root), outputTruncated: false, terminal: "ownership_ambiguous", lastHeartbeatAt: latest.heartbeatAt };
+          if (child && compareProcessIdentity({ name: "developer", pid: latest.child.pid, command: latest.child.argv.join(" "), startedAt: latest.child.startTime, processGroup: latest.child.processGroup, startTime: latest.child.startTime, executable: latest.child.executable, argv: latest.child.argv, ...(latest.child.ownerUid !== null ? { ownerUid: latest.child.ownerUid } : {}) }, child).kind === "exact_match") return { executionId: lease.executionId, resultHash: "", exitCode: null, exitSignal: null, lines: input.onLine ? [] : await readEvents(root), outputTruncated: false, terminal: "ownership_ambiguous", lastHeartbeatAt: latest.heartbeatAt };
           // A short-lived child can exit and close the control socket just
           // before the supervisor's atomic result rename becomes visible.
           // Keep polling that bounded finalization window instead of falsely
@@ -168,7 +190,7 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
             continue;
           }
         }
-        return { executionId: lease.executionId, resultHash: "", exitCode: null, exitSignal: null, lines: await readEvents(root), outputTruncated: false, terminal: "interrupted", lastHeartbeatAt: latest?.heartbeatAt ?? lastHeartbeat };
+        return { executionId: lease.executionId, resultHash: "", exitCode: null, exitSignal: null, lines: input.onLine ? [] : await readEvents(root), outputTruncated: false, terminal: "interrupted", lastHeartbeatAt: latest?.heartbeatAt ?? lastHeartbeat };
       }
       if (response.status === "running" && lastStatus !== "active") { lastStatus = "active"; await input.onMilestone?.("active"); }
       await activitySleep(500);

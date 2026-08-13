@@ -33,6 +33,7 @@ export interface AuthUser {
   id: string;
   displayName: string;
   username: string;
+  avatarSeed: string;
   role: UserRole;
   status: UserStatus;
   companyIds: string[];
@@ -157,6 +158,7 @@ const invitationTokenSchema = z.string().refine((value) => INVITATION_TOKEN_PATT
 const idSchema = z.string().min(1).max(128);
 const responseSchema = z.object({ id: z.string().min(1).max(512), type: z.literal("public-key") }).passthrough();
 const displayNameSchema = z.string().trim().min(1).max(120);
+const usernameSchema = z.string().trim().regex(/^[A-Za-z0-9][A-Za-z0-9._@-]{1,63}$/);
 const companyNameSchema = z.string().trim().min(1).max(120);
 const companyIssueCodeSchema = z.string().regex(/^[A-Z][A-Z0-9]{1,9}$/);
 
@@ -428,7 +430,7 @@ export class AuthService {
       const now = this.now().toISOString();
       let user = this.repository.findUser(userId);
       if (!user) {
-        this.repository.createUser({ id: userId, displayName: "Development Admin", username: "development@forge.local", role: "admin", status: "active", createdAt: now, updatedAt: now, identityVersion: 1 });
+        this.repository.createUser({ id: userId, displayName: "Development Admin", username: "development@forge.local", avatarSeed: "development@forge.local", role: "admin", status: "active", createdAt: now, updatedAt: now, identityVersion: 1 });
         user = this.repository.findUser(userId)!;
       }
       if (user.role !== "admin" || user.status !== "active") throw new AuthFailure("Development user is unavailable", 409);
@@ -444,6 +446,38 @@ export class AuthService {
   getUserForAuthority(userId: string): AuthUser | undefined {
     const row = this.repository.findUser(userId, "active");
     return row ? this.publicRepositoryUser(row) : undefined;
+  }
+
+  updateUsername(actorUserId: string, rawUsername: string): AuthUser {
+    return this.updateProfile(actorUserId, { username: rawUsername });
+  }
+
+  updateProfile(actorUserId: string, input: { displayName?: string | undefined; username?: string | undefined; avatarSeed?: string | undefined }): AuthUser {
+    const displayName = input.displayName === undefined ? undefined : displayNameSchema.safeParse(input.displayName);
+    if (displayName && !displayName.success) throw new AuthFailure("Name must be 1–120 characters");
+    const username = input.username === undefined ? undefined : usernameSchema.safeParse(input.username);
+    if (username && !username.success) throw new AuthFailure("Username must be 2–64 characters and use letters, numbers, dots, hyphens, underscores, or @");
+    const avatarSeed = input.avatarSeed?.trim();
+    if (avatarSeed !== undefined && (avatarSeed.length === 0 || avatarSeed.length > 128)) throw new AuthFailure("Avatar seed is invalid");
+    return this.database.authTransaction(() => {
+      const user = this.repository.findUser(actorUserId, "active");
+      if (!user) throw new AuthFailure("Authentication required", 401);
+      const nextDisplayName = displayName?.data ?? user.displayName;
+      const nextUsername = username?.data ?? user.username;
+      const nextAvatarSeed = (avatarSeed ?? user.avatarSeed) || nextUsername;
+      if (user.displayName === nextDisplayName && user.username === nextUsername && (user.avatarSeed || user.username) === nextAvatarSeed) return this.publicRepositoryUser(user);
+      const updatedAt = this.now().toISOString();
+      if (user.username !== nextUsername) {
+        try { this.repository.updateUsername(user.id, nextUsername, updatedAt); }
+        catch { throw new AuthFailure("Username is already in use", 409, "username_taken"); }
+      }
+      if (user.displayName !== nextDisplayName) this.repository.updateDisplayName(user.id, nextDisplayName, updatedAt);
+      if ((user.avatarSeed || user.username) !== nextAvatarSeed) this.repository.updateAvatarSeed(user.id, nextAvatarSeed, updatedAt);
+      if (user.displayName !== nextDisplayName) this.recordAuditEventInTransaction(undefined, user.id, "display_name_updated", user.id, undefined, {});
+      if (user.username !== nextUsername) this.recordAuditEventInTransaction(undefined, user.id, "username_updated", user.id, undefined, {});
+      if ((user.avatarSeed || user.username) !== nextAvatarSeed) this.recordAuditEventInTransaction(undefined, user.id, "avatar_updated", user.id, undefined, {});
+      return this.publicRepositoryUser({ ...user, displayName: nextDisplayName, username: nextUsername, avatarSeed: nextAvatarSeed });
+    });
   }
 
   recordAuditEvent(actorUserId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
@@ -483,7 +517,7 @@ export class AuthService {
       this.requireAdminById(actorUserId);
       const userId = id("user");
       const now = this.now().toISOString();
-      this.repository.createUser({ id: userId, displayName: displayName.data, username: neutralUsername(userId), role: "member", status: "pending", createdAt: now, updatedAt: now, identityVersion: 1 });
+      this.repository.createUser({ id: userId, displayName: displayName.data, username: neutralUsername(userId), avatarSeed: neutralUsername(userId), role: "member", status: "pending", createdAt: now, updatedAt: now, identityVersion: 1 });
       const invitation = this.issueInvitation(undefined, "user", displayName.data, userId);
       this.recordAuditEventInTransaction(undefined, actorUserId, "user_invited", userId, undefined, {});
       return { ...invitation, user: this.publicRepositoryUser(this.repository.findUser(userId)!) };
@@ -754,14 +788,14 @@ export class AuthService {
       if (kind === "bootstrap") {
         if (this.repository.hasActiveAdmin()) throw invitationFailure();
         userId = id("user");
-        this.repository.createUser({ id: userId, displayName: invitation.display_name, username: neutralUsername(userId), role: "admin", status: "active", createdAt: now, updatedAt: now, identityVersion: 1 });
+        this.repository.createUser({ id: userId, displayName: invitation.display_name, username: neutralUsername(userId), avatarSeed: neutralUsername(userId), role: "admin", status: "active", createdAt: now, updatedAt: now, identityVersion: 1 });
       } else if (kind === "recovery") {
         const adminIds = this.repository.activeAdminIds();
         for (const adminId of adminIds) this.repository.updateUserStatus(adminId, "revoked", now);
         this.repository.revokeCredentialsForUsers(adminIds, now);
         this.repository.revokeSessionsForUsers(adminIds, now);
         userId = id("user");
-        this.repository.createUser({ id: userId, displayName: invitation.display_name, username: neutralUsername(userId), role: "admin", status: "active", createdAt: now, updatedAt: now, identityVersion: 1 });
+        this.repository.createUser({ id: userId, displayName: invitation.display_name, username: neutralUsername(userId), avatarSeed: neutralUsername(userId), role: "admin", status: "active", createdAt: now, updatedAt: now, identityVersion: 1 });
       } else {
         if (!invitation.user_id) {
           throw invitationFailure();
@@ -835,8 +869,8 @@ export class AuthService {
     if (user.role !== "admin") throw new AuthFailure("Not found", 404);
   }
 
-  private publicRepositoryUser(row: { id: string; displayName: string; username: string; role: UserRole; status: UserStatus }): AuthUser {
-    return { id: row.id, displayName: row.displayName, username: row.username, role: row.role, status: row.status, companyIds: this.repository.userCompanyIds(row.id) };
+  private publicRepositoryUser(row: { id: string; displayName: string; username: string; avatarSeed?: string; role: UserRole; status: UserStatus }): AuthUser {
+    return { id: row.id, displayName: row.displayName, username: row.username, avatarSeed: row.avatarSeed || row.username, role: row.role, status: row.status, companyIds: this.repository.userCompanyIds(row.id) };
   }
 
   private publicCompany(row: AuthCompanyRow): Company {

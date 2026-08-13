@@ -47,7 +47,7 @@ export interface ParsedCodexJsonl {
 }
 
 function summary(value: unknown): string {
-  const text = typeof value === "string" ? value : JSON.stringify(redact(value)) ?? String(value);
+  const text = typeof value === "string" ? String(redact(value)) : JSON.stringify(redact(value)) ?? String(value);
   return text.slice(0, MAX_SUMMARY);
 }
 
@@ -85,6 +85,9 @@ function createReceipt(options: CodexJsonlParseOptions, sequence: number, input:
     sequence,
     occurredAt: (options.now ?? (() => new Date()))().toISOString(),
     ...input,
+    // Receipts are browser-visible evidence. Keep the parser boundary safe even
+    // when a future receipt type bypasses summary().
+    summary: String(redact(input.summary)).slice(0, MAX_SUMMARY),
   });
 }
 
@@ -151,7 +154,7 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
           ? validRange && activeStep === null && !startedSteps.has(stepMarker.stepNumber) && (expectedStep === undefined || expectedStep === stepMarker.stepNumber)
           : validRange && activeStep === stepMarker.stepNumber && !terminalSteps.has(stepMarker.stepNumber);
         if (!validTransition) {
-          push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: `Invalid forge-step marker: ${command}`.slice(0, MAX_SUMMARY), exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `invalid-marker:${sourceItemId ?? command}:${stepMarker.kind}` });
+          push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: "Invalid Developer step marker", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `invalid-marker:${sourceItemId ?? command}:${stepMarker.kind}` });
         } else if (stepMarker.kind === "step_started") {
           activeStep = stepMarker.stepNumber;
           startedSteps.add(stepMarker.stepNumber);
@@ -193,9 +196,9 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
       try { finalReport = JSON.parse(item.text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { /* The schema validator reports a missing/invalid report later. */ }
       continue;
     }
-    if (type === "error" || itemType === "error") push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: summary(event), exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `error:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
+    if (type === "error" || itemType === "error") push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: "Codex reported an error", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `error:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
     else if (!(["thread.started", "turn.started", "turn.completed", "turn.failed", "item.started", "item.updated", "item.completed"].includes(type))) {
-      push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: `Unknown Codex event preserved: ${summary(event)}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `unknown:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
+      push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: "Codex event could not be classified", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `unknown:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
     }
   }
   return {

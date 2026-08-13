@@ -33,8 +33,6 @@ export function releaseDeliveryProjection(value: unknown): { summary?: string; c
       summary: report.summary,
       changes: report.steps.map((step) => step.notes).filter(Boolean),
       filesChanged: reconciled.data.git.changedPaths,
-      commandsRun: reconciled.data.receipts.filter((receipt) => receipt.kind === "command_finished" && receipt.exitCode === 0).map((receipt) => receipt.summary),
-      testResults: reconciled.data.receipts.filter((receipt) => receipt.kind === "test_result").map((receipt) => receipt.summary),
     };
   }
   const legacy = LegacyReleaseDeliverySchema.parse(value);

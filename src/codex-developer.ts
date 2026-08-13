@@ -27,6 +27,8 @@ import { parseAcceptedProjectRevision } from "./projects.js";
 import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
 import { PlanDecisionSubjectSchema, PlanSubjectSchema, samePlanSubject } from "./plan-governance.js";
 import { hashPlanDecisionSubject } from "./plan-governance-repository.js";
+import { buildGitBranchName } from "./git-branch-name.js";
+import { fallbackGitPresentation } from "./git-presentation.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -338,7 +340,7 @@ export class DeveloperService {
     if (input.revisionRequestId && (!revisionAuthorization || revisionAuthorization.status !== "authorized" || revisionAuthorization.authorizedPlanRevision !== input.planRevision)) throw new AgentFailure("revision-not-authorized", "Developer execution is not authorized for this plan revision");
     const targetBaseSha = prior?.target_base_sha ?? (revisionAuthorization?.disposition === "new" ? revisionAuthorization.exactBaseSha : revisionAuthorization?.baseSha) ?? projectRevision.data.targetSha;
     if (!/^[a-f0-9]{40,64}$/i.test(targetBaseSha)) throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain an exact target SHA");
-    let branchName = `forge/issue/${input.taskId}`;
+    let branchName = prior?.branch_name ?? buildGitBranchName({ branchSlug: fallbackGitPresentation(context.title).branchSlug, taskId: input.taskId });
     const worktreeRoot = await scopedRepository(this.config.worktreeRoot, projectRevision.data.worktreeRoot);
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
     const executionId = input.developerTurnExecutionId ?? input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
@@ -354,7 +356,7 @@ export class DeveloperService {
         branchName = inspected.branchName;
         worktree = { branchName: inspected.branchName, worktreePath: revisionAuthorization.worktreePath, targetBaseSha: inspected.baseSha };
       } else if (revisionAuthorization?.disposition === "new") {
-        branchName = `forge/issue/${input.taskId}/revision-${input.planRevision}`;
+        branchName = `${buildGitBranchName({ branchSlug: fallbackGitPresentation(context.title).branchSlug, taskId: input.taskId })}-r${input.planRevision}`;
         worktree = await this.worktrees.create({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName, pathSegment: `${input.taskId}-revision-${input.planRevision}` });
       } else {
         worktree = input.reuseWorktree || prior ? await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName }) : await this.worktrees.create({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName });
@@ -476,7 +478,8 @@ export class DeveloperService {
     const project = evidence.manifest.projectRevision;
     const repositoryPath = await scopedRepository(this.config.repositoryRoot, project.repositoryPath);
     const worktreeRoot = await scopedRepository(this.config.worktreeRoot, project.worktreeRoot);
-    const owned = reserveOwnedWorktree(this.database, { taskId: input.taskId, companyId: input.companyId, projectId: input.projectId, workflowId: input.workflowId, repositoryRoot: repositoryPath, worktreeRoot, worktreePath: resolve(worktreeRoot, input.taskId), branchName: `work/issue/${input.taskId}`, startingSha: project.targetSha });
+    const existingOwned = this.database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName FROM forge_issue_worktrees WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status <> 'released'").get(input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string } | undefined);
+    const owned = reserveOwnedWorktree(this.database, { taskId: input.taskId, companyId: input.companyId, projectId: input.projectId, workflowId: input.workflowId, repositoryRoot: repositoryPath, worktreeRoot, worktreePath: existingOwned?.worktreePath ?? resolve(worktreeRoot, input.taskId), branchName: existingOwned?.branchName ?? buildGitBranchName({ branchSlug: evidence.gitPresentation.branchSlug, taskId: input.taskId }), startingSha: project.targetSha });
     const inspection = await this.worktrees.materialize(owned);
     const activeWorktree = owned.status === "active" ? owned : activateOwnedWorktree(this.database, inspection);
     const startingTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: activeWorktree.worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();

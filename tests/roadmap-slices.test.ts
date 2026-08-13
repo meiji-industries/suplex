@@ -67,21 +67,24 @@ function addReleaseFixtures(database: ForgeDatabase, status = "draft"): void {
 
 const pullRequest = (overrides: Partial<GithubPullRequest> = {}): GithubPullRequest => ({ number: 12, url: "https://github.com/acme/forge/pull/12", repository: "acme/forge", headBranch: "issue/task-a", baseBranch: "main", headSha, baseSha, isDraft: true, state: "open", mergedAt: null, ...overrides });
 
-function fakeGithub(checks: CheckObservation[] = []): GithubReleasePort & GithubAcceptancePort & { pushed: number; ready: number } {
+function fakeGithub(checks: CheckObservation[] = []): GithubReleasePort & GithubAcceptancePort & { pushed: number; ready: number; updated: number; createdInput: { title: string; body: string } | null } {
   return {
     pushed: 0,
     ready: 0,
+    updated: 0,
+    createdInput: null,
     async checkAuthentication() {},
     async getRemoteRepository() { return "acme/forge"; },
     async getBranchHead(input) { return input.branch === "main" ? baseSha : this.pushed ? headSha : null; },
     async inspectLocalRevision() { return { branch: "issue/task-a", headSha, treeSha, clean: true }; },
     async pushNormal() { this.pushed += 1; },
     async listPullRequests() { return []; },
-    async createDraftPullRequest() { return pullRequest(); },
+    async createDraftPullRequest(input) { this.createdInput = { title: input.title, body: input.body }; return pullRequest(); },
+    async updateDraftPullRequest() { this.updated += 1; return pullRequest(); },
     async markReadyForReview() { this.ready += 1; },
     async getPullRequest() { return this.ready ? pullRequest({ isDraft: false }) : pullRequest(); },
     async listChecks() { return checks; },
-  } as GithubReleasePort & GithubAcceptancePort & { pushed: number; ready: number };
+  } as GithubReleasePort & GithubAcceptancePort & { pushed: number; ready: number; updated: number; createdInput: { title: string; body: string } | null };
 }
 
 test("capacity is durable, FIFO, bounded, and restart-reconcilable", async () => {
@@ -121,9 +124,10 @@ test("release publishes one exact reviewed draft and CI accepts only the exact h
     addReleaseFixtures(value.database);
     const github = fakeGithub();
     const service = new ReleaseService(value.database, new ArtifactStore(value.config.artifactRoot), github);
-    const release = await service.publish({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", coordinates: { projectRevisionId: "revision-a", repositoryPath: value.root, worktreePath: value.root, repository: "acme/forge", owner: "acme", headBranch: "issue/task-a", baseBranch: "main", expectedBaseSha: baseSha }, reviewedRevision: { reviewId: "review-a", developerExecutionId: "developer-a", commitSha: headSha, treeSha }, taskTitle: "Task A", delivery: { testResults: ["Local checks passed"] } });
+    const release = await service.publish({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", coordinates: { projectRevisionId: "revision-a", repositoryPath: value.root, worktreePath: value.root, repository: "acme/forge", owner: "acme", headBranch: "issue/task-a", baseBranch: "main", expectedBaseSha: baseSha }, reviewedRevision: { reviewId: "review-a", developerExecutionId: "developer-a", commitSha: headSha, treeSha }, taskTitle: "Task A", gitPresentation: { branchSlug: "improve-release-publishing", pullRequestTitle: "Improve release publishing", pullRequestDescription: "Give reviewers useful context before they open the diff." }, delivery: { summary: "Implemented the approved release presentation.", changes: ["Use polished Git metadata."], testResults: ["Local checks passed"] } });
     expect(release.pullRequest.isDraft).toBe(true);
     expect(github.pushed).toBe(1);
+    expect(github.createdInput).toEqual({ title: "Improve release publishing", body: "## Summary\n\nGive reviewers useful context before they open the diff.\n\nImplemented the approved release presentation.\n\n## Changes\n\n- Use polished Git metadata.\n\n## Testing\n\n- Local checks passed\n" });
     const checks: CheckObservation[] = [{ providerCheckId: "1", name: "Tests / unit", headSha, status: "completed", conclusion: "success", detailsUrl: null, startedAt: now, completedAt: now, summary: "passed" }];
     const ci = new CiService(value.database, { async getPullRequest() { return { repository: "acme/forge", number: 12, url: "https://github.com/acme/forge/pull/12", state: "open", draft: true, baseBranch: "main", baseSha, headBranch: "issue/task-a", headSha }; }, async listChecks() { return checks; } });
     expect((await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: release.releaseId, expectedHeadSha: headSha, attemptNumber: 1 })).outcome).toBe("passed");
@@ -200,6 +204,7 @@ test("release reconciles push and create timeouts after success without duplicat
     let created: GithubPullRequest | undefined;
     let pushes = 0;
     let creates = 0;
+    let updates = 0;
     const github: GithubReleasePort = {
       async checkAuthentication() {},
       async getRemoteRepository() { return "acme/forge"; },
@@ -208,6 +213,7 @@ test("release reconciles push and create timeouts after success without duplicat
       async pushNormal() { pushes += 1; remoteHead = headSha; throw new GithubReleaseFailure("provider-unavailable", "push response lost"); },
       async listPullRequests() { return created ? [created] : []; },
       async createDraftPullRequest() { creates += 1; created = pullRequest(); throw new GithubReleaseFailure("provider-unavailable", "create response lost"); },
+      async updateDraftPullRequest() { updates += 1; return created!; },
       async getPullRequest() { return created!; },
     };
     const service = new ReleaseService(value.database, new ArtifactStore(value.config.artifactRoot), github);
@@ -215,8 +221,8 @@ test("release reconciles push and create timeouts after success without duplicat
     const first = await service.publish(input);
     const second = await service.publish(input);
     expect(second).toMatchObject({ releaseId: first.releaseId, reused: true, attempt: 1, pullRequest: { number: first.pullRequest.number } });
-    expect({ pushes, creates }).toEqual({ pushes: 1, creates: 1 });
-    expect(value.database.authQuery((db) => db.prepare("SELECT kind, status, attempt FROM forge_provider_operations WHERE release_key = (SELECT release_key FROM forge_releases WHERE id = ?) ORDER BY kind").all(first.releaseId))).toEqual([{ kind: "create-draft-pr", status: "completed", attempt: 1 }, { kind: "push", status: "completed", attempt: 1 }]);
+    expect({ pushes, creates, updates }).toEqual({ pushes: 1, creates: 1, updates: 1 });
+    expect(value.database.authQuery((db) => db.prepare("SELECT kind, status, attempt FROM forge_provider_operations WHERE release_key = (SELECT release_key FROM forge_releases WHERE id = ?) ORDER BY kind").all(first.releaseId))).toEqual([{ kind: "create-draft-pr", status: "completed", attempt: 1 }, { kind: "push", status: "completed", attempt: 1 }, { kind: "update-draft-pr", status: "completed", attempt: 1 }]);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -360,6 +366,7 @@ test("restore drill preserves users, completed work, artifacts, and draft releas
         async pushNormal() { providerMutations += 1; },
         async listPullRequests() { providerMutations += 1; return []; },
         async createDraftPullRequest() { providerMutations += 1; return pullRequest({ number: 42, headSha, baseSha }); },
+        async updateDraftPullRequest() { providerMutations += 1; return pullRequest({ number: 42, headSha, baseSha }); },
         async getPullRequest() { providerReads += 1; return pullRequest({ number: 42, headSha, baseSha }); },
       });
       expect(reconciliation.developerExecutions).toEqual([{ executionId: "developer-in-flight", status: "interrupted", reason: "restore-invalidated-process-ownership" }]);
@@ -675,6 +682,7 @@ test("publishRelease rejects stale delivery before release mutation", async () =
     async pushNormal() { this.pushed += 1; },
     async listPullRequests() { return this.created; },
     async createDraftPullRequest(input) { const pr: GithubPullRequest = { number: this.created.length + 1, url: `https://github.com/${input.repository}/pull/${this.created.length + 1}`, repository: input.repository, headBranch: input.headBranch, baseBranch: input.baseBranch, headSha: this.nextHead, baseSha: this.nextBase, isDraft: true, state: "open", mergedAt: null }; this.created.push(pr); return pr; },
+    async updateDraftPullRequest(input) { return this.created.find((pr) => pr.number === input.number) ?? this.created[0]!; },
     async markReadyForReview() {},
     async getPullRequest(input) { return this.created.find((pr) => pr.number === input.number) ?? this.created[0]!; },
   };
@@ -714,6 +722,7 @@ test("existing PR retry observes remote state before repeating a push", async ()
       async pushNormal() { pushes += 1; remoteHead = nextHead; pullRequestHead = nextHead; hidePushedHeadOnce = true; throw new Error("timeout after push"); },
       async listPullRequests() { return [{ number: 12, url: "https://github.com/acme/forge/pull/12", repository: "acme/forge", headBranch: "issue/task-a", baseBranch: "main", headSha: pullRequestHead, baseSha, isDraft: true, state: "open", mergedAt: null }]; },
       async createDraftPullRequest() { throw new Error("must not create a second PR"); },
+      async updateDraftPullRequest() { return { number: 12, url: "https://github.com/acme/forge/pull/12", repository: "acme/forge", headBranch: "issue/task-a", baseBranch: "main", headSha: pullRequestHead, baseSha, isDraft: true, state: "open", mergedAt: null }; },
       async getPullRequest() { return { number: 12, url: "https://github.com/acme/forge/pull/12", repository: "acme/forge", headBranch: "issue/task-a", baseBranch: "main", headSha: pullRequestHead, baseSha, isDraft: true, state: "open", mergedAt: null }; },
     };
     const release = new ReleaseService(value.database, new ArtifactStore(value.config.artifactRoot), github);

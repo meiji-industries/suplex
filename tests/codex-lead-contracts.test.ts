@@ -3,6 +3,12 @@ import { expect, test } from "vitest";
 import { LeadOutputJsonSchema, LeadOutputSchema, PersistedLeadOutputSchema } from "../src/codex-lead-contracts.js";
 import { SafeSummarySchema, toSafeSummary } from "../src/temporal/issue-contracts.js";
 
+const gitPresentation = {
+  branchSlug: "improve-lead-contracts",
+  pullRequestTitle: "Improve Lead plan contracts",
+  pullRequestDescription: "Make the approved plan carry clear Git presentation metadata.",
+};
+
 test("multiline and multibyte Lead summaries fit bounded Temporal state", () => {
   const summary = toSafeSummary(`A detailed plan\n${"évidence ".repeat(80)}`);
   expect(summary).not.toMatch(/[\r\n]/);
@@ -15,6 +21,7 @@ test("Lead contracts are strict and step numbering is contiguous", () => {
   const plan = {
     kind: "plan" as const,
     summary: "Bounded plan",
+    gitPresentation,
     reproduction: null,
     rootCauseAnalysis: "A known defect.",
     steps: [{ number: 1, instruction: "Inspect the seam", entryPoint: "src/index.ts", completionCriterion: "The seam is covered", verification: "Run the focused test" }],
@@ -27,6 +34,8 @@ test("Lead contracts are strict and step numbering is contiguous", () => {
     materiality: [],
   };
   expect(LeadOutputSchema.safeParse(plan).success).toBe(true);
+  expect(LeadOutputSchema.safeParse({ ...plan, gitPresentation: undefined }).success).toBe(false);
+  expect(LeadOutputSchema.safeParse({ ...plan, gitPresentation: { ...gitPresentation, branchSlug: "Task_Internal_Key" } }).success).toBe(false);
   expect(LeadOutputSchema.safeParse({ ...plan, extra: true }).success).toBe(false);
   expect(LeadOutputSchema.safeParse({ ...plan, steps: [{ ...plan.steps[0], number: 2 }] }).success).toBe(false);
   expect(LeadOutputSchema.safeParse({ kind: "decision_blocker", category: "human_decision", summary: "Choose", evidence: "Evidence", owner: "human", question: "Which?", nextAction: "Answer", resumePhase: "planning", extra: true }).success).toBe(false);
@@ -49,5 +58,5 @@ test("persisted Lead plans from before materiality evidence remain readable", ()
     materialCategories: [],
   };
   expect(LeadOutputSchema.safeParse(legacyPlan).success).toBe(false);
-  expect(PersistedLeadOutputSchema.parse(legacyPlan)).toMatchObject({ affectedPaths: [], materiality: [] });
+  expect(PersistedLeadOutputSchema.parse(legacyPlan)).toMatchObject({ gitPresentation: null, affectedPaths: [], materiality: [] });
 });

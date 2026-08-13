@@ -47,6 +47,7 @@ test("uses supported gh api commands and strictly parses branch and paginated pu
     { stdout: JSON.stringify({ commit: { sha: baseSha } }), stderr: "" },
     { stdout: JSON.stringify([[JSON.parse(pull())]]), stderr: "" },
     { stdout: JSON.stringify([[JSON.parse(pull({ state: "closed", draft: false, merged_at: "2026-08-11T00:00:00.000Z" }))]]), stderr: "" },
+    { stdout: pull({ title: "Improve releases", body: "Useful description" }), stderr: "" },
     { stdout: JSON.stringify(JSON.parse(pull({ number: 8, html_url: "https://github.com/acme/forge/pull/8" }))), stderr: "" },
   ]);
   const github = createGithubReleasePort({ ghCommand: "gh", gitCommand: "git", runner: value.runner });
@@ -58,6 +59,7 @@ test("uses supported gh api commands and strictly parses branch and paginated pu
   expect(await github.getBranchHead({ repository: "acme/forge", branch: "main" })).toBe(baseSha);
   expect(await github.listPullRequests({ repository: "acme/forge", owner: "acme", headBranch: "issue/7", baseBranch: "main" })).toHaveLength(1);
   expect((await github.listPullRequests({ repository: "acme/forge", owner: "acme", headBranch: "issue/7", baseBranch: "main" }))[0]?.state).toBe("merged");
+  expect((await github.updateDraftPullRequest!({ repository: "acme/forge", number: 7, title: "Improve releases", body: "Useful description" })).number).toBe(7);
   expect((await github.getPullRequest({ repository: "acme/forge", number: 8 })).number).toBe(8);
 
   expect(value.calls.map(({ command, args }) => [command, ...args])).toEqual([
@@ -71,9 +73,13 @@ test("uses supported gh api commands and strictly parses branch and paginated pu
     ["gh", "api", "repos/acme/forge/branches/main"],
     ["gh", "api", "--method", "GET", "--paginate", "--slurp", "repos/acme/forge/pulls", "-f", "state=all", "-f", "head=acme:issue/7", "-f", "base=main"],
     ["gh", "api", "--method", "GET", "--paginate", "--slurp", "repos/acme/forge/pulls", "-f", "state=all", "-f", "head=acme:issue/7", "-f", "base=main"],
+    ["gh", "api", "--method", "PATCH", "repos/acme/forge/pulls/7", "-f", "title=Improve releases", "-f", "body=Useful description"],
     ["gh", "api", "repos/acme/forge/pulls/8"],
   ]);
   expect(value.calls.flatMap((call) => [call.command, ...call.args]).join(" ")).not.toMatch(/--force|--force-with-lease|\brebase\b|\breset\b|\bclean\b|\bamend\b|\bmerge\b|pr ready|auto-merge/);
+
+  const mismatchedUpdate = runnerFor([{ stdout: pull({ title: "Wrong title", body: "Useful description" }), stderr: "" }]);
+  await expect(createGithubReleasePort({ runner: mismatchedUpdate.runner }).updateDraftPullRequest({ repository: "acme/forge", number: 7, title: "Improve releases", body: "Useful description" })).rejects.toMatchObject({ code: "invalid-provider-response" });
 });
 
 test("treats only validated 404 as an absent branch and validates rate limits", async () => {
@@ -107,12 +113,38 @@ test("rejects malformed provider identities and redacts provider failure summari
 });
 
 test("builds a deterministic bounded public projection and rejects private content", () => {
-  const projection = buildDraftPullRequestProjection({ taskTitle: "Ship the release", filesChanged: ["src/main.ts", "src/main.ts"], commandsRun: ["pnpm test", "pnpm test"], testResults: ["2 passed"] });
-  expect(projection.title).toBe("Ship the release");
-  expect(projection.body).toContain("Title: Ship the release");
-  expect(projection.body).toContain("## Verification");
-  expect(projection.body.match(/src\/main\.ts/g)).toHaveLength(1);
+  const projection = buildDraftPullRequestProjection({ taskTitle: "Original task title", pullRequestTitle: "Improve release publishing", pullRequestDescription: "Give reviewers clear context before they open the diff.", deliverySummary: "Implemented the approved release presentation.", changes: ["Use the approved plan for public Git metadata.", "Use the approved plan for public Git metadata."], filesChanged: ["src/main.ts", "src/main.ts"], commandsRun: ["pnpm test", "pnpm test"], testResults: ["2 passed"] });
+  expect(projection.title).toBe("Improve release publishing");
+  expect(projection.body).toBe(`## Summary
+
+Give reviewers clear context before they open the diff.
+
+Implemented the approved release presentation.
+
+## Changes
+
+- Use the approved plan for public Git metadata.
+
+## Testing
+
+- \`pnpm test\`
+- 2 passed
+`);
+  expect(projection.body).not.toMatch(/^(?:Title|Body):/m);
   expect(Buffer.byteLength(projection.body)).toBeLessThanOrEqual(20_000);
+
+  const bounded = buildDraftPullRequestProjection({
+    taskTitle: "Bound a large delivery",
+    pullRequestDescription: "\ud83c\udf1f".repeat(2_000),
+    changes: Array.from({ length: 50 }, (_, index) => `${index} ${"\ud83c\udf1f".repeat(500)}`),
+    filesChanged: Array.from({ length: 50 }, (_, index) => `src/${index}-${"x".repeat(450)}.ts`),
+    commandsRun: Array.from({ length: 50 }, (_, index) => `command-${index} ${"`".repeat(200)}`),
+    testResults: Array.from({ length: 50 }, (_, index) => `${index} ${"\ud83c\udf1f".repeat(500)} passed`),
+  });
+  expect(Buffer.byteLength(bounded.body)).toBeLessThanOrEqual(20_000);
+  expect(bounded.body).toContain("```");
+
+  expect(() => buildDraftPullRequestProjection({ taskTitle: "Improve Forge releases", filesChanged: ["src/main.ts"] })).not.toThrow();
 
   for (const input of [
     { filesChanged: ["/Users/dev/private.txt"] },
@@ -121,6 +153,7 @@ test("builds a deterministic bounded public projection and rejects private conte
     { commandsRun: ["token=secret_value"] },
     { commandsRun: ["prompt: private reasoning"] },
     { commandsRun: [headSha] },
+    { changes: ["Expose task_1234567890abcdef"] },
   ]) {
     expect(() => buildDraftPullRequestProjection({ taskTitle: "Safe title", ...input })).toThrowError(GithubReleaseFailure);
   }

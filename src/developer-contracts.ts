@@ -116,8 +116,8 @@ export const OwnedWorktreeSchema = z.object({
   legacy: z.boolean(),
   status: z.enum(["reserved", "active", "ambiguous", "released"]),
 }).superRefine((value, context) => {
-  if (!value.legacy && !value.branchName.startsWith("work/issue/")) {
-    context.addIssue({ code: "custom", path: ["branchName"], message: "New issue worktrees require the neutral work/issue namespace" });
+  if (!value.legacy && !value.branchName.startsWith("work/")) {
+    context.addIssue({ code: "custom", path: ["branchName"], message: "New issue worktrees require the neutral work namespace" });
   }
 });
 

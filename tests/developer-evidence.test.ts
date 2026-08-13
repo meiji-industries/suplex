@@ -42,6 +42,7 @@ test("Developer evidence admits only the exact supplemental review that was avai
     const subject = { authorizationId: "authorization_1", taskId: "task_1", companyId: "company_1", projectId: "project_1", workflowId: "workflow_1", planRevision: 1, planArtifactId: plan.id, planSha256: plan.sha256, authorizationKind: "routine_auto" as const, approvalDecisionId: null, authorizedAt: now };
     const result = await new DeveloperEvidenceBuilder(database, config).build({ subject, executionId: "execution_1" });
     expect(result.manifest.entries).toContainEqual(expect.objectContaining({ kind: "evidence", artifactId: supplemental.id, planStepNumbers: [1] }));
+    expect(result.gitPresentation).toEqual({ branchSlug: "task", pullRequestTitle: "Task", pullRequestDescription: "Task." });
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });

@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { DeveloperContextSchema, PlanStepVerificationSchema } from "./developer-contracts.js";
+import { GitPresentationSchema } from "./git-presentation.js";
 import {
   PlanMaterialCategorySchema,
   canonicalMaterialCategories,
@@ -41,6 +42,7 @@ export const ContiguousLeadStepsSchema = z.array(LeadPlanStepSchema)
 export const LeadPlanSchema = z.object({
   kind: z.literal("plan"),
   summary: z.string().min(1).max(2_000),
+  gitPresentation: GitPresentationSchema,
   reproduction: z.string().max(20_000).nullable(),
   rootCauseAnalysis: z.string().max(20_000).nullable(),
   steps: ContiguousLeadStepsSchema,
@@ -94,11 +96,13 @@ export const LeadOutputSchema = z.discriminatedUnion("kind", [LeadPlanSchema, De
 export const LeadOutputJsonSchema = z.toJSONSchema(LeadOutputSchema);
 
 // Lead plans are persisted as immutable artifacts. Plans written before exact
-// plan authority did not record repository paths or materiality evidence, so
-// projection readers must be able to display those historical artifacts after
-// an upgrade. New provider output continues to use LeadOutputSchema above.
+// plan authority did not record repository paths or materiality evidence, and
+// plans written before the Git presentation contract did not record public
+// branch/PR copy. Projection readers keep both generations readable while new
+// provider output continues to use LeadOutputSchema above.
 const PersistedLegacyLeadPlanSchema = z.object({
   ...LeadPlanSchema.shape,
+  gitPresentation: GitPresentationSchema.nullable().default(null),
   affectedPaths: z.array(z.string().min(1).max(1_000)).max(128).default([]),
   materiality: z.array(z.object({
     category: PlanMaterialCategorySchema,
@@ -106,8 +110,22 @@ const PersistedLegacyLeadPlanSchema = z.object({
     evidenceRefs: z.array(z.string().min(1).max(1_000)).min(1).max(8),
   }).strict()).max(6).default([]),
 }).strict().superRefine((value, context) => {
-  if (value.affectedPaths.length || value.materiality.length) {
-    context.addIssue({ code: "custom", message: "Legacy persisted plans may only omit affected paths and materiality evidence" });
+  const stepNumbers = value.steps.map((step) => step.number);
+  if (!value.affectedPaths.length) {
+    if (value.materiality.length) context.addIssue({ code: "custom", path: ["materiality"], message: "Materiality evidence requires affected paths" });
+  } else {
+    try {
+      const affectedPaths = validateAffectedPaths(value.affectedPaths);
+      const materiality = value.materiality.length
+        ? value.materiality
+        : value.materialCategories.map((category) => ({ category, rationale: "Lead-declared material category", evidenceRefs: ["step:1"] }));
+      validateMaterialityEvidence({ affectedPaths, categories: materiality, stepNumbers });
+    } catch (error) {
+      context.addIssue({ code: "custom", path: ["materiality"], message: error instanceof Error ? error.message : "Materiality evidence is invalid" });
+    }
+  }
+  if (JSON.stringify(canonicalMaterialCategories(value.materialCategories)) !== JSON.stringify(value.materialCategories)) {
+    context.addIssue({ code: "custom", path: ["materialCategories"], message: "Material categories must use canonical order" });
   }
 });
 

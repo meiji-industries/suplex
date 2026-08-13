@@ -8,6 +8,7 @@ import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import type { ForgeConfig } from "./config.js";
 import { ForgeDatabase } from "./database.js";
 import { AcceptedProjectRevisionSchema, AuthorizedPlanSubjectSchema, DeveloperContextSchema, EvidenceManifestSchema, normalizeRepositoryInstructionPath, type AuthorizedPlanSubject, type EvidenceManifest } from "./developer-contracts.js";
+import { fallbackGitPresentation, GitPresentationSchema, type GitPresentation } from "./git-presentation.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,7 +60,7 @@ export class DeveloperEvidenceBuilder {
     this.artifacts = new ArtifactStore(config.artifactRoot);
   }
 
-  async build(rawSubject: DeveloperEvidenceBuildInput): Promise<{ manifest: EvidenceManifest; artifact: StoredArtifact }> {
+  async build(rawSubject: DeveloperEvidenceBuildInput): Promise<{ manifest: EvidenceManifest; artifact: StoredArtifact; gitPresentation: GitPresentation }> {
     const subject = AuthorizedPlanSubjectSchema.parse(rawSubject.subject);
     const row = this.database.authQuery((db) => db.prepare(`SELECT a.id, a.company_id, a.kind, a.filename, a.storage_path, a.sha256, a.byte_size, t.title, t.brief_artifact_id, t.image_artifact_ids_json, r.id AS project_revision_id, r.normalized_json, r.base_sha, r.target_sha, r.state, p.repository_identity, p.repository_path, p.worktree_root, p.base_branch, p.target_branch, p.setup_command, p.verification_command, p.required_checks_json
       FROM forge_plan_authorizations pa
@@ -73,6 +74,13 @@ export class DeveloperEvidenceBuilder {
     if (createHash("sha256").update(planBytes).digest("hex") !== subject.planSha256) throw new DeveloperEvidenceFailure("plan-authorization-mismatch", "The authorized plan artifact hash does not match");
     let plan: Record<string, unknown>;
     try { plan = JSON.parse(planBytes.toString("utf8")) as Record<string, unknown>; } catch { throw new DeveloperEvidenceFailure("legacy-plan-not-authorized", "The authorized plan is not valid JSON"); }
+    let gitPresentation: GitPresentation;
+    if (plan.gitPresentation === undefined || plan.gitPresentation === null) gitPresentation = fallbackGitPresentation(row.title);
+    else {
+      const parsed = GitPresentationSchema.safeParse(plan.gitPresentation);
+      if (!parsed.success) throw new DeveloperEvidenceFailure("plan-authorization-mismatch", "The authorized plan contains invalid Git presentation metadata");
+      gitPresentation = parsed.data;
+    }
     const contextResult = DeveloperContextSchema.safeParse(plan.developerContext);
     if (!contextResult.success) throw new DeveloperEvidenceFailure("legacy-plan-not-authorized", "Legacy or incomplete final plans cannot authorize Developer context");
     const projectRevision = AcceptedProjectRevisionSchema.parse({
@@ -140,7 +148,7 @@ export class DeveloperEvidenceBuilder {
     const manifest = EvidenceManifestSchema.parse({ version: 1, authorizedPlan: subject, projectRevision, entries, contradictionRule: "stop_before_unrelated_edits", verificationCommands: steps.map((step) => ({ stepNumber: step.number, commands: step.verificationCommands })), createdAt: new Date().toISOString() });
     const artifact = await this.artifacts.put(subject.companyId, "developer-evidence-manifest", { filename: `${rawSubject.executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(manifest, null, 2), "utf8") });
     this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
-    return { manifest, artifact };
+    return { manifest, artifact, gitPresentation };
   }
 
   async stage(manifest: EvidenceManifest, worktreePath: string, executionId: string): Promise<StagedDeveloperEvidence> {

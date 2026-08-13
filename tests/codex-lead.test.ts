@@ -17,6 +17,12 @@ import { ForgeDatabase, ProjectionIntegrityFailure } from "../src/database.js";
 import { asNonRetryableApplicationFailure, createActivities } from "../src/temporal/activities.js";
 import { DeliveryOperationBlockCodeSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeveloperRepairActivityResultSchema } from "../src/temporal/issue-contracts.js";
 
+const gitPresentation = {
+  branchSlug: "improve-fixture-planning",
+  pullRequestTitle: "Improve fixture planning",
+  pullRequestDescription: "Make the fixture planning path deterministic and easier to review.",
+};
+
 const execFileAsync = promisify(execFile);
 
 test("Codex command resolution bypasses a mise shim that depends on target trust", async () => {
@@ -138,7 +144,7 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
       await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-session-1" }));
       await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "not json Bearer gho_secret" } }));
     } else {
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "plan", summary: "A bounded fixture plan", reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect the fixture", entryPoint: null, completionCriterion: "The fixture is understood", verification: "The fixture test passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change is required.", operationalAnalysis: "The change is local.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] }) } }));
+      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "plan", gitPresentation, summary: "A bounded fixture plan", reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect the fixture", entryPoint: null, completionCriterion: "The fixture is understood", verification: "The fixture test passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change is required.", operationalAnalysis: "The change is local.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] }) } }));
     }
     return { exitCode: 0, stderr: "" };
   };
@@ -176,7 +182,7 @@ test("a capacity request pins model, reasoning, and service priority through lat
     wrapperRequests.push(JSON.parse(await readFile(invocation.args.at(-1)!, "utf8")) as { model: string; reasoningLevel: string; servicePriority: string });
     await invocation.onStart(4330, "2026-08-12T00:00:00.000Z");
     await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-pinned-session" }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "plan", summary: "Pinned profile plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect the fixture", verification: "The focused test passes" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused test.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] }) } }));
+    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "plan", gitPresentation, summary: "Pinned profile plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect the fixture", verification: "The focused test passes" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused test.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] }) } }));
     return { exitCode: 0, stderr: "" };
   };
   try {
@@ -199,12 +205,12 @@ test("a capacity request pins model, reasoning, and service priority through lat
 });
 
 test("Lead output schema rejects unresolved technical questions and malformed blockers", () => {
-  expect(LeadOutputSchema.safeParse({ kind: "plan", summary: "x", reproduction: null, rootCauseAnalysis: null, steps: [], compatibilityAnalysis: "x", operationalAnalysis: "x", verificationStrategy: "x", unresolvedTechnicalQuestions: ["choose"] }).success).toBe(false);
+  expect(LeadOutputSchema.safeParse({ kind: "plan", gitPresentation, summary: "x", reproduction: null, rootCauseAnalysis: null, steps: [], compatibilityAnalysis: "x", operationalAnalysis: "x", verificationStrategy: "x", unresolvedTechnicalQuestions: ["choose"] }).success).toBe(false);
   expect(LeadOutputSchema.safeParse({ kind: "decision_blocker", summary: "x", evidence: "x", owner: "developer", question: "x", nextAction: "x" }).success).toBe(false);
 });
 
 test("Lead output parsing rejects unknown null fields", () => {
-  const output = { kind: "plan", summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect", entryPoint: null, completionCriterion: "Inspected", verification: "Check" }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], unexpected: null };
+  const output = { kind: "plan", gitPresentation, summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect", entryPoint: null, completionCriterion: "Inspected", verification: "Check" }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], unexpected: null };
   expect(() => parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })])).toThrow(/required schema/);
 });
 
@@ -216,7 +222,7 @@ test("Codex Lead schema uses provider-compatible artifact step mappings", () => 
 });
 
 test("Lead output parsing canonicalizes provider artifact step mappings", () => {
-  const output = { kind: "plan", summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect", entryPoint: null, completionCriterion: "Inspected", verification: "Check", verificationCommands: [] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], preservedWorktreeCompatibility: null, affectedPaths: ["README.md"], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: ["artifact_1"], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: [{ artifactIdOrPath: "artifact_1", stepNumbers: [1] }] } };
+  const output = { kind: "plan", gitPresentation, summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect", entryPoint: null, completionCriterion: "Inspected", verification: "Check", verificationCommands: [] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], preservedWorktreeCompatibility: null, affectedPaths: ["README.md"], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: ["artifact_1"], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: [{ artifactIdOrPath: "artifact_1", stepNumbers: [1] }] } };
   const parsed = parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })]);
   expect(parsed.kind === "plan" && parsed.developerContext.artifactStepNumbers).toEqual({ artifact_1: [1] });
 });
@@ -231,7 +237,7 @@ test.each(["live", "exited"] as const)("Lead planning finalizes stored completio
   const executionId = "agent_attached";
   const runtimeDir = join(value.config.runtimeRoot, "agent-turns", executionId);
   await mkdir(runtimeDir, { recursive: true });
-  const output = { kind: "plan", summary: "An attached plan", reproduction: null, rootCauseAnalysis: "The worker restarted.", steps: [{ number: 1, instruction: "Inspect the stored turn", entryPoint: null, completionCriterion: "The turn is finalized", verification: "The attached result is returned" }], compatibilityAnalysis: "No compatibility change is required.", operationalAnalysis: "The wrapper owns the process.", verificationStrategy: "Run the focused test.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] };
+  const output = { kind: "plan", gitPresentation, summary: "An attached plan", reproduction: null, rootCauseAnalysis: "The worker restarted.", steps: [{ number: 1, instruction: "Inspect the stored turn", entryPoint: null, completionCriterion: "The turn is finalized", verification: "The attached result is returned" }], compatibilityAnalysis: "No compatibility change is required.", operationalAnalysis: "The wrapper owns the process.", verificationStrategy: "Run the focused test.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] };
   await writeFile(join(runtimeDir, "spool.ndjson"), `${JSON.stringify({ type: "forge.session_bound", sessionRef: "session_opaque" })}\n${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })}\n`);
   await writeFile(join(runtimeDir, "status.json"), JSON.stringify({ state: "completed", eventOffset: 1 }));
   const manifest = await new ArtifactStore(value.config.artifactRoot).put("company_1", "lead-input-manifest", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from("{}") });
@@ -275,7 +281,7 @@ test("Lead stale-child reconciliation signals through the injected process contr
     async signalGroup(_group: number, signal: "SIGTERM" | "SIGKILL") { signals.push(signal); groupAlive = false; },
     async isProcessGroupAlive() { return groupAlive; },
   };
-  const output = { kind: "plan", summary: "Recovered plan", reproduction: null, rootCauseAnalysis: "The worker restarted.", steps: [{ number: 1, instruction: "Recover", entryPoint: null, completionCriterion: "Recovered", verification: "Check" }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] };
+  const output = { kind: "plan", gitPresentation, summary: "Recovered plan", reproduction: null, rootCauseAnalysis: "The worker restarted.", steps: [{ number: 1, instruction: "Recover", entryPoint: null, completionCriterion: "Recovered", verification: "Check" }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] };
   try {
     const service = new AgentService(value.database, value.config, {
       processController: controller,
@@ -535,7 +541,7 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
   const sessions = new Map([["session_primary", "raw-primary"]]);
   const sessionStore: SessionStore = { async create(raw) { sessions.set("session_review", raw); return "session_review"; }, async read(ref) { return sessions.get(ref) ?? ""; } };
-  const draft = await artifactStore.put("company_1", "lead-plan", { filename: "draft.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Draft plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
+  const draft = await artifactStore.put("company_1", "lead-plan", { filename: "draft.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Draft plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
   const priorEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "prior.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"turn.completed\"}\n") });
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();
@@ -553,7 +559,7 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
       await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-review" }));
       await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "review", summary: "Review is independent", opinion: "approve", concerns: [], requiredChanges: [] }) } }));
     } else {
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ version: 1, originalPlanRevision: 2, reviewArtifactId, reviewResponse: "The independent review is addressed by the consolidated plan.", result: { kind: "plan", summary: "Consolidated plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] } }) } }));
+      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ version: 1, originalPlanRevision: 2, reviewArtifactId, reviewResponse: "The independent review is addressed by the consolidated plan.", result: { kind: "plan", gitPresentation, summary: "Consolidated plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] } }) } }));
     }
     return { exitCode: 0, stderr: "" };
   };
@@ -577,7 +583,7 @@ test("Developer execution creates an isolated delivery commit and stores an exac
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
   const sessions = new Map<string, string>();
   const sessionStore: SessionStore = { async create(raw) { sessions.set("session_developer", raw); return "session_developer"; }, async read(ref) { return sessions.get(ref) ?? ""; } };
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "approved.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "A bounded developer fixture", reproduction: null, rootCauseAnalysis: "The fixture needs a marker.", steps: [{ number: 1, instruction: "Add the fixture marker", verification: "The marker is present" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the marker and commit.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "approved.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "A bounded developer fixture", reproduction: null, rootCauseAnalysis: "The fixture needs a marker.", steps: [{ number: 1, instruction: "Add the fixture marker", verification: "The marker is present" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the marker and commit.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
   const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();
@@ -612,7 +618,7 @@ test("Developer execution creates an isolated delivery commit and stores an exac
 test("Developer execution safely resumes an owned worktree after its result was lost", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "retry.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Retry the bounded developer fixture", reproduction: null, rootCauseAnalysis: "The fixture needs a marker.", steps: [{ number: 1, instruction: "Add the retry marker", verification: "The marker is present" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the marker and commit.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "retry.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Retry the bounded developer fixture", reproduction: null, rootCauseAnalysis: "The fixture needs a marker.", steps: [{ number: 1, instruction: "Add the retry marker", verification: "The marker is present" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the marker and commit.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
   const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead-retry.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();
@@ -643,7 +649,7 @@ test("Developer execution safely resumes an owned worktree after its result was 
     const evidence = value.database.authQuery((db) => db.prepare("SELECT storage_path FROM forge_artifacts WHERE id = ?").get(failed.evidence_artifact_id) as { storage_path: string });
     expect(await readFile(join(value.config.artifactRoot, evidence.storage_path), "utf8")).toContain("provider transport closed");
     const result = await service.run(input);
-    expect(result).toMatchObject({ outcome: "completed", developerSessionRef: "session_retry", branchName: "forge/issue/task_1" });
+    expect(result).toMatchObject({ outcome: "completed", developerSessionRef: "session_retry", branchName: expect.stringMatching(/^work\/fixture-task-[a-f0-9]{8}$/) });
     expect(value.database.authQuery((db) => db.prepare("SELECT attempt, supersedes_execution_id FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toEqual({ attempt: 2, supersedes_execution_id: failed.id });
   } finally {
     value.database.close();
@@ -654,7 +660,7 @@ test("Developer execution safely resumes an owned worktree after its result was 
 test("a late Developer failure cannot overwrite a cancellation", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "cancel-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Cancellation plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Wait for cancellation.", verification: "The execution remains cancelled." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect execution state.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "cancel-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Cancellation plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Wait for cancellation.", verification: "The execution remains cancelled." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect execution state.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
   const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "cancel-lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();
@@ -682,7 +688,7 @@ test("a late Developer failure cannot overwrite a cancellation", async () => {
 test("a late Developer success cannot overwrite a cancellation", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "cancel-success-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Cancellation success race", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Create the marker.", verification: "The marker exists." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the marker.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "cancel-success-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Cancellation success race", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Create the marker.", verification: "The marker exists." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the marker.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
   const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "cancel-success-lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();
@@ -725,7 +731,7 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
   await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Deliver exact fixture"], { cwd: worktreePath });
   const subjectCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).stdout.trim();
   const subjectTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: worktreePath })).stdout.trim();
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "review-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Exact fixture plan", reproduction: null, rootCauseAnalysis: "The fixture needs a delivery marker.", steps: [{ number: 1, instruction: "Create the delivery marker.", verification: "The marker exists." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the exact commit.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "review-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Exact fixture plan", reproduction: null, rootCauseAnalysis: "The fixture needs a delivery marker.", steps: [{ number: 1, instruction: "Create the delivery marker.", verification: "The marker exists." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the exact commit.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
   const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead-review.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
   const delivery = await artifactStore.put("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from("{\"kind\":\"delivery\"}\n") });
   const developerEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "developer.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"developer\"}\n") });
@@ -1047,7 +1053,7 @@ test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Lead r
 test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Developer executes a controlled fixture plan in a fresh issue worktree", async () => {
   const value = await fixture(process.env.FORGE_CODEX_REAL_MODEL ?? "gpt-5.6-luna");
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "approved-real.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Create one owner-controlled proof marker", reproduction: null, rootCauseAnalysis: "The fixture intentionally lacks a marker.", steps: [{ number: 1, instruction: "Create REAL_DEVELOPER_PROOF.md containing exactly the text forge developer proof, then commit the file locally.", verification: "REAL_DEVELOPER_PROOF.md exists with the exact text and the worktree is clean." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No provider or deployment operation is authorized.", verificationStrategy: "Read the file, inspect git status, and report the exact commit and tree.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["REAL_DEVELOPER_PROOF.md"], materiality: [] })) });
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "approved-real.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Create one owner-controlled proof marker", reproduction: null, rootCauseAnalysis: "The fixture intentionally lacks a marker.", steps: [{ number: 1, instruction: "Create REAL_DEVELOPER_PROOF.md containing exactly the text forge developer proof, then commit the file locally.", verification: "REAL_DEVELOPER_PROOF.md exists with the exact text and the worktree is clean." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No provider or deployment operation is authorized.", verificationStrategy: "Read the file, inspect git status, and report the exact commit and tree.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["REAL_DEVELOPER_PROOF.md"], materiality: [] })) });
   const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead-real.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\",\"session\":\"real-lead\"}\n") });
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();

@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import type { ArtifactStore, StoredArtifact } from "./artifacts.js";
 import type { ForgeDatabase } from "./database.js";
+import type { GitPresentation } from "./git-presentation.js";
 import { redact } from "./logging.js";
 import type { ReleaseFailureCode } from "./release-failures.js";
 
@@ -70,6 +71,13 @@ export interface DraftPullRequestCreate extends ExactPullRequestIdentity {
   body: string;
 }
 
+export interface DraftPullRequestUpdate {
+  repository: string;
+  number: number;
+  title: string;
+  body: string;
+}
+
 export interface GithubReleasePort {
   checkAuthentication(): Promise<void>;
   getRemoteRepository(input: { cwd: string }): Promise<string>;
@@ -78,6 +86,7 @@ export interface GithubReleasePort {
   pushNormal(input: { cwd: string; branch: string }): Promise<void>;
   listPullRequests(input: ExactPullRequestIdentity): Promise<GithubPullRequest[]>;
   createDraftPullRequest(input: DraftPullRequestCreate): Promise<GithubPullRequest>;
+  updateDraftPullRequest(input: DraftPullRequestUpdate): Promise<GithubPullRequest>;
   getPullRequest(input: { repository: string; number: number }): Promise<GithubPullRequest>;
 }
 
@@ -305,6 +314,12 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       const value = await api(["api", "--method", "POST", `repos/${input.repository}/pulls`, "-f", `title=${input.title}`, "-f", `head=${input.headBranch}`, "-f", `base=${input.baseBranch}`, "-f", `body=${input.body}`, "-F", "draft=true"], "draft pull request creation");
       return pull(value);
     },
+    async updateDraftPullRequest(input) {
+      const value = await api(["api", "--method", "PATCH", `repos/${input.repository}/pulls/${input.number}`, "-f", `title=${input.title}`, "-f", `body=${input.body}`], "draft pull request metadata update");
+      const metadata = PullResponseSchema.extend({ title: z.string(), body: z.string() }).safeParse(value);
+      if (!metadata.success || metadata.data.title !== input.title || metadata.data.body !== input.body) throw providerFailure("invalid-provider-response", "GitHub did not confirm the updated pull request metadata");
+      return pull(value);
+    },
     async getPullRequest(input) {
       const value = await api(["api", `repos/${input.repository}/pulls/${input.number}`], "pull request observation");
       return pull(value);
@@ -320,7 +335,9 @@ function normalizeText(value: string): string {
 }
 
 function unsafePublicValue(value: string): boolean {
-  return /Forge|task_|workflow-|session_|artifact[_-]|(?:^|\s)(?:prompt|reasoning)(?:\s|:)/i.test(value)
+  return /\b(?:task|session|artifact|developer|release|provider|output|review)_[A-Za-z0-9][A-Za-z0-9._:-]{7,}\b/i.test(value)
+    || /\bworkflow-[A-Za-z0-9._:-]{8,}\b/i.test(value)
+    || /(?:^|\s)(?:prompt|reasoning)(?:\s|:)/i.test(value)
     || /(?:^|\s)(?:https?:\/\/|ssh:\/\/|git@)/i.test(value)
     || /(?:Bearer\s+|(?:gho_|github_pat_|sk-)[A-Za-z0-9_-]+|(?:token|password|secret|api[_-]?key)\s*[:=])/i.test(value)
     || /\b[a-f0-9]{40,64}\b/i.test(value)
@@ -329,30 +346,60 @@ function unsafePublicValue(value: string): boolean {
 
 function safePath(value: string): string {
   const normalized = value.trim();
-  if (!normalized || normalized.startsWith("/") || /^[A-Za-z]:[\\/]/.test(normalized) || normalized.includes("\\") || normalized.split("/").some((part) => part === ".." || part === "." || part === "") || unsafePublicValue(normalized)) throw providerFailure("public-projection-unsafe", "Public changed-file projection is unsafe");
+  if (!normalized || /[\u0000-\u001f\u007f]/.test(normalized) || Buffer.byteLength(normalized, "utf8") > 500 || normalized.startsWith("/") || /^[A-Za-z]:[\\/]/.test(normalized) || normalized.includes("\\") || normalized.split("/").some((part) => part === ".." || part === "." || part === "") || unsafePublicValue(normalized)) throw providerFailure("public-projection-unsafe", "Public changed-file projection is unsafe");
   return normalized;
 }
 
-function safeRow(value: string): string {
+function truncateUtf8(value: string, byteLimit: number): string {
+  const bytes = Buffer.from(value, "utf8");
+  if (bytes.length <= byteLimit) return value;
+  let end = byteLimit;
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+  return bytes.subarray(0, end).toString("utf8").trimEnd();
+}
+
+function safeRow(value: string, byteLimit = 300): string {
   if (/[\u0000-\u001f\u007f]/.test(value)) throw providerFailure("public-projection-unsafe", "Public verification projection is unsafe");
   if (unsafePublicValue(value)) throw providerFailure("public-projection-unsafe", "Public verification projection is unsafe");
   const normalized = normalizeText(String(redact(value)));
   if (!normalized || unsafePublicValue(normalized)) throw providerFailure("public-projection-unsafe", "Public verification projection is unsafe");
-  return normalized.slice(0, 300);
+  return truncateUtf8(normalized, byteLimit);
+}
+
+function inlineCode(value: string): string {
+  const longestFence = Math.max(0, ...[...value.matchAll(/`+/g)].map((match) => match[0].length));
+  const fence = "`".repeat(longestFence + 1);
+  const content = value.startsWith("`") || value.endsWith("`") ? ` ${value} ` : value;
+  return `${fence}${content}${fence}`;
 }
 
 export function buildDraftPullRequestProjection(input: {
   taskTitle: string;
+  pullRequestTitle?: string;
+  pullRequestDescription?: string;
+  deliverySummary?: string;
+  changes?: string[];
   filesChanged?: string[];
   commandsRun?: string[];
   testResults?: string[];
 }): DraftPullRequestProjection {
-  if (/[\u0000-\u001f\u007f]/.test(input.taskTitle)) throw providerFailure("public-projection-unsafe", "Public title is unsafe");
-  const title = normalizeText(input.taskTitle);
+  const rawTitle = input.pullRequestTitle ?? input.taskTitle;
+  if (/[\u0000-\u001f\u007f]/.test(rawTitle)) throw providerFailure("public-projection-unsafe", "Public title is unsafe");
+  const title = normalizeText(rawTitle);
   if (!title || title.length > 160 || unsafePublicValue(title)) throw providerFailure("public-projection-unsafe", "Public title is unsafe");
-  const paths = [...new Set((input.filesChanged ?? []).map(safePath))].slice(0, 50);
-  const checks = [...new Set([...(input.commandsRun ?? []), ...(input.testResults ?? [])].map(safeRow))].slice(0, 100);
-  const body = [`Title: ${title}`, ``, `Body:`, `## Summary`, ``, title, ``, `## Changes`, ``, ...(paths.length ? paths.map((path) => `- \`${path}\``) : ["- No changed files recorded"]), ``, `## Verification`, ``, ...(checks.length ? checks.map((check) => `- ${check}`) : ["- No verification rows recorded"])].join("\n");
+  const paths = [...new Set((input.filesChanged ?? []).map(safePath))].slice(0, 10);
+  const description = safeRow(input.pullRequestDescription ?? input.deliverySummary ?? title, 2_000);
+  const deliverySummary = input.deliverySummary ? safeRow(input.deliverySummary, 2_000) : undefined;
+  const changes = [...new Set((input.changes ?? []).map((change) => safeRow(change, 400)))].slice(0, 10);
+  const commands = [...new Set((input.commandsRun ?? []).map((command) => safeRow(command, 300)))].slice(0, 10);
+  const tests = [...new Set((input.testResults ?? []).map((result) => safeRow(result, 300)))].slice(0, 10);
+  const changeRows = changes.length ? changes.map((change) => `- ${change}`) : paths.length ? paths.map((path) => `- ${inlineCode(path)}`) : ["- No implementation details were reported."];
+  const testingRows = [
+    ...commands.map((command) => `- ${inlineCode(command)}`),
+    ...tests.map((result) => `- ${result}`),
+  ];
+  const summaryRows = deliverySummary && deliverySummary !== description ? [description, "", deliverySummary] : [description];
+  const body = ["## Summary", "", ...summaryRows, "", "## Changes", "", ...changeRows, "", "## Testing", "", ...(testingRows.length ? testingRows : ["- Not run (no verification was reported)."]), ""].join("\n");
   const projection = { title, body, bodySha256: createHash("sha256").update(body, "utf8").digest("hex") };
   assertSafePublicProjection(projection);
   return projection;
@@ -370,7 +417,8 @@ export interface PublishReleaseInput {
   coordinates: PinnedRepositoryCoordinates;
   reviewedRevision: ReviewedRevision;
   taskTitle: string;
-  delivery: { filesChanged?: string[]; commandsRun?: string[]; testResults?: string[] };
+  gitPresentation?: GitPresentation;
+  delivery: { summary?: string; changes?: string[]; filesChanged?: string[]; commandsRun?: string[]; testResults?: string[] };
 }
 
 export interface PublishReleaseResult {
@@ -452,8 +500,24 @@ export class ReleaseService {
   }
 
   private operationAttempt(releaseKey: string): number {
-    const row = this.database.authQuery((db) => db.prepare("SELECT MAX(COALESCE(attempt, 0)) AS attempt FROM forge_provider_operations WHERE release_key = ? AND kind IN ('push', 'create-draft-pr')").get(releaseKey) as { attempt: number | null });
+    const row = this.database.authQuery((db) => db.prepare("SELECT MAX(COALESCE(attempt, 0)) AS attempt FROM forge_provider_operations WHERE release_key = ? AND kind IN ('push', 'create-draft-pr', 'update-draft-pr')").get(releaseKey) as { attempt: number | null });
     return row.attempt ?? 0;
+  }
+
+  private async refreshDraftMetadata(input: PublishReleaseInput, coordinates: PinnedRepositoryCoordinates, reviewed: ReviewedRevision, releaseKey: string, pullRequest: GithubPullRequest, projection: DraftPullRequestProjection): Promise<GithubPullRequest> {
+    const operationKey = `${releaseKey}:${reviewed.commitSha}:${projection.bodySha256}:update-draft-pr`;
+    const now = new Date().toISOString();
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_provider_operations (id, operation_key, task_id, company_id, workflow_id, project_revision_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, kind, status, attempt, started_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'update-draft-pr', 'intent-recorded', 1, ?, ?, ?) ON CONFLICT(operation_key) DO UPDATE SET status = CASE WHEN forge_provider_operations.status = 'completed' THEN 'completed' ELSE 'intent-recorded' END, attempt = CASE WHEN forge_provider_operations.status = 'completed' THEN forge_provider_operations.attempt ELSE forge_provider_operations.attempt + 1 END, updated_at = excluded.updated_at").run(operationId(), operationKey, input.taskId, input.companyId, input.workflowId, coordinates.projectRevisionId, releaseKey, coordinates.repository, coordinates.headBranch, coordinates.baseBranch, coordinates.expectedBaseSha, reviewed.commitSha, reviewed.treeSha, now, now, now));
+    try {
+      const updated = await this.github.updateDraftPullRequest({ repository: coordinates.repository, number: pullRequest.number, title: projection.title, body: projection.body });
+      if (updated.number !== pullRequest.number || updated.url !== pullRequest.url || updated.repository.toLowerCase() !== coordinates.repository || updated.headBranch !== coordinates.headBranch || updated.baseBranch !== coordinates.baseBranch || updated.headSha.toLowerCase() !== reviewed.commitSha.toLowerCase() || updated.baseSha.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase() || !updated.isDraft || updated.state !== "open") throw providerFailure("ambiguous-provider-state", "Updated pull request does not match the exact reviewed draft");
+      this.updateOperation(operationKey, "completed");
+      return updated;
+    } catch (error) {
+      const failure = error instanceof GithubReleaseFailure ? error : classifyCommandFailure(error, "draft pull request metadata update");
+      this.updateOperation(operationKey, failure.code === "provider-rate-limited" ? "blocked" : "failed", failure);
+      throw failure;
+    }
   }
 
   private async publishExisting(input: PublishReleaseInput, coordinates: PinnedRepositoryCoordinates, reviewed: ReviewedRevision, projection: DraftPullRequestProjection): Promise<PublishReleaseResult> {
@@ -477,8 +541,9 @@ export class ReleaseService {
       const confirmed = await this.github.getBranchHead({ repository: coordinates.repository, branch: coordinates.headBranch });
       if (confirmed?.toLowerCase() !== reviewed.commitSha.toLowerCase()) throw providerFailure("provider-unavailable", "Normal push did not produce the reviewed remote head");
     }
-    const pullRequest = await this.github.getPullRequest({ repository: coordinates.repository, number: release.pullRequestNumber });
+    let pullRequest = await this.github.getPullRequest({ repository: coordinates.repository, number: release.pullRequestNumber });
     if (pullRequest.number !== release.pullRequestNumber || pullRequest.url !== release.pullRequestUrl || pullRequest.repository.toLowerCase() !== coordinates.repository || pullRequest.headBranch !== coordinates.headBranch || pullRequest.baseBranch !== coordinates.baseBranch || pullRequest.headSha.toLowerCase() !== reviewed.commitSha.toLowerCase() || !pullRequest.isDraft || pullRequest.state !== "open") throw providerFailure("ambiguous-provider-state", "Stored pull request does not match the revalidated exact head");
+    pullRequest = await this.refreshDraftMetadata(input, coordinates, reviewed, release.releaseKey, pullRequest, projection);
     this.database.authTransaction((db) => {
       db.prepare("UPDATE forge_provider_operations SET status = 'completed', completed_at = ?, updated_at = ? WHERE operation_key = ?").run(now, now, operationKey);
       db.prepare("UPDATE forge_releases SET base_sha = ?, head_sha = ?, head_tree = ?, status = 'draft', title = ?, body_artifact_id = ?, reused = 1, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(coordinates.expectedBaseSha, reviewed.commitSha, reviewed.treeSha, projection.title, bodyArtifact.id, now, release.id, input.taskId, input.companyId, input.workflowId);
@@ -499,7 +564,7 @@ export class ReleaseService {
       if (!local.clean || local.branch !== coordinates.headBranch || local.headSha.toLowerCase() !== reviewed.commitSha.toLowerCase() || local.treeSha.toLowerCase() !== reviewed.treeSha.toLowerCase()) throw providerFailure("stale-reviewed-revision", "Local worktree is not the reviewed clean revision");
       const base = await this.github.getBranchHead({ repository: coordinates.repository, branch: coordinates.baseBranch });
       if (base === null || base.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase()) throw providerFailure("target-base-drift", "Pinned target base has moved");
-      const projection = buildDraftPullRequestProjection({ taskTitle: title, ...bodyInput });
+      const projection = buildDraftPullRequestProjection({ taskTitle: title, ...(input.gitPresentation ?? {}), ...(bodyInput.summary ? { deliverySummary: bodyInput.summary } : {}), ...(bodyInput.changes ? { changes: bodyInput.changes } : {}), ...(bodyInput.filesChanged ? { filesChanged: bodyInput.filesChanged } : {}), ...(bodyInput.commandsRun ? { commandsRun: bodyInput.commandsRun } : {}), ...(bodyInput.testResults ? { testResults: bodyInput.testResults } : {}) });
       if (input.releaseId) return await this.publishExisting(input, coordinates, reviewed, projection);
       const releaseKey = releaseKeyFor(input, coordinates, reviewed);
       const bodyArtifact = this.existingBodyArtifact(input.companyId, releaseKey, projection.bodySha256) ?? await this.artifacts.put(input.companyId, "release-public-body", { filename: `${input.taskId}-release.md`, mimeType: "text/markdown", bytes: Buffer.from(projection.body, "utf8") });
@@ -561,6 +626,7 @@ export class ReleaseService {
         this.updateOperation(createKey, "completed");
       }
       if (!pullRequest) throw providerFailure("invalid-provider-response", "GitHub did not return a pull request");
+      if (reused) pullRequest = await this.refreshDraftMetadata(input, coordinates, reviewed, releaseKey, pullRequest, projection);
       const now = new Date().toISOString();
       this.database.authTransaction((db) => {
         db.prepare("UPDATE forge_releases SET status = 'draft', pr_number = ?, pr_url = ?, reused = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(pullRequest.number, pullRequest.url, reused ? 1 : 0, now, releaseId, input.taskId, input.companyId, input.workflowId);

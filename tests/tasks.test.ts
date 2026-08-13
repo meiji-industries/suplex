@@ -11,7 +11,7 @@ import { ForgeDatabase, projectionStateHash } from "../src/database.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
-import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput } from "../src/temporal/issue-contracts.js";
 
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
 const github: GithubAdapter = { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } };
@@ -44,21 +44,25 @@ async function fixture(): Promise<{ root: string; config: ForgeConfig; database:
       database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run-1", eventId: state.lastEventId, state }));
       return { workflowId: state.workflowId, runId: "run-1" };
     },
-    async startPlanning(workflowId: string, input: StartPlanningInput) {
+    async execute(command, workflowId, input) {
       const current = [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
       if (input.expectedRevision !== current.revision) throw new Error("Stale workflow revision");
-      const next = { ...current, phase: "planning" as const, revision: 1, owner: "lead" as const, allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:1` };
-      stateByTask.set(next.issueId, next);
-      database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run-1", eventId: next.lastEventId, state: next }));
-      return next;
+      if (command === "start_planning") {
+        const next = { ...current, phase: "planning" as const, revision: 1, owner: "lead" as const, allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:1` };
+        stateByTask.set(next.issueId, next);
+        database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run-1", eventId: next.lastEventId, state: next }));
+        return next;
+      }
+      if (command === "publish_draft") {
+        const next = { ...current, phase: "releasing" as const, revision: current.revision + 1, owner: "lead" as const, allowedCommands: [], pendingAction: "Publishing one exact draft pull request", lastEventId: `${workflowId}:${current.revision + 1}` };
+        stateByTask.set(next.issueId, next);
+        projectState(database, next);
+        return next;
+      }
+      throw new Error(`Unsupported fixture command: ${command}`);
     },
-    async publishDraft(workflowId: string, input: StartPlanningInput) {
-      const current = [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
-      if (input.expectedRevision !== current.revision) throw new Error("Stale workflow revision");
-      const next = { ...current, phase: "releasing" as const, revision: current.revision + 1, owner: "lead" as const, allowedCommands: [], pendingAction: "Publishing one exact draft pull request", lastEventId: `${workflowId}:${current.revision + 1}` };
-      stateByTask.set(next.issueId, next);
-      projectState(database, next);
-      return next;
+    async revisePlan(workflowId: string, _input: PlanRevisionCommand) {
+      return [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
     },
     async continueWork(workflowId: string, input: ContinueWorkCommand) {
       const current = [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
@@ -77,6 +81,15 @@ async function fixture(): Promise<{ root: string; config: ForgeConfig; database:
       stateByTask.set(current.issueId, next);
       database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run-1", eventId: next.lastEventId, state: next }));
       return next;
+    },
+    async resolveDecisionBlocker(workflowId: string, _input: ResolveDecisionBlockerInput) {
+      return [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
+    },
+    async recordProgress(workflowId: string, _input: RecordProgressInput) {
+      return [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
+    },
+    async query(workflowId: string) {
+      return [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
     },
   };
   tasks = new TaskService(database, auth, projects, config, { workflow });
@@ -187,8 +200,8 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     const duplicate = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Investigate queue", description: "## Reproduce\n\nPlease inspect the queue.", idempotencyKey: "queue-task-0001", supplementalReview: true, images: [{ filename: "evidence.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] });
     expect(duplicate.created).toBe(false);
     expect(duplicate.task.id).toBe(first.task.id);
-    await expect(value.tasks.startPlanning(value.adminId, first.task.id, 9)).rejects.toMatchObject({ statusCode: 409, findings: [expect.objectContaining({ code: "stale-revision" })] });
-    const planning = await value.tasks.startPlanning(value.adminId, first.task.id, 0);
+    await expect(value.tasks.executeCommand(value.adminId, first.task.id, "start_planning", { expectedRevision: 9 })).rejects.toMatchObject({ statusCode: 409, findings: [expect.objectContaining({ code: "stale-revision" })] });
+    const planning = await value.tasks.executeCommand(value.adminId, first.task.id, "start_planning", { expectedRevision: 0 });
     expect(planning).toMatchObject({ phase: "planning", revision: 1, owner: "lead", pendingAction: "Lead planning", allowedCommands: [] });
     expect(planning.timeline.map((entry) => entry.eventType)).toEqual(["task_created", "planning_started"]);
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'lead', 'failed', 1, '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId));
@@ -207,7 +220,7 @@ test("retries draft publication from a typed provider-failure state", async () =
     value.stateByTask.set(created.task.id, blocked);
     projectState(value.database, blocked);
 
-    const retried = await value.tasks.publishDraft(value.adminId, created.task.id, 1);
+    const retried = await value.tasks.executeCommand(value.adminId, created.task.id, "publish_draft", { expectedRevision: 1 });
     expect(retried).toMatchObject({ phase: "releasing", revision: 2, pendingAction: "Publishing one exact draft pull request" });
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });

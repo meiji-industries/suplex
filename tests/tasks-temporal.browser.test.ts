@@ -163,18 +163,19 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
       expect(Buffer.from(await attachmentResponse.body())).toEqual(await readFile(imagePath));
       await pane.getByRole("button", { name: "Start planning" }).click();
       await pane.locator('[data-status="planning"]').waitFor();
-      await pane.getByText("Projection current · r1", { exact: true }).waitFor();
-      await expect.poll(() => apiDatabase!.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE workflow_id = ? ORDER BY revision").all(workflowId))).toEqual([{ revision: 0 }, { revision: 1 }]);
+      // Capacity admission (#25) records a second planning revision after start_planning.
+      await expect.poll(() => apiDatabase!.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE workflow_id = ? ORDER BY revision").all(workflowId))).toEqual([{ revision: 0 }, { revision: 1 }, { revision: 2 }]);
+      await pane.getByText("Projection current · r2", { exact: true }).waitFor();
       const stale = await page.evaluate(async (id) => { const csrf = document.cookie.split("; ").find((value) => value.startsWith("csrf_v1="))?.split("=", 2)[1] ?? ""; const response = await fetch(`/api/tasks/${id}/start-planning`, { method: "POST", headers: { "Content-Type": "application/json", "X-CSRF-V1": csrf }, body: JSON.stringify({ expectedRevision: 0 }) }); return { status: response.status, body: await response.json() }; }, workflowId.split("-issue-").at(-1)!);
-      expect(stale).toMatchObject({ status: 409, body: { current: { revision: 1, phase: "planning" } } });
+      expect(stale).toMatchObject({ status: 409, body: { current: { revision: 2, phase: "planning" } } });
 
       const responsesBeforeRestart = taskListResponses;
       await stopApi(); await stopWorker(); await stopTemporal();
       await startTemporal(); await startWorker(); await startApi();
       await expect.poll(() => taskListResponses, { timeout: 15_000 }).toBeGreaterThan(responsesBeforeRestart);
       await pane.locator('[data-status="planning"]').waitFor();
-      await pane.getByText("Projection current · r1", { exact: true }).waitFor();
-      expect(apiDatabase!.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE workflow_id = ? ORDER BY revision").all(workflowId))).toEqual([{ revision: 0 }, { revision: 1 }]);
+      await pane.getByText("Projection current · r2", { exact: true }).waitFor();
+      expect(apiDatabase!.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE workflow_id = ? ORDER BY revision").all(workflowId))).toEqual([{ revision: 0 }, { revision: 1 }, { revision: 2 }]);
       expect(apiDatabase!.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE workflow_id = ?").get(workflowId))).toEqual({ count: 1 });
       await page.setViewportSize({ width: 390, height: 844 });
       expect(await pane.getByText("Owner", { exact: true }).isVisible()).toBe(true);

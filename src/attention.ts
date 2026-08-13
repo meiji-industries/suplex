@@ -4,10 +4,11 @@ import type { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import { ATTENTION_CATEGORY_SEVERITY, attentionId } from "./attention-policy.js";
 import { AttentionCategorySchema, IssueBlockerActionSchema, type AttentionCategory, type IssueCommand } from "./temporal/issue-contracts.js";
+import { ATTENTION_ACTIVE_PHASES } from "./issue-phases.js";
 
 export const RECENT_OUTCOME_LIMIT = 5;
 export const RECENT_OUTCOME_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
-export const ACTIVE_PHASES = new Set(["planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge", "delivery_blocked"]);
+export const ACTIVE_PHASES = ATTENTION_ACTIVE_PHASES;
 const TERMINAL_PHASES = new Set(["done", "cancelled", "failed"]);
 const REDACTED_EVIDENCE_KEYS = new Set(["prompt", "transcript", "rawlog", "stdout", "stderr", "repositorypath", "worktreepath", "sessionref", "authorization", "cookie", "token", "secret", "credential"]);
 

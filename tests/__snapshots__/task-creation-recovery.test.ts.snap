@@ -1,0 +1,27 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`initial state serialized field order is frozen 1`] = `
+"{
+  "workflowId": "workflow-installation-issue-task-recovery",
+  "companyId": "company-recovery",
+  "projectId": "project-recovery",
+  "issueId": "task-recovery",
+  "projectRevisionId": "revision-recovery",
+  "requestHash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "phase": "backlog",
+  "revision": 0,
+  "owner": "human",
+  "allowedCommands": [
+    "start_planning"
+  ],
+  "pendingAction": "Start planning",
+  "lastEventId": "workflow-installation-issue-task-recovery:0",
+  "continuationCount": 0,
+  "lastSummaryHash": null,
+  "blocker": null,
+  "stateChangedAt": "2026-08-11T00:00:00.000Z",
+  "activeOperation": null,
+  "processedCommandIds": [],
+  "repairCycle": 0
+}"
+`;

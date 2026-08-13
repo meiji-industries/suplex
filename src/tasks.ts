@@ -13,8 +13,9 @@ import { canonicalJson } from "./canonical-json.js";
 import { redact } from "./logging.js";
 import { ProjectFailure, ProjectService, type ProjectRole } from "./projects.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
-import { acceptIssueDelivery, acceptIssuePlanning, approveIssuePlan, cancelIssue, cancelIssueDevelopment, continueIssueWork, finalReviewIssue, IssueWorkflowStartFailure, publishIssueDraft, recordIssueDeliveryDecision, reconcileIssueAcceptance, reconcileIssueCI, reconcileIssueMerge, repairIssueCI, repairIssueDelivery, requestIssueDeliveryChanges, requestIssuePlanRevision, requestIssueSupplementalReview, respondIssuePlanBlocker, resolveIssueDecisionBlocker, resolveIssueMergeConflict, reviseIssuePlan, retryIssueCapacity, retryIssueDevelopment, retryIssueForwardMergeVerification, retryIssueTargetBaseReconciliation, reviewIssueDelivery, startIssueDevelopment, startIssueWorkflow, verifyIssueDeveloperOwnership } from "./temporal/service.js";
-import { createInitialIssueWorkflowState, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type ResolveDecisionBlockerInput, type StartPlanningInput } from "./temporal/issue-contracts.js";
+import { acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, reviseIssuePlan, startIssueWorkflow } from "./temporal/service.js";
+import { issueCommands } from "./commands/registry.js";
+import { createInitialIssueWorkflowState, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "./temporal/issue-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { taskCommandDescriptors, type TaskCommandDescriptor } from "./task-commands.js";
 import { MaterialityEvidenceArtifactSchema, PlanMaterialCategorySchema, PlanSubjectSchema, deterministicMaterialCategories, samePlanSubject, type MaterialityEvidenceSubject, type PlanBlockerSubject, type PlanDecisionSubject, type PlanMaterialCategory, type PlanSubject, type SupplementalReviewSubject } from "./plan-governance.js";
@@ -575,36 +576,21 @@ export interface TaskDeveloperDiff {
 
 export interface IssueWorkflowPort {
   start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string; existing?: boolean }>;
-  startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState>;
-  requestSupplementalReview?: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>;
-  approvePlan?: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>;
-  approvePlanExact?: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>;
-  rejectPlan?: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>;
-  requestPlanRevision?: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>;
-  respondPlanBlocker?: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>;
-  revisePlan?: (workflowId: string, input: PlanRevisionCommand) => Promise<IssueWorkflowState>;
-  startDevelopment?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  retryDevelopment?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  cancelDevelopment?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  continueWork?: (workflowId: string, input: ContinueWorkCommand) => Promise<IssueWorkflowState>;
-  verifyDeveloperOwnership?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  reviewDelivery?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  repairDelivery?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  recordDeliveryDecision?: (workflowId: string, input: StartPlanningInput & { note?: string }) => Promise<IssueWorkflowState>;
-  publishDraft?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  resolveMergeConflict?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  retryTargetBaseReconciliation?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  retryForwardMergeVerification?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  reconcileCI?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  repairCI?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  finalReview?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  acceptDelivery?: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>;
-  requestDeliveryChanges?: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>;
-  cancelIssue?: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>;
-  reconcileAcceptance?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  reconcileMerge?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  retryCapacity?: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>;
-  resolveDecisionBlocker?: (workflowId: string, input: ResolveDecisionBlockerInput) => Promise<IssueWorkflowState>;
+  execute(command: IssueCommand, workflowId: string, input: StartPlanningInput | PlanCommandInput): Promise<IssueWorkflowState>;
+  revisePlan(workflowId: string, input: PlanRevisionCommand): Promise<IssueWorkflowState>;
+  continueWork(workflowId: string, input: ContinueWorkCommand): Promise<IssueWorkflowState>;
+  resolveDecisionBlocker(workflowId: string, input: ResolveDecisionBlockerInput): Promise<IssueWorkflowState>;
+  recordProgress(workflowId: string, input: RecordProgressInput): Promise<IssueWorkflowState>;
+  query(workflowId: string): Promise<IssueWorkflowState>;
+  acceptPlanning?(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState>;
+}
+
+export interface TaskCommandPayload {
+  expectedRevision: number;
+  note?: string;
+  subject?: unknown;
+  idempotencyKey?: string;
+  blockerSubject?: unknown;
 }
 
 interface TaskServiceOptions {
@@ -833,34 +819,13 @@ export class TaskService {
     this.capacity = options.capacity ?? new CapacityManager(database, config);
     this.workflow = options.workflow ?? {
       start: (input) => startIssueWorkflow(config, input),
-      startPlanning: (workflowId, input) => acceptIssuePlanning(config, workflowId, input),
-      requestSupplementalReview: (workflowId, input) => requestIssueSupplementalReview(config, workflowId, input),
-      approvePlanExact: (workflowId, input) => approveIssuePlan(config, workflowId, input),
-      requestPlanRevision: (workflowId, input) => requestIssuePlanRevision(config, workflowId, input),
-      respondPlanBlocker: (workflowId, input) => respondIssuePlanBlocker(config, workflowId, input),
+      execute: (command, workflowId, input) => executeIssueCommand(config, workflowId, command, input),
+      acceptPlanning: (workflowId, input) => acceptIssuePlanning(config, workflowId, input),
       revisePlan: (workflowId, input) => reviseIssuePlan(config, workflowId, input),
-      startDevelopment: (workflowId, input) => startIssueDevelopment(config, workflowId, input),
-      retryDevelopment: (workflowId, input) => retryIssueDevelopment(config, workflowId, input),
-      cancelDevelopment: (workflowId, input) => cancelIssueDevelopment(config, workflowId, input),
-      verifyDeveloperOwnership: (workflowId, input) => verifyIssueDeveloperOwnership(config, workflowId, input),
-      reviewDelivery: (workflowId, input) => reviewIssueDelivery(config, workflowId, input),
-      repairDelivery: (workflowId, input) => repairIssueDelivery(config, workflowId, input),
-      recordDeliveryDecision: (workflowId, input) => recordIssueDeliveryDecision(config, workflowId, input),
-      publishDraft: (workflowId, input) => publishIssueDraft(config, workflowId, input),
-      resolveMergeConflict: (workflowId, input) => resolveIssueMergeConflict(config, workflowId, input),
-      retryTargetBaseReconciliation: (workflowId, input) => retryIssueTargetBaseReconciliation(config, workflowId, input),
-      retryForwardMergeVerification: (workflowId, input) => retryIssueForwardMergeVerification(config, workflowId, input),
-      reconcileCI: (workflowId, input) => reconcileIssueCI(config, workflowId, input),
-      repairCI: (workflowId, input) => repairIssueCI(config, workflowId, input),
-      finalReview: (workflowId, input) => finalReviewIssue(config, workflowId, input),
-      acceptDelivery: (workflowId, input) => acceptIssueDelivery(config, workflowId, input),
-      requestDeliveryChanges: (workflowId, input) => requestIssueDeliveryChanges(config, workflowId, input),
-      cancelIssue: (workflowId, input) => cancelIssue(config, workflowId, input),
-      reconcileAcceptance: (workflowId, input) => reconcileIssueAcceptance(config, workflowId, input),
-      reconcileMerge: (workflowId, input) => reconcileIssueMerge(config, workflowId, input),
       continueWork: (workflowId, input) => continueIssueWork(config, workflowId, input),
-      retryCapacity: (workflowId, input) => retryIssueCapacity(config, workflowId, input),
       resolveDecisionBlocker: (workflowId, input) => resolveIssueDecisionBlocker(config, workflowId, input),
+      recordProgress: (workflowId, input) => recordIssueProgress(config, workflowId, input),
+      query: (workflowId) => queryIssueWorkflow(config, workflowId),
     };
   }
 
@@ -1228,21 +1193,6 @@ export class TaskService {
     throw new Error("Workflow projection did not become available");
   }
 
-  async startPlanning(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    const task = this.getTask(actorUserId, taskId);
-    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before starting planning")], 409, task);
-    if (!task.allowedCommands.includes("start_planning")) throw new TaskFailure("Planning cannot start from the current state", [finding("illegal-command", "phase", "Start planning is not available")], 409);
-    try {
-      await this.workflow.startPlanning(task.workflowId, { expectedRevision, actorUserId });
-      await this.waitForProjection(taskId, expectedRevision + 1);
-    } catch (error) {
-      const message = error instanceof Error && /stale workflow revision/i.test(error.message) ? "Task changed before this action was accepted" : "Planning command could not be accepted";
-      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409, this.getTask(actorUserId, taskId));
-    }
-    const updated = this.getTask(actorUserId, taskId);
-    return updated;
-  }
-
   async resolveDecisionBlocker(actorUserId: string, taskId: string, expectedRevision: number, answer: string): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
     const normalizedAnswer = normalizeText(answer);
@@ -1256,7 +1206,7 @@ export class TaskService {
     this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
     try {
       const input: ResolveDecisionBlockerInput = { expectedRevision, actorUserId, answerArtifactId: artifact.id, answerSha256: artifact.sha256 };
-      await (this.workflow.resolveDecisionBlocker ? this.workflow.resolveDecisionBlocker(task.workflowId, input) : Promise.reject(new Error("Decision blocker workflow is unavailable")));
+      await this.workflow.resolveDecisionBlocker(task.workflowId, input);
     } catch (error) {
       this.database.authTransaction((db) => db.prepare("DELETE FROM forge_artifacts WHERE id = ? AND company_id = ?").run(artifact.id, task.companyId));
       await this.artifacts.remove({ companyId: artifact.companyId, storagePath: artifact.storagePath });
@@ -1267,63 +1217,44 @@ export class TaskService {
     return this.getTask(actorUserId, taskId);
   }
 
-  async requestSupplementalReview(actorUserId: string, taskId: string, expectedRevisionOrCommand: number | PlanCommandInput): Promise<ForgeTask> {
+  async executeCommand(actorUserId: string, taskId: string, command: IssueCommand, payload: TaskCommandPayload): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
-    const input = bindCommandSubjects(task, typeof expectedRevisionOrCommand === "number" ? { expectedRevision: expectedRevisionOrCommand, actorUserId } : { ...expectedRevisionOrCommand, actorUserId });
-    return this.memberCommand(actorUserId, taskId, input.expectedRevision, "request_supplemental_review", (workflowId, command) => this.workflow.requestSupplementalReview ? this.workflow.requestSupplementalReview(workflowId, command) : Promise.reject(new Error("Supplemental review workflow is unavailable")), input);
-  }
-
-  async startDevelopment(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "start_development", (workflowId, input) => this.workflow.startDevelopment ? this.workflow.startDevelopment(workflowId, input) : Promise.reject(new Error("Developer workflow is unavailable")));
-  }
-
-  async retryDevelopment(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "retry_development", (workflowId, input) => this.workflow.retryDevelopment ? this.workflow.retryDevelopment(workflowId, input) : Promise.reject(new Error("Developer retry workflow is unavailable")));
-  }
-
-  async retryCapacity(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "retry_capacity", (workflowId, input) => this.workflow.retryCapacity ? this.workflow.retryCapacity(workflowId, input) : Promise.reject(new Error("Capacity retry workflow is unavailable")));
-  }
-
-  async cancelDevelopment(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "cancel_development", (workflowId, input) => this.workflow.cancelDevelopment ? this.workflow.cancelDevelopment(workflowId, input) : Promise.reject(new Error("Developer cancellation workflow is unavailable")));
-  }
-
-  async verifyDeveloperOwnership(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "verify_developer_ownership", (workflowId, input) => this.workflow.verifyDeveloperOwnership ? this.workflow.verifyDeveloperOwnership(workflowId, input) : Promise.reject(new Error("Developer ownership verification is unavailable")));
-  }
-
-  async reviewDelivery(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "review_delivery", (workflowId, input) => this.workflow.reviewDelivery ? this.workflow.reviewDelivery(workflowId, input) : Promise.reject(new Error("Delivery review workflow is unavailable")));
-  }
-
-  async repairDelivery(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "repair_delivery", (workflowId, input) => this.workflow.repairDelivery ? this.workflow.repairDelivery(workflowId, input) : Promise.reject(new Error("Delivery repair workflow is unavailable")));
-  }
-
-  async recordDeliveryDecision(actorUserId: string, taskId: string, expectedRevision: number, note?: string): Promise<ForgeTask> {
-    const task = this.getTask(actorUserId, taskId);
+    const descriptor = issueCommands[command];
+    if (descriptor.family === "bespoke") throw new TaskFailure("This command requires its dedicated action", [finding("workflow-unavailable", "workflow", "The durable issue workflow is unavailable")], 503, task);
+    const expectedRevision = payload.expectedRevision;
     if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
-    if (!task.allowedCommands.includes("record_delivery_decision")) throw new TaskFailure("A delivery decision is not available", [finding("illegal-command", "phase", "A member decision is not available")], 409);
+    if (!task.allowedCommands.includes(command)) {
+      const message = command === "start_planning" ? "Planning cannot start from the current state" : command === "record_delivery_decision" ? "A delivery decision is not available" : descriptor.family === "start" ? "Plan action is not available" : "Task action is not available";
+      throw new TaskFailure(message, [finding("illegal-command", "phase", message)], 409, task);
+    }
+    const planInput = bindCommandSubjects(task, {
+      expectedRevision,
+      actorUserId,
+      ...(payload.note !== undefined ? { note: payload.note } : {}),
+      ...(payload.subject !== undefined ? { subject: payload.subject as PlanCommandInput["subject"] } : {}),
+      ...(payload.idempotencyKey !== undefined ? { idempotencyKey: payload.idempotencyKey } : {}),
+      ...(payload.blockerSubject !== undefined ? { blockerSubject: payload.blockerSubject as PlanCommandInput["blockerSubject"] } : {}),
+      ...(command === "respond_plan_blocker" ? { expectedWorkflowRevision: expectedRevision, ...(payload.blockerSubject === undefined && payload.subject !== undefined ? { blockerSubject: payload.subject as PlanCommandInput["blockerSubject"] } : {}) } : {}),
+    });
+    if (command === "approve_plan" || command === "request_plan_revision" || command === "respond_plan_blocker") return this.exactDecisionCommand(actorUserId, taskId, planInput, command);
+    const input: StartPlanningInput | PlanCommandInput = descriptor.family === "start"
+      ? { expectedRevision, actorUserId, ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}), ...(command !== "start_planning" && task.planArtifactSha256 ? { planArtifactSha256: task.planArtifactSha256 } : {}) }
+      : planInput;
     try {
-      await (this.workflow.recordDeliveryDecision ? this.workflow.recordDeliveryDecision(task.workflowId, { expectedRevision, actorUserId, ...(note !== undefined ? { note } : {}) }) : Promise.reject(new Error("Delivery decision workflow is unavailable")));
+      await this.workflow.execute(command, task.workflowId, input);
+      if (command === "start_planning") await this.waitForProjection(taskId, expectedRevision + 1);
+      return this.getTask(actorUserId, taskId);
     } catch (error) {
-      const message = error instanceof Error && /stale workflow revision/i.test(error.message) ? "Task changed before this action was accepted" : "Delivery decision could not be accepted";
+      const stale = error instanceof Error && /stale workflow revision/i.test(error.message);
+      const message = stale ? "Task changed before this action was accepted" : command === "start_planning" ? "Planning command could not be accepted" : command === "record_delivery_decision" ? "Delivery decision could not be accepted" : descriptor.family === "start" ? "Plan action could not be accepted" : "Task action could not be accepted";
       throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409, this.getTask(actorUserId, taskId));
     }
-    const updated = this.getTask(actorUserId, taskId);
-    return updated;
-  }
-
-  async approvePlanCommand(actorUserId: string, taskId: string, input: PlanCommandInput): Promise<ForgeTask> {
-    return this.exactDecisionCommand(actorUserId, taskId, input, "approve_plan", (workflowId, command) => this.workflow.approvePlanExact ? this.workflow.approvePlanExact(workflowId, command) : this.workflow.approvePlan ? this.workflow.approvePlan(workflowId, command) : Promise.reject(new Error("Exact plan approval workflow is unavailable")));
   }
 
   async revisePlan(actorUserId: string, taskId: string, input: PlanRevisionCommand): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
     if (input.actorUserId !== actorUserId) throw new TaskFailure("Plan revision is unavailable", [finding("actor-mismatch", "actorUserId", "Authenticated actor does not match the revision request")], 403, task);
     if (input.expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before revising the plan")], 409, task);
-    if (!this.workflow.revisePlan) throw new TaskFailure("Plan revision workflow is unavailable", [finding("workflow-unavailable", "workflow", "The durable issue workflow is unavailable")], 503, task);
     try {
       const state = await this.workflow.revisePlan(task.workflowId, input);
       this.projectState(state);
@@ -1335,14 +1266,10 @@ export class TaskService {
   }
 
   async requestPlanRevision(actorUserId: string, taskId: string, input: PlanCommandInput): Promise<ForgeTask> {
-    return this.exactDecisionCommand(actorUserId, taskId, input, "request_plan_revision", (workflowId, command) => this.workflow.requestPlanRevision ? this.workflow.requestPlanRevision(workflowId, command) : Promise.reject(new Error("Exact plan revision workflow is unavailable")));
+    return this.executeCommand(actorUserId, taskId, "request_plan_revision", { expectedRevision: input.expectedRevision, ...(input.note !== undefined ? { note: input.note } : {}), ...(input.subject !== undefined ? { subject: input.subject } : {}), ...(input.idempotencyKey !== undefined ? { idempotencyKey: input.idempotencyKey } : {}) });
   }
 
-  async respondPlanBlocker(actorUserId: string, taskId: string, input: PlanCommandInput): Promise<ForgeTask> {
-    return this.exactDecisionCommand(actorUserId, taskId, input, "respond_plan_blocker", (workflowId, command) => this.workflow.respondPlanBlocker ? this.workflow.respondPlanBlocker(workflowId, command) : Promise.reject(new Error("Plan blocker response workflow is unavailable")));
-  }
-
-  private async exactDecisionCommand(actorUserId: string, taskId: string, input: PlanCommandInput, commandName: "approve_plan" | "request_plan_revision" | "respond_plan_blocker", command: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>): Promise<ForgeTask> {
+  private async exactDecisionCommand(actorUserId: string, taskId: string, input: PlanCommandInput, commandName: "approve_plan" | "request_plan_revision" | "respond_plan_blocker"): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
     const boundInput = bindCommandSubjects(task, input);
     const isBlocker = commandName === "respond_plan_blocker";
@@ -1373,7 +1300,7 @@ export class TaskService {
     const staged = await this.artifacts.stage(task.companyId, isBlocker ? "plan-blocker-response" : "plan-decision", { filename: `${boundInput.idempotencyKey}.md`, mimeType: "text/markdown", bytes: Buffer.from(note.trim(), "utf8") });
     const workflowInput: PlanCommandInput = { expectedRevision: boundInput.expectedRevision, actorUserId, ...(boundInput.subject ? { subject: boundInput.subject } : {}), idempotencyKey: boundInput.idempotencyKey, ...(isBlocker ? { answerStagingRef: staged.ref, answerSha256: staged.sha256, expectedWorkflowRevision: boundInput.expectedWorkflowRevision ?? boundInput.expectedRevision, blockerSubject: boundInput.blockerSubject } : { noteStagingRef: staged.ref, noteSha256: staged.sha256 }) };
     try {
-      const state = await command(task.workflowId, workflowInput);
+      const state = await this.workflow.execute(commandName, task.workflowId, workflowInput);
       this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state });
       return this.getTask(actorUserId, taskId);
     } catch (error) {
@@ -1381,54 +1308,6 @@ export class TaskService {
       const message = error instanceof Error && /stale|subject|conflict/i.test(error.message) ? "Task changed before this action was accepted" : "Task action could not be accepted";
       throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409);
     }
-  }
-
-  async publishDraft(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "publish_draft", (workflowId, input) => this.workflow.publishDraft ? this.workflow.publishDraft(workflowId, input) : Promise.reject(new Error("Draft publication workflow is unavailable")));
-  }
-
-  async resolveMergeConflict(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "resolve_merge_conflict", (workflowId, input) => this.workflow.resolveMergeConflict ? this.workflow.resolveMergeConflict(workflowId, input) : Promise.reject(new Error("Merge-conflict resolution workflow is unavailable")));
-  }
-
-  async retryTargetBaseReconciliation(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "retry_target_base_reconciliation", (workflowId, input) => this.workflow.retryTargetBaseReconciliation ? this.workflow.retryTargetBaseReconciliation(workflowId, input) : Promise.reject(new Error("Target-base reconciliation workflow is unavailable")));
-  }
-
-  async retryForwardMergeVerification(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "retry_forward_merge_verification", (workflowId, input) => this.workflow.retryForwardMergeVerification ? this.workflow.retryForwardMergeVerification(workflowId, input) : Promise.reject(new Error("Forward-merge verification workflow is unavailable")));
-  }
-
-  async reconcileCI(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "reconcile_ci", (workflowId, input) => this.workflow.reconcileCI ? this.workflow.reconcileCI(workflowId, input) : Promise.reject(new Error("CI reconciliation workflow is unavailable")));
-  }
-
-  async finalReview(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "final_review", (workflowId, input) => this.workflow.finalReview ? this.workflow.finalReview(workflowId, input) : Promise.reject(new Error("Final review workflow is unavailable")));
-  }
-
-  async repairCI(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "repair_ci", (workflowId, input) => this.workflow.repairCI ? this.workflow.repairCI(workflowId, input) : Promise.reject(new Error("CI repair workflow is unavailable")));
-  }
-
-  async acceptDelivery(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.memberCommand(actorUserId, taskId, expectedRevision, "accept_delivery", (workflowId, input) => this.workflow.acceptDelivery ? this.workflow.acceptDelivery(workflowId, input) : Promise.reject(new Error("Delivery acceptance workflow is unavailable")));
-  }
-
-  async requestDeliveryChanges(actorUserId: string, taskId: string, expectedRevision: number, note?: string): Promise<ForgeTask> {
-    return this.memberCommand(actorUserId, taskId, expectedRevision, "request_delivery_changes", (workflowId, input) => this.workflow.requestDeliveryChanges ? this.workflow.requestDeliveryChanges(workflowId, { ...input, ...(note !== undefined ? { note } : {}) }) : Promise.reject(new Error("Delivery change workflow is unavailable")));
-  }
-
-  async cancelIssue(actorUserId: string, taskId: string, expectedRevision: number, note?: string): Promise<ForgeTask> {
-    return this.memberCommand(actorUserId, taskId, expectedRevision, "cancel_issue", (workflowId, input) => this.workflow.cancelIssue ? this.workflow.cancelIssue(workflowId, { ...input, ...(note !== undefined ? { note } : {}) }) : Promise.reject(new Error("Issue cancellation workflow is unavailable")));
-  }
-
-  async reconcileAcceptance(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "reconcile_acceptance", (workflowId, input) => this.workflow.reconcileAcceptance ? this.workflow.reconcileAcceptance(workflowId, input) : Promise.reject(new Error("Acceptance reconciliation workflow is unavailable")));
-  }
-
-  async reconcileMerge(actorUserId: string, taskId: string, expectedRevision: number): Promise<ForgeTask> {
-    return this.planCommand(actorUserId, taskId, expectedRevision, "reconcile_merge", (workflowId, input) => this.workflow.reconcileMerge ? this.workflow.reconcileMerge(workflowId, input) : Promise.reject(new Error("Merge reconciliation workflow is unavailable")));
   }
 
   async continueWork(actorUserId: string, taskId: string, expectedRevision: number, reason: string): Promise<{ original: ForgeTask; successor: ForgeTask }> {
@@ -1444,7 +1323,6 @@ export class TaskService {
       if (isSameRequest(intent)) throw new TaskFailure("Continue work is awaiting reconciliation", [finding("successor-reconciliation", "workflow", "The successor is being reconciled; retry this request")], 503, original);
       throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before continuing work")], 409, original);
     }
-    if (!this.workflow.continueWork) throw new TaskFailure("Continue work workflow is unavailable", [finding("workflow-unavailable", "workflow", "The durable issue workflow is unavailable")], 503, original);
     try {
       const state = await this.workflow.continueWork(original.workflowId, { expectedRevision, actorUserId, reason });
       this.projectState(state);
@@ -1463,32 +1341,8 @@ export class TaskService {
     }
   }
 
-  private async planCommand(actorUserId: string, taskId: string, expectedRevision: number, commandName: IssueCommand, command: (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>): Promise<ForgeTask> {
-    const task = this.getTask(actorUserId, taskId);
-    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
-    if (!task.allowedCommands.includes(commandName)) throw new TaskFailure("Plan action is not available", [finding("illegal-command", "phase", "This plan action is not available")], 409);
-    try { await command(task.workflowId, { expectedRevision, actorUserId, ...(task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}), ...(task.planArtifactSha256 ? { planArtifactSha256: task.planArtifactSha256 } : {}) }); } catch (error) {
-      const message = error instanceof Error && /stale workflow revision/i.test(error.message) ? "Task changed before this action was accepted" : "Plan action could not be accepted";
-      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409, this.getTask(actorUserId, taskId));
-    }
-    const updated = this.getTask(actorUserId, taskId);
-    return updated;
-  }
-
   private projectState(state: IssueWorkflowState): void {
     this.database.projectIssueEvent({ schemaVersion: 1, runId: state.workflowId, eventId: state.lastEventId, state });
-  }
-
-  private async memberCommand(actorUserId: string, taskId: string, expectedRevision: number, commandName: IssueCommand, command: (workflowId: string, input: PlanCommandInput) => Promise<IssueWorkflowState>, workflowInput: PlanCommandInput = { expectedRevision, actorUserId }): Promise<ForgeTask> {
-    const task = this.getTask(actorUserId, taskId);
-    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
-    if (!task.allowedCommands.includes(commandName)) throw new TaskFailure("Task action is not available", [finding("illegal-command", "phase", "This task action is not available")], 409);
-    try { await command(task.workflowId, workflowInput); } catch (error) {
-      const message = error instanceof Error && /stale workflow revision/i.test(error.message) ? "Task changed before this action was accepted" : "Task action could not be accepted";
-      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409, this.getTask(actorUserId, taskId));
-    }
-    const updated = this.getTask(actorUserId, taskId);
-    return updated;
   }
 
   async getTaskImage(actorUserId: string, taskId: string, artifactId: string): Promise<{ artifact: TaskImage; bytes: Buffer }> {

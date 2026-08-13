@@ -1,0 +1,48 @@
+import type { DeliveryBlockerActivities, DeliveryBlockerActivityInput, DeliveryBlockerActivityResult, ProjectionActivities } from "../contracts/activities/projection.js";
+import type { IssueProjectionEvent, IssueWorkflowState } from "../issue-contracts.js";
+import type { ProbeActivities, ProbeWorkflowInput, ProbeWorkflowState } from "../contracts.js";
+import type { ActivityContext } from "./context.js";
+
+export function createProjectionActivities(ctx: ActivityContext): ProbeActivities & ProjectionActivities & DeliveryBlockerActivities {
+  const { database, config, options, createHash, randomBytes, ApplicationFailure, CancelledFailure, Context, z, ProjectionIntegrityFailure, projectionStateHash, ArtifactStore, redact, AgentFailure, AgentService, DeveloperService, cancelDeveloperExecution, reconcileDeveloperExecutions, cancelAgentExecution, reconcileAgentExecutions, DeveloperExecutionLeaseRepository, runDeveloperTurn, AcceptanceFailure, AcceptanceService, CiFailure, CiProviderFailure, CiService, createGithubCiProvider, createGithubReleasePort, GithubReleaseFailure, ReleaseService, ForwardMergeFailure, ForwardMergeService, parseAcceptedProjectRevision, runPinnedVerification, createGitCommandGuard, ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, ArtifactReferenceSchema, CreateSuccessorActivityInputSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeliveryOperationBlockCodeSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PreparePlanRevisionActivityInputSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, RevisedExecutionCoordinatesSchema, SafeSummarySchema, createInitialIssueWorkflowState, normalizeSafeSummary, PlanGovernanceConflict, PlanGovernanceRepository, hashPlanBlockerSubject, hashPlanDecisionSubject, StructuredLogger, activityLogContext, CapacityFailure, CapacityManager, CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema, WorktreeFailure, WorktreeManager, startIssueWorkflow, logger, defaultAgent, githubRelease, defaultDeveloper, artifacts, release, ci, acceptance, legacyForwardMerge, capacity, activityWorktrees, activityWorktreesByBranch, worktrees, agent, developer, putAttentionEvidence, attentionFailure, artifactSha256, agentCategory, invokeAgent, bindCapacityExecution, recoverFinalizedDeveloperResult, runSupervised, latestWorktree, cancellationSignal, agentRuntime, pinnedProjectRevision, normalizeReviewResult, normalizeRepairResult, durableArtifactReference, verifiedArtifactBytes, artifactReference, registerArtifact, reconcileBlocker, asNonRetryableCapacityFailure, asNonRetryableApplicationFailure, asRetryableAgentFailure, DeveloperDeliverySchema } = ctx;
+  void [database, config, options, createHash, randomBytes, ApplicationFailure, CancelledFailure, Context, z, ProjectionIntegrityFailure, projectionStateHash, ArtifactStore, redact, AgentFailure, AgentService, DeveloperService, cancelDeveloperExecution, reconcileDeveloperExecutions, cancelAgentExecution, reconcileAgentExecutions, DeveloperExecutionLeaseRepository, runDeveloperTurn, AcceptanceFailure, AcceptanceService, CiFailure, CiProviderFailure, CiService, createGithubCiProvider, createGithubReleasePort, GithubReleaseFailure, ReleaseService, ForwardMergeFailure, ForwardMergeService, parseAcceptedProjectRevision, runPinnedVerification, createGitCommandGuard, ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, ArtifactReferenceSchema, CreateSuccessorActivityInputSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeliveryOperationBlockCodeSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PreparePlanRevisionActivityInputSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, RevisedExecutionCoordinatesSchema, SafeSummarySchema, createInitialIssueWorkflowState, normalizeSafeSummary, PlanGovernanceConflict, PlanGovernanceRepository, hashPlanBlockerSubject, hashPlanDecisionSubject, StructuredLogger, activityLogContext, CapacityFailure, CapacityManager, CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema, WorktreeFailure, WorktreeManager, startIssueWorkflow, logger, defaultAgent, githubRelease, defaultDeveloper, artifacts, release, ci, acceptance, legacyForwardMerge, capacity, activityWorktrees, activityWorktreesByBranch, worktrees, agent, developer, putAttentionEvidence, attentionFailure, artifactSha256, agentCategory, invokeAgent, bindCapacityExecution, recoverFinalizedDeveloperResult, runSupervised, latestWorktree, cancellationSignal, agentRuntime, pinnedProjectRevision, normalizeReviewResult, normalizeRepairResult, durableArtifactReference, verifiedArtifactBytes, artifactReference, registerArtifact, reconcileBlocker, asNonRetryableCapacityFailure, asNonRetryableApplicationFailure, asRetryableAgentFailure, DeveloperDeliverySchema];
+  return {
+    async recordProbeStarted(input: ProbeWorkflowInput): Promise<ProbeWorkflowState> {
+      const validatedInput = ProbeWorkflowInputSchema.parse(input);
+      logger.child(activityLogContext()).info("Probe activity started", {
+        companyId: validatedInput.companyId,
+      });
+      database.recordProbe({
+        workflowId: validatedInput.workflowId,
+        probeId: validatedInput.probeId,
+        companyId: validatedInput.companyId,
+        status: "running",
+      });
+      return ProbeWorkflowStateSchema.parse({
+        ...validatedInput,
+        status: "running",
+      });
+    },
+    async projectIssueState(input: IssueProjectionEvent): Promise<IssueWorkflowState> {
+      const event = IssueProjectionEventSchema.parse(input);
+      try {
+        // Apply before observing: applyIssueProjection's normalizeLegacyInitialProjection
+        // reconciles the creation-written revision-0 row (which differs only in
+        // stateChangedAt) before observe's authoritative-hash guard compares it.
+        database.projectIssueEvent(event);
+        database.observeIssueProjection(event);
+      } catch (error) {
+        const permanentFailure = asNonRetryableApplicationFailure(error);
+        if (permanentFailure) throw permanentFailure;
+        throw error;
+      }
+      return IssueWorkflowStateSchema.parse(event.state);
+    },
+    async recordDeliveryBlocker(input: DeliveryBlockerActivityInput): Promise<DeliveryBlockerActivityResult> {
+      const summary = input.operation === "review" ? "The delivery review infrastructure did not complete; retry the review." : "The delivery repair infrastructure did not complete; retry the repair.";
+      const artifact = await artifacts.put(input.companyId, "delivery-blocker", { filename: `${input.workflowId}-${input.operation}-blocker.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ type: "forge.delivery-blocker", operation: input.operation, summary }), "utf8") });
+      database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
+      return { artifactId: artifact.id };
+    },
+  };
+}

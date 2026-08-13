@@ -1,0 +1,152 @@
+import {
+  ArtifactPointerSchema,
+  IssueBlockerSchema,
+  IssueWorkflowStateSchema,
+  type ArtifactPointer,
+  type DeliveryReviewActivityResult,
+  type DeliveryWorkflowBlockCode,
+  type DeveloperRepairActivityResult,
+  type IssueBlocker,
+  type IssueBlockerAction,
+  type IssueWorkflowState,
+} from "../issue-contracts.js";
+
+type CompletedReview = Extract<DeliveryReviewActivityResult, { outcome: "completed" }>;
+type CompletedRepair = Omit<Extract<DeveloperRepairActivityResult, { outcome: "completed" }>, "worktreePath"> & { worktreePath?: string };
+type BlockedRepair = Omit<Extract<DeveloperRepairActivityResult, { outcome: "blocked" }>, "worktreePath">;
+
+export function evidencePointer(artifactId: string | undefined, sha256: string | undefined, kind: ArtifactPointer["kind"]): ArtifactPointer | undefined {
+  const pointer = artifactId && sha256 ? { artifactId, sha256, kind } : undefined;
+  return pointer && ArtifactPointerSchema.safeParse(pointer).success ? pointer : undefined;
+}
+
+export function humanBlocker(category: IssueBlocker["category"], summary: string, actions: IssueBlockerAction[], evidence: ArtifactPointer | undefined): IssueBlocker | null {
+  if (!evidence) return null;
+  return IssueBlockerSchema.parse({ category, summary: summary.replace(/[\r\n]+/g, " ").slice(0, 240), unblockOwner: "human", actions, evidence, createdAt: new Date().toISOString(), retry: null });
+}
+
+export function revisioned(state: IssueWorkflowState, phase: IssueWorkflowState["phase"], owner: IssueWorkflowState["owner"], allowedCommands: IssueWorkflowState["allowedCommands"], pendingAction: string): IssueWorkflowState {
+  const revision = state.revision + 1;
+  return IssueWorkflowStateSchema.parse({ ...state, revision, phase, owner, allowedCommands, pendingAction, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${revision}` });
+}
+
+export function reviewingDeliveryState(state: IssueWorkflowState): IssueWorkflowState {
+  return revisioned(state, "reviewing_delivery", "lead", [], "Lead delivery review");
+}
+
+export function reviewBlockedState(state: IssueWorkflowState, result: { attemptId: string | null; code: DeliveryWorkflowBlockCode; summary: string; evidenceArtifactId: string | null }, infrastructure = false): IssueWorkflowState {
+  return IssueWorkflowStateSchema.parse({
+    ...revisioned(state, "delivery_blocked", "human", ["review_delivery", "cancel_issue"], infrastructure ? "Delivery review infrastructure failed; retry the review" : "Delivery review blocked; retry the review or cancel"),
+    deliveryReviewAttemptId: result.attemptId,
+    deliveryReviewId: null,
+    deliveryReviewOutcome: null,
+    deliveryReviewSummary: null,
+    deliveryBlockingFindings: [],
+    deliveryRepairPlan: null,
+    deliveryReviewBlockerCode: result.code,
+    deliveryReviewBlockerSummary: result.summary,
+    deliveryReviewBlockerEvidenceArtifactId: result.evidenceArtifactId,
+  });
+}
+
+export function repairRequiredState(state: IssueWorkflowState, result: CompletedReview, repairCycleLimit: number): IssueWorkflowState {
+  const openBlocking = result.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
+  const canRepair = result.review.opinion === "blocking" && result.review.repairPlan !== null && openBlocking.length > 0 && (state.repairCycle ?? 0) < repairCycleLimit;
+  const phase = result.review.opinion === "approved" ? "delivery_reviewed" : canRepair ? "repair_required" : "delivery_blocked";
+  const owner = phase === "repair_required" ? "lead" : "human";
+  const allowedCommands: IssueWorkflowState["allowedCommands"] = phase === "repair_required" ? ["repair_delivery", "cancel_issue"] : phase === "delivery_blocked" ? ["record_delivery_decision", "cancel_issue"] : ["publish_draft", "cancel_issue"];
+  const pendingAction = phase === "repair_required" ? "Developer repair of blocking findings" : phase === "delivery_blocked" ? "Member decision required" : "Publish draft pull request";
+  return IssueWorkflowStateSchema.parse({
+    ...revisioned(state, phase, owner, allowedCommands, pendingAction),
+    blocker: phase === "delivery_blocked" ? humanBlocker("agent_exhausted", result.review.summary, [{ command: "record_delivery_decision", label: "Record delivery decision", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], result.review.reviewArtifact ? evidencePointer(result.review.reviewArtifact.artifactId, result.review.reviewArtifact.sha256, "delivery-review") : undefined) : null,
+    deliveryReviewId: result.review.reviewId,
+    deliveryReviewAttemptId: result.attemptId,
+    deliveryReviewOutcome: result.review.opinion,
+    deliveryReviewSummary: result.review.summary,
+    deliveryBlockingFindings: openBlocking,
+    deliveryRepairPlan: result.review.repairPlanArtifactId ? null : result.review.repairPlan,
+    deliveryRepairPlanArtifactId: result.review.repairPlanArtifactId ?? null,
+    deliveryRepairPlanSha256: result.review.repairPlanSha256 ?? null,
+    deliveryRepairAuthority: result.review.opinion === "blocking" ? "delivery_review" : null,
+    deliveryReviewBlockerCode: null,
+    deliveryReviewBlockerSummary: null,
+    deliveryReviewBlockerEvidenceArtifactId: null,
+    deliveryReviewSupersedesId: result.review.supersedesReviewId,
+    deliveryReviewArtifact: result.review.reviewArtifact,
+    repairCycle: state.repairCycle ?? 0,
+  });
+}
+
+export function repairBlockedState(state: IssueWorkflowState, result: BlockedRepair & { evidenceArtifactSha256?: string }, repairCycleLimit: number): IssueWorkflowState {
+  const retry = result.cycle < repairCycleLimit && result.code !== "repair-cap-exhausted" && result.code !== "worktree-unsafe";
+  return IssueWorkflowStateSchema.parse({
+    ...revisioned(state, "delivery_blocked", "human", retry ? ["repair_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], retry ? "Developer repair blocked; retry the repair" : "Member decision required"),
+    blocker: retry ? null : humanBlocker("agent_exhausted", result.summary, [{ command: "record_delivery_decision", label: "Record delivery decision", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.evidenceArtifactId, result.evidenceArtifactSha256, "developer-repair")),
+    repairCycle: result.cycle,
+    deliveryRepairAttemptId: result.repairAttemptId,
+    deliveryRepairBlockerCode: result.code,
+    deliveryRepairBlockerSummary: result.summary,
+    deliveryRepairBlockerEvidenceArtifactId: result.evidenceArtifactId,
+  });
+}
+
+export function repairInfrastructureBlockedState(state: IssueWorkflowState, cycle: number, repairCycleLimit: number, evidenceArtifactId: string | null): IssueWorkflowState {
+  const retry = cycle < repairCycleLimit;
+  return IssueWorkflowStateSchema.parse({
+    ...revisioned(state, "delivery_blocked", "human", retry ? ["repair_delivery", "cancel_issue"] : ["record_delivery_decision", "cancel_issue"], "Repair infrastructure failed; retry or record a decision"),
+    repairCycle: cycle,
+    deliveryRepairBlockerCode: "repair-infrastructure-failure",
+    deliveryRepairBlockerSummary: "The repair infrastructure did not complete; retry the repair.",
+    deliveryRepairBlockerEvidenceArtifactId: evidenceArtifactId,
+  });
+}
+
+export function repairedDeliveryAwaitingFreshReviewState(state: IssueWorkflowState, result: CompletedRepair): IssueWorkflowState {
+  return IssueWorkflowStateSchema.parse({
+    ...revisioned(state, "delivery_ready", "lead", ["review_delivery", "cancel_issue"], "Fresh Lead delivery review required"),
+    developerExecutionId: result.developerExecutionId,
+    developerSessionRef: result.developerSessionRef,
+    worktreePath: result.worktreePath ?? state.worktreePath,
+    branchName: result.branchName,
+    targetBaseSha: result.subject.targetBaseSha,
+    resultCommit: result.resultCommit,
+    resultTree: result.resultTree,
+    dirtyState: result.dirtyState,
+    deliveryArtifactId: result.deliveryArtifactId,
+    developerEvidenceArtifactId: result.evidenceArtifactId,
+    deliverySummary: result.summary,
+    developerOutcome: "completed",
+    repairCycle: result.cycle,
+    deliveryRepairAttemptId: result.repairAttemptId,
+    deliveryRepairBlockerCode: null,
+    deliveryRepairBlockerSummary: null,
+    deliveryRepairBlockerEvidenceArtifactId: null,
+    deliveryReviewSupersedesId: state.deliveryReviewId,
+    deliveryReviewId: null,
+    deliveryReviewOutcome: null,
+    deliveryReviewSummary: null,
+    deliveryBlockingFindings: [],
+    deliveryRepairPlan: null,
+    deliveryReviewBlockerCode: null,
+    deliveryReviewBlockerSummary: null,
+    deliveryReviewBlockerEvidenceArtifactId: null,
+    releaseId: null,
+    pullRequestNumber: null,
+    pullRequestUrl: null,
+    expectedHeadSha: null,
+    expectedHeadTree: null,
+    ciRunId: null,
+    ciAttempt: 0,
+    ciOutcome: null,
+    ciNextPollAt: null,
+    finalReviewId: null,
+    finalReviewOutcome: null,
+    acceptanceId: null,
+    acceptedHeadSha: null,
+    mergeOutcome: null,
+  });
+}
+
+export function reviewApprovedState(state: IssueWorkflowState, result: CompletedReview): IssueWorkflowState {
+  return repairRequiredState(state, result, state.repairCycle ?? 0);
+}

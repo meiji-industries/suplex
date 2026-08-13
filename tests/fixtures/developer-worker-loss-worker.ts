@@ -41,8 +41,8 @@ async function main(): Promise<void> {
   capacity.reconcileFromLedgers();
 
   const projectIssueState = async (event: IssueProjectionEvent): Promise<IssueWorkflowState> => {
-    database.observeIssueProjection(event);
     database.projectIssueEvent(event);
+    database.observeIssueProjection(event);
     return event.state;
   };
 

@@ -14,10 +14,11 @@ import { ForgeDatabase } from "../src/database.js";
 import { CapacityManager } from "../src/capacity.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
-import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
-import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueWorkflowInput, type IssueWorkflowState, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
+import { TaskService } from "../src/tasks.js";
+import { IssueProjectionEventSchema, IssueWorkflowStateSchema } from "../src/temporal/issue-contracts.js";
 import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 import { WorktreeManager } from "../src/worktrees.js";
+import { createWorkflowPortFake } from "./fakes/workflow-port.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,8 +38,8 @@ function fakeWebAuthn(): WebAuthnAdapter {
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
 const github: GithubAdapter = { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } };
 
-test("task API creates an idempotent backlog card and accepts only the current planning revision", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-task-api-test-"));
+test("task API command dispatch preserves revision and evidence lineage", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-task-api-commands-test-"));
   const repositoryRoot = join(root, "repositories"); const worktreeRoot = join(root, "worktrees"); const repositoryPath = join(repositoryRoot, "repo");
   await mkdir(repositoryPath, { recursive: true }); await mkdir(worktreeRoot, { recursive: true });
   await git(["init", "-b", "main"], repositoryPath);
@@ -57,17 +58,10 @@ test("task API creates an idempotent backlog card and accepts only the current p
   const profile = projects.createProfile("admin-1", { name: "API profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const project = await projects.createProject("admin-1", company.id, { name: "API project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, reviewer: profile.id, developer: profile.id } });
   const active = await projects.activateProject("admin-1", project.id);
-  const projectState = (state: IssueWorkflowState): IssueWorkflowState => {
+  const workflow = createWorkflowPortFake({ companyId: company.id, projectId: active.id, projectRevisionId: active.activeRevisionId!, projectState: (state) => {
     database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state }));
     return state;
-  };
-  const workflow: IssueWorkflowPort = {
-    async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) { const state = buildInitialIssueWorkflowState({ ...input, workflowId: input.workflowId! }); projectState(state); return { workflowId: input.workflowId!, runId: "run" }; },
-    async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return projectState({ workflowId, companyId: company.id, projectId: active.id, issueId: workflowId.split("-issue-")[1]!, projectRevisionId: active.activeRevisionId!, phase: "approval", revision: input.expectedRevision + 1, owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "reject_plan"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null, planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: false }); },
-    async requestSupplementalReview(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return projectState({ workflowId, companyId: company.id, projectId: active.id, issueId: workflowId.split("-issue-")[1]!, projectRevisionId: active.activeRevisionId!, phase: "approval", revision: input.expectedRevision + 1, owner: "human", allowedCommands: ["approve_plan", "reject_plan"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null, planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: true }); },
-    async approvePlan(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return projectState({ workflowId, companyId: company.id, projectId: active.id, issueId: workflowId.split("-issue-")[1]!, projectRevisionId: active.activeRevisionId!, phase: "ready_for_development", revision: input.expectedRevision + 1, owner: "lead", allowedCommands: ["start_development"], pendingAction: "Start development", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null, planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: true }); },
-    async rejectPlan(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> { return projectState({ workflowId, companyId: company.id, projectId: active.id, issueId: workflowId.split("-issue-")[1]!, projectRevisionId: active.activeRevisionId!, phase: "planning", revision: input.expectedRevision + 1, owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, continuationCount: 0, lastSummaryHash: null, planRevision: null, planMaterial: null, materialCategories: [], supplementalReviewUsed: false }); },
-  };
+  } });
   const tasks = new TaskService(database, auth, projects, config, { workflow });
   const app = createApp({ config, auth, projects, tasks, health: {
     temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }), database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }), artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }), worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }), codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }), ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
@@ -98,11 +92,8 @@ test("task API creates an idempotent backlog card and accepts only the current p
   const memberCookie = memberCookieValues.map((setCookie) => setCookie.split(";", 1)[0] ?? "").find((pair) => pair.startsWith(`${SESSION_COOKIE_NAME}=`)) ?? "";
   auth.addMembership(adminUserId, memberUserId, otherCompany.id);
   try {
-    const created = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload: { projectId: project.id, title: "API task", description: "# Details", idempotencyKey: "api-task-0001", supplementalReview: true, images: [{ filename: "note.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] } });
+    const created = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload: { projectId: project.id, title: "API task", description: "# Details", idempotencyKey: "api-task-commands-0001", supplementalReview: true, images: [{ filename: "note.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] } });
     expect(created.statusCode).toBe(201);
-    expect(created.json()).toMatchObject({ title: "API task", phase: "backlog", revision: 0, allowedCommands: ["start_planning"] });
-    const duplicate = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload: { projectId: project.id, title: "API task", description: "# Details", idempotencyKey: "api-task-0001", supplementalReview: true, images: [{ filename: "note.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] } });
-    expect(duplicate.statusCode).toBe(200);
     const task = created.json() as { id: string; workflowId: string };
     const body = await new ArtifactStore(config.artifactRoot).put(company.id, "release-public-body", { filename: "release.md", mimeType: "text/markdown", bytes: Buffer.from("## Summary\n\nAPI task") });
     database.authTransaction((db) => {

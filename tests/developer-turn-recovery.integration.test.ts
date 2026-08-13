@@ -58,7 +58,7 @@ test("INV-02/INV-03/INV-05/INV-06 competing supervisors preserve one child, grow
     expect(result.outputTruncated).toBe(false);
     expect((await readFile(outputPath, "utf8"))).toContain("completed");
     expect((await readFile(launchCountPath, "utf8")).trim().split(/\r?\n/)).toHaveLength(1);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 3 }); }
 });
 
 test("INV-01/INV-02 retry starts the same turn after worker loss before supervisor spawn", async () => {

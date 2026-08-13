@@ -7,50 +7,21 @@ import { expect, test } from "vitest";
 import { ArtifactManifestEntrySchema, ArtifactStore } from "../src/artifacts.js";
 import { canonicalJson } from "../src/canonical-json.js";
 import { projectionStateHash } from "../src/database.js";
-import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/temporal/issue-contracts.js";
-
-const input = {
-  workflowId: "workflow-installation-issue-task-recovery",
-  companyId: "company-recovery",
-  projectId: "project-recovery",
-  issueId: "task-recovery",
-  projectRevisionId: "revision-recovery",
-  briefArtifactId: "artifact-brief",
-  briefSha256: "a".repeat(64),
-  imageArtifactIds: [],
-  requestHash: "b".repeat(64),
-  roleProfiles: { lead: "profile-lead" },
-  supplementalReview: false,
-  repairCycleLimit: 2,
-  stateChangedAt: "2026-08-11T00:00:00.000Z",
-};
+import { expectedInitialIssueWorkflowState, initialStateFixture } from "./fixtures/issue-state.js";
 
 test("revision-zero state is one schema-parsed canonical value", () => {
-  const fromCreation = buildInitialIssueWorkflowState(input);
-  const fromWorkflow = IssueWorkflowStateSchema.parse({
-    workflowId: input.workflowId,
-    companyId: input.companyId,
-    projectId: input.projectId,
-    issueId: input.issueId,
-    projectRevisionId: input.projectRevisionId,
-    requestHash: input.requestHash,
-    phase: "backlog",
-    revision: 0,
-    owner: "human",
-    allowedCommands: ["start_planning"],
-    pendingAction: "Start planning",
-    lastEventId: `${input.workflowId}:0`,
-    continuationCount: 0,
-    lastSummaryHash: null,
-    repairCycle: 0,
-    blocker: null,
-    stateChangedAt: input.stateChangedAt,
-    activeOperation: null,
-    processedCommandIds: [],
-  });
-
+  const fromCreation = initialStateFixture();
+  const fromWorkflow = expectedInitialIssueWorkflowState();
   expect(canonicalJson(fromCreation)).toBe(canonicalJson(fromWorkflow));
   expect(projectionStateHash(fromCreation)).toBe(projectionStateHash(fromWorkflow));
+});
+
+// FROZEN: pins the SERIALIZED FIELD ORDER of IssueWorkflowState. Schema
+// decomposition (contracts/state/*) must keep this byte-identical. If this
+// fails after a schema refactor, the refactor reordered fields — fix the
+// refactor, do not update the snapshot without human sign-off.
+test("initial state serialized field order is frozen", () => {
+  expect(JSON.stringify(initialStateFixture(), null, 2)).toMatchSnapshot();
 });
 
 test("an artifact manifest is persisted before bytes and cleanup is exact", async () => {

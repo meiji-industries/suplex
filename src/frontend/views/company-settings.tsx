@@ -1,0 +1,84 @@
+import { Alert, AlertDescription } from ".././components/ui/alert.js";
+import { Button } from ".././components/ui/button.js";
+import { Input } from ".././components/ui/input.js";
+import { Skeleton } from ".././components/ui/skeleton.js";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from ".././components/ui/alert-dialog.js";
+import { ApplicationFrame } from ".././components/app/application-frame.js";
+import { useCompanyContext } from ".././components/app/company-context.js";
+import { SettingsLayout, SettingsSection, SettingRow } from ".././components/app/settings-layout.js";
+import { companySettingsPath, withCompany, type CompanyStatus } from ".././lib/api.js";
+import { Archive, RotateCcw, Save, Pause } from "lucide-react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
+
+export function CompanySettingsView(): ReactElement {
+  const { user, companies, currentCompany, loading, selectCompany, renameCompany, setCompanyStatus } = useCompanyContext();
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState("");
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const pathId = useMemo(() => {
+    const match = /^\/companies\/([^/]+)\/settings$/.exec(window.location.pathname);
+    if (!match?.[1]) return "";
+    try { return decodeURIComponent(match[1]); } catch { return ""; }
+  }, []);
+  const company = companies.find((candidate) => candidate.id === pathId);
+
+  useEffect(() => {
+    if (company && company.id !== currentCompany?.id) selectCompany(company.id);
+  }, [company, currentCompany?.id, selectCompany]);
+  useEffect(() => { setName(company?.name ?? ""); setSaved(false); }, [company?.id]);
+
+  const notFound = !loading && (user?.role !== "admin" || !company);
+  if (loading) {
+    return <ApplicationFrame title="Company settings"><div className="space-y-2 p-4" aria-busy="true" aria-label="Loading company settings"><Skeleton className="h-4 w-40" /><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-3/4" /></div></ApplicationFrame>;
+  }
+  if (notFound) {
+    return <ApplicationFrame title="Company settings"><div className="p-4"><p className="text-xs text-muted-foreground">Company not found.</p><a className="mt-3 inline-flex text-xs text-primary underline underline-offset-2" href={withCompany("/projects", currentCompany?.id)}>Back to Projects</a></div></ApplicationFrame>;
+  }
+  if (!company) return <ApplicationFrame title="Company settings"><div className="p-4 text-xs text-muted-foreground">Company not found.</div></ApplicationFrame>;
+
+  const mutateStatus = async (status: CompanyStatus): Promise<void> => {
+    setBusy(status); setError("");
+    try { await setCompanyStatus(company.id, status); setArchiveOpen(false); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to update company"); }
+    finally { setBusy(""); }
+  };
+  const save = async (): Promise<void> => {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === company.name || busy) return;
+    setBusy("rename"); setError(""); setSaved(false);
+    try { await renameCompany(company.id, trimmed); setSaved(true); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to rename company"); }
+    finally { setBusy(""); }
+  };
+
+  const backHref = withCompany("/projects", company.id);
+
+  return (
+    <SettingsLayout title="Workspace" companyId={company.id} backHref={backHref} activeHref={companySettingsPath(company.id)}>
+      <SettingsSection title="Profile">
+        <SettingRow label="Company name" description="Public workspace name.">
+          <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void save(); }}>
+            <Input id="company-name" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} />
+            <Button type="submit" size="sm" disabled={busy !== "" || !name.trim() || name.trim() === company.name}><Save className="size-3.5" />{busy === "rename" ? "Saving…" : saved ? "Saved" : "Save"}</Button>
+          </form>
+        </SettingRow>
+        <SettingRow label="Company ID" description="Unique identifier.">
+          <code className="select-all text-xs text-muted-foreground">{company.id}</code>
+        </SettingRow>
+        <SettingRow label="Created" description={new Date(company.createdAt).toLocaleDateString()}>
+          <span className="text-xs text-muted-foreground">{new Date(company.createdAt).toLocaleDateString()}</span>
+        </SettingRow>
+      </SettingsSection>
+      {error ? <div className="mb-4 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
+      <SettingsSection title="Lifecycle" description="Control workspace activity.">
+        {company.status === "active" ? <SettingRow label="Pause company" description="Existing records remain available; new projects and tasks are blocked."><Button variant="outline" size="sm" onClick={() => void mutateStatus("paused")} disabled={busy !== ""}><Pause className="size-3.5" />{busy === "paused" ? "Pausing…" : "Pause company"}</Button></SettingRow> : null}
+        {company.status === "paused" ? <SettingRow label="Reactivate company" description="Restore creation of new projects and tasks."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Reactivating…" : "Reactivate company"}</Button></SettingRow> : null}
+        {company.status !== "archived" ? <SettingRow label="Archive company" description="Archive is reversible, retains history, and blocks new work." destructive><Button variant="outline" size="sm" className="text-rose-700" onClick={() => setArchiveOpen(true)} disabled={busy !== ""}><Archive className="size-3.5" />Archive company</Button></SettingRow> : null}
+        {company.status === "archived" ? <SettingRow label="Restore company" description="Restore the company to active status."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Restoring…" : "Restore company"}</Button></SettingRow> : null}
+      </SettingsSection>
+      <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Archive {company.name}?</AlertDialogTitle><AlertDialogDescription>This is reversible. Project and task history remains readable, but new work is blocked.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void mutateStatus("archived")} disabled={busy !== ""}>{busy === "archived" ? "Archiving…" : "Archive"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+    </SettingsLayout>
+  );
+}

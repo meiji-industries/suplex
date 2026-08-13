@@ -4,7 +4,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { temporalConnectionOptions, type ForgeConfig } from "../config.js";
 import type { HealthCheck } from "../health.js";
 import { runtimeIdentifiers } from "../runtime-identifiers.js";
-import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, continueWorkUpdate, finalReviewUpdate, issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow, publishDraftUpdate, reconcileAcceptanceUpdate, reconcileCIUpdate, reconcileMergeUpdate, recordDeliveryDecisionUpdate, recordProgressUpdate, rejectPlanUpdate, repairCIUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, requestPlanRevisionUpdate, requestSupplementalReviewUpdate, respondPlanBlockerUpdate, resolveDecisionBlockerUpdate, resolveMergeConflictUpdate, revisePlanUpdate, retryCapacityUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, retryForwardMergeVerificationUpdate, retryTargetBaseReconciliationUpdate, startDevelopmentUpdate, startPlanningUpdate, verifyDeveloperOwnershipUpdate } from "./workflows.js";
+import { issueCommands, type IssueCommand } from "../commands/registry.js";
+import { issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow } from "./workflows.js";
+import { issueUpdates } from "./issue-updates.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { ContinueWorkCommandSchema, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, StartPlanningInputSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
@@ -226,15 +228,25 @@ export async function startIssueWorkflow(config: ForgeConfig, input: Omit<IssueW
   }
 }
 
-export async function startIssuePlanning(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+export function issueCommandId(workflowId: string, command: IssueCommand, input: StartPlanningInput | PlanCommandInput): string {
+  const descriptor = issueCommands[command];
+  if (descriptor.family === "bespoke" || descriptor.durableCommandKind === null) throw new Error(`Command ${command} requires its dedicated client function`);
+  return durableCommand(workflowId, descriptor.durableCommandKind, input).commandId;
+}
+
+export async function executeIssueCommand(config: ForgeConfig, workflowId: string, command: IssueCommand, input: StartPlanningInput | PlanCommandInput): Promise<IssueWorkflowState> {
+  const descriptor = issueCommands[command];
+  if (descriptor.family === "bespoke") throw new Error(`Command ${command} requires its dedicated client function`);
   const identifiers = runtimeIdentifiers(config.installationId);
   if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
-  const validatedInput = StartPlanningInputSchema.parse(durableCommand(workflowId, "start-planning", input));
-  assertPayloadWithinLimit("startPlanning command", validatedInput);
+  const schema = descriptor.family === "start" ? StartPlanningInputSchema : PlanCommandInputSchema;
+  const durable = descriptor.durableCommandKind === null ? input : durableCommand(workflowId, descriptor.durableCommandKind, input);
+  const validatedInput = schema.parse(durable);
+  assertPayloadWithinLimit(descriptor.payloadLabel, validatedInput);
   const temporalClient = await connectTemporal(config);
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(startPlanningUpdate, { args: [validatedInput], updateId: validatedInput.commandId }));
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates[command] as never, { args: [validatedInput as never], updateId: (validatedInput as { commandId: string }).commandId }));
   } finally {
     temporalClient.connection.close();
   }
@@ -248,7 +260,7 @@ export async function acceptIssuePlanning(config: ForgeConfig, workflowId: strin
   const temporalClient = await connectTemporal(config);
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    await handle.startUpdate(startPlanningUpdate, { args: [validatedInput], waitForStage: WorkflowUpdateStage.ACCEPTED });
+    await handle.startUpdate(issueUpdates.start_planning, { args: [validatedInput], waitForStage: WorkflowUpdateStage.ACCEPTED });
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const state = IssueWorkflowStateSchema.parse(await handle.query(issueStateQuery));
       if (state.revision > validatedInput.expectedRevision) return state;
@@ -268,40 +280,20 @@ export async function resolveIssueDecisionBlocker(config: ForgeConfig, workflowI
   const temporalClient = await connectTemporal(config);
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(resolveDecisionBlockerUpdate, { args: [validatedInput] }));
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.resolve_decision_blocker, { args: [validatedInput] }));
   } finally { temporalClient.connection.close(); }
 }
 
-async function issuePlanUpdate(config: ForgeConfig, workflowId: string, input: PlanCommandInput, update: typeof requestSupplementalReviewUpdate | typeof approvePlanUpdate | typeof requestPlanRevisionUpdate | typeof respondPlanBlockerUpdate | typeof rejectPlanUpdate | typeof recordDeliveryDecisionUpdate | typeof cancelIssueUpdate, label = "plan command"): Promise<IssueWorkflowState> {
+export async function rejectIssuePlan(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
   if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
-  const validatedInput = PlanCommandInputSchema.parse(durableCommand(workflowId, update.name, input));
-  assertPayloadWithinLimit(label, validatedInput);
+  const validatedInput = PlanCommandInputSchema.parse(durableCommand(workflowId, "rejectPlan", input));
+  assertPayloadWithinLimit("plan command", validatedInput);
   const temporalClient = await connectTemporal(config);
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(update, { args: [validatedInput], updateId: validatedInput.commandId }));
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.reject_plan, { args: [validatedInput], updateId: validatedInput.commandId }));
   } finally { temporalClient.connection.close(); }
-}
-
-export function requestIssueSupplementalReview(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
-  return issuePlanUpdate(config, workflowId, input, requestSupplementalReviewUpdate);
-}
-
-export function approveIssuePlan(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
-  return issuePlanUpdate(config, workflowId, { ...input, ...(input.note !== undefined ? { note: input.note } : {}) }, approvePlanUpdate);
-}
-
-export function requestIssuePlanRevision(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
-  return issuePlanUpdate(config, workflowId, input, requestPlanRevisionUpdate);
-}
-
-export function rejectIssuePlan(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
-  return issuePlanUpdate(config, workflowId, input, rejectPlanUpdate);
-}
-
-export function respondIssuePlanBlocker(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
-  return issuePlanUpdate(config, workflowId, input, respondPlanBlockerUpdate);
 }
 
 export async function reviseIssuePlan(config: ForgeConfig, workflowId: string, input: PlanRevisionCommand): Promise<IssueWorkflowState> {
@@ -312,7 +304,7 @@ export async function reviseIssuePlan(config: ForgeConfig, workflowId: string, i
   const temporalClient = await connectTemporal(config);
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(revisePlanUpdate, { args: [validatedInput] }));
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.revise_plan, { args: [validatedInput] }));
   } finally { temporalClient.connection.close(); }
 }
 
@@ -324,123 +316,7 @@ export async function continueIssueWork(config: ForgeConfig, workflowId: string,
   const temporalClient = await connectTemporal(config);
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(continueWorkUpdate, { args: [validatedInput] }));
-  } finally { temporalClient.connection.close(); }
-}
-
-export async function startIssueDevelopment(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  const identifiers = runtimeIdentifiers(config.installationId);
-  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
-  const validatedInput = StartPlanningInputSchema.parse(durableCommand(workflowId, "start-development", input));
-  assertPayloadWithinLimit("start development command", validatedInput);
-  const temporalClient = await connectTemporal(config);
-  try {
-    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(startDevelopmentUpdate, { args: [validatedInput], updateId: validatedInput.commandId }));
-  } finally { temporalClient.connection.close(); }
-}
-
-export async function retryIssueDevelopment(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  const identifiers = runtimeIdentifiers(config.installationId);
-  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
-  const validatedInput = StartPlanningInputSchema.parse(durableCommand(workflowId, "retry-development", input));
-  assertPayloadWithinLimit("retry development command", validatedInput);
-  const temporalClient = await connectTemporal(config);
-  try {
-    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(retryDevelopmentUpdate, { args: [validatedInput], updateId: validatedInput.commandId }));
-  } finally { temporalClient.connection.close(); }
-}
-
-export function retryIssueCapacity(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, retryCapacityUpdate, "capacity retry command");
-}
-
-export async function cancelIssueDevelopment(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  const identifiers = runtimeIdentifiers(config.installationId);
-  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
-  const validatedInput = StartPlanningInputSchema.parse(durableCommand(workflowId, "cancel-development", input));
-  assertPayloadWithinLimit("cancel development command", validatedInput);
-  const temporalClient = await connectTemporal(config);
-  try {
-    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(cancelDevelopmentUpdate, { args: [validatedInput], updateId: validatedInput.commandId }));
-  } finally { temporalClient.connection.close(); }
-}
-
-export function verifyIssueDeveloperOwnership(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, verifyDeveloperOwnershipUpdate, "Developer ownership verification command");
-}
-
-export function reviewIssueDelivery(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, reviewDeliveryUpdate, "delivery review command");
-}
-
-export function repairIssueDelivery(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, repairDeliveryUpdate, "delivery repair command");
-}
-
-export function recordIssueDeliveryDecision(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
-  return issuePlanUpdate(config, workflowId, input, recordDeliveryDecisionUpdate);
-}
-
-export function publishIssueDraft(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, publishDraftUpdate, "draft publication command");
-}
-
-export function resolveIssueMergeConflict(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, resolveMergeConflictUpdate, "merge-conflict resolution command");
-}
-
-export function retryIssueTargetBaseReconciliation(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, retryTargetBaseReconciliationUpdate, "target-base reconciliation retry command");
-}
-
-export function retryIssueForwardMergeVerification(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, retryForwardMergeVerificationUpdate, "forward-merge verification retry command");
-}
-
-export function reconcileIssueCI(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, reconcileCIUpdate, "CI reconciliation command");
-}
-
-export function repairIssueCI(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, repairCIUpdate, "CI repair command");
-}
-
-export function finalReviewIssue(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, finalReviewUpdate, "final review command");
-}
-
-export function acceptIssueDelivery(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
-  return issuePlanUpdate(config, workflowId, input, acceptDeliveryUpdate);
-}
-
-export function requestIssueDeliveryChanges(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
-  return issuePlanUpdate(config, workflowId, input, requestDeliveryChangesUpdate);
-}
-
-export function cancelIssue(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
-  return issuePlanUpdate(config, workflowId, input, cancelIssueUpdate, "issue cancellation command");
-}
-
-export function reconcileIssueAcceptance(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, reconcileAcceptanceUpdate, "acceptance reconciliation command");
-}
-
-export function reconcileIssueMerge(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-  return issueStartUpdate(config, workflowId, input, reconcileMergeUpdate, "merge reconciliation command");
-}
-
-async function issueStartUpdate(config: ForgeConfig, workflowId: string, input: StartPlanningInput, update: typeof startDevelopmentUpdate | typeof retryCapacityUpdate | typeof retryDevelopmentUpdate | typeof cancelDevelopmentUpdate | typeof verifyDeveloperOwnershipUpdate | typeof reviewDeliveryUpdate | typeof repairDeliveryUpdate | typeof publishDraftUpdate | typeof resolveMergeConflictUpdate | typeof retryTargetBaseReconciliationUpdate | typeof retryForwardMergeVerificationUpdate | typeof reconcileAcceptanceUpdate | typeof reconcileCIUpdate | typeof repairCIUpdate | typeof finalReviewUpdate | typeof cancelIssueUpdate | typeof reconcileMergeUpdate, label: string): Promise<IssueWorkflowState> {
-  const identifiers = runtimeIdentifiers(config.installationId);
-  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
-  const validatedInput = StartPlanningInputSchema.parse(durableCommand(workflowId, label, input));
-  assertPayloadWithinLimit(label, validatedInput);
-  const temporalClient = await connectTemporal(config);
-  try {
-    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(update, { args: [validatedInput], updateId: validatedInput.commandId }));
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.continue_work, { args: [validatedInput] }));
   } finally { temporalClient.connection.close(); }
 }
 
@@ -464,7 +340,7 @@ export async function recordIssueProgress(config: ForgeConfig, workflowId: strin
   const temporalClient = await connectTemporal(config);
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(recordProgressUpdate, { args: [validatedInput], updateId: validatedInput.commandId }));
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.record_progress, { args: [validatedInput], updateId: validatedInput.commandId }));
   } finally {
     temporalClient.connection.close();
   }

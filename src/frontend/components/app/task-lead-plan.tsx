@@ -7,7 +7,7 @@ type LeadPlanContent = {
   summary: string;
   reproduction: string | null;
   rootCauseAnalysis: string | null;
-  steps: Array<{ number: number; instruction: string; entryPoint?: string | null; completionCriterion?: string; verification: string }>;
+  steps: Array<{ number: number; instruction: string; entryPoint?: string | null | undefined; completionCriterion?: string | null | undefined; verification: string; verificationCommands?: string[] | undefined }>;
   compatibilityAnalysis: string;
   operationalAnalysis: string;
   verificationStrategy: string;

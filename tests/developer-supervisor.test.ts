@@ -38,7 +38,7 @@ test("INV-06 real supervisor writes one bounded, hashed result envelope", async 
     expect(await readFile(join(executionRoot, "events.jsonl"), "utf8")).toContain("supervisor-child-ok");
     expect(await readFile(join(executionRoot, "heartbeat.json"), "utf8")).toContain("result_ready");
     for (let attempt = 0; attempt < 100 && exitCode === null; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 3 }); }
 });
 
 test("INV-11/INV-12 PID reuse during cancellation is ambiguous, never exited", async () => {

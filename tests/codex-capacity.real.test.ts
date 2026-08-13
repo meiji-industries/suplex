@@ -18,7 +18,7 @@ import { DeveloperService } from "../src/codex-developer.js";
 import { ForgeDatabase } from "../src/database.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 import { createActivities } from "../src/temporal/activities.js";
-import { ensureTemporalFoundation, queryIssueWorkflow, startIssueDevelopment, startIssueWorkflow } from "../src/temporal/service.js";
+import { ensureTemporalFoundation, executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/temporal/service.js";
 
 const execFileAsync = promisify(execFile);
 const runReal = process.env.FORGE_RUN_REAL_CODEX_CAPACITY === "1";
@@ -226,7 +226,7 @@ test.skipIf(!runReal)("real Temporal Workflow/Activity path runs two authenticat
     const continuationState = (workflowId: string, issueId: string) => ({ phase: "ready_for_development" as const, revision: 0, owner: "lead" as const, allowedCommands: ["start_development", "cancel_issue"] as ("start_development" | "cancel_issue")[], pendingAction: "Start development", lastEventId: `${workflowId}:0`, continuationCount: 0, lastSummaryHash: null, planRevision: 1, planMaterial: true, leadSessionRef: `lead-session-${issueId}`, leadOutputArtifactId: plan.id });
     const workflows = await Promise.all(["workflow-a", "workflow-b", "workflow-c"].map((issueId) => startIssueWorkflow(config, { companyId: "workflow-company", projectId: "workflow-project", issueId, projectRevisionId: "workflow-revision", briefArtifactId: plan.id, briefSha256: plan.sha256, imageArtifactIds: [], roleProfiles: { lead: "workflow-profile", developer: "workflow-profile" }, supplementalReview: false, continuationState: continuationState(`${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-${issueId}`, issueId) })));
     const startedAt = new Date().toISOString();
-    const development = workflows.map((workflow) => startIssueDevelopment(config, workflow.workflowId, { expectedRevision: 1, actorUserId: "workflow-admin" }));
+    const development = workflows.map((workflow) => executeIssueCommand(config, workflow.workflowId, "start_development", { expectedRevision: 1, actorUserId: "workflow-admin" }));
     const settledDevelopment = Promise.allSettled(development);
     let states = await Promise.all(workflows.map((workflow) => queryIssueWorkflow(config, workflow.workflowId)));
     for (let attempt = 0; attempt < 120 && !(states.filter((state) => state.capacity?.status === "active").length === 2 && states.some((state) => state.capacity?.status === "queued")); attempt += 1) {

@@ -4,7 +4,10 @@ import { join } from "node:path";
 
 import { expect, test } from "vitest";
 
-import { ForgeDatabase } from "../src/database.js";
+import { createTestConfig } from "../src/config.js";
+import { ForgeDatabase, projectionStateHash } from "../src/database.js";
+import { createActivityContext } from "../src/temporal/activities/context.js";
+import { createProjectionActivities } from "../src/temporal/activities/projection.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueProjectionEvent } from "../src/temporal/issue-contracts.js";
 
 function createEvent(revision: number, phase: "backlog" | "planning", lastEventId: string): IssueProjectionEvent {
@@ -71,6 +74,35 @@ test("stale projections do not write and conflicting events fail closed", async 
     expect(() => database.replaceIssueProjectionFromEvents("task-integrity", [initial, planning, conflictingRebuild])).toThrow();
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ revision: 1, phase: "planning" });
     expect(database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all("task-integrity"))).toEqual([{ revision: 0 }, { revision: 1 }]);
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("workflow's first projection accepts the creation row when only stateChangedAt differs", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-projection-initial-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    // Creation path (TaskService.createTask) writes authoritative revision-0 rows at its own timestamp…
+    const creationState = IssueWorkflowStateSchema.parse({ ...createEvent(0, "backlog", "workflow-integrity:0").state, stateChangedAt: "2026-08-11T00:00:00.000Z" });
+    const creationHash = projectionStateHash(creationState);
+    const now = "2026-08-11T00:00:00.000Z";
+    database.authQuery((db) => {
+      db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, authoritative_event_hash, projected_at) VALUES (?, ?, ?, ?, 0, 'backlog', 'human', ?, 'Start planning', ?, 'workflow-integrity:0', ?, 0, ?, ?)").run("task-integrity", "company-integrity", "project-integrity", "workflow-integrity", JSON.stringify(["start_planning"]), now, creationHash, creationHash, now);
+      db.prepare("INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at, event_hash) VALUES ('workflow-integrity:0', ?, ?, ?, 0, 'task_created', ?, ?, ?)").run("task-integrity", "company-integrity", "workflow-integrity", JSON.stringify({ revision: 0, stateHash: creationHash }), now, creationHash);
+      db.prepare("INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, ?, ?, 0, ?, ?)").run("task-integrity", "company-integrity", "workflow-integrity", JSON.stringify(creationState), now);
+    });
+    // …then the workflow's first projectIssueState projects the same canonical state at ITS timestamp.
+    const workflowEvent = createEvent(0, "backlog", "workflow-integrity:0");
+    workflowEvent.state.stateChangedAt = "2026-08-11T00:00:01.000Z";
+    // Exercise the real projectIssueState activity seam.
+    const context = createActivityContext(database, createTestConfig(root));
+    const projection = createProjectionActivities(context);
+    await expect(projection.projectIssueState(workflowEvent)).resolves.toBeTruthy();
+    const workflowHash = projectionStateHash(IssueWorkflowStateSchema.parse(workflowEvent.state));
+    expect(database.authQuery((db) => db.prepare("SELECT authoritative_event_hash FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ authoritative_event_hash: workflowHash });
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });

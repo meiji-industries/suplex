@@ -47,3 +47,13 @@ mise run dev
 Before creating or modifying database migrations, read
 `docs/database-migrations.md`. Create migrations with
 `pnpm migration:new <name>`; timestamped SQL files are the canonical format.
+
+## Where new code goes (anti-hub rules)
+
+- A new issue command = one `defineIssueCommand` in `src/commands/definitions/<domain>.ts` + one `setHandler` in `src/temporal/workflow/register-<domain>.ts`. NEVER edit routes, service wrappers, the workflow port, contract enums, or frontend action types for a command — they derive from the registry.
+- A new workflow state field goes in its owning `src/temporal/contracts/state/<domain>.ts` fragment, APPENDED LAST in that fragment (serialized order is frozen; `tests/task-creation-recovery.test.ts` pins it).
+- A new activity = one signature in `src/temporal/contracts/activities/<domain>.ts` + one implementation in `src/temporal/activities/<domain>.ts`. Never add stubs to test fakes — pass overrides to `createIssueActivitiesFake`.
+- A new phase goes in `src/issue-phases.ts` only.
+- A new replay scenario = one file in `tests/replay-scenarios/` + one line in its index.
+- Temporal update names, patch strings, `setHandler` order, and `durableCommand` kind strings are FROZEN. `tests/temporal-contract-pins.test.ts` and `tests/issue-command-executor.test.ts` enforce this — if they fail, your change is wrong, not the tests.
+- If `tests/architecture-guardrails.test.ts` line budgets fail, move code into the per-domain modules instead of raising the budget.

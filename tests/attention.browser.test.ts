@@ -59,7 +59,8 @@ test("attention page proves desktop and narrow action/evidence disclosure", { ti
     const attention = new AttentionService(database, auth, artifactStore);
     let workflowAttempts = 0;
     const tasks = new TaskService(database, auth, null as never, config, { workflow: {
-      recordDeliveryDecision: async (_workflowId: string, input: { expectedRevision: number; actorUserId: string; note?: string }) => {
+      execute: async (command: string, _workflowId: string, input: { expectedRevision: number; actorUserId: string; note?: string }) => {
+        if (command !== "record_delivery_decision") throw new Error(`unexpected command ${command}`);
         workflowAttempts += 1;
         if (workflowAttempts === 1) throw new Error("stale workflow revision");
         if (input.expectedRevision !== 7) throw new Error("stale workflow revision");

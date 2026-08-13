@@ -15,6 +15,7 @@ import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js"
 import type { GithubAdapter } from "../src/github.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
 import { TaskResponseSchema } from "../src/http/contracts/tasks.js";
+import { issueCommands } from "../src/commands/registry.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, type IssueWorkflowInput, type IssueWorkflowState, type PlanRevisionCommand, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
 import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 
@@ -25,7 +26,7 @@ function fakeWebAuthn(): WebAuthnAdapter {
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
 const github: GithubAdapter = { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } };
 
-test("task creation and the dedicated board remain usable on desktop and narrow viewports", { timeout: 120_000 }, async () => {
+test("task detail remains truthful and usable on desktop and narrow viewports", { timeout: 120_000 }, async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-task-browser-test-"));
   const repositoryRoot = join(root, "repositories"); const worktreeRoot = join(root, "worktrees"); const repositoryPath = join(repositoryRoot, "repo");
   await mkdir(repositoryPath, { recursive: true }); await mkdir(worktreeRoot, { recursive: true });
@@ -45,13 +46,17 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
   const planningGate = new Promise<void>((resolve) => { finishPlanning = resolve; });
   const projectState = (state: IssueWorkflowState): void => {
     const event = IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state });
-    workerDatabase.observeIssueProjection(event);
     workerDatabase.projectIssueEvent(event);
+    workerDatabase.observeIssueProjection(event);
   };
-  const workflow: IssueWorkflowPort = { async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) {
+  const workflow = { async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) {
     plannedState = buildInitialIssueWorkflowState({ ...input, workflowId: input.workflowId! });
     projectState(plannedState);
     return { workflowId: input.workflowId!, runId: "run" };
+  }, async execute(command: keyof typeof issueCommands, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    const handler = (workflow as unknown as Record<string, (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>>)[issueCommands[command].updateName];
+    if (!handler) throw new Error(`Unsupported browser fixture command: ${command}`);
+    return handler(workflowId, input);
   }, async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     const taskId = workflowId.split("-issue-")[1]!;
     plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${input.expectedRevision + 1}` };
@@ -59,7 +64,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
     await planningGate;
     const artifactStore = new ArtifactStore(config.artifactRoot);
     const evidence = await artifactStore.put(company.id, "agent-evidence", { filename: "agent.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"turn.completed\"}\n") });
-    const output = await artifactStore.put(company.id, "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "A focused browser plan", reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The issue is understood", verification: "Review the repository evidence" }, { number: 2, instruction: "Run focused tests", entryPoint: null, completionCriterion: "The focused suite passes", verification: "Confirm the focused suite result" }], compatibilityAnalysis: "The change is local.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
+    const output = await artifactStore.put(company.id, "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "A focused browser plan", reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The issue is understood", verification: "Review the repository evidence" }, { number: 2, instruction: "Run focused tests", entryPoint: null, completionCriterion: "The focused suite passes", verification: "Confirm the focused suite result" }], compatibilityAnalysis: "The change is local.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["src/browser-fixture.ts"], materiality: [{ category: "user_visible_behavior", rationale: "The fixture changes a user-visible task detail.", evidenceRefs: ["step:1"] }] })) });
     database.authQuery((db) => {
       const now = new Date().toISOString();
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, output.id, output.companyId, output.kind, output.filename, output.mimeType, output.byteSize, output.sha256, output.storagePath, output.createdAt);
@@ -118,7 +123,7 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
     plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: ["start_planning", "cancel_issue", "revise_plan"], pendingAction: "Run revised Lead planning", revisionRequestId: `revision_browser_${input.expectedRevision}`, revisedExecutionCoordinates: { disposition: "new", revisionRequestId: `revision_browser_${input.expectedRevision}`, exactBaseSha: input.exactBaseSha! }, lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
-  } };
+  } } as unknown as IssueWorkflowPort;
   const tasks = new TaskService(database, auth, projects, config, { workflow });
   const app = createApp({ config, auth, projects, tasks, health: { temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }), database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }), artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }), worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }), codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }), ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }) } });
   await app.listen({ host: "127.0.0.1", port: 0 });
@@ -290,29 +295,6 @@ test("task creation and the dedicated board remain usable on desktop and narrow 
       expect(await taskDetail.getByRole("button", { name: "LGTM", exact: true }).isVisible()).toBe(true);
       await taskDetail.getByRole("button", { name: "Request changes", exact: true }).click();
       await taskDetail.locator('[data-status="planning"]').waitFor();
-      await page.getByRole("link", { name: "Tasks", exact: true }).click();
-      await page.waitForURL(/\/tasks\?company=/);
-      expect(new URL(page.url()).pathname).toBe("/tasks");
-      expect(new URL(page.url()).searchParams.get("company")).toBe(company.id);
-      const taskList = page.locator("[data-task-list]");
-      await taskList.getByText("In progress", { exact: true }).waitFor();
-      expect(await taskList.locator("[data-task-row]").getByText("Browser task", { exact: true }).isVisible()).toBe(true);
-      expect(await taskList.getByText("Browser task project", { exact: true }).isVisible()).toBe(true);
-
-      await page.getByRole("link", { name: "Board", exact: true }).click();
-      await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
-      expect(new URL(page.url()).pathname).toBe("/board");
-      expect(await page.getByText("Backlog", { exact: true }).isVisible()).toBe(true);
-      for (const phase of ["Planning", "Development", "Reviewing", "Waiting for CI", "Final review", "Done"]) expect(await page.getByText(phase, { exact: true }).isVisible()).toBe(true);
-      const boardTask = page.getByRole("button", { name: /Browser task/ });
-      await boardTask.waitFor();
-      await boardTask.scrollIntoViewIfNeeded();
-      expect(await boardTask.isVisible()).toBe(true);
-      await boardTask.click();
-      await page.locator("[data-task-detail]").waitFor();
-      expect(new URL(page.url()).pathname).toMatch(/^\/board\//);
-      expect(await page.locator("[data-task-detail]").getByRole("heading", { name: "Browser task", exact: true, level: 2 }).isVisible()).toBe(true);
-
       const narrow = await context.newPage();
       await narrow.setViewportSize({ width: 390, height: 844 });
       await narrow.goto(`${baseUrl}${detailPath}`);

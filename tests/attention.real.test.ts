@@ -18,7 +18,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { createGithubAdapter } from "../src/github.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 import { createActivities } from "../src/temporal/activities.js";
-import { ensureTemporalFoundation, queryIssueWorkflow, startIssuePlanning, startIssueWorkflow } from "../src/temporal/service.js";
+import { ensureTemporalFoundation, executeIssueCommand, queryIssueWorkflow, startIssueWorkflow } from "../src/temporal/service.js";
 import { SESSION_COOKIE_NAME, CSRF_COOKIE_NAME, newSessionToken } from "../src/auth-identifiers.js";
 
 const runRealJourney = process.env.FORGE_RUN_REAL_CODEX === "1";
@@ -115,8 +115,8 @@ test.skipIf(!runRealJourney)("real Codex/GitHub attention decision produces a sa
     const started = await startIssueWorkflow(config, { companyId: "real-company", projectId: "real-project", issueId: "real-decision", projectRevisionId: "real-revision", briefArtifactId: brief.id, briefSha256: brief.sha256, imageArtifactIds: [], roleProfiles: { lead: "real-profile" }, supplementalReview: false });
     const quietStarted = await startIssueWorkflow(config, { companyId: "real-company", projectId: "real-project", issueId: "real-quiet", projectRevisionId: "real-revision", briefArtifactId: quietBrief.id, briefSha256: quietBrief.sha256, imageArtifactIds: [], roleProfiles: { lead: "real-profile" }, supplementalReview: false });
     const [planned, quietPlanned] = await Promise.all([
-      startIssuePlanning(config, started.workflowId, { expectedRevision: 0, actorUserId: "real-admin" }),
-      startIssuePlanning(config, quietStarted.workflowId, { expectedRevision: 0, actorUserId: "real-admin" }),
+      executeIssueCommand(config, started.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "real-admin" }),
+      executeIssueCommand(config, quietStarted.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "real-admin" }),
     ]);
     expect(planned).toMatchObject({ phase: "approval", planMaterial: true, leadOutputKind: "plan" });
     expect(quietPlanned.revision).toBeGreaterThan(0);

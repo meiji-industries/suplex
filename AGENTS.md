@@ -36,6 +36,12 @@ with the Playwright browser proof at desktop and narrow viewport sizes.
 
 `mise run dev` embeds Vite in Fastify. Frontend changes use Vite HMR and React
 Fast Refresh; backend changes restart the affected Node development process.
+Before runtime or browser verification, run `mise run dev:status` and reuse the
+shared supervisor. Use `mise run dev:restart` for a fresh API/worker and
+`mise run down` for cooperative shutdown. Use `mise run dev:recover` only when
+status is `orphaned`; never use direct process signals or Forge lifecycle
+commands around the supervisor.
+
 Start the development stack with:
 
 ```bash

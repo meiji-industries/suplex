@@ -18,6 +18,7 @@ test("multiline and multibyte Lead summaries fit bounded Temporal state", () => 
 });
 
 test("Lead contracts are strict and step numbering is contiguous", () => {
+  const askUserQuestion = { header: "Decision", id: "decision", question: "Which?", options: [{ label: "First (Recommended)", description: "The best supported choice." }, { label: "Second", description: "Choose the alternative." }, { label: "Defer", description: "Keep the task blocked." }], isOther: true, isSecret: false };
   const plan = {
     kind: "plan" as const,
     summary: "Bounded plan",
@@ -38,7 +39,10 @@ test("Lead contracts are strict and step numbering is contiguous", () => {
   expect(LeadOutputSchema.safeParse({ ...plan, gitPresentation: { ...gitPresentation, branchSlug: "Task_Internal_Key" } }).success).toBe(false);
   expect(LeadOutputSchema.safeParse({ ...plan, extra: true }).success).toBe(false);
   expect(LeadOutputSchema.safeParse({ ...plan, steps: [{ ...plan.steps[0], number: 2 }] }).success).toBe(false);
-  expect(LeadOutputSchema.safeParse({ kind: "decision_blocker", category: "human_decision", summary: "Choose", evidence: "Evidence", owner: "human", question: "Which?", nextAction: "Answer", resumePhase: "planning", extra: true }).success).toBe(false);
+  const blocker = { kind: "decision_blocker", category: "human_decision", summary: "Choose", evidence: "Evidence", owner: "human", askUserQuestion, nextAction: "Answer", resumePhase: "planning" };
+  expect(LeadOutputSchema.safeParse(blocker).success).toBe(true);
+  expect(LeadOutputSchema.safeParse({ ...blocker, extra: true }).success).toBe(false);
+  expect(LeadOutputSchema.safeParse({ ...blocker, askUserQuestion: { ...askUserQuestion, options: askUserQuestion.options.slice(0, 2) } }).success).toBe(false);
   const branches = (LeadOutputJsonSchema as { oneOf?: Array<{ additionalProperties?: boolean }> }).oneOf ?? [];
   expect(branches).toHaveLength(2);
   expect(branches.every((branch) => branch.additionalProperties === false)).toBe(true);
@@ -59,4 +63,10 @@ test("persisted Lead plans from before materiality evidence remain readable", ()
   };
   expect(LeadOutputSchema.safeParse(legacyPlan).success).toBe(false);
   expect(PersistedLeadOutputSchema.parse(legacyPlan)).toMatchObject({ gitPresentation: null, affectedPaths: [], materiality: [] });
+});
+
+test("persisted decision blockers from before structured choices remain readable", () => {
+  const blocker = { kind: "decision_blocker", category: "human_decision", summary: "Choose", evidence: "Evidence", owner: "human", question: "Which?", nextAction: "Answer", resumePhase: "planning" } as const;
+  expect(LeadOutputSchema.safeParse(blocker).success).toBe(false);
+  expect(PersistedLeadOutputSchema.parse(blocker)).toEqual(blocker);
 });

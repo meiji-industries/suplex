@@ -16,7 +16,7 @@ import { z } from "zod";
 
 import type { ForgeConfig } from "./config.js";
 import { ForgeDatabase } from "./database.js";
-import { AuthRepository } from "./auth-repository.js";
+import { AuthRepository, type AuthCompanyRow } from "./auth-repository.js";
 import {
   INVITATION_TOKEN_PATTERN,
   LEGACY_INVITATION_TOKEN_PATTERN,
@@ -42,6 +42,7 @@ export interface Company {
   id: string;
   name: string;
   status: "active" | "paused" | "archived";
+  issueCode: string | null;
   createdAt: string;
 }
 
@@ -157,6 +158,7 @@ const idSchema = z.string().min(1).max(128);
 const responseSchema = z.object({ id: z.string().min(1).max(512), type: z.literal("public-key") }).passthrough();
 const displayNameSchema = z.string().trim().min(1).max(120);
 const companyNameSchema = z.string().trim().min(1).max(120);
+const companyIssueCodeSchema = z.string().regex(/^[A-Z][A-Z0-9]{1,9}$/);
 
 const invitationFailure = (): AuthFailure => new AuthFailure("Invitation is invalid or expired", 400, "invitation_invalid");
 const passkeyFailure = (): AuthFailure => new AuthFailure("Passkey could not be verified", 400, "passkey_invalid");
@@ -545,14 +547,14 @@ export class AuthService {
     }
     return this.database.authTransaction(() => {
       this.requireAdminById(actorUserId);
-      const company = { id: id("company"), name: name.data, status: "active" as const, createdAt: this.now().toISOString() };
+      const company = { id: id("company"), name: name.data, status: "active" as const, issueCode: null, nextIssueNumber: 1, createdAt: this.now().toISOString() };
       try {
         this.repository.createCompany(company);
       } catch {
         throw new AuthFailure("Company name is already in use");
       }
       this.recordAuditEventInTransaction(undefined, actorUserId, "company_created", undefined, company.id, {});
-      return company;
+      return this.publicCompany(company);
     });
   }
 
@@ -571,7 +573,7 @@ export class AuthService {
         throw new AuthFailure("Not found", 404);
       }
       if (company.name === name.data) {
-        return { id: company.id, name: company.name, status: company.status, createdAt: company.createdAt };
+        return this.publicCompany(company);
       }
       try {
         this.repository.updateCompany(companyId, { name: name.data });
@@ -579,7 +581,27 @@ export class AuthService {
         throw new AuthFailure("Company name is already in use");
       }
       this.recordAuditEventInTransaction(undefined, actorUserId, "company_renamed", undefined, companyId, { previousName: company.name, newName: name.data });
-      return { id: company.id, name: name.data, status: company.status, createdAt: company.createdAt };
+      return this.publicCompany({ ...company, name: name.data });
+    });
+  }
+
+  setCompanyIssueCode(actorUserId: string, companyId: string, rawIssueCode: string | null): Company {
+    if (!idSchema.safeParse(companyId).success) throw new AuthFailure("Not found", 404);
+    return this.database.authTransaction(() => {
+      this.requireAdminById(actorUserId);
+      const issueCode = rawIssueCode === null ? null : rawIssueCode.trim().toUpperCase();
+      if (issueCode !== null && !companyIssueCodeSchema.safeParse(issueCode).success) {
+        throw new AuthFailure("Issue code must be 2–10 letters or numbers and start with a letter");
+      }
+      const company = this.repository.findCompany(companyId);
+      if (!company) throw new AuthFailure("Not found", 404);
+      if (company.issueCode === issueCode) return this.publicCompany(company);
+      if (company.issueCode !== null && company.nextIssueNumber > 1) {
+        throw new AuthFailure("Issue code cannot be changed after issues have been created", 409, "company_issue_code_locked");
+      }
+      this.repository.updateCompany(companyId, { issueCode });
+      this.recordAuditEventInTransaction(undefined, actorUserId, "company_issue_code_updated", undefined, companyId, { previousIssueCode: company.issueCode ?? "", newIssueCode: issueCode ?? "" });
+      return this.publicCompany({ ...company, issueCode });
     });
   }
 
@@ -592,14 +614,14 @@ export class AuthService {
       if (!company) throw new AuthFailure("Not found", 404);
       this.repository.updateCompany(companyId, { status });
       this.recordAuditEventInTransaction(undefined, actorUserId, `company_${status}`, undefined, companyId, {});
-      return { id: company.id, name: company.name, status, createdAt: company.createdAt };
+      return this.publicCompany({ ...company, status });
     });
   }
 
   listVisibleCompanies(actorUserId: string): Company[] {
     const user = this.repository.findUser(actorUserId, "active");
     if (!user) throw new AuthFailure("Authentication required", 401);
-    return this.repository.listCompaniesForUser(actorUserId, user.role).map((row) => ({ id: row.id, name: row.name, status: row.status, createdAt: row.createdAt }));
+    return this.repository.listCompaniesForUser(actorUserId, user.role).map((row) => this.publicCompany(row));
   }
 
   requireCompanyAccess(actorUserId: string, companyId: string): Company {
@@ -611,7 +633,7 @@ export class AuthService {
     if (!user) throw new AuthFailure("Authentication required", 401);
     const company = this.repository.findCompanyForUser(actorUserId, user.role, companyId);
     if (!company) throw new AuthFailure("Not found", 404);
-    return { id: company.id, name: company.name, status: company.status, createdAt: company.createdAt };
+    return this.publicCompany(company);
   }
 
   addMembership(actorUserId: string, targetUserId: string, companyId: string): void {
@@ -815,6 +837,10 @@ export class AuthService {
 
   private publicRepositoryUser(row: { id: string; displayName: string; username: string; role: UserRole; status: UserStatus }): AuthUser {
     return { id: row.id, displayName: row.displayName, username: row.username, role: row.role, status: row.status, companyIds: this.repository.userCompanyIds(row.id) };
+  }
+
+  private publicCompany(row: AuthCompanyRow): Company {
+    return { id: row.id, name: row.name, status: row.status, issueCode: row.issueCode, createdAt: row.createdAt };
   }
 
   private createSession(userId: string): string {

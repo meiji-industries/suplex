@@ -167,19 +167,19 @@ export class AuthRepository {
 
   listCompaniesForUser(userId: string, role: "admin" | "member"): AuthCompanyRow[] {
     if (role === "admin") return this.db.select().from(forgeCompanies).orderBy(asc(forgeCompanies.name)).all();
-    return this.db.select({ id: forgeCompanies.id, name: forgeCompanies.name, status: forgeCompanies.status, createdAt: forgeCompanies.createdAt }).from(forgeCompanies).innerJoin(forgeMemberships, eq(forgeMemberships.companyId, forgeCompanies.id)).where(eq(forgeMemberships.userId, userId)).orderBy(asc(forgeCompanies.name)).all();
+    return this.db.select({ id: forgeCompanies.id, name: forgeCompanies.name, status: forgeCompanies.status, issueCode: forgeCompanies.issueCode, nextIssueNumber: forgeCompanies.nextIssueNumber, createdAt: forgeCompanies.createdAt }).from(forgeCompanies).innerJoin(forgeMemberships, eq(forgeMemberships.companyId, forgeCompanies.id)).where(eq(forgeMemberships.userId, userId)).orderBy(asc(forgeCompanies.name)).all();
   }
 
   findCompanyForUser(userId: string, role: "admin" | "member", companyId: string): AuthCompanyRow | undefined {
     if (role === "admin") return this.findCompany(companyId);
-    return this.db.select({ id: forgeCompanies.id, name: forgeCompanies.name, status: forgeCompanies.status, createdAt: forgeCompanies.createdAt }).from(forgeCompanies).innerJoin(forgeMemberships, eq(forgeMemberships.companyId, forgeCompanies.id)).where(and(eq(forgeCompanies.id, companyId), eq(forgeMemberships.userId, userId))).get();
+    return this.db.select({ id: forgeCompanies.id, name: forgeCompanies.name, status: forgeCompanies.status, issueCode: forgeCompanies.issueCode, nextIssueNumber: forgeCompanies.nextIssueNumber, createdAt: forgeCompanies.createdAt }).from(forgeCompanies).innerJoin(forgeMemberships, eq(forgeMemberships.companyId, forgeCompanies.id)).where(and(eq(forgeCompanies.id, companyId), eq(forgeMemberships.userId, userId))).get();
   }
 
   createCompany(company: AuthCompanyRow): void {
     this.db.insert(forgeCompanies).values(company).run();
   }
 
-  updateCompany(companyId: string, values: Partial<Pick<AuthCompanyRow, "name" | "status">>): void {
+  updateCompany(companyId: string, values: Partial<Pick<AuthCompanyRow, "name" | "status" | "issueCode">>): void {
     this.db.update(forgeCompanies).set(values).where(eq(forgeCompanies.id, companyId)).run();
   }
 

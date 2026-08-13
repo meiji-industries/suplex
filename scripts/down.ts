@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 
+import { inspectDevLock, inspectDevStatus } from "./dev.js";
 import { readProcessRegistry, stopOwnedProcesses } from "../src/process-manager.js";
 
 const execFileAsync = promisify(execFile);
@@ -25,7 +26,7 @@ export function parseProcessList(output: string): ProcessSummary[] {
 
 export function isForgeDevelopmentCommand(command: string): boolean {
   return /(?:^|\s)(?:\S*\/)?temporal server start-dev\b.*(?:^|\s)--db-filename(?:=|\s+)\.forge\/dev\/temporal\.db(?:\s|$)/.test(command)
-    || /(?:^|\s)(?:\S*\/)?node --import tsx scripts\/dev\.ts(?:\s|$)/.test(command)
+    || /(?:^|\s)(?:\S*\/)?node --import tsx scripts\/dev\.ts(?:\s+start)?\s*$/.test(command)
     || /(?:^|\s)(?:\S*\/)?node --import tsx src\/cli\.ts start --foreground(?:\s|$)/.test(command)
     || /(?:^|\s)\S*tsx\/dist\/cli\.mjs watch\b.*\ssrc\/(?:server|worker)\.ts(?:\s|$)/.test(command);
 }
@@ -111,6 +112,11 @@ async function stopRecordedProcesses(registryPath: string): Promise<Error | unde
 export async function down(): Promise<void> {
   const projectRoot = await realpath(process.cwd());
   const root = runtimeRoot();
+  const [status, lock] = await Promise.all([inspectDevStatus(root), inspectDevLock(root)]);
+  if (status.state !== "orphaned") {
+    throw new Error(`Development recovery requires orphaned status; current status is ${status.state}`);
+  }
+  if (lock.kind === "ambiguous" || lock.kind === "live") throw new Error("Development ownership is ambiguous; refusing recovery");
   const registryPath = join(root, "owned-processes.json");
   await stopRecordedProcesses(registryPath);
 
@@ -133,4 +139,9 @@ export async function down(): Promise<void> {
   process.stdout.write(`[down] stopped ${processGroups.length} Forge development process group${processGroups.length === 1 ? "" : "s"}\n`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) await down();
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+  down().catch((error: unknown) => {
+    process.stderr.write(`[dev:recover] ${error instanceof Error ? error.message : "unknown error"}\n`);
+    process.exitCode = 1;
+  });
+}

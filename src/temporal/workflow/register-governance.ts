@@ -28,11 +28,11 @@ export function registerGovernanceHandlers(ctx: IssueWorkflowContext): void {
     } catch (error) {
       ctx.planningPromise = undefined;
       ctx.planningScope = undefined;
-      const failure = ctx.permanentActivityFailure(error);
+      const failure = ctx.permanentActivityFailure(error, ctx.patched(ctx.exhaustedActivityRecoveryPatch));
       if (!failure) throw error;
       if (ctx.currentState().phase === "cancelled") return ctx.currentState();
       const blockedCategory = ctx.failureBlockCategory(failure.code);
-      ctx.state = IssueWorkflowStateSchema.parse({ ...next, phase: blockedCategory ? "blocked" : "failed", revision: next.revision + 1, owner: "human", allowedCommands: blockedCategory ? ["start_planning", "cancel_issue"] : ["resolve_decision_blocker", "cancel_issue"], pendingAction: failure.summary, lastEventId: `${ctx.state.workflowId}:${next.revision + 1}`, ...(blockedCategory ? { blockedCategory, blockedResumePhase: "planning" as const } : {}) });
+      ctx.state = IssueWorkflowStateSchema.parse({ ...next, phase: "blocked", revision: next.revision + 1, owner: "human", allowedCommands: blockedCategory ? ["start_planning", "cancel_issue"] : ["resolve_decision_blocker", "cancel_issue"], pendingAction: blockedCategory ? failure.summary : "Lead decision resolution failed; resubmit the decision", lastEventId: `${ctx.state.workflowId}:${next.revision + 1}`, blockedCategory: blockedCategory ?? "human_decision", blockedResumePhase: "planning" });
       await ctx.project();
       return ctx.state;
     }

@@ -48,10 +48,12 @@ export function installHttpErrorHandlers(app: FastifyInstance): void {
   app.setErrorHandler((error: unknown, request, reply) => {
     if (isValidationError(error)) {
       const findings = validationFindings(error);
+      request.log.warn({ requestId: request.id, statusCode: 400, findings: redact(findings) }, "Request rejected");
       reply.code(400).send({ error: "Invalid request", ...(findings.length > 0 ? { findings } : {}) });
       return;
     }
     if (error instanceof AuthFailure || error instanceof ProjectFailure || error instanceof TaskFailure) {
+      request.log.warn({ requestId: request.id, statusCode: error.statusCode, error: redact(error.publicMessage), ...(error instanceof ProjectFailure || error instanceof TaskFailure ? { findings: redact(error.findings) } : {}) }, "Request rejected");
       sendDomainFailure(reply, error);
       return;
     }

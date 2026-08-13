@@ -69,11 +69,17 @@ test("API enrollment and authorization fail closed before company details are re
     expect(adminCookie).toContain(`${SESSION_COOKIE_NAME}=`);
     expect((await app.inject({ method: "GET", url: "/api/auth/me", headers: { cookie: adminCookie } })).statusCode).toBe(200);
 
-    const companyA = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "API A" } })).json() as { id: string };
+    const companyAResponse = await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "API A" } });
+    const companyA = companyAResponse.json() as { id: string; issueCode: string | null };
+    expect(companyA).toMatchObject({ issueCode: null });
     const companyB = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "API B" } })).json() as { id: string };
     const renamed = await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "  API A renamed  " } });
     expect(renamed.statusCode).toBe(200);
     expect(renamed.json()).toMatchObject({ id: companyA.id, name: "API A renamed", status: "active" });
+    const issueCode = await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}/issue-code`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { issueCode: "  ad4m " } });
+    expect(issueCode.statusCode).toBe(200);
+    expect(issueCode.json()).toMatchObject({ id: companyA.id, issueCode: "AD4M" });
+    expect((await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}/issue-code`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { issueCode: "A" } })).statusCode).toBe(400);
     expect((await app.inject({ method: "POST", url: `/api/admin/companies/${companyA.id}/status/paused`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: {} })).statusCode).toBe(200);
     expect((await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "" } })).json()).toEqual({ error: "Company name is invalid" });
     expect((await app.inject({ method: "DELETE", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie, origin: config.reachableAddress } })).statusCode).toBe(404);
@@ -85,6 +91,7 @@ test("API enrollment and authorization fail closed before company details are re
 
     const memberRename = await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: memberCookie, origin: config.reachableAddress }, payload: { name: "Member rename" } });
     expect(memberRename.statusCode).toBe(404);
+    expect((await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}/issue-code`, headers: { cookie: memberCookie, origin: config.reachableAddress }, payload: { issueCode: "MEM" } })).statusCode).toBe(404);
 
     const membership = await app.inject({ method: "POST", url: `/api/admin/companies/${companyA.id}/members`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { userId: invite.user.id } });
     expect(membership.statusCode).toBe(204);

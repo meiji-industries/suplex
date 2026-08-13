@@ -1,4 +1,6 @@
 import { Badge } from "../ui/badge.js";
+import { Button } from "../ui/button.js";
+import { Collapsible } from "../ui/collapsible.js";
 import type { ReactElement } from "react";
 
 export interface DeveloperExecutionView {
@@ -50,17 +52,18 @@ export function DevelopmentStatus({ execution }: { execution: DeveloperExecution
   return (
     <section className="space-y-3" data-developer-status>
       <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold">Developer execution</h3><Badge variant={reconciled ? "secondary" : execution.status === "blocked" || execution.status === "failed" ? "destructive" : "outline"}>{reconciled ? "reconciled" : execution.status}</Badge></div>
-      <div className="grid gap-x-4 gap-y-2 text-xs sm:grid-cols-2">
-        <div><span className="text-muted-foreground">Attempt</span><div>{execution.attempt}</div></div>
-        <div><span className="text-muted-foreground">Confirmed step</span><div>{execution.currentStep ?? "none"}</div></div>
-        <div className="min-w-0"><span className="text-muted-foreground">Branch</span><code className="block break-all">{execution.branchName}</code></div>
-        <div><span className="text-muted-foreground">Boundary</span><div>{(execution.boundaryMode ?? "owner_controlled_observed") === "owner_controlled_observed" ? "Owner-controlled local execution; provider state observed" : execution.boundaryMode}</div></div>
-        <div><span className="text-muted-foreground">Starting commit/tree</span><code className="block break-all">{shortHash(execution.startingCommit ?? execution.targetBaseSha)} / {shortHash(execution.startingTree)}</code></div>
-        <div><span className="text-muted-foreground">Final commit/tree</span><code className="block break-all">{shortHash(execution.resultCommit)} / {shortHash(execution.resultTree)}</code></div>
-        <div><span className="text-muted-foreground">Worktree</span><div>{execution.dirtyState ?? "not reconciled"}</div></div>
-        <div><span className="text-muted-foreground">Provider observation</span><div>{execution.providerObservation ?? "unavailable"}</div></div>
-      </div>
+      <div className="min-w-0 truncate text-xs text-muted-foreground">Attempt {execution.attempt} · step {execution.currentStep ?? "none"} · <code title={execution.branchName}>{execution.branchName}</code></div>
       {execution.failureSummary ? <p className="text-xs text-destructive">{execution.failureCode ? `${execution.failureCode}: ` : ""}{execution.failureSummary}</p> : null}
+      <Collapsible.Root>
+        <Collapsible.Trigger render={<Button variant="ghost" size="sm" />}>Execution details</Collapsible.Trigger>
+        <Collapsible.Panel><div className="grid gap-x-4 gap-y-2 pt-2 text-xs sm:grid-cols-2">
+          <div><span className="text-muted-foreground">Boundary</span><div>{(execution.boundaryMode ?? "owner_controlled_observed") === "owner_controlled_observed" ? "Owner-controlled local execution; provider state observed" : execution.boundaryMode}</div></div>
+          <div><span className="text-muted-foreground">Starting commit/tree</span><code className="block break-all">{shortHash(execution.startingCommit ?? execution.targetBaseSha)} / {shortHash(execution.startingTree)}</code></div>
+          <div><span className="text-muted-foreground">Final commit/tree</span><code className="block break-all">{shortHash(execution.resultCommit)} / {shortHash(execution.resultTree)}</code></div>
+          <div><span className="text-muted-foreground">Worktree</span><div>{execution.dirtyState ?? "not reconciled"}</div></div>
+          <div><span className="text-muted-foreground">Provider observation</span><div>{execution.providerObservation ?? "unavailable"}</div></div>
+        </div></Collapsible.Panel>
+      </Collapsible.Root>
     </section>
   );
 }
@@ -76,17 +79,18 @@ export function PlanStepProgress({ execution, events }: { execution: DeveloperEx
   );
 }
 
-export function VerificationReceiptList({ events }: { events: DeveloperExecutionEventView[] }): ReactElement {
+export function VerificationReceiptList({ events }: { events: DeveloperExecutionEventView[] }): ReactElement | null {
   const receipts = events.filter((event) => ["command_finished", "test_result", "file_change", "step_blocked"].includes(event.kind));
+  if (!receipts.length) return null;
   return (
     <section className="space-y-2" data-verification-receipts>
       <h3 className="text-xs font-semibold">Verification receipts</h3>
-      {receipts.length ? <div className="grid gap-1">{receipts.map((event) => <div className="grid min-h-8 min-w-0 items-center gap-1 border-l-2 border-border pl-2 text-xs sm:grid-cols-[4rem_4rem_minmax(0,1fr)_3rem] sm:gap-2" key={event.eventId}><span>#{event.sequence}</span><span>step {event.stepNumber ?? "—"}</span><code className="break-words whitespace-pre-wrap">{event.summary}</code><span className={event.exitCode !== null && event.exitCode !== 0 ? "font-medium text-destructive" : "text-muted-foreground"}>{event.kind === "step_blocked" ? "blocked" : event.kind === "file_change" ? "changed" : event.exitCode === null ? "—" : `exit ${event.exitCode}`}</span></div>)}</div> : <p className="text-xs text-muted-foreground">No command receipts yet.</p>}
+      <div className="grid gap-1">{receipts.map((event) => <div className="grid min-h-8 min-w-0 items-center gap-1 border-l-2 border-border pl-2 text-xs sm:grid-cols-[4rem_4rem_minmax(0,1fr)_3rem] sm:gap-2" key={event.eventId}><span>#{event.sequence}</span><span>step {event.stepNumber ?? "—"}</span><code className="break-words whitespace-pre-wrap">{event.summary}</code><span className={event.exitCode !== null && event.exitCode !== 0 ? "font-medium text-destructive" : "text-muted-foreground"}>{event.kind === "step_blocked" ? "blocked" : event.kind === "file_change" ? "changed" : event.exitCode === null ? "—" : `exit ${event.exitCode}`}</span></div>)}</div>
     </section>
   );
 }
 
-export function DeliveryReportPanel({ taskId, execution }: { taskId: string; execution: DeveloperExecutionView }): ReactElement {
+export function DeliveryReportPanel({ taskId, execution }: { taskId: string; execution: DeveloperExecutionView }): ReactElement | null {
   const links = [
     ["Manifest", execution.manifestArtifactId],
     ["Raw delivery", execution.rawReportArtifactId],
@@ -94,6 +98,7 @@ export function DeliveryReportPanel({ taskId, execution }: { taskId: string; exe
     ["After provider", execution.afterProviderArtifactId],
     ["Reconciliation", execution.reconciliationArtifactId],
   ] as const;
+  if (!links.some(([, artifactId]) => artifactId)) return null;
   return (
     <section className="space-y-2" data-delivery-report>
       <h3 className="text-xs font-semibold">Delivery evidence</h3>

@@ -39,6 +39,7 @@ test("attention page proves desktop and narrow action/evidence disclosure", { ti
       db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, state, created_at) VALUES ('revision-a', 'project-a', 1, 'identity-a', '{}', ?, ?, 'admin', 'accepted', ?)").run("a".repeat(40), "b".repeat(40), now);
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-a', 'company-a', 'task-brief', 'brief.md', 'text/markdown', 1, ?, ?, ?)").run("b".repeat(64), "company-a/brief-a", now);
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-a', 'company-a', 'project-a', 'Needs a decision', 'brief-a', '[]', '{}', 0, 'workflow-a', 'revision-a', 'attention-browser', ?, ?)").run(now, now);
+      db.prepare("UPDATE forge_companies SET issue_code = 'ATTN' WHERE id = 'company-a'").run();
       db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, authoritative_revision, projected_at, state_changed_at, projection_status, reconciled_at) VALUES ('task-a', 'company-a', 'project-a', 'workflow-a', 7, 'delivery_blocked', 'human', '[\"record_delivery_decision\",\"cancel_issue\"]', 'Decision required', ?, 'workflow-a:7', 7, ?, ?, 'current', ?)").run(now, staleProjectionAt, now, now);
       db.prepare("INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES ('task-a', 'company-a', 'workflow-a', 7, ?, ?)").run(JSON.stringify({ workflowId: "workflow-a", companyId: "company-a", projectId: "project-a", issueId: "task-a", projectRevisionId: "revision-a", phase: "delivery_blocked", revision: 7, owner: "human", allowedCommands: ["record_delivery_decision", "cancel_issue"], pendingAction: "Decision required", lastEventId: "workflow-a:7", continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: now }), now);
     });
@@ -91,7 +92,7 @@ test("attention page proves desktop and narrow action/evidence disclosure", { ti
       await context.addCookies(cookie.map(({ name, value }) => ({ name, value, domain: "127.0.0.1", path: "/" })));
       const page = await context.newPage();
       await page.goto(`http://127.0.0.1:${address.port}/attention`);
-      await page.getByRole("main").getByText("Company A", { exact: true }).waitFor();
+      await page.locator("section").getByText("Company A", { exact: true }).waitFor();
       await page.getByRole("button", { name: "Switch company" }).click();
       await page.getByRole("menuitem", { name: /Company B/ }).click();
       expect(await page.url()).toMatch(/company=company-b/);
@@ -99,6 +100,7 @@ test("attention page proves desktop and narrow action/evidence disclosure", { ti
       await page.getByRole("button", { name: "Switch company" }).click();
       await page.getByRole("menuitem", { name: /Company A/ }).click();
       await page.getByText("Projection stale · r7 → r7", { exact: true }).waitFor();
+      expect(await page.getByText("ATTN-1", { exact: true }).isVisible()).toBe(true);
       const narrowInteraction = await context.newPage();
       await narrowInteraction.setViewportSize({ width: 390, height: 844 });
       await narrowInteraction.goto(`http://127.0.0.1:${address.port}/attention?company=company-a`);
@@ -113,7 +115,7 @@ test("attention page proves desktop and narrow action/evidence disclosure", { ti
       await page.getByRole("button", { name: "Cancel issue" }).click();
       const cancelDialog = page.locator('[data-slot="alert-dialog-content"]');
       await cancelDialog.waitFor({ timeout: 5_000 });
-      expect(await cancelDialog.textContent()).toContain("Cancel Needs a decision?");
+      expect(await cancelDialog.textContent()).toContain("Cancel ATTN-1 · Needs a decision?");
       await page.getByRole("button", { name: "Keep issue" }).click();
       await page.getByRole("button", { name: "Record decision" }).click();
       await page.getByRole("textbox", { name: "Record decision note" }).fill("Reviewed current delivery evidence.");
@@ -131,8 +133,8 @@ test("attention page proves desktop and narrow action/evidence disclosure", { ti
       const narrow = await context.newPage();
       await narrow.setViewportSize({ width: 390, height: 844 });
       await narrow.goto(`http://127.0.0.1:${address.port}/attention`);
-      expect(await narrow.getByRole("button", { name: "Open navigation" }).isVisible()).toBe(true);
-      expect(await narrow.getByRole("main").getByText("Company A", { exact: true }).isVisible()).toBe(true);
+      expect(await narrow.getByRole("button", { name: "Open settings navigation" }).isVisible()).toBe(true);
+      expect(await narrow.locator("section").getByText("Company A", { exact: true }).isVisible()).toBe(true);
       await narrow.getByRole("button", { name: "Refresh" }).click();
       await narrow.getByText("No decision needed.", { exact: true }).waitFor();
       await narrow.close(); await page.close(); await context.close();

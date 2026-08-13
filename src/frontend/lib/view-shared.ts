@@ -9,8 +9,8 @@ export type ApiInvitation = { id: string; kind: "bootstrap" | "user" | "recovery
 export type ApiCredential = { id: string; userId: string; credentialId: string; createdAt: string; revokedAt?: string };
 export type ApiProject = { id: string; companyId: string; name: string; repositoryPath: string; worktreeRoot: string; repository?: string; baseBranch: string; targetBranch: string; setupCommand: string; verificationCommand: string; requiredChecks: string[]; allowedProfileIds: string[]; roleDefaults: Record<string, string>; status: "draft" | "active" | "paused" | "needs-reactivation" | "archived"; configurationRevision: number; configurationIdentity?: string; baseSha?: string; targetSha?: string };
 export type ApiAttentionAction = { command: string; label: string; expectedRevision: number; requiresNote: boolean; destructive: boolean };
-export type ApiAttentionItem = { id: string; companyId: string; taskId: string; taskTitle: string; category: string; summary: string; sourceRevision: number; activatedAt: string; actions: ApiAttentionAction[]; evidence: { artifactId: string; sha256: string; kind: string; mimeType: string; byteSize: number; href: string } };
-export type ApiAttentionCompany = { companyId: string; companyName: string; companyStatus: string; activeIssueCount: number; phases: Record<string, number>; attentionCount: number; attention: ApiAttentionItem[]; recentOutcomes: Array<{ taskId: string; taskTitle: string; phase: string; updatedAt: string }>; projectionHealth: { projectedRevision: number; sourceRevision: number; projectedAt: string; stateChangedAt: string | null; reconciledAt: string | null; status: "current" | "stale" | "unknown"; lagMs: number } };
+export type ApiAttentionItem = { id: string; companyId: string; taskId: string; issueKey: string | null; taskTitle: string; category: string; summary: string; sourceRevision: number; activatedAt: string; actions: ApiAttentionAction[]; evidence: { artifactId: string; sha256: string; kind: string; mimeType: string; byteSize: number; href: string } };
+export type ApiAttentionCompany = { companyId: string; companyName: string; companyStatus: string; activeIssueCount: number; phases: Record<string, number>; attentionCount: number; attention: ApiAttentionItem[]; recentOutcomes: Array<{ taskId: string; issueKey: string | null; taskTitle: string; phase: IssuePhase; updatedAt: string }>; projectionHealth: { projectedRevision: number; sourceRevision: number; projectedAt: string; stateChangedAt: string | null; reconciledAt: string | null; status: "current" | "stale" | "unknown"; lagMs: number } };
 export type ApiAttentionEvidence = { artifactId: string; sha256: string; kind: string; content: string; truncated: boolean };
 export type ApiTask = TaskResponse;
 export type TaskPhase = IssuePhase;
@@ -18,6 +18,10 @@ export type ApiCi = NonNullable<ApiTask["ci"]>;
 export type ApiRelease = NonNullable<ApiTask["release"]>;
 
 export const taskPhases = ISSUE_PHASES;
+
+export function taskActionPayload(expectedRevision: number, note?: string, payload: Record<string, unknown> = {}): Record<string, unknown> {
+  return "expectedWorkflowRevision" in payload ? payload : { expectedRevision, ...(note ? { note } : {}), ...payload };
+}
 
 export async function reconcileScopedNotFound(reason: unknown, reloadCompanies: () => Promise<void>): Promise<boolean> {
   if (!isApiError(reason, 404)) return false;

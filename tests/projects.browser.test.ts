@@ -96,7 +96,7 @@ test("projects desktop flow activates valid configuration and shows actionable v
       await context.addCookies([{ ...session, domain: "127.0.0.1", path: "/" }, { ...csrf, domain: "127.0.0.1", path: "/" }]);
       const adminId = (await auth.getUserBySession(session.value))!.id;
       projects.createProfile(adminId, { name: "Browser profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-      auth.createCompany(adminId, "Browser Projects");
+      const browserCompany = auth.createCompany(adminId, "Browser Projects");
       const page = await context.newPage();
       await page.goto(`${baseUrl}/projects`);
       await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
@@ -126,22 +126,43 @@ test("projects desktop flow activates valid configuration and shows actionable v
       await page.getByRole("button", { name: "Cancel" }).click();
       const projectsNav = page.getByRole("link", { name: "Projects" }).first();
       expect(await projectsNav.getAttribute("aria-current")).toBe("page");
-      const healthNav = page.getByRole("link", { name: "Host health" }).first();
-      expect(await healthNav.getAttribute("aria-current")).toBe(null);
+      expect(await page.getByRole("navigation", { name: "Overview", exact: true }).count()).toBe(0);
       expect(await page.getByRole("link", { name: "Settings", exact: true }).count()).toBe(1);
       expect(await page.getByRole("link", { name: "Administration", exact: true }).count()).toBe(0);
+      const systemHealth = page.locator("[data-app-header]").getByRole("button", { name: "System health: Healthy", exact: true });
+      await systemHealth.waitFor();
+      expect(await systemHealth.getAttribute("data-status")).toBe("green");
+      await systemHealth.click();
+      const healthDialog = page.getByRole("dialog", { name: "System health", exact: true });
+      await healthDialog.getByText("Temporal", { exact: true }).waitFor();
+      await healthDialog.getByRole("button", { name: "Close", exact: true }).click();
+
+      await page.goto(`${baseUrl}/companies/${encodeURIComponent(browserCompany.id)}/settings?company=${encodeURIComponent(browserCompany.id)}`);
+      const issueCode = page.getByLabel("Issue code", { exact: true });
+      await issueCode.fill("proj");
+      const issueCodeForm = issueCode.locator("xpath=ancestor::form");
+      await issueCodeForm.getByRole("button", { name: "Save", exact: true }).click();
+      await issueCodeForm.getByRole("button", { name: "Saved", exact: true }).waitFor();
+      await page.reload();
+      expect(await page.getByLabel("Issue code", { exact: true }).inputValue()).toBe("PROJ");
 
       await page.goto(`${baseUrl}/admin/profiles`);
       await page.getByRole("heading", { name: "Profiles", exact: true }).waitFor();
+      expect(await page.getByRole("link", { name: "Host health", exact: true }).isVisible()).toBe(true);
+      expect(await page.getByRole("link", { name: "Attention", exact: true }).isVisible()).toBe(true);
+      expect(await page.getByPlaceholder("Filter by name…").isDisabled()).toBe(true);
+      expect(await page.getByRole("button", { name: "All models", exact: true }).isDisabled()).toBe(true);
       await page.getByText("Model catalog", { exact: true }).waitFor();
       await page.getByText(/Override · 2 slots · 0 active \/ 0 queued/).waitFor();
       const capacityInput = page.getByLabel("Browser profile capacity");
       await capacityInput.fill("3");
       await page.getByRole("button", { name: "Save", exact: true }).click();
       await page.getByText(/Override · 3 slots · 0 active \/ 0 queued/).waitFor();
+      await page.getByRole("button", { name: "New profile", exact: true }).click();
       await page.getByRole("combobox", { name: "Model" }).click();
       await expect.poll(async () => page.getByRole("option").allTextContents()).toEqual(expect.arrayContaining([expect.stringContaining("GPT-5.6 Sol"), expect.stringContaining("GPT-5.6 Terra")]));
       await page.keyboard.press("Escape");
+      await page.getByRole("button", { name: "Cancel", exact: true }).click();
 
       const narrow = await context.newPage();
       await narrow.setViewportSize({ width: 390, height: 844 });
@@ -162,6 +183,8 @@ test("projects desktop flow activates valid configuration and shows actionable v
       await expect.poll(async () => narrow.getByText("forge", { exact: true }).isVisible({ timeout: 1000 })).toBe(true);
       await expect.poll(async () => narrow.getByRole("button", { name: "Pause" }).first().isVisible({ timeout: 1000 })).toBe(true);
       await expect.poll(async () => narrow.getByRole("button", { name: "Archive" }).first().isVisible({ timeout: 1000 })).toBe(true);
+      await narrow.goto(`${baseUrl}/companies/${encodeURIComponent(browserCompany.id)}/settings?company=${encodeURIComponent(browserCompany.id)}`);
+      expect(await narrow.getByLabel("Issue code", { exact: true }).inputValue()).toBe("PROJ");
       await narrow.close(); await page.close(); await context.close();
     } finally {
       await browser.close();

@@ -11,9 +11,10 @@ function artifactLink(taskId: string, artifactId: string, label: string): ReactE
   return <a className="break-all text-primary underline underline-offset-2" href={`/api/tasks/${taskId}/review-artifacts/${artifactId}`} target="_blank" rel="noreferrer">{label}</a>;
 }
 
-export function DeliveryReviewPanel({ task }: { task: Task }): ReactElement {
+export function DeliveryReviewPanel({ task }: { task: Task }): ReactElement | null {
   const review = task.reviewLineage.currentReview;
   const blockerCode = task.deliveryReviewBlockerCode ?? task.deliveryRepairBlockerCode;
+  if (!review && !blockerCode && !task.reviewLineage.reviewAttempts.length && !task.reviewLineage.repairAttempts.length && !task.reviewLineage.priorReviews.length) return null;
   const blockerSummary = task.deliveryReviewBlockerSummary ?? task.deliveryRepairBlockerSummary;
   const blockerArtifactId = task.deliveryReviewBlockerEvidenceArtifactId ?? task.deliveryRepairBlockerEvidenceArtifactId;
   return (

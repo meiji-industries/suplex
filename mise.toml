@@ -21,7 +21,19 @@ description = "Run Temporal and Forge with Vite HMR and backend live reload"
 run = "mise exec -- node --import tsx scripts/dev.ts"
 
 [tasks.down]
-description = "Stop Forge development processes for this checkout"
+description = "Request a cooperative stop from the shared development supervisor"
+run = "mise exec -- node --import tsx scripts/dev.ts stop"
+
+[tasks."dev:status"]
+description = "Report the shared development supervisor state"
+run = "mise exec -- node --import tsx scripts/dev.ts status"
+
+[tasks."dev:restart"]
+description = "Request a Forge API and worker restart while keeping Temporal running"
+run = "mise exec -- node --import tsx scripts/dev.ts restart"
+
+[tasks."dev:recover"]
+description = "Recover proven orphaned development processes for this checkout"
 run = "mise exec -- node --import tsx scripts/down.ts"
 
 [tasks.worktree]

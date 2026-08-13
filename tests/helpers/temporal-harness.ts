@@ -34,6 +34,7 @@ async function availablePort(): Promise<number> {
 }
 
 export type TemporalHarnessState = {
+  planningFailure: boolean;
   permanentPlanningFailure: boolean;
   permanentPlanningCalls: number;
   developerFailure: boolean;
@@ -84,7 +85,7 @@ export function createTemporalHarness(): TemporalHarness {
   let restartActivitiesFactory: ((database: ForgeDatabase) => ReturnType<typeof createActivities>) | undefined;
   let started = false;
   const issueRoleProfiles = { lead: "profile", developer: "profile" };
-  const state: TemporalHarnessState = { permanentPlanningFailure: false, permanentPlanningCalls: 0, developerFailure: false, planningMaterial: true, preservedWorktreeCompatibility: null, revisionDisposition: "new", revisionAuthorizationCalls: 0, holdPlanning: false, releasePlanning: () => {}, planningGate: Promise.resolve() };
+  const state: TemporalHarnessState = { planningFailure: false, permanentPlanningFailure: false, permanentPlanningCalls: 0, developerFailure: false, planningMaterial: true, preservedWorktreeCompatibility: null, revisionDisposition: "new", revisionAuthorizationCalls: 0, holdPlanning: false, releasePlanning: () => {}, planningGate: Promise.resolve() };
   const ciCalls = new Map<string, number>();
   const ciPlanInputs: Array<{ leadSessionRef: string; ciAttemptId: string }> = [];
   const ciRepairInputs: Array<{ priorDeveloperSessionRef: string; ciAttemptId: string }> = [];
@@ -140,6 +141,7 @@ export function createTemporalHarness(): TemporalHarness {
     const integrationAgent = {
       runLeadPlanning: async () => {
         if (state.holdPlanning) await state.planningGate;
+        if (state.planningFailure) throw new Error("Injected retryable planning failure");
         if (state.permanentPlanningFailure) {
           state.permanentPlanningCalls += 1;
           throw new AgentFailure("model-unavailable", "The configured model is unavailable for the active provider account. Select a supported model, then retry.", { nonRetryable: true });

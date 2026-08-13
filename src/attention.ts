@@ -43,6 +43,7 @@ export interface AttentionItem {
   id: string;
   companyId: string;
   taskId: string;
+  issueKey: string | null;
   taskTitle: string;
   category: AttentionCategory;
   summary: string;
@@ -54,6 +55,7 @@ export interface AttentionItem {
 
 export interface RecentOutcome {
   taskId: string;
+  issueKey: string | null;
   taskTitle: string;
   phase: string;
   updatedAt: string;
@@ -92,6 +94,7 @@ interface AttentionRow {
   id: string;
   company_id: string;
   task_id: string;
+  issue_key: string | null;
   task_title: string;
   category: string;
   summary: string;
@@ -103,6 +106,15 @@ interface AttentionRow {
   mime_type: string;
   byte_size: number;
   kind: string;
+}
+
+interface RecentOutcomeRow {
+  task_id: string;
+  issue_key: string | null;
+  task_title: string;
+  phase: string;
+  updated_at: string;
+  source_revision: number;
 }
 
 function parseActions(raw: string, expectedRevision: number): AttentionAction[] | undefined {
@@ -149,8 +161,8 @@ export class AttentionService {
     const companies = this.auth.listVisibleCompanies(actorUserId);
     const rows = (companyId: string): ProjectionRow[] => this.database.authQuery((db) => db.prepare(`SELECT ip.task_id, t.title AS task_title, ip.company_id, ip.phase, ip.revision, ip.authoritative_revision, ip.allowed_commands_json, ip.pending_action, ip.updated_at, ip.projected_at, ip.state_changed_at, ip.projection_status, ip.reconciled_at
       FROM forge_issue_projections ip JOIN forge_tasks t ON t.id = ip.task_id WHERE ip.company_id = ? ORDER BY ip.task_id`).all(companyId) as ProjectionRow[]);
-    const readAttention = (companyId: string): AttentionRow[] => this.database.authQuery((db) => db.prepare(`SELECT ai.id, ai.company_id, ai.task_id, t.title AS task_title, ai.category, ai.summary, ai.source_revision, ai.activated_at, ai.actions_json, ai.evidence_artifact_id, ai.evidence_sha256, a.mime_type, a.byte_size, a.kind
-      FROM forge_attention_items ai JOIN forge_tasks t ON t.id = ai.task_id JOIN forge_artifacts a ON a.id = ai.evidence_artifact_id AND a.company_id = ai.company_id AND a.sha256 = ai.evidence_sha256
+    const readAttention = (companyId: string): AttentionRow[] => this.database.authQuery((db) => db.prepare(`SELECT ai.id, ai.company_id, ai.task_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title AS task_title, ai.category, ai.summary, ai.source_revision, ai.activated_at, ai.actions_json, ai.evidence_artifact_id, ai.evidence_sha256, a.mime_type, a.byte_size, a.kind
+      FROM forge_attention_items ai JOIN forge_tasks t ON t.id = ai.task_id JOIN forge_companies c ON c.id = ai.company_id JOIN forge_artifacts a ON a.id = ai.evidence_artifact_id AND a.company_id = ai.company_id AND a.sha256 = ai.evidence_sha256
       WHERE ai.company_id = ? AND ai.active = 1 AND a.kind IN (${SAFE_ARTIFACT_KINDS_SQL})
       ORDER BY ai.activated_at ASC, ai.id ASC`).all(companyId) as AttentionRow[]);
     const result = companies.map((company) => {
@@ -159,8 +171,9 @@ export class AttentionService {
       const phases: Record<string, number> = {};
       for (const row of activeRows) phases[row.phase] = (phases[row.phase] ?? 0) + 1;
       const attention = readAttention(company.id).flatMap((row) => this.publicAttention(row));
-      const recentOutcomes = this.database.authQuery((db) => db.prepare(`SELECT ip.task_id, t.title AS task_title, ip.phase, ip.state_changed_at AS updated_at, ip.revision AS source_revision
-        FROM forge_issue_projections ip JOIN forge_tasks t ON t.id = ip.task_id WHERE ip.company_id = ? AND ip.phase IN ('done', 'cancelled', 'failed') AND ip.state_changed_at IS NOT NULL`).all(company.id) as RecentOutcome[])
+      const recentOutcomes = this.database.authQuery((db) => db.prepare(`SELECT ip.task_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title AS task_title, ip.phase, ip.state_changed_at AS updated_at, ip.revision AS source_revision
+        FROM forge_issue_projections ip JOIN forge_tasks t ON t.id = ip.task_id JOIN forge_companies c ON c.id = ip.company_id WHERE ip.company_id = ? AND ip.phase IN ('done', 'cancelled', 'failed') AND ip.state_changed_at IS NOT NULL`).all(company.id) as RecentOutcomeRow[])
+        .map((row): RecentOutcome => ({ taskId: row.task_id, issueKey: row.issue_key, taskTitle: row.task_title, phase: row.phase, updatedAt: row.updated_at, sourceRevision: row.source_revision }))
         .filter((row) => Date.parse(row.updatedAt) >= now - RECENT_OUTCOME_WINDOW_MS)
         .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt) * -1 || left.taskId.localeCompare(right.taskId))
         .slice(0, RECENT_OUTCOME_LIMIT);
@@ -185,8 +198,8 @@ export class AttentionService {
     const task = this.database.authQuery((db) => db.prepare("SELECT company_id FROM forge_tasks WHERE id = ?").get(taskId) as { company_id: string } | undefined);
     if (!task) safeNotFound();
     this.auth.requireCompanyAccess(actorUserId, task.company_id);
-    return this.database.authQuery((db) => db.prepare(`SELECT ai.id, ai.company_id, ai.task_id, t.title AS task_title, ai.category, ai.summary, ai.source_revision, ai.activated_at, ai.actions_json, ai.evidence_artifact_id, ai.evidence_sha256, a.mime_type, a.byte_size, a.kind
-      FROM forge_attention_items ai JOIN forge_tasks t ON t.id = ai.task_id JOIN forge_artifacts a ON a.id = ai.evidence_artifact_id AND a.company_id = ai.company_id AND a.sha256 = ai.evidence_sha256
+    return this.database.authQuery((db) => db.prepare(`SELECT ai.id, ai.company_id, ai.task_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title AS task_title, ai.category, ai.summary, ai.source_revision, ai.activated_at, ai.actions_json, ai.evidence_artifact_id, ai.evidence_sha256, a.mime_type, a.byte_size, a.kind
+      FROM forge_attention_items ai JOIN forge_tasks t ON t.id = ai.task_id JOIN forge_companies c ON c.id = ai.company_id JOIN forge_artifacts a ON a.id = ai.evidence_artifact_id AND a.company_id = ai.company_id AND a.sha256 = ai.evidence_sha256
       WHERE ai.task_id = ? AND ai.company_id = ? AND ai.active = 1 AND a.kind IN (${SAFE_ARTIFACT_KINDS_SQL}) ORDER BY ai.activated_at, ai.id`).all(taskId, task.company_id).flatMap((item) => this.publicAttention(item as AttentionRow)));
   }
 
@@ -220,7 +233,7 @@ export class AttentionService {
     const category = AttentionCategorySchema.safeParse(row.category);
     const actions = parseActions(row.actions_json, row.source_revision);
     if (!category.success || !actions || !row.activated_at || !row.evidence_artifact_id || !row.evidence_sha256) return [];
-    return [{ id: row.id || attentionId(row.company_id, row.task_id, row.source_revision, category.data), companyId: row.company_id, taskId: row.task_id, taskTitle: row.task_title, category: category.data, summary: row.summary, sourceRevision: row.source_revision, activatedAt: row.activated_at, actions, evidence: { artifactId: row.evidence_artifact_id, sha256: row.evidence_sha256, kind: row.kind, mimeType: row.mime_type, byteSize: row.byte_size, href: `/api/attention/${encodeURIComponent(row.id)}/evidence` } }];
+    return [{ id: row.id || attentionId(row.company_id, row.task_id, row.source_revision, category.data), companyId: row.company_id, taskId: row.task_id, issueKey: row.issue_key, taskTitle: row.task_title, category: category.data, summary: row.summary, sourceRevision: row.source_revision, activatedAt: row.activated_at, actions, evidence: { artifactId: row.evidence_artifact_id, sha256: row.evidence_sha256, kind: row.kind, mimeType: row.mime_type, byteSize: row.byte_size, href: `/api/attention/${encodeURIComponent(row.id)}/evidence` } }];
   }
 
   private categoryRank(company: CompanyAttentionOverview): number {

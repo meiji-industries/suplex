@@ -39,7 +39,7 @@ const LeadReviewResponseSchema = z.object({
   reviewResponse: z.string().min(1).max(20_000),
   result: LeadOutputSchema,
 }).strict();
-export { DecisionBlockerSchema, LeadOutputSchema, LeadPlanSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type PersistedLeadOutput } from "./codex-lead-contracts.js";
+export { AskUserQuestionSchema, DecisionBlockerSchema, LeadOutputSchema, LeadPlanSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type AskUserQuestion, type PersistedLeadOutput } from "./codex-lead-contracts.js";
 export type { DecisionBlocker, LeadOutput, LeadPlan, LeadPlanningActivityInput, LeadPlanningResult, LegacyLeadPlanningResult } from "./codex-lead-contracts.js";
 export const SupplementalReviewSchema = z.object({
   kind: z.literal("review"),
@@ -294,13 +294,21 @@ export function parseLeadOutput(lines: string[]): LeadOutput {
         if (validShape) providerObject.developerContext = { ...context, artifactStepNumbers: Object.fromEntries(mappings) };
       }
     }
+    if (Array.isArray(providerObject.affectedPaths) && Array.isArray(providerObject.materiality)) {
+      const affectedPaths = new Set(providerObject.affectedPaths);
+      for (const entry of providerObject.materiality) {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+        const evidence = entry as Record<string, unknown>;
+        if (Array.isArray(evidence.evidenceRefs)) evidence.evidenceRefs = evidence.evidenceRefs.map((ref) => typeof ref === "string" && affectedPaths.has(ref) ? `path:${ref}` : ref);
+      }
+    }
   }
   // The provider-compatible closed schema requires inactive discriminated
   // fields to be present even when the discriminator makes them inactive.
   // Remove that declared inactive set before canonical Zod validation, which
   // still rejects every omitted or malformed active field and every unknown key.
   const inactiveKeys = providerObject?.kind === "plan"
-    ? new Set(["category", "evidence", "owner", "question", "nextAction", "resumePhase"])
+    ? new Set(["category", "evidence", "owner", "askUserQuestion", "nextAction", "resumePhase"])
     : providerObject?.kind === "decision_blocker"
       ? new Set(["gitPresentation", "reproduction", "rootCauseAnalysis", "steps", "compatibilityAnalysis", "operationalAnalysis", "verificationStrategy", "unresolvedTechnicalQuestions", "materialCategories", "preservedWorktreeCompatibility", "affectedPaths", "materiality", "developerContext"])
       : undefined;
@@ -768,7 +776,7 @@ export class AgentService {
     if (!row) throw new AgentFailure("scoped-input-missing", "Lead planning evidence is unavailable");
     const completed = await this.completedPlanningResult(input);
     if (completed) return completed;
-    const active = this.database.authQuery((db) => db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at, wrapper_pid, wrapper_process_group, wrapper_start_identity, process_pid, process_start_identity, spool_relative_path, status_relative_path, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND role = 'lead' AND turn_key = ? AND status IN ('starting', 'running', 'cancelling') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`) as (ActiveLeadExecution & { profile_id: string | null }) | undefined);
+    const active = this.database.authQuery((db) => db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at, wrapper_pid, wrapper_process_group, wrapper_start_identity, process_pid, process_start_identity, spool_relative_path, status_relative_path, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND role = 'lead' AND turn_key = ? AND status IN ('starting', 'running', 'cancelling', 'failed') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`) as (ActiveLeadExecution & { profile_id: string | null }) | undefined);
     const turnSupervisor = new CodexTurnSupervisor(this.processController);
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
     const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
@@ -851,32 +859,36 @@ export class AgentService {
     if (!sessionRef && !rawSessionId && this.sessionStore.reserve) sessionRef = await this.sessionStore.reserve();
     try {
       if (active) {
-        try {
-          const storedStatus = JSON.parse(await readFile(this.runtimePath(active.status_relative_path), "utf8")) as { state?: string };
-          if (storedStatus.state === "completed") return this.attachPlanningResult(input, active, runtime.signal);
-        } catch (error) {
-          if (error instanceof AgentFailure) throw error;
+        if (active.status !== "failed") {
+          try {
+            const storedStatus = JSON.parse(await readFile(this.runtimePath(active.status_relative_path), "utf8")) as { state?: string };
+            if (storedStatus.state === "completed") return this.attachPlanningResult(input, active, runtime.signal);
+          } catch (error) {
+            if (error instanceof AgentFailure) throw error;
+          }
+          const wrapper = active.wrapper_pid && active.wrapper_process_group && active.wrapper_start_identity ? await this.processController.inspect(active.wrapper_pid) : undefined;
+          const wrapperAlive = Boolean(wrapper && wrapper.processGroup === active.wrapper_process_group && `${active.wrapper_pid}:${wrapper.startTime}` === active.wrapper_start_identity);
+          const child = active.process_pid ? await this.processController.inspect(active.process_pid) : undefined;
+          const childAlive = Boolean(child && active.process_start_identity && `${active.process_pid}:${child.startTime}` === active.process_start_identity && child.processGroup === active.wrapper_process_group);
+          const groupAlive = active.wrapper_process_group ? await this.processController.isProcessGroupAlive?.(active.wrapper_process_group) : false;
+          if (wrapperAlive) return this.attachPlanningResult(input, active, runtime.signal, wrapper);
+          if (childAlive && child) {
+            const childOwnership = { name: "codex-child", pid: child.pid, command: child.command, startedAt, processGroup: child.processGroup, startTime: child.startTime, executable: child.executable, argv: child.argv };
+            if (!await turnSupervisor.cancelOwnedProcess(childOwnership, child)) throw new AgentFailure("ownership_ambiguous", "The stale Lead child process could not be safely terminated");
+          } else if (groupAlive) {
+            throw new AgentFailure("ownership_ambiguous", "The stale Lead process group could not be safely identified");
+          }
+          if (!active.wrapper_pid || !active.wrapper_process_group || !active.wrapper_start_identity) throw new AgentFailure("ownership_ambiguous", "The stale Lead execution has incomplete process ownership or pinned settings");
         }
-        const wrapper = active.wrapper_pid && active.wrapper_process_group && active.wrapper_start_identity ? await this.processController.inspect(active.wrapper_pid) : undefined;
-        const wrapperAlive = Boolean(wrapper && wrapper.processGroup === active.wrapper_process_group && `${active.wrapper_pid}:${wrapper.startTime}` === active.wrapper_start_identity);
-        const child = active.process_pid ? await this.processController.inspect(active.process_pid) : undefined;
-        const childAlive = Boolean(child && active.process_start_identity && `${active.process_pid}:${child.startTime}` === active.process_start_identity && child.processGroup === active.wrapper_process_group);
-        const groupAlive = active.wrapper_process_group ? await this.processController.isProcessGroupAlive?.(active.wrapper_process_group) : false;
-        if (wrapperAlive) return this.attachPlanningResult(input, active, runtime.signal, wrapper);
-        if (childAlive && child) {
-          const childOwnership = { name: "codex-child", pid: child.pid, command: child.command, startedAt, processGroup: child.processGroup, startTime: child.startTime, executable: child.executable, argv: child.argv };
-          if (!await turnSupervisor.cancelOwnedProcess(childOwnership, child)) throw new AgentFailure("ownership_ambiguous", "The stale Lead child process could not be safely terminated");
-        } else if (groupAlive) {
-          throw new AgentFailure("ownership_ambiguous", "The stale Lead process group could not be safely identified");
-        }
-        if (!active.wrapper_pid || !active.wrapper_process_group || !active.wrapper_start_identity || !active.resolved_model || !active.resolved_reasoning_level || !active.resolved_service_priority) throw new AgentFailure("ownership_ambiguous", "The stale Lead execution has incomplete process ownership or pinned settings");
+        if (!active.resolved_model || !active.resolved_reasoning_level || !active.resolved_service_priority) throw new AgentFailure("ownership_ambiguous", "The Lead execution has incomplete pinned settings");
         executionId = active.id;
         sessionRef = active.session_ref ?? undefined;
         rawSessionId = sessionRef ? await this.sessionStore.read(sessionRef) : undefined;
         leadProfile.model = active.resolved_model;
         leadProfile.reasoningLevel = active.resolved_reasoning_level;
         leadProfile.servicePriority = active.resolved_service_priority;
-        this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'starting', attempt = ?, heartbeat_at = ?, finished_at = NULL, failure_code = NULL, failure_summary = NULL, cancellation_requested_at = NULL, cancelled_at = NULL WHERE id = ?").run(active.attempt + 1, startedAt, executionId));
+        const claim = this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'starting', attempt = ?, heartbeat_at = ?, finished_at = NULL, failure_code = NULL, failure_summary = NULL, cancellation_requested_at = NULL, cancelled_at = NULL WHERE id = ? AND status = ?").run(active.attempt + 1, startedAt, executionId, active.status));
+        if (claim.changes !== 1) throw new AgentFailure("active-lease", "A Lead execution is already active for this issue");
       } else {
         this.database.authTransaction((db) => {
           db.prepare(`INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?, 'planning', ?, ?, ?, ?, ?, ?, 0)`).run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`, input.revision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, sessionRef ?? null, startedAt);
@@ -1739,7 +1751,7 @@ export class AgentService {
   }
 
   private initialPrompt(title: string, brief: string, revision: string, profiles: ProfileSettings[], repositoryEvidence: string, revisionContext?: Record<string, unknown>): string {
-    return `You are Forge's Lead planner. Work read-only in the provided repository. Do not modify files, reveal credentials, or invent provider facts.\n\nReturn exactly one JSON object matching one of these shapes:\n{"kind":"plan","summary":"...","gitPresentation":{"branchSlug":"short-kebab-case-purpose","pullRequestTitle":"Polished imperative title","pullRequestDescription":"One to three sentences explaining the change and why it matters."},"reproduction":null,"rootCauseAnalysis":null,"steps":[{"number":1,"instruction":"...","entryPoint":null,"completionCriterion":"...","verification":"...","verificationCommands":["exact command"]}],"compatibilityAnalysis":"...","operationalAnalysis":"...","verificationStrategy":"...","unresolvedTechnicalQuestions":[],"materialCategories":[],"affectedPaths":["path/to/affected/file"],"materiality":[{"category":"user_visible_behavior","rationale":"...","evidenceRefs":["step:1"]}],"preservedWorktreeCompatibility":null,"developerContext":{"includeTaskBrief":false,"evidenceArtifactIds":[],"imageArtifactIds":[],"repositoryInstructionPaths":[],"artifactStepNumbers":[]}}\n{"kind":"decision_blocker","category":"human_decision","summary":"...","evidence":"...","owner":"human","question":"...","nextAction":"...","resumePhase":"planning"}\nUse decision_blocker only for one unresolved human/business choice. A plan must have numbered prescriptive steps with exact verificationCommands, compatibility and operational analysis, a complete verification strategy, zero unresolved technical questions, a non-empty affectedPaths list naming repository-relative paths, materiality evidence whose categories and references are grounded in those paths or numbered steps, and developerContext as the complete Developer evidence allowlist. Every plan must also lock polished, developer-facing Git presentation: branchSlug is a concise lowercase kebab-case purpose with no issue, workflow, or other system identifier; pullRequestTitle is imperative and specific; pullRequestDescription is one to three useful sentences explaining what changes and why. Each artifactStepNumbers entry has artifactIdOrPath and stepNumbers. materialCategories must contain only categories directly implicated: architecture_dependencies, schema_data_migration, security_permissions, external_integration, production_operation, user_visible_behavior. For a revised reuse request, set preservedWorktreeCompatibility to true only when the preserved coordinates remain safe for the plan; otherwise set it to false and explain why in compatibilityAnalysis. Ordinary and new-worktree plans set it to null.\n\nTask: ${title}\nBrief:\n${brief}\n\nPinned Project revision:\n${revision}\n\nRole profile settings:\n${JSON.stringify(profiles)}\n\nRepository read evidence:\n${repositoryEvidence}${revisionContext ? `\n\nRevision request:\n${JSON.stringify(revisionContext)}` : ""}`;
+    return `You are Forge's Lead planner. Work read-only in the provided repository. Do not modify files, reveal credentials, or invent provider facts.\n\nReturn exactly one JSON object matching one of these shapes:\n{"kind":"plan","summary":"...","gitPresentation":{"branchSlug":"short-kebab-case-purpose","pullRequestTitle":"Polished imperative title","pullRequestDescription":"One to three sentences explaining the change and why it matters."},"reproduction":null,"rootCauseAnalysis":null,"steps":[{"number":1,"instruction":"...","entryPoint":null,"completionCriterion":"...","verification":"...","verificationCommands":["exact command"]}],"compatibilityAnalysis":"...","operationalAnalysis":"...","verificationStrategy":"...","unresolvedTechnicalQuestions":[],"materialCategories":[],"affectedPaths":["path/to/affected/file"],"materiality":[{"category":"user_visible_behavior","rationale":"...","evidenceRefs":["step:1"]}],"preservedWorktreeCompatibility":null,"developerContext":{"includeTaskBrief":false,"evidenceArtifactIds":[],"imageArtifactIds":[],"repositoryInstructionPaths":[],"artifactStepNumbers":[]}}\n{"kind":"decision_blocker","category":"human_decision","summary":"...","evidence":"...","owner":"human","askUserQuestion":{"header":"Decision","id":"decision","question":"...","options":[{"label":"Best option (Recommended)","description":"Why this is the recommended choice."},{"label":"Alternative","description":"The tradeoff of this choice."},{"label":"Defer","description":"What remains blocked if this is chosen."}],"isOther":true,"isSecret":false},"nextAction":"...","resumePhase":"planning"}\nUse decision_blocker only for one unresolved human/business choice. Its askUserQuestion must follow Codex request_user_input semantics: always offer exactly three concrete, mutually exclusive recommendations that the member can select as written; never use a restatement of the blocker or a request for free-form input as an option. Put the strongest recommendation first and suffix its label with (Recommended); Forge adds the fourth Other free-text choice. A plan must have numbered prescriptive steps with exact verificationCommands, compatibility and operational analysis, a complete verification strategy, zero unresolved technical questions, a non-empty affectedPaths list naming repository-relative paths, materiality evidence whose categories and references are grounded in those paths or numbered steps, and developerContext as the complete Developer evidence allowlist. Every plan must also lock polished, developer-facing Git presentation: branchSlug is a concise lowercase kebab-case purpose with no issue, workflow, or other system identifier; pullRequestTitle is imperative and specific; pullRequestDescription is one to three useful sentences explaining what changes and why. Each artifactStepNumbers entry has artifactIdOrPath and stepNumbers. materialCategories must contain only categories directly implicated: architecture_dependencies, schema_data_migration, security_permissions, external_integration, production_operation, user_visible_behavior. For a revised reuse request, set preservedWorktreeCompatibility to true only when the preserved coordinates remain safe for the plan; otherwise set it to false and explain why in compatibilityAnalysis. Ordinary and new-worktree plans set it to null.\n\nTask: ${title}\nBrief:\n${brief}\n\nPinned Project revision:\n${revision}\n\nRole profile settings:\n${JSON.stringify(profiles)}\n\nRepository read evidence:\n${repositoryEvidence}${revisionContext ? `\n\nRevision request:\n${JSON.stringify(revisionContext)}` : ""}`;
   }
 
   private correctionPrompt(): string {

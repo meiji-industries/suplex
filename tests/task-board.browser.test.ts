@@ -33,6 +33,7 @@ test("the task board shows its workflow lanes on desktop and narrow viewports", 
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
   const projects = new ProjectService(database, auth, config, { localRepository, github });
   const company = auth.createCompany("admin-1", "Browser Board Company");
+  auth.setCompanyIssueCode("admin-1", company.id, "brd");
   const profile = projects.createProfile("admin-1", { name: "Browser board profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const project = await projects.createProject("admin-1", company.id, { name: "Browser board project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
   const active = await projects.activateProject("admin-1", project.id);
@@ -53,19 +54,51 @@ test("the task board shows its workflow lanes on desktop and narrow viewports", 
     try {
       const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
       await context.addCookies([{ name: SESSION_COOKIE_NAME, value: cookie.split("=", 2)[1] ?? "", domain: "127.0.0.1", path: "/" }, { name: CSRF_COOKIE_NAME, value: csrf.split("=", 2)[1] ?? "", domain: "127.0.0.1", path: "/" }]);
-      const page = await context.newPage();
+      let page = await context.newPage();
       await page.goto(`${baseUrl}/tasks?company=${encodeURIComponent(company.id)}&new=1`);
       await page.getByRole("dialog", { name: "New task" }).waitFor();
       await page.getByRole("combobox", { name: "Project" }).click(); await page.getByRole("option", { name: "Browser board project" }).click();
       await page.getByLabel("Task title", { exact: true }).fill("Browser board task"); await page.getByLabel("Task description", { exact: true }).fill("A board fixture."); await page.getByRole("button", { name: "Create task" }).click(); await page.waitForURL(/\/tasks\/[^/?]+/);
-      await page.getByRole("link", { name: "Tasks", exact: true }).click(); await page.waitForURL(/\/tasks\?company=/); await page.locator("[data-task-list]").getByText("Browser board task", { exact: true }).waitFor();
+      const taskId = new URL(page.url()).pathname.split("/").at(-1)!;
+      const actorId = (enrolled.json() as { user: { id: string } }).user.id;
+      const successor = await tasks.createTask(actorId, company.id, { projectId: project.id, title: "Browser board successor", description: "A linked board fixture.", idempotencyKey: "browser-board-successor", images: [] });
+      database.authTransaction((db) => {
+        db.prepare("UPDATE forge_tasks SET successor_task_id = ? WHERE id = ?").run(successor.task.id, taskId);
+        db.prepare("UPDATE forge_tasks SET predecessor_task_id = ? WHERE id = ?").run(taskId, successor.task.id);
+        const finishedAt = new Date(Date.now() - 60_000).toISOString();
+        db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, profile_id, started_at, finished_at) SELECT 'browser-board-agent', id, company_id, workflow_id, 'lead', 'completed', 1, ?, ?, ? FROM forge_tasks WHERE id = ?").run(profile.id, new Date(Date.now() - 120_000).toISOString(), finishedAt, taskId);
+      });
+      database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'planning' WHERE task_id = ?").run(taskId));
+      database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'blocked' WHERE task_id = ?").run(successor.task.id));
+      const iconPage = await context.newPage(); await iconPage.goto(`${baseUrl}/tasks?company=${encodeURIComponent(company.id)}`); await iconPage.getByRole("link", { name: /Browser board task/ }).waitFor();
+      expect(await iconPage.getByRole("tab", { name: /All tasks\s+2/ }).isVisible()).toBe(true);
+      expect(await iconPage.locator("[data-task-row]").count()).toBe(2);
+      expect(await iconPage.getByRole("link", { name: /BRD-1 Browser board task/ }).isVisible()).toBe(true);
+      expect(await iconPage.getByRole("link", { name: /Browser board task/ }).locator("svg.lucide-circle-dot-dashed").count()).toBe(1);
+      await iconPage.setViewportSize({ width: 390, height: 844 }); await iconPage.reload();
+      await iconPage.getByRole("link", { name: /Browser board task/ }).waitFor();
+      expect(await iconPage.locator("[data-task-row]").count()).toBe(2);
+      expect(await iconPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true); await iconPage.close();
+      database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'backlog' WHERE task_id = ?").run(taskId));
+      await page.close(); page = await context.newPage(); await page.goto(`${baseUrl}/tasks?company=${encodeURIComponent(company.id)}`); await page.locator("[data-task-list]").getByText("Browser board task", { exact: true }).waitFor();
       await page.getByRole("link", { name: "Board", exact: true }).click(); await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
       expect(await page.getByText("Backlog", { exact: true }).isVisible()).toBe(true); for (const phase of ["Planning", "Development", "Reviewing", "Waiting for CI", "Final review", "Done"]) expect(await page.getByText(phase, { exact: true }).isVisible()).toBe(true);
       const boardTask = page.getByRole("button", { name: /Browser board task/ }); await boardTask.waitFor(); expect(await boardTask.isVisible()).toBe(true);
+      expect(await boardTask.textContent()).toContain("BRD-1");
       await page.setViewportSize({ width: 390, height: 844 }); await page.reload(); await page.getByRole("heading", { name: "Board", exact: true }).waitFor();
       expect(await page.getByText("Backlog", { exact: true }).isVisible()).toBe(true);
-      expect(await page.getByRole("button", { name: /Browser board task/ }).isVisible()).toBe(true);
+      const narrowBoardTask = page.getByRole("button", { name: /Browser board task/ }); await narrowBoardTask.waitFor(); expect(await narrowBoardTask.textContent()).toContain("BRD-1");
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await page.goto(`${baseUrl}/tasks/${encodeURIComponent(taskId)}?company=${encodeURIComponent(company.id)}`);
+      const history = page.locator("[data-task-history]");
+      await history.getByRole("button", { name: /^History · \d+$/ }).click();
+      expect(await history.getByRole("link", { name: /Successor: BRD-2 Browser board successor/ }).isVisible()).toBe(true);
+      await page.goto(`${baseUrl}/timeline?company=${encodeURIComponent(company.id)}`);
+      await page.locator("[data-work-timeline]").waitFor();
+      expect(await page.getByRole("link", { name: /BRD-1 Browser board task/ }).last().isVisible()).toBe(true);
+      const interval = page.getByRole("link", { name: /worked on BRD-1 Browser board task/ });
+      await interval.focus();
+      await page.locator("[data-slot=tooltip-content]").getByText("BRD-1", { exact: true }).waitFor();
       await page.close(); await context.close();
     } finally { await browser.close(); }
   } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }

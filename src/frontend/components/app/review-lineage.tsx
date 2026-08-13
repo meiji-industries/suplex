@@ -1,4 +1,5 @@
 import { Badge } from "../ui/badge.js";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion.js";
 import { RevisionIdentity } from "./revision-identity.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
 import type { ReactElement } from "react";
@@ -97,9 +98,15 @@ export function ReviewLineage({ taskId, lineage }: { taskId: string; lineage: Li
   ].sort((left, right) => left.createdAt.localeCompare(right.createdAt) || eventRank(left) - eventRank(right) || (left.value.id.localeCompare(right.value.id)));
 
   return (
-    <section className="min-w-0 space-y-2" aria-labelledby="review-lineage-heading">
-      <div className="flex min-w-0 items-center justify-between gap-2"><h3 id="review-lineage-heading" className="text-xs font-semibold">Review lineage</h3><span className="text-[11px] text-muted-foreground">{lineage.reviewAttempts.length} attempts · {lineage.repairAttempts.length} repairs</span></div>
-      {events.length ? <ol className="min-w-0 divide-y">{events.map((event) => event.kind === "review" ? reviewRow(taskId, event.value, event.value.id === lineage.currentReview?.id) : event.kind === "attempt" ? reviewAttemptRow(taskId, event.value) : repairRow(taskId, event.value))}</ol> : <p className="text-[12px] text-muted-foreground">No completed review yet.</p>}
+    <section className="min-w-0" aria-labelledby="review-lineage-heading">
+      <Accordion>
+        <AccordionItem value="review-lineage">
+          <AccordionTrigger><span><span id="review-lineage-heading">Review lineage</span> · {lineage.reviewAttempts.length} attempts · {lineage.repairAttempts.length} repairs</span></AccordionTrigger>
+          <AccordionContent>
+            {events.length ? <ol className="min-w-0 divide-y">{events.map((event) => event.kind === "review" ? reviewRow(taskId, event.value, event.value.id === lineage.currentReview?.id) : event.kind === "attempt" ? reviewAttemptRow(taskId, event.value) : repairRow(taskId, event.value))}</ol> : <p className="text-[12px] text-muted-foreground">No completed review yet.</p>}
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
     </section>
   );
 }

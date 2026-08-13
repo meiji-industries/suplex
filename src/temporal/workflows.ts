@@ -95,6 +95,7 @@ const planApprovalBlockerPatch = "forge-plan-approval-blocker-v1";
 
 const durableCapacityPatch = "durable-capacity-v1";
 const decisionResolutionProjectionPatch = "forge-decision-resolution-projection-v1";
+const exhaustedActivityRecoveryPatch = "forge-exhausted-activity-recovery-v1";
 
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
@@ -310,6 +311,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     durableCapacityPatch,
     planGovernancePatch,
     decisionResolutionProjectionPatch,
+    exhaustedActivityRecoveryPatch,
     developerFailureRecoveryPatch,
     artifactBackedReviewPatch,
     exactDeliveryReviewPatch,

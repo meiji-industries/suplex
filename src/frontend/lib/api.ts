@@ -13,6 +13,7 @@ export type ApiCompany = {
   id: string;
   name: string;
   status: CompanyStatus;
+  issueCode: string | null;
   createdAt: string;
 };
 

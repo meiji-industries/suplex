@@ -136,6 +136,14 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = 'issue-developer-failure'").get())).toEqual({ revision: 7, phase: "delivery_blocked", pending_action: "The agent invocation did not complete." });
     state.developerFailure = false;
 
+    state.planningFailure = true;
+    const startedPlanningFailure = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "ci-planning-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false });
+    const retryablePlanningFailure = await executeIssueCommand(config, startedPlanningFailure.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "issue-admin" });
+    expect(retryablePlanningFailure).toMatchObject({ phase: "failed", owner: "human", allowedCommands: ["start_planning", "continue_work", "cancel_issue"], pendingAction: "Planning failed; retry is available" });
+    state.planningFailure = false;
+    const retriedPlanning = await executeIssueCommand(config, startedPlanningFailure.workflowId, "start_planning", { expectedRevision: retryablePlanningFailure.revision, actorUserId: "issue-admin" });
+    expect(retriedPlanning).toMatchObject({ phase: "approval", allowedCommands: expect.arrayContaining(["approve_plan", "reject_plan"]) });
+
     state.permanentPlanningFailure = true;
     const startedPermanentFailure = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-permanent-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false });
     const failedIssue = await executeIssueCommand(config, startedPermanentFailure.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "issue-admin" });

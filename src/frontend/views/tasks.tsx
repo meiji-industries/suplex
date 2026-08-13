@@ -13,12 +13,12 @@ import { Badge as ReuiBadge } from ".././components/reui/badge.js";
 import { Tabs, TabsList, TabsTrigger } from ".././components/ui/tabs.js";
 import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
+import { TaskStatus, TaskStatusIcon, taskStatusAppearance } from ".././components/app/task-status.js";
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES as blockedTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
 import { CheckCircle2, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, Filter, Layers3, ListFilter, Plus } from "lucide-react";
-import type { LucideIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { relativeTime, reconcileScopedNotFound, taskPhases, type ApiProject, type ApiTask, type TaskPhase } from "../lib/view-shared.js";
+import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiProject, type ApiTask, type TaskPhase } from "../lib/view-shared.js";
 import { TaskDetailsPage, TaskDetailsNotFound, TaskDetailsSkeleton, type PlanRevisionInput, type TaskPlanAction } from "./task-details.js";
 
 async function fileAsImage(file: File): Promise<{ filename: string; mimeType: string; base64: string }> {
@@ -37,14 +37,6 @@ function taskListDate(timestamp: string): string {
   const today = new Date();
   if (date.toDateString() === today.toDateString()) return relativeTime(timestamp);
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
-}
-
-function taskPhaseAppearance(phase: TaskPhase): { icon: LucideIcon; iconClass: string; badge: "secondary" | "success-light" | "warning-light" | "destructive-light" | "primary-light" } {
-  if (phase === "done") return { icon: CheckCircle2, iconClass: "text-emerald-500", badge: "success-light" };
-  if (blockedTaskPhases.has(phase) || phase === "cancelled") return { icon: CircleX, iconClass: "text-rose-500", badge: "destructive-light" };
-  if (["development", "repair_required", "releasing", "merge_conflict_resolving", "ci_repair_required"].includes(phase)) return { icon: CircleDotDashed, iconClass: "text-amber-500", badge: "warning-light" };
-  if (["approval", "ready_for_development", "delivery_ready", "reviewing_delivery", "delivery_reviewed", "final_review", "accepted", "ready_reconciliation", "manual_merge"].includes(phase)) return { icon: CircleDotDashed, iconClass: "text-blue-500", badge: "primary-light" };
-  return { icon: CircleDashed, iconClass: "text-muted-foreground", badge: "secondary" };
 }
 
 function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, projects, projectId, onProjectChange, title, onTitleChange, description, onDescriptionChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
@@ -84,7 +76,7 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
             </FieldGroup>
             {error ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
             <DialogFooter>
-              <DialogClose render={<Button type="button" variant="ghost" size="sm">Cancel</Button>} />
+              <DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} />
               <Button type="submit" size="sm" disabled={busy || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button>
             </DialogFooter>
           </form>
@@ -214,7 +206,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const planAction = async (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>): Promise<void> => {
     if (!selected) return;
     setBusy(true); setError("");
-    try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/${path}`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision, ...(note ? { note } : {}), ...payload }) }); selectedRef.current = updated; setSelected(updated); await reload(); }
+    try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/${path}`, { method: "POST", body: JSON.stringify(taskActionPayload(selected.revision, note, payload)) }); selectedRef.current = updated; setSelected(updated); await reload(); }
     catch (reason) {
       if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
       const staleRevision = isApiError(reason, 409);
@@ -281,18 +273,16 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
             <Kanban value={taskBoard} onValueChange={() => {}} getItemValue={(task) => task.id} className="h-full">
               <KanbanBoard className="h-full min-w-max grid-flow-col auto-cols-[286px] grid-cols-none gap-2">
                 {taskPhases.map((phase) => {
-                  const statusClass = phase === "failed" || phase === "delivery_blocked" ? "text-rose-500" : phase === "delivery_reviewed" ? "text-indigo-500" : phase === "development" || phase === "delivery_ready" || phase === "reviewing_delivery" ? "text-amber-500" : phase === "backlog" || phase === "planning" ? "text-muted-foreground" : "text-blue-500";
-                  const StatusIcon = phase === "delivery_reviewed" ? CheckCircle2 : phase === "failed" || phase === "delivery_blocked" ? CircleX : phase === "development" || phase === "delivery_ready" || phase === "reviewing_delivery" ? CircleDotDashed : CircleDashed;
                   return <KanbanColumn disabled key={phase} value={phase} className="min-h-0 rounded-md bg-muted/45">
                     <div className="flex h-10 shrink-0 items-center justify-between px-3 text-xs">
-                      <div className="flex min-w-0 items-center gap-2"><StatusIcon className={`size-3.5 shrink-0 ${statusClass}`} /><span className="truncate font-medium">{taskPhaseLabel(phase)}</span><span className="text-muted-foreground">{taskBoard[phase].length}</span></div>
+                      <div className="flex min-w-0 items-center gap-2"><TaskStatus phase={phase} /><span className="text-muted-foreground">{taskBoard[phase].length}</span></div>
                       <div className="flex items-center gap-0.5 text-muted-foreground"><Button variant="ghost" size="icon-sm" className="size-6" aria-label={`${taskPhaseLabel(phase)} options`}><Ellipsis className="size-3.5" /></Button><Button render={<a href={withCompany("/tasks", companyId)} />} variant="ghost" size="icon-sm" className="size-6" aria-label="Create task"><Plus className="size-3.5" /></Button></div>
                     </div>
                     <KanbanColumnContent value={phase} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
                       {taskBoard[phase].map((task) => {
                         const project = visibleProjects.find((candidate) => candidate.id === task.projectId);
                         return <button type="button" className="block w-full rounded-md border border-border/90 bg-card px-3 py-2.5 text-left text-xs transition-colors hover:border-muted-foreground/35 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring" key={task.id} onClick={() => selectTask(task)}>
-                          <span className="block font-medium leading-4 text-card-foreground">{task.title}</span>
+                          <span className="block font-medium leading-4 text-card-foreground">{task.issueKey ? <span className="mr-1.5 font-normal text-muted-foreground">{task.issueKey}</span> : null}{task.title}</span>
                           {task.pendingAction ? <span className="mt-1 block truncate text-[11px] leading-4 text-muted-foreground">{task.pendingAction}</span> : null}
                           <span className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"><Layers3 className="size-3" />{project?.name ?? "Unknown project"}</span>
                         </button>;
@@ -325,27 +315,27 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
         {error ? <div className="p-3 sm:p-4"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
         {!scopeLoaded && !error ? <div className="space-y-px p-2" aria-label="Loading tasks" aria-busy="true"><Skeleton className="h-8 w-full" /><Skeleton className="h-9 w-full" /><Skeleton className="h-9 w-full" /></div> : null}
         {scopeLoaded && taskGroups.length === 0 ? <div className="px-4 py-8 text-xs text-muted-foreground">{taskFilter === "active" ? "No active tasks." : taskFilter === "backlog" ? "No backlog tasks." : "No tasks yet. Press ⌘N to create one."}</div> : null}
-        {scopeLoaded ? <div aria-label="Task groups">
+        {scopeLoaded ? <div aria-label="Task groups" className="py-1">
           {taskGroups.map((group) => {
             const GroupIcon = group.id === "completed" ? CheckCircle2 : group.id === "blocked" ? CircleX : group.id === "active" ? CircleDotDashed : CircleDashed;
             const groupIconClass = group.id === "completed" ? "text-emerald-500" : group.id === "blocked" ? "text-rose-500" : group.id === "active" ? "text-amber-500" : "text-muted-foreground";
             return (
-              <Collapsible.Root key={group.id} defaultOpen className="group/task-group border-b border-border/70">
-                <Collapsible.Trigger className="flex h-8 w-full items-center gap-2 bg-muted/45 px-3 text-left text-xs outline-none transition-colors hover:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring/50 sm:px-4">
+              <Collapsible.Root key={group.id} defaultOpen className="group/task-group pt-1">
+                <Collapsible.Trigger className="mx-2 flex h-9 w-[calc(100%-1rem)] items-center gap-2 rounded-md bg-muted/60 px-2 text-left text-xs outline-none transition-colors hover:bg-muted/80 focus-visible:ring-1 focus-visible:ring-ring/50">
                   <ChevronRight className="size-3 text-muted-foreground transition-transform group-data-[open]/task-group:rotate-90" />
                   <GroupIcon className={`size-3.5 ${groupIconClass}`} />
                   <span className="font-medium">{group.title}</span>
                   <span className="text-muted-foreground">{group.tasks.length}</span>
                 </Collapsible.Trigger>
-                <Collapsible.Panel>
+                <Collapsible.Panel className="pt-0.5">
                   {group.tasks.map((task) => {
                     const project = visibleProjects.find((candidate) => candidate.id === task.projectId);
-                    const appearance = taskPhaseAppearance(task.phase);
-                    const StatusIcon = appearance.icon;
+                    const appearance = taskStatusAppearance(task.phase);
                     return (
-                      <a data-task-row key={task.id} href={withCompany(`/tasks/${encodeURIComponent(task.id)}`, companyId)} className="group/task-row grid min-h-9 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 border-t border-border/55 px-3 text-[13px] outline-none transition-colors first:border-t-0 hover:bg-muted/40 focus-visible:bg-muted/50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring/50 sm:grid-cols-[auto_minmax(0,1fr)_auto_auto] sm:px-4">
-                        <StatusIcon className={`size-3.5 ${appearance.iconClass}`} />
+                      <a data-task-row key={task.id} href={withCompany(`/tasks/${encodeURIComponent(task.id)}`, companyId)} className="group/task-row grid min-h-9 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md px-3 text-[13px] outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring/50 sm:grid-cols-[auto_minmax(0,1fr)_auto_auto] sm:px-4">
+                        <TaskStatusIcon phase={task.phase} />
                         <span className="flex min-w-0 items-center gap-2">
+                          {task.issueKey ? <span className="shrink-0 text-xs text-muted-foreground">{task.issueKey}</span> : null}
                           <span className="truncate font-medium">{task.title}</span>
                           {project ? <><ChevronRight className="hidden size-3 shrink-0 text-muted-foreground/60 md:block" /><span className="hidden truncate text-xs text-muted-foreground md:block">{project.name}</span></> : null}
                         </span>

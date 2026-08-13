@@ -1,8 +1,5 @@
 import { basename } from "node:path";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
 
 import type { HealthCheck } from "./health.js";
 import { GhAuthStatusSchema } from "./schemas.js";
@@ -11,8 +8,6 @@ export type GithubFailure = "command-missing" | "auth-timeout" | "auth-format" |
 
 export type CommandResult = { stdout: string; stderr: string };
 export type CommandRunner = (command: string, args: string[], options: { timeout: number; maxBuffer: number; cwd?: string }) => Promise<CommandResult>;
-
-const codexReadinessCacheMs = 5 * 60_000;
 
 export const MINIMUM_CODEX_VERSION = "0.140.0";
 
@@ -74,12 +69,9 @@ const runCommand: CommandRunner = (command, args, options) => new Promise((resol
 });
 
 export class CodexReadinessProbe {
-  private cached: { key: string; expiresAt: number; check: HealthCheck } | undefined;
-
   constructor(
     private readonly command: string,
     private readonly runner: CommandRunner = runCommand,
-    private readonly cacheDurationMs = codexReadinessCacheMs,
     private readonly workingDirectory = process.cwd(),
   ) {}
 
@@ -110,17 +102,10 @@ export class CodexReadinessProbe {
       }
     }
 
-    const cacheKey = `${version}|${authenticated ? "authenticated" : "unauthenticated"}|${failure ?? "none"}`;
-    if (this.cached && this.cached.expiresAt > Date.now() && this.cached.key === cacheKey) {
-      return this.cached.check;
-    }
-
     const safeCommand = basename(this.command);
-    const cacheExpiresAt = new Date(Date.now() + this.cacheDurationMs).toISOString();
-    let check: HealthCheck;
     const testedAt = new Date().toISOString();
     if (!authenticated || failure) {
-      check = {
+      return {
         id: "codex-auth",
         label: "Codex readiness",
         status: "unhealthy",
@@ -129,65 +114,16 @@ export class CodexReadinessProbe {
           : failure === "version-unsupported" || failure === "unsupported-version"
             ? `Codex version ${version === "unknown" ? "is unparseable" : version} is not supported`
             : "Codex local authentication is unavailable",
-        details: { command: safeCommand, version, authentication: "unavailable", smoke: "not-run", failure: failure ?? "unauthenticated", testedAt, cacheExpiresAt, minVersion: MINIMUM_CODEX_VERSION },
+        details: { command: safeCommand, version, authentication: "unavailable", failure: failure ?? "unauthenticated", testedAt, minVersion: MINIMUM_CODEX_VERSION },
       };
-    } else {
-      try {
-        const schemaRoot = await mkdtemp(join(tmpdir(), "forge-codex-readiness-"));
-        const schemaPath = join(schemaRoot, "schema.json");
-        await writeFile(schemaPath, JSON.stringify({ type: "object", properties: { ok: { type: "boolean" } }, required: ["ok"], additionalProperties: false }), { mode: 0o600 });
-        try {
-          const smoke = await this.runner(this.command, [
-            "exec",
-            "--json",
-            "--strict-config",
-            "--ignore-user-config",
-            "--output-schema",
-            schemaPath,
-            "--ephemeral",
-            "-C",
-            resolve(this.workingDirectory),
-            "--sandbox",
-            "read-only",
-            "Return exactly a JSON object with an ok boolean. Do not use tools.",
-          ], { timeout: 20_000, maxBuffer: 64 * 1024, cwd: this.workingDirectory });
-          const events = smoke.stdout.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line) as unknown);
-          const completed = events.some((event) => event && typeof event === "object" && "type" in event && event.type === "turn.completed");
-          const validOutput = events.some((event) => {
-            if (!event || typeof event !== "object" || !("type" in event) || event.type !== "item.completed" || !("item" in event)) return false;
-            const item = event.item;
-            if (!item || typeof item !== "object" || !("type" in item) || item.type !== "agent_message" || !("text" in item) || typeof item.text !== "string") return false;
-            try {
-              const output = JSON.parse(item.text) as unknown;
-              return Boolean(output && typeof output === "object" && "ok" in output && output.ok === true);
-            } catch {
-              return false;
-            }
-          });
-          if (!completed || !validOutput) throw new Error("Codex smoke did not produce a completed structured JSON object");
-          check = {
-            id: "codex-auth",
-            label: "Codex readiness",
-            status: "healthy",
-            summary: "Codex version, authentication, and structured smoke are ready",
-            details: { command: safeCommand, version, authentication: "available", smoke: "passed", failure: "none", testedAt, cacheExpiresAt, minVersion: MINIMUM_CODEX_VERSION },
-          };
-        } finally {
-          await rm(schemaRoot, { recursive: true, force: true });
-        }
-      } catch (error) {
-        const smokeFailure = smokeFailureKind(error);
-        check = {
-          id: "codex-auth",
-          label: "Codex readiness",
-          status: "unhealthy",
-          summary: "Codex authentication is available but the structured smoke failed",
-          details: { command: safeCommand, version, authentication: "available", smoke: "failed", failure: smokeFailure, testedAt, cacheExpiresAt, minVersion: MINIMUM_CODEX_VERSION },
-        };
-      }
     }
-    this.cached = { key: cacheKey, expiresAt: Date.now() + this.cacheDurationMs, check };
-    return check;
+    return {
+      id: "codex-auth",
+      label: "Codex readiness",
+      status: "healthy",
+      summary: "Codex version and local authentication are ready",
+      details: { command: safeCommand, version, authentication: "available", failure: "none", testedAt, minVersion: MINIMUM_CODEX_VERSION },
+    };
   }
 }
 
@@ -199,13 +135,6 @@ function commandFailure(error: unknown, fallback: string, timeoutFailure: string
     return timeoutFailure;
   }
   return fallback;
-}
-
-function smokeFailureKind(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  if (/timed out/i.test(message)) return "smoke-timeout";
-  if (/JSON|structured turn/i.test(message)) return "smoke-invalid-output";
-  return "smoke-failed";
 }
 
 export function checkGithubAuthentication(command: string, runner: CommandRunner = runCommand): () => Promise<HealthCheck> {

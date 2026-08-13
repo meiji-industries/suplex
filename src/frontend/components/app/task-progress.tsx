@@ -1,7 +1,6 @@
 import { CheckIcon, CircleIcon, PlayIcon } from "lucide-react";
 
 import { cn } from "../../lib/utils.js";
-import { Badge } from "../reui/badge.js";
 import { Timeline, TimelineContent, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "../ui/timeline.js";
 
 const stages = [
@@ -49,10 +48,7 @@ export function TaskProgress({ phase, allowedCommands, createdAt, updatedAt, tim
             <TimelineItem key={stage.step} step={stage.step} aria-current={status === "current" ? "step" : undefined}>
               <TimelineHeader>
                 <TimelineSeparator className="bg-input! group-data-[orientation=horizontal]/timeline:-top-6 group-data-[orientation=horizontal]/timeline:left-2.5 group-data-[orientation=horizontal]/timeline:w-[calc(100%-2.25rem)]" />
-                <TimelineTitle className="flex flex-wrap items-center gap-2">
-                  <span>{stage.title}</span>
-                  {status === "current" ? <Badge variant="primary-light" size="sm">Current</Badge> : null}
-                </TimelineTitle>
+                <TimelineTitle>{stage.title}</TimelineTitle>
                 <TimelineIndicator className={cn(
                   "flex size-6 items-center justify-center border-none",
                   status === "completed" && "bg-emerald-500 text-white",

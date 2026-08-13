@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import Database from "better-sqlite3";
 
-import { DatabaseMigrationFailure, ForgeDatabase } from "../src/database.js";
+import { DatabaseMigrationFailure, ForgeDatabase, readMigrations } from "../src/database.js";
 
 test("initializes migrations in WAL mode and preserves probe state after reopening", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-db-test-"));
@@ -154,19 +154,15 @@ test("0019 upgrades legacy Developer executions without inventing verification t
     current.close();
 
     const legacy = new Database(filename);
+    const developerTruthMigration = readMigrations(join(process.cwd(), "drizzle")).find((migration) => migration.tag.endsWith("_developer_execution_truth"))!;
     legacy.pragma("foreign_keys = OFF");
     legacy.exec(`
       DROP TABLE forge_developer_execution_events;
       DROP TABLE forge_developer_execution_truth;
       DROP TABLE forge_issue_worktrees;
       DROP TABLE forge_plan_authorizations;
-      DELETE FROM __drizzle_migrations
-      WHERE created_at = (
-        SELECT created_at FROM __drizzle_migrations
-        ORDER BY created_at DESC
-        LIMIT 1 OFFSET 1
-      );
     `);
+    legacy.prepare("DELETE FROM __drizzle_migrations WHERE hash = ?").run(developerTruthMigration.hash);
     legacy.close();
 
     const upgraded = new ForgeDatabase(filename);

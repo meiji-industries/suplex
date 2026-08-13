@@ -16,6 +16,7 @@ export type CompanyContextValue = {
   selectCompany: (companyId: string) => void;
   createCompany: (name: string) => Promise<ApiCompany>;
   renameCompany: (companyId: string, name: string) => Promise<ApiCompany>;
+  setCompanyIssueCode: (companyId: string, issueCode: string | null) => Promise<ApiCompany>;
   setCompanyStatus: (companyId: string, status: CompanyStatus) => Promise<ApiCompany>;
   reloadCompanies: () => Promise<void>;
 };
@@ -149,6 +150,12 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     return updated;
   }, [reloadCompanies]);
 
+  const setCompanyIssueCode = useCallback(async (companyId: string, issueCode: string | null): Promise<ApiCompany> => {
+    const updated = await readJson<ApiCompany>(`/api/admin/companies/${encodeURIComponent(companyId)}/issue-code`, { method: "PATCH", body: JSON.stringify({ issueCode }) });
+    await reloadCompanies();
+    return updated;
+  }, [reloadCompanies]);
+
   const value = useMemo<CompanyContextValue>(() => ({
     ...(user ? { user } : {}),
     companies,
@@ -158,9 +165,10 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     selectCompany,
     createCompany,
     renameCompany,
+    setCompanyIssueCode,
     setCompanyStatus,
     reloadCompanies,
-  }), [companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, selectCompany, setCompanyStatus, user]);
+  }), [companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, selectCompany, setCompanyIssueCode, setCompanyStatus, user]);
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;
 }
 

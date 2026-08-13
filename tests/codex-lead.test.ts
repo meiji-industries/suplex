@@ -175,6 +175,33 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
   }
 });
 
+test("Lead planning reuses a failed execution on activity retry", async () => {
+  const value = await fixture();
+  let calls = 0;
+  const runner: LeadProcessRunner = async (invocation) => {
+    calls += 1;
+    await invocation.onStart(4322, "2026-08-11T00:00:00.000Z");
+    if (calls === 1) await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-retry-session" }));
+    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: calls < 3 ? "{}" : JSON.stringify({ kind: "plan", gitPresentation, summary: "A retried fixture plan", reproduction: null, rootCauseAnalysis: "The prior output was invalid.", steps: [{ number: 1, instruction: "Inspect the fixture", entryPoint: null, completionCriterion: "The fixture is understood", verification: "The fixture test passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change is required.", operationalAnalysis: "The change is local.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] }) } }));
+    return { exitCode: 0, stderr: "" };
+  };
+  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1" }, revision: 1 };
+  try {
+    const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_retry"; }, async read() { return "raw-retry-session"; } } });
+    await expect(service.runLeadPlanning(input)).rejects.toMatchObject({ code: "invalid-output-schema" });
+    const failed = value.database.authQuery((db) => db.prepare("SELECT id, status, attempt FROM forge_agent_executions WHERE turn_key = 'workflow-test-issue-task_1:lead-planning:1'").get()) as { id: string; status: string; attempt: number };
+    expect(failed).toMatchObject({ status: "failed", attempt: 1 });
+
+    const result = await service.runLeadPlanning(input);
+    expect(result.leadExecutionId).toBe(failed.id);
+    expect(calls).toBe(3);
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, attempt FROM forge_agent_executions WHERE id = ?").get(failed.id))).toEqual({ status: "completed", attempt: 2 });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("a capacity request pins model, reasoning, and service priority through later profile edits", async () => {
   const value = await fixture("pinned-model");
   const wrapperRequests: Array<{ model: string; reasoningLevel: string; servicePriority: string }> = [];
@@ -206,7 +233,7 @@ test("a capacity request pins model, reasoning, and service priority through lat
 
 test("Lead output schema rejects unresolved technical questions and malformed blockers", () => {
   expect(LeadOutputSchema.safeParse({ kind: "plan", gitPresentation, summary: "x", reproduction: null, rootCauseAnalysis: null, steps: [], compatibilityAnalysis: "x", operationalAnalysis: "x", verificationStrategy: "x", unresolvedTechnicalQuestions: ["choose"] }).success).toBe(false);
-  expect(LeadOutputSchema.safeParse({ kind: "decision_blocker", summary: "x", evidence: "x", owner: "developer", question: "x", nextAction: "x" }).success).toBe(false);
+  expect(LeadOutputSchema.safeParse({ kind: "decision_blocker", summary: "x", evidence: "x", owner: "developer", askUserQuestion: { header: "Decision", id: "decision", question: "Which?", options: [{ label: "First (Recommended)", description: "First" }, { label: "Second", description: "Second" }, { label: "Third", description: "Third" }], isOther: true, isSecret: false }, nextAction: "x" }).success).toBe(false);
 });
 
 test("Lead output parsing rejects unknown null fields", () => {
@@ -222,13 +249,14 @@ test("Codex Lead schema uses provider-compatible artifact step mappings", () => 
 });
 
 test("Lead output parsing canonicalizes provider artifact step mappings", () => {
-  const output = { kind: "plan", gitPresentation, summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect", entryPoint: null, completionCriterion: "Inspected", verification: "Check", verificationCommands: [] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], preservedWorktreeCompatibility: null, affectedPaths: ["README.md"], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: ["artifact_1"], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: [{ artifactIdOrPath: "artifact_1", stepNumbers: [1] }] } };
+  const output = { kind: "plan", gitPresentation, summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect", entryPoint: null, completionCriterion: "Inspected", verification: "Check", verificationCommands: [] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: ["user_visible_behavior"], preservedWorktreeCompatibility: null, affectedPaths: ["README.md"], materiality: [{ category: "user_visible_behavior", rationale: "The README changes.", evidenceRefs: ["README.md"] }], developerContext: { includeTaskBrief: false, evidenceArtifactIds: ["artifact_1"], imageArtifactIds: [], repositoryInstructionPaths: ["docs/verify.md"], artifactStepNumbers: [{ artifactIdOrPath: "artifact_1", stepNumbers: [1] }, { artifactIdOrPath: "docs/verify.md", stepNumbers: [1] }] } };
   const parsed = parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })]);
-  expect(parsed.kind === "plan" && parsed.developerContext.artifactStepNumbers).toEqual({ artifact_1: [1] });
+  expect(parsed.kind === "plan" && parsed.developerContext.artifactStepNumbers).toEqual({ artifact_1: [1], "docs/verify.md": [1] });
+  expect(parsed.kind === "plan" && parsed.materiality[0]?.evidenceRefs).toEqual(["path:README.md"]);
 });
 
 test("Lead output parsing removes inactive plan placeholders from blockers", () => {
-  const output = { kind: "decision_blocker", category: "human_decision", summary: "A choice is required", evidence: "The brief does not specify the intended text", owner: "human", question: "What text should change?", nextAction: "Provide the intended edit", resumePhase: "planning", reproduction: "Inactive provider field", rootCauseAnalysis: null, steps: null, compatibilityAnalysis: null, operationalAnalysis: null, verificationStrategy: null, unresolvedTechnicalQuestions: null, materialCategories: null, preservedWorktreeCompatibility: null, affectedPaths: ["README.md"], materiality: null, developerContext: null };
+  const output = { kind: "decision_blocker", category: "human_decision", summary: "A choice is required", evidence: "The brief does not specify the intended text", owner: "human", askUserQuestion: { header: "README", id: "readme_edit", question: "What text should change?", options: [{ label: "Overview (Recommended)", description: "Improve the introductory overview." }, { label: "Features", description: "Improve a feature description." }, { label: "Install", description: "Improve installation guidance." }], isOther: true, isSecret: false }, nextAction: "Provide the intended edit", resumePhase: "planning", reproduction: "Inactive provider field", rootCauseAnalysis: null, steps: null, compatibilityAnalysis: null, operationalAnalysis: null, verificationStrategy: null, unresolvedTechnicalQuestions: null, materialCategories: null, preservedWorktreeCompatibility: null, affectedPaths: ["README.md"], materiality: null, developerContext: null };
   expect(parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })])).toMatchObject({ kind: "decision_blocker", owner: "human" });
 });
 

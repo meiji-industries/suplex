@@ -98,11 +98,14 @@ export function applyLegacyLeadResult(state: IssueWorkflowState, result: LeadPla
   });
 }
 
-export function permanentActivityFailure(error: unknown): IssueWorkflowContext["permanentActivityFailure"] extends (error: unknown) => infer Result ? Result : never {
+export function permanentActivityFailure(error: unknown, recoverExhausted = false): IssueWorkflowContext["permanentActivityFailure"] extends (error: unknown) => infer Result ? Result : never {
   if (error instanceof ApplicationFailure && error.nonRetryable) {
     return { code: error.type ?? "permanent-activity-failure", summary: error.message || "The invocation cannot complete without a configuration change." };
   }
-  if (!(error instanceof ActivityFailure) || !(error.cause instanceof ApplicationFailure) || !error.cause.nonRetryable) return undefined;
+  if (!(error instanceof ActivityFailure)) return undefined;
+  if (!(error.cause instanceof ApplicationFailure) || !error.cause.nonRetryable) {
+    return recoverExhausted ? { code: "activity-failed", summary: "The operation failed after its retry attempts." } : undefined;
+  }
   const detail = error.cause.details?.[0];
   if (detail && typeof detail === "object") {
     const record = detail as Record<string, unknown>;

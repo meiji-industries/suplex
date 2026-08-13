@@ -3,7 +3,7 @@ import { type ZodTypeProvider } from "@fastify/type-provider-zod";
 
 import type { AuthService } from "../../auth.js";
 import { CompanyIdParamsSchema, CompanyStatusParamsSchema, CompanyListResponseSchema, CompanyResponseSchema } from "../contracts/common.js";
-import { CompanyNameBodySchema, MembershipBodySchema } from "../contracts/auth.js";
+import { CompanyIssueCodeBodySchema, CompanyNameBodySchema, MembershipBodySchema } from "../contracts/auth.js";
 import { UserIdParamsSchema } from "../contracts/common.js";
 
 export interface CompanyRoutesOptions {
@@ -17,6 +17,7 @@ const companies: FastifyPluginAsync<CompanyRoutesOptions> = async (app, options)
   typed.get("/api/companies/:companyId", { schema: { params: CompanyIdParamsSchema, response: { 200: CompanyResponseSchema } } }, async (request, reply) => reply.send(auth.requireCompanyAccess(request.forgeUser.id, request.params.companyId)));
   typed.post("/api/admin/companies", { schema: { body: CompanyNameBodySchema, response: { 201: CompanyResponseSchema } } }, async (request, reply) => reply.code(201).send(auth.createCompany(request.forgeUser.id, request.body.name)));
   typed.patch("/api/admin/companies/:companyId", { schema: { params: CompanyIdParamsSchema, body: CompanyNameBodySchema, response: { 200: CompanyResponseSchema } } }, async (request, reply) => reply.send(auth.renameCompany(request.forgeUser.id, request.params.companyId, request.body.name)));
+  typed.patch("/api/admin/companies/:companyId/issue-code", { schema: { params: CompanyIdParamsSchema, body: CompanyIssueCodeBodySchema, response: { 200: CompanyResponseSchema } } }, async (request, reply) => reply.send(auth.setCompanyIssueCode(request.forgeUser.id, request.params.companyId, request.body.issueCode)));
   typed.post("/api/admin/companies/:companyId/status/:status", { schema: { params: CompanyStatusParamsSchema, response: { 200: CompanyResponseSchema } } }, async (request, reply) => reply.send(auth.setCompanyStatus(request.forgeUser.id, request.params.companyId, request.params.status)));
   typed.post("/api/admin/companies/:companyId/members", { schema: { params: CompanyIdParamsSchema, body: MembershipBodySchema } }, async (request, reply) => {
     auth.addMembership(request.forgeUser.id, request.body.userId, request.params.companyId);

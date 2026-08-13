@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .forge/
+logs/
 playwright-report/
 test-results/
 *.sqlite

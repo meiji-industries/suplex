@@ -81,16 +81,34 @@ export const LeadPlanSchema = z.object({
   }
 });
 
-export const DecisionBlockerSchema = z.object({
+export const AskUserQuestionOptionSchema = z.object({
+  label: z.string().min(1).max(80),
+  description: z.string().min(1).max(300),
+}).strict();
+
+export const AskUserQuestionSchema = z.object({
+  header: z.string().min(1).max(12),
+  id: z.string().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/),
+  question: z.string().min(1).max(4_000),
+  options: z.array(AskUserQuestionOptionSchema).length(3),
+  isOther: z.literal(true),
+  isSecret: z.literal(false),
+}).strict().superRefine((value, context) => {
+  if (!value.options[0]?.label.endsWith(" (Recommended)")) context.addIssue({ code: "custom", path: ["options", 0, "label"], message: "The recommended option must be first and labeled (Recommended)" });
+  if (new Set(value.options.map((option) => option.label)).size !== value.options.length) context.addIssue({ code: "custom", path: ["options"], message: "Question option labels must be unique" });
+});
+
+const decisionBlockerShape = {
   kind: z.literal("decision_blocker"),
   category: z.literal("human_decision").default("human_decision"),
   summary: z.string().min(1).max(2_000),
   evidence: z.string().min(1).max(10_000),
   owner: z.literal("human"),
-  question: z.string().min(1).max(4_000),
   nextAction: z.string().min(1).max(4_000),
   resumePhase: z.literal("planning").default("planning"),
-}).strict();
+};
+
+export const DecisionBlockerSchema = z.object({ ...decisionBlockerShape, askUserQuestion: AskUserQuestionSchema }).strict();
 
 export const LeadOutputSchema = z.discriminatedUnion("kind", [LeadPlanSchema, DecisionBlockerSchema]);
 export const LeadOutputJsonSchema = z.toJSONSchema(LeadOutputSchema);
@@ -129,7 +147,9 @@ const PersistedLegacyLeadPlanSchema = z.object({
   }
 });
 
-export const PersistedLeadOutputSchema = z.union([LeadOutputSchema, PersistedLegacyLeadPlanSchema]);
+const PersistedLegacyDecisionBlockerSchema = z.object({ ...decisionBlockerShape, question: z.string().min(1).max(4_000) }).strict();
+
+export const PersistedLeadOutputSchema = z.union([LeadOutputSchema, PersistedLegacyLeadPlanSchema, PersistedLegacyDecisionBlockerSchema]);
 const generatedLeadOutputJsonSchema = LeadOutputJsonSchema as { oneOf?: Array<Record<string, unknown>> } & Record<string, unknown>;
 const leadOutputVariants = generatedLeadOutputJsonSchema.oneOf ?? [];
 const leadOutputPropertyEntries = new Map<string, unknown>();
@@ -173,6 +193,7 @@ export const CodexLeadOutputJsonSchema = {
 };
 
 export type LeadPlan = z.infer<typeof LeadPlanSchema>;
+export type AskUserQuestion = z.infer<typeof AskUserQuestionSchema>;
 export type DecisionBlocker = z.infer<typeof DecisionBlockerSchema>;
 export type LeadOutput = z.infer<typeof LeadOutputSchema>;
 export type PersistedLeadOutput = z.infer<typeof PersistedLeadOutputSchema>;

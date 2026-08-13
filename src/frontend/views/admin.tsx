@@ -1,14 +1,47 @@
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
 import { Button } from ".././components/ui/button.js";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from ".././components/ui/dialog.js";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from ".././components/ui/dropdown-menu.js";
 import { Field, FieldDescription, FieldGroup, FieldLabel } from ".././components/ui/field.js";
 import { Input } from ".././components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".././components/ui/select.js";
 import { Skeleton } from ".././components/ui/skeleton.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { SettingsLayout } from ".././components/app/settings-layout.js";
+import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, SettingsToolbarAction, type SettingsTableColumn } from ".././components/app/settings-table.js";
 import { readJson, withCompany, type ApiUser } from ".././lib/api.js";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { adminDate, type ApiCredential, type ApiInvitation, type ApiModel, type ApiProfile } from "../lib/view-shared.js";
+import { Ellipsis, Save } from "lucide-react";
+
+const USER_COLUMNS: SettingsTableColumn[] = [
+  { key: "indent", width: 60 },
+  { key: "name", label: "Name ↓", width: 177 },
+  { key: "username", label: "Username", width: 118 },
+  { key: "role", label: "Role", width: 140 },
+  { key: "companies", label: "Companies", width: 82 },
+  { key: "passkeys", label: "Passkeys", width: 82 },
+  { key: "status", label: "Status", width: 82 },
+  { key: "menu", width: 28 },
+  { key: "end", width: 32 },
+];
+
+const PROFILE_COLUMNS: SettingsTableColumn[] = [
+  { key: "indent", width: 60 },
+  { key: "name", label: "Name ↓", width: 240 },
+  { key: "model", label: "Model", width: 200 },
+  { key: "reasoning", label: "Reasoning", width: 75 },
+  { key: "priority", label: "Priority", width: 102 },
+  { key: "capacity", label: "Capacity", width: 102 },
+  { key: "save", width: 28 },
+  { key: "end", width: 32 },
+];
+
+const USER_GROUPS: Array<{ label: string; status: ApiUser["status"] }> = [
+  { label: "Active", status: "active" },
+  { label: "Pending", status: "pending" },
+  { label: "Revoked", status: "revoked" },
+];
 
 export function AdminView(): ReactElement {
   const { user, companies, currentCompany, loading } = useCompanyContext();
@@ -18,15 +51,18 @@ export function AdminView(): ReactElement {
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   const [models, setModels] = useState<ApiModel[]>([]);
   const [displayName, setDisplayName] = useState("");
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileModel, setProfileModel] = useState("gpt-5.6-sol");
   const [profileReasoning, setProfileReasoning] = useState("medium");
   const [profilePriority, setProfilePriority] = useState("standard");
   const [profileCapacity, setProfileCapacity] = useState("");
+  const [profileOpen, setProfileOpen] = useState(false);
   const [capacityLanes, setCapacityLanes] = useState<Array<{ profileId: string; activeCount: number; queuedCount: number }>>([]);
   const [capacityEdits, setCapacityEdits] = useState<Record<string, string>>({});
   const [modelId, setModelId] = useState("");
   const [modelName, setModelName] = useState("");
+  const [modelOpen, setModelOpen] = useState(false);
   const [inviteToken, setInviteToken] = useState("");
   const [inviteExpiresAt, setInviteExpiresAt] = useState("");
   const [copied, setCopied] = useState(false);
@@ -76,7 +112,7 @@ export function AdminView(): ReactElement {
     } catch { setError("Unable to copy invitation"); }
   };
   const createProfile = async (): Promise<void> => {
-    try { await readJson("/api/admin/profiles", { method: "POST", body: JSON.stringify({ name: profileName, model: profileModel, reasoningLevel: profileReasoning, servicePriority: profilePriority, capacity: profileCapacity.trim() === "" ? null : Number(profileCapacity) }) }); setProfileName(""); await reload(); } catch { setError("Unable to create profile"); }
+    try { await readJson("/api/admin/profiles", { method: "POST", body: JSON.stringify({ name: profileName, model: profileModel, reasoningLevel: profileReasoning, servicePriority: profilePriority, capacity: profileCapacity.trim() === "" ? null : Number(profileCapacity) }) }); setProfileName(""); setProfileCapacity(""); setProfileOpen(false); await reload(); } catch { setError("Unable to create profile"); }
   };
   const updateCapacity = async (profile: ApiProfile): Promise<void> => {
     const raw = capacityEdits[profile.id] ?? (profile.capacity === null ? "" : String(profile.capacity));
@@ -85,7 +121,7 @@ export function AdminView(): ReactElement {
   const createModel = async (): Promise<void> => {
     try {
       await readJson("/api/admin/models", { method: "POST", body: JSON.stringify({ id: modelId, displayName: modelName, description: "", sortOrder: 100 }) });
-      setModelId(""); setModelName(""); await reload();
+      setModelId(""); setModelName(""); setModelOpen(false); await reload();
     } catch { setError("Unable to add model"); }
   };
   const toggleModel = async (model: ApiModel): Promise<void> => {
@@ -130,7 +166,6 @@ export function AdminView(): ReactElement {
       await reload();
     } catch { setError("Unable to revoke passkey"); }
   };
-  const signOut = async (): Promise<void> => { await readJson("/api/auth/sign-out", { method: "POST", body: "{}" }); window.localStorage.removeItem("forge.activeCompanyId"); window.location.assign("/auth"); };
   const isProfiles = window.location.pathname.endsWith("/profiles");
   const activeHref = withCompany(window.location.pathname, currentCompany?.id);
   const backHref = withCompany("/projects", currentCompany?.id);
@@ -153,52 +188,31 @@ export function AdminView(): ReactElement {
   return (
     <SettingsLayout title={isProfiles ? "Profiles" : "Users"} companyId={currentCompany?.id ?? ""} backHref={backHref} activeHref={activeHref} contentClassName="">
       <div>{!isProfiles ? (<>
-        <section className="flex flex-wrap items-center justify-between gap-3 px-3 py-3 sm:px-4"><span className="text-xs text-muted-foreground">{user?.displayName ?? ""} · {user?.role ?? ""}</span><Button variant="ghost" size="sm" onClick={() => void signOut()}>Sign out</Button></section>
-        <section className="grid gap-px sm:grid-cols-2">
-          <div className="bg-background p-4">
-            <div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Users</span><span className="text-[11px] text-muted-foreground">{users.length}</span></div>
-            <FieldGroup>
-              <Field>
-                <FieldLabel htmlFor="invite-display-name">Display name</FieldLabel>
-                <Input id="invite-display-name" placeholder="Forge user" value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
-              </Field>
-              <Button size="sm" onClick={() => void invite()}>Invite</Button>
-            </FieldGroup>
-            {inviteToken ? <div className="bg-muted/30 p-2"><div className="mb-1 flex flex-wrap items-center justify-between gap-2 text-[11px] text-muted-foreground"><span>Invitation · shown once</span><span>Expires {adminDate(inviteExpiresAt)}</span></div><code className="block break-all text-[11px]">{inviteToken}</code><Button className="mt-2" variant="outline" size="sm" onClick={() => void copyInvitation()}>{copied ? "Copied" : "Copy invitation"}</Button></div> : null}
-            <div className="mt-3">{users.map((candidate) => <div className="flex min-h-8 items-center justify-between gap-2 text-xs" key={candidate.id}><span className="min-w-0 truncate">{candidate.displayName} <span className="text-muted-foreground">{candidate.status}</span></span>{candidate.role !== "admin" && candidate.status === "active" ? <span className="flex shrink-0 items-center gap-1">{pendingAction === `user:${candidate.id}` ? <span className="text-[11px] text-muted-foreground">Confirm</span> : null}<Button variant="ghost" size="sm" onClick={() => void revokeUser(candidate)}>{pendingAction === `user:${candidate.id}` ? "Confirm revoke" : "Revoke"}</Button>{pendingAction === `user:${candidate.id}` ? <Button variant="ghost" size="sm" onClick={() => setPendingAction("")}>Cancel</Button> : null}</span> : null}</div>)}</div>
-          </div>
-          <div className="bg-background p-4">
-            <div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Companies</span><span className="text-[11px] text-muted-foreground">{companies.length}</span></div>
-            <div>{companies.map((company) => <div className="py-2 text-xs" key={company.id}><div className="mb-2 flex flex-wrap items-center justify-between gap-2"><span className="min-w-0 truncate"><span>{company.name}</span> <span className="text-muted-foreground">{company.status}</span></span><a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={withCompany(`/companies/${encodeURIComponent(company.id)}/settings`, company.id)}>Settings</a></div><div className="flex flex-wrap gap-1.5">{users.filter((candidate) => candidate.role === "member" && candidate.status === "active").map((candidate) => { const assigned = candidate.companyIds.includes(company.id); const action = `membership:${company.id}:${candidate.id}`; return <span className="flex items-center gap-1" key={candidate.id}><Button variant={assigned ? "secondary" : "outline"} size="sm" onClick={() => void changeMembership(company.id, candidate.id, !assigned)}>{assigned ? "− " : "+ "}{candidate.displayName}</Button>{pendingAction === action ? <><span className="text-[11px] text-muted-foreground">Confirm remove</span><Button variant="ghost" size="sm" onClick={() => setPendingAction("")}>Cancel</Button></> : null}</span>; })}</div></div>)}</div>
-          </div>
-        </section></>) : null}
-        {!isProfiles ? <section className="grid gap-px sm:grid-cols-2">
-          <div className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Invitations</span><span className="text-[11px] text-muted-foreground">{invitations.length}</span></div><div>{invitations.map((invitation) => <div className="py-2 text-xs" key={invitation.id}><div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate">{invitation.displayName}</span><span className="shrink-0 text-muted-foreground">{invitation.status}</span></div><div className="mt-1 text-[11px] text-muted-foreground">{invitation.kind} · expires {adminDate(invitation.expiresAt)}</div></div>)}</div></div>
-          <div className="bg-background p-4"><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Passkeys</span><span className="text-[11px] text-muted-foreground">{credentials.filter((credential) => !credential.revokedAt).length} active</span></div><div>{credentials.map((credential) => { const candidate = users.find((entry) => entry.id === credential.userId); const action = `credential:${credential.id}`; return <div className="flex min-h-8 items-center justify-between gap-2 text-xs" key={credential.id}><span className="min-w-0 truncate">{candidate?.displayName ?? "User"}<span className="ml-2 text-muted-foreground">{credential.revokedAt ? "revoked" : `created ${adminDate(credential.createdAt)}`}</span></span>{!credential.revokedAt && credential.userId !== user.id ? <span className="flex shrink-0 items-center gap-1">{pendingAction === action ? <span className="text-[11px] text-muted-foreground">Confirm</span> : null}<Button variant="ghost" size="sm" onClick={() => void revokeCredential(credential)}>{pendingAction === action ? "Confirm revoke" : "Revoke"}</Button>{pendingAction === action ? <Button variant="ghost" size="sm" onClick={() => setPendingAction("")}>Cancel</Button> : null}</span> : null}</div>; })}</div></div>
-        </section> : null}
+        <section>
+          <SettingsToolbar searchLabel="Search users" searchPlaceholder="Search by name or username" filterLabel="All" actions={<><SettingsToolbarAction disabled>Export CSV</SettingsToolbarAction><SettingsToolbarAction tone="primary" onClick={() => { setInviteToken(""); setCopied(false); setInviteOpen(true); }}>Invite</SettingsToolbarAction></>} />
+          <SettingsDataTable label="Users" columns={USER_COLUMNS} className="mt-5">
+            {USER_GROUPS.map((group) => { const groupUsers = users.filter((candidate) => candidate.status === group.status); if (groupUsers.length === 0) return null; return <SettingsTableGroup columnCount={USER_COLUMNS.length} count={groupUsers.length} key={group.status} label={group.label}>{groupUsers.map((candidate) => { const action = `user:${candidate.id}`; const passkeyCount = credentials.filter((credential) => credential.userId === candidate.id && !credential.revokedAt).length; return <SettingsTableRow key={candidate.id} size="member"><SettingsTableCell className="p-0" /><SettingsTableCell><span className="flex min-w-0 items-center gap-2"><span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium">{candidate.displayName.trim().charAt(0).toUpperCase() || "U"}</span><span className="truncate">{candidate.displayName}</span></span></SettingsTableCell><SettingsTableCell className="truncate text-muted-foreground">@{candidate.username}</SettingsTableCell><SettingsTableCell><span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">{candidate.role}</span></SettingsTableCell><SettingsTableCell className="text-muted-foreground">{candidate.companyIds.length}</SettingsTableCell><SettingsTableCell className="text-muted-foreground">{passkeyCount}</SettingsTableCell><SettingsTableCell><span className="flex items-center gap-1.5 text-muted-foreground"><span className={candidate.status === "active" ? "size-1.5 rounded-full bg-emerald-500" : candidate.status === "pending" ? "size-1.5 rounded-full bg-amber-500" : "size-1.5 rounded-full bg-muted-foreground"} />{candidate.status}</span></SettingsTableCell><SettingsTableCell className="p-0">{candidate.role !== "admin" && candidate.status === "active" ? <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${candidate.displayName} actions`} title={`${candidate.displayName} actions`} />}><Ellipsis /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem variant="destructive" onClick={() => void revokeUser(candidate)}>{pendingAction === action ? "Confirm revoke" : "Revoke user"}</DropdownMenuItem>{pendingAction === action ? <DropdownMenuItem onClick={() => setPendingAction("")}>Cancel</DropdownMenuItem> : null}</DropdownMenuContent></DropdownMenu> : null}</SettingsTableCell><SettingsTableCell className="p-0" /></SettingsTableRow>; })}</SettingsTableGroup>; })}
+            {users.length === 0 ? <SettingsTableEmpty columnCount={USER_COLUMNS.length}>No users configured.</SettingsTableEmpty> : null}
+          </SettingsDataTable>
+        </section>
+        <section className="mt-12"><div className="flex h-8 items-center justify-between gap-3"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Companies</h2><span className="text-[11px] text-muted-foreground">{companies.length}</span></div></div><div className="mt-5">{companies.map((company) => <div className="rounded-lg px-1 py-2.5 text-xs hover:bg-black/[0.025]" key={company.id}><div className="mb-2 flex flex-wrap items-center justify-between gap-2"><span className="min-w-0 truncate"><span className="font-medium">{company.name}</span> <span className="text-muted-foreground">· {company.status}</span></span><a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={withCompany(`/companies/${encodeURIComponent(company.id)}/settings`, company.id)}>Settings</a></div><div className="flex flex-wrap gap-1.5">{users.filter((candidate) => candidate.role === "member" && candidate.status === "active").map((candidate) => { const assigned = candidate.companyIds.includes(company.id); const action = `membership:${company.id}:${candidate.id}`; return <span className="flex items-center gap-1" key={candidate.id}><Button variant={assigned ? "secondary" : "outline"} size="sm" onClick={() => void changeMembership(company.id, candidate.id, !assigned)}>{assigned ? "− " : "+ "}{candidate.displayName}</Button>{pendingAction === action ? <><span className="text-[11px] text-muted-foreground">Confirm remove</span><Button variant="outline" size="sm" onClick={() => setPendingAction("")}>Cancel</Button></> : null}</span>; })}</div></div>)}</div></section>
+        <section className="mt-12 grid gap-10 sm:grid-cols-2"><div><div className="flex h-8 items-center justify-between"><h2 className="text-base font-medium">Invitations</h2><span className="text-[11px] text-muted-foreground">{invitations.length}</span></div><div className="mt-5">{invitations.map((invitation) => <div className="rounded-lg px-1 py-2.5 text-xs hover:bg-black/[0.025]" key={invitation.id}><div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate font-medium">{invitation.displayName}</span><span className="shrink-0 text-muted-foreground">{invitation.status}</span></div><div className="mt-1 text-[11px] text-muted-foreground">{invitation.kind} · expires {adminDate(invitation.expiresAt)}</div></div>)}</div></div><div><div className="flex h-8 items-center justify-between"><h2 className="text-base font-medium">Passkeys</h2><span className="text-[11px] text-muted-foreground">{credentials.filter((credential) => !credential.revokedAt).length} active</span></div><div className="mt-5">{credentials.map((credential) => { const candidate = users.find((entry) => entry.id === credential.userId); const action = `credential:${credential.id}`; return <div className="flex min-h-11 items-center justify-between gap-2 rounded-lg px-1 text-xs hover:bg-black/[0.025]" key={credential.id}><span className="min-w-0 truncate">{candidate?.displayName ?? "User"}<span className="ml-2 text-muted-foreground">{credential.revokedAt ? "revoked" : `created ${adminDate(credential.createdAt)}`}</span></span>{!credential.revokedAt && credential.userId !== user.id ? <span className="flex shrink-0 items-center gap-1">{pendingAction === action ? <span className="text-[11px] text-muted-foreground">Confirm</span> : null}<Button variant="ghost" size="sm" onClick={() => void revokeCredential(credential)}>{pendingAction === action ? "Confirm revoke" : "Revoke"}</Button>{pendingAction === action ? <Button variant="outline" size="sm" onClick={() => setPendingAction("")}>Cancel</Button> : null}</span> : null}</div>; })}</div></div></section>
+        <Dialog open={inviteOpen} onOpenChange={(open) => { setInviteOpen(open); if (!open) { setInviteToken(""); setCopied(false); } }}><DialogContent><DialogHeader><DialogTitle>{inviteToken ? "Invitation ready" : "Invite user"}</DialogTitle><DialogDescription>{inviteToken ? `Shown once · expires ${adminDate(inviteExpiresAt)}` : "Create an invitation for a Forge user."}</DialogDescription></DialogHeader>{inviteToken ? <><code className="break-all text-xs">{inviteToken}</code><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Close</DialogClose><Button type="button" size="sm" onClick={() => void copyInvitation()}>{copied ? "Copied" : "Copy invitation"}</Button></DialogFooter></> : <form onSubmit={(event) => { event.preventDefault(); void invite(); }}><FieldGroup><Field><FieldLabel htmlFor="invite-display-name">Display name</FieldLabel><Input id="invite-display-name" autoFocus placeholder="Forge user" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm">Invite</Button></DialogFooter></FieldGroup></form>}</DialogContent></Dialog>
+        </>) : null}
         {isProfiles ? (<>
-          <section className="bg-background p-4">
-            <div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold">Codex profiles</span><span className="text-[11px] text-muted-foreground">{profiles.length} configured</span></div>
-            <FieldGroup>
-              <Field><FieldLabel htmlFor="profile-name">Profile name</FieldLabel><Input id="profile-name" value={profileName} onChange={(event) => setProfileName(event.target.value)} /></Field>
-              <Field><FieldLabel htmlFor="profile-model">Model</FieldLabel><Select value={profileModel || null} onValueChange={(value) => setProfileModel(value ?? "")}><SelectTrigger id="profile-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{models.filter((model) => model.status === "active").map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field>
-              <Field><FieldLabel htmlFor="profile-reasoning">Reasoning level</FieldLabel><Select value={profileReasoning} onValueChange={(value) => setProfileReasoning(value ?? "medium")}><SelectTrigger id="profile-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem></SelectContent></Select></Field>
-              <Field><FieldLabel htmlFor="profile-priority">Service priority</FieldLabel><Select value={profilePriority} onValueChange={(value) => setProfilePriority(value ?? "standard")}><SelectTrigger id="profile-priority"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="standard">Standard</SelectItem><SelectItem value="priority">Priority</SelectItem></SelectContent></Select></Field>
-              <Field><FieldLabel htmlFor="profile-capacity">Capacity override</FieldLabel><Input id="profile-capacity" inputMode="numeric" placeholder="Default" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><FieldDescription>Blank inherits the host default.</FieldDescription></Field>
-              <Button size="sm" onClick={() => void createProfile()} disabled={!profileName.trim() || !profileModel}>Create profile</Button>
-            </FieldGroup>
-            <div className="text-xs">{profiles.map((profile) => { const lane = capacityLanes.find((item) => item.profileId === profile.id); const edit = capacityEdits[profile.id] ?? (profile.capacity === null ? "" : String(profile.capacity)); return <div className="flex min-h-9 flex-wrap items-center justify-between gap-2" key={profile.id}><span className="font-medium">{profile.name}</span><span className="flex items-center gap-2 text-[11px] text-muted-foreground"><span>{profile.capacity === null ? `Default · ${profile.effectiveCapacity} slots effective` : `Override · ${profile.capacity} slots`} · {lane?.activeCount ?? 0} active / {lane?.queuedCount ?? 0} queued</span><Input aria-label={`${profile.name} capacity`} inputMode="numeric" placeholder="Default" value={edit} onChange={(event) => setCapacityEdits((current) => ({ ...current, [profile.id]: event.target.value }))} /><Button size="sm" variant="ghost" onClick={() => void updateCapacity(profile)}>Save</Button></span></div>; })}</div>
+          <section>
+            <SettingsToolbar searchLabel="Filter profiles by name" searchPlaceholder="Filter by name…" filterLabel="All models" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={() => setProfileOpen(true)}>New profile</SettingsToolbarAction>} />
+            <SettingsDataTable label="Profiles" columns={PROFILE_COLUMNS} className="mt-10">
+              <tbody>{profiles.map((profile) => { const lane = capacityLanes.find((item) => item.profileId === profile.id); const edit = capacityEdits[profile.id] ?? (profile.capacity === null ? "" : String(profile.capacity)); const saved = profile.capacity === null ? "" : String(profile.capacity); const formId = `capacity-${profile.id}`; return <SettingsTableRow key={profile.id}><SettingsTableCell className="p-0" /><SettingsTableCell><span className="flex min-w-0 items-center gap-3"><span className="size-2.5 shrink-0 rounded-full bg-[lch(53%_52.26_286.91)]" /><span className="min-w-0"><span className="block truncate">{profile.name}</span><span className="block truncate text-[10px] leading-3 text-muted-foreground">{profile.capacity === null ? `Default · ${profile.effectiveCapacity} slots effective` : `Override · ${profile.capacity} slots`} · {lane?.activeCount ?? 0} active / {lane?.queuedCount ?? 0} queued</span></span></span></SettingsTableCell><SettingsTableCell className="truncate">{profile.model}</SettingsTableCell><SettingsTableCell className="truncate text-muted-foreground">{profile.reasoningLevel}</SettingsTableCell><SettingsTableCell className="truncate text-muted-foreground">{profile.servicePriority}</SettingsTableCell><SettingsTableCell><form id={formId} onSubmit={(event) => { event.preventDefault(); void updateCapacity(profile); }}><input aria-label={`${profile.name} capacity`} className="h-7 w-[86px] rounded-md border-[0.5px] border-border bg-transparent px-2 text-[12px] outline-none focus:border-ring" inputMode="numeric" placeholder="Default" value={edit} onChange={(event) => setCapacityEdits((current) => ({ ...current, [profile.id]: event.target.value }))} /></form></SettingsTableCell><SettingsTableCell className="p-0"><button aria-label="Save" className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-black/5 hover:text-foreground disabled:opacity-30" disabled={edit === saved} form={formId} title="Save capacity" type="submit"><Save className="size-3.5" /></button></SettingsTableCell><SettingsTableCell className="p-0" /></SettingsTableRow>; })}</tbody>
+              {profiles.length === 0 ? <SettingsTableEmpty columnCount={PROFILE_COLUMNS.length}>No profiles configured.</SettingsTableEmpty> : null}
+            </SettingsDataTable>
           </section>
-          <section className="bg-background p-4">
-            <div className="mb-1 flex items-center justify-between"><span className="text-xs font-semibold">Model catalog</span><span className="text-[11px] text-muted-foreground">Database backed</span></div>
-            <p className="mb-3 text-[11px] text-muted-foreground">Models available when creating Codex profiles. Retiring a model preserves existing profiles.</p>
-            <FieldGroup>
-              <Field><FieldLabel htmlFor="model-id">Model ID</FieldLabel><Input id="model-id" placeholder="gpt-5-codex" value={modelId} onChange={(event) => setModelId(event.target.value)} /></Field>
-              <Field><FieldLabel htmlFor="model-display-name">Display name</FieldLabel><Input id="model-display-name" value={modelName} onChange={(event) => setModelName(event.target.value)} /></Field>
-              <Button variant="outline" size="sm" onClick={() => void createModel()} disabled={!modelId.trim() || !modelName.trim()}>Add model</Button>
-            </FieldGroup>
-            <div>{models.map((model) => <div className="flex min-h-10 items-center justify-between gap-3 text-xs" key={model.id}><div className="min-w-0"><div className="font-medium">{model.displayName} <code className="ml-1 text-[11px] font-normal text-muted-foreground">{model.id}</code></div><div className="truncate text-[11px] text-muted-foreground">{model.description || "No description"}</div></div><Button variant="ghost" size="sm" onClick={() => void toggleModel(model)}>{model.status === "active" ? "Retire" : "Restore"}</Button></div>)}</div>
+          <section className="mt-12">
+            <div className="flex h-8 items-center justify-between gap-3"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Model catalog</h2><span className="text-[11px] text-muted-foreground">{models.filter((model) => model.status === "active").length} active</span></div><Button variant="outline" size="sm" onClick={() => setModelOpen(true)}>Add model</Button></div>
+            <div className="mt-5">{models.map((model) => <div className="flex h-11 items-center justify-between gap-3 rounded-lg px-1 text-[13px] hover:bg-black/[0.025]" key={model.id}><div className="min-w-0"><div className="truncate">{model.displayName} <code className="ml-1 text-[11px] text-muted-foreground">{model.id}</code></div><div className="truncate text-[10px] leading-3 text-muted-foreground">{model.status}{model.description ? ` · ${model.description}` : ""}</div></div><Button variant="ghost" size="sm" onClick={() => void toggleModel(model)}>{model.status === "active" ? "Retire" : "Restore"}</Button></div>)}</div>
           </section>
+          <Dialog open={profileOpen} onOpenChange={setProfileOpen}><DialogContent><DialogHeader><DialogTitle>New profile</DialogTitle><DialogDescription>Configure a reusable Codex execution profile.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void createProfile(); }}><FieldGroup><Field><FieldLabel htmlFor="profile-name">Profile name</FieldLabel><Input id="profile-name" autoFocus value={profileName} onChange={(event) => setProfileName(event.target.value)} /></Field><Field><FieldLabel htmlFor="profile-model">Model</FieldLabel><Select value={profileModel || null} onValueChange={(value) => setProfileModel(value ?? "")}><SelectTrigger id="profile-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{models.filter((model) => model.status === "active").map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field><Field><FieldLabel htmlFor="profile-reasoning">Reasoning level</FieldLabel><Select value={profileReasoning} onValueChange={(value) => setProfileReasoning(value ?? "medium")}><SelectTrigger id="profile-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem></SelectContent></Select></Field><Field><FieldLabel htmlFor="profile-priority">Service priority</FieldLabel><Select value={profilePriority} onValueChange={(value) => setProfilePriority(value ?? "standard")}><SelectTrigger id="profile-priority"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="standard">Standard</SelectItem><SelectItem value="priority">Priority</SelectItem></SelectContent></Select></Field><Field><FieldLabel htmlFor="profile-capacity">Capacity override</FieldLabel><Input id="profile-capacity" inputMode="numeric" placeholder="Default" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><FieldDescription>Blank inherits the host default.</FieldDescription></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!profileName.trim() || !profileModel}>Create profile</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
+          <Dialog open={modelOpen} onOpenChange={setModelOpen}><DialogContent><DialogHeader><DialogTitle>Add model</DialogTitle><DialogDescription>Make a model available to new profiles.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void createModel(); }}><FieldGroup><Field><FieldLabel htmlFor="model-id">Model ID</FieldLabel><Input id="model-id" autoFocus placeholder="gpt-5-codex" value={modelId} onChange={(event) => setModelId(event.target.value)} /></Field><Field><FieldLabel htmlFor="model-display-name">Display name</FieldLabel><Input id="model-display-name" value={modelName} onChange={(event) => setModelName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!modelId.trim() || !modelName.trim()}>Add model</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
         </>) : null}
         {error ? <div className="px-4 py-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       </div>

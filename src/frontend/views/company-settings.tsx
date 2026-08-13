@@ -11,10 +11,12 @@ import { Archive, RotateCcw, Save, Pause } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 
 export function CompanySettingsView(): ReactElement {
-  const { user, companies, currentCompany, loading, selectCompany, renameCompany, setCompanyStatus } = useCompanyContext();
+  const { user, companies, currentCompany, loading, selectCompany, renameCompany, setCompanyIssueCode, setCompanyStatus } = useCompanyContext();
   const [name, setName] = useState("");
+  const [issueCode, setIssueCode] = useState("");
   const [busy, setBusy] = useState("");
   const [saved, setSaved] = useState(false);
+  const [codeSaved, setCodeSaved] = useState(false);
   const [error, setError] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
   const pathId = useMemo(() => {
@@ -27,7 +29,7 @@ export function CompanySettingsView(): ReactElement {
   useEffect(() => {
     if (company && company.id !== currentCompany?.id) selectCompany(company.id);
   }, [company, currentCompany?.id, selectCompany]);
-  useEffect(() => { setName(company?.name ?? ""); setSaved(false); }, [company?.id]);
+  useEffect(() => { setName(company?.name ?? ""); setIssueCode(company?.issueCode ?? ""); setSaved(false); setCodeSaved(false); }, [company?.id]);
 
   const notFound = !loading && (user?.role !== "admin" || !company);
   if (loading) {
@@ -52,6 +54,15 @@ export function CompanySettingsView(): ReactElement {
     catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to rename company"); }
     finally { setBusy(""); }
   };
+  const saveIssueCode = async (): Promise<void> => {
+    const normalized = issueCode.trim().toUpperCase();
+    const next = normalized || null;
+    if (next === company.issueCode || busy) return;
+    setBusy("issue-code"); setError(""); setCodeSaved(false);
+    try { const updated = await setCompanyIssueCode(company.id, next); setIssueCode(updated.issueCode ?? ""); setCodeSaved(true); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to update issue code"); }
+    finally { setBusy(""); }
+  };
 
   const backHref = withCompany("/projects", company.id);
 
@@ -62,6 +73,12 @@ export function CompanySettingsView(): ReactElement {
           <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void save(); }}>
             <Input id="company-name" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} />
             <Button type="submit" size="sm" disabled={busy !== "" || !name.trim() || name.trim() === company.name}><Save className="size-3.5" />{busy === "rename" ? "Saving…" : saved ? "Saved" : "Save"}</Button>
+          </form>
+        </SettingRow>
+        <SettingRow label="Issue code" description="2–10 letters or numbers, beginning with a letter. Once set, it locks after the company has an issue.">
+          <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void saveIssueCode(); }}>
+            <Input id="company-issue-code" aria-label="Issue code" maxLength={10} pattern="[A-Za-z][A-Za-z0-9]{1,9}" placeholder="ADAM" value={issueCode} onChange={(event) => { setIssueCode(event.target.value.toUpperCase()); setCodeSaved(false); }} />
+            <Button type="submit" size="sm" disabled={busy !== "" || (issueCode.trim().toUpperCase() || null) === company.issueCode}><Save className="size-3.5" />{busy === "issue-code" ? "Saving…" : codeSaved ? "Saved" : "Save"}</Button>
           </form>
         </SettingRow>
         <SettingRow label="Company ID" description="Unique identifier.">

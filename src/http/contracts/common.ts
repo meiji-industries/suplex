@@ -37,7 +37,7 @@ export const HealthSnapshotResponseSchema = z.object({
 });
 
 export const AuthUserResponseSchema = z.object({ id: z.string(), displayName: z.string(), username: z.string(), role: z.enum(["admin", "member"]), status: z.enum(["pending", "active", "revoked"]), companyIds: z.array(z.string()) });
-export const CompanyResponseSchema = z.object({ id: z.string(), name: z.string(), status: z.enum(["active", "paused", "archived"]), createdAt: z.string() });
+export const CompanyResponseSchema = z.object({ id: z.string(), name: z.string(), status: z.enum(["active", "paused", "archived"]), issueCode: z.string().nullable(), createdAt: z.string() });
 export const CompanyListResponseSchema = z.object({ companies: z.array(CompanyResponseSchema) });
 export const UserResponseSchema = AuthUserResponseSchema;
 export const UserListResponseSchema = z.object({ users: z.array(UserResponseSchema) });

@@ -1,16 +1,16 @@
-import { ArrowLeft, Bell, Building2, CreditCard, Key, Menu, Palette, Settings2, Shield, Terminal, Users, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Building2, Menu, ShieldCheck, Terminal, Users, type LucideIcon } from "lucide-react";
 import { useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import { Button } from "../ui/button.js";
-import { Field, FieldLabel } from "../ui/field.js";
 import { Input } from "../ui/input.js";
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "../ui/sheet.js";
 import { ScrollArea } from "../ui/scroll-area.js";
 import { companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 import { CompanySwitcher } from "./company-switcher.js";
+import { SystemHealthIndicator } from "./system-health.js";
 
-type SettingsNavItem = { label: string; href?: string; icon: LucideIcon };
+type SettingsNavItem = { label: string; href: string; icon: LucideIcon };
 
 type SettingsNavGroup = { title: string; items: SettingsNavItem[] };
 
@@ -18,20 +18,14 @@ function useSettingsGroups(companyId: string, user?: ApiUser): SettingsNavGroup[
   return useMemo<SettingsNavGroup[]>(() => {
     const companyItems: SettingsNavItem[] = companyId ? [{ label: "Workspace", href: companySettingsPath(companyId), icon: Building2 }] : [];
     return [
-      { title: "General", items: [
-        { label: "General", icon: Settings2 },
-        { label: "Notifications", icon: Bell },
-        { label: "Appearance", icon: Palette },
+      { title: "System", items: [
+        { label: "Host health", href: withCompany("/health", companyId), icon: ShieldCheck },
+        { label: "Attention", href: withCompany("/attention", companyId), icon: AlertTriangle },
       ]},
-      { title: "Company", items: companyItems.concat([
-        { label: "Members", icon: Users },
-        { label: "Billing", icon: CreditCard },
-      ])},
+      ...(user?.role === "admin" && companyItems.length ? [{ title: "Company", items: companyItems }] : []),
       ...(user?.role === "admin" ? [{ title: "Administration", items: [
         { label: "Users", href: withCompany("/admin", companyId), icon: Users },
         { label: "Profiles", href: withCompany("/admin/profiles", companyId), icon: Terminal },
-        { label: "Security", icon: Shield },
-        { label: "API", icon: Key },
       ]}] : []),
     ];
   }, [companyId, user?.role]);
@@ -43,9 +37,6 @@ function SettingsNavItem({ item, active }: { item: SettingsNavItem; active: bool
     : "flex h-7 items-center gap-2 rounded-md px-2 text-[13px] text-muted-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground";
   const iconClass = active ? "size-3.5 text-primary" : "size-3.5";
   const Icon = item.icon;
-  if (!item.href) {
-    return <div className={`${className} cursor-not-allowed opacity-50`}><Icon className={iconClass} />{item.label}</div>;
-  }
   return <a aria-current={active ? "page" : undefined} className={className} href={item.href}><Icon className={iconClass} />{item.label}</a>;
 }
 
@@ -64,11 +55,8 @@ function SettingsNavContent({ groups, activeHref, search, setSearch, backHref }:
           <ArrowLeft className="size-3.5" />Back to app
         </a>
       </div>
-      <div className="px-3 pb-2">
-        <Field>
-          <FieldLabel htmlFor="settings-search">Search settings</FieldLabel>
-          <Input id="settings-search" value={search} onChange={(event) => setSearch(event.target.value)} />
-        </Field>
+      <div className="px-3 pb-3">
+        <Input aria-label="Search settings" placeholder="Search…" value={search} onChange={(event) => setSearch(event.target.value)} />
       </div>
       <ScrollArea className="flex-1 space-y-5 px-3 pb-4">
         <div className="space-y-5">
@@ -105,23 +93,26 @@ function SettingsMobileNavigation({ title, groups, activeHref, backHref }: { tit
   );
 }
 
-export function SettingsLayout({ title, companyId, backHref, activeHref, contentClassName = "max-w-3xl px-4 py-6 lg:px-8", children }: { title: string; companyId: string; backHref: string; activeHref: string; contentClassName?: string; children: ReactNode }): ReactElement {
+export function SettingsLayout({ title, companyId, backHref, activeHref, contentClassName = "", children }: { title: string; companyId: string; backHref: string; activeHref: string; contentClassName?: string; children: ReactNode }): ReactElement {
   const context = useOptionalCompanyContext();
   const groups = useSettingsGroups(companyId, context?.user);
   const [search, setSearch] = useState("");
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="min-h-screen bg-sidebar text-foreground">
       <div className="flex min-h-screen">
-        <aside className="hidden w-60 shrink-0 flex-col bg-sidebar lg:flex">
-          <SettingsNavContent groups={groups} activeHref={activeHref} search={search} setSearch={setSearch} backHref={backHref} />
+        <aside className="hidden w-[244px] shrink-0 flex-col bg-sidebar lg:flex">
+          <div className="min-h-0 flex-1"><SettingsNavContent groups={groups} activeHref={activeHref} search={search} setSearch={setSearch} backHref={backHref} /></div>
+          <div className="flex items-center gap-1 px-3 pb-3"><div className="min-w-0 flex-1"><CompanySwitcher /></div><SystemHealthIndicator /></div>
         </aside>
-        <main className="min-w-0 flex-1">
-          <header className="flex h-12 items-center gap-3 px-4 lg:px-6">
+        <main className="min-w-0 flex-1 overflow-hidden bg-[lch(97.94%_0.5_282)] lg:m-2 lg:ml-0 lg:rounded-xl lg:border-[0.5px] lg:border-[lch(89.84%_0_282)] lg:shadow-[0_3px_6px_-2px_rgb(0_0_0_/_0.02),0_1px_1px_rgb(0_0_0_/_0.04)]">
+          <header className="flex h-16 items-center gap-3 px-4 lg:px-14">
             <div className="lg:hidden"><SettingsMobileNavigation title={title} groups={groups} activeHref={activeHref} backHref={backHref} /></div>
-            <h1 className="min-w-0 truncate text-lg font-semibold">{title}</h1>
-            <div className="ml-auto min-w-0 w-52 max-w-[50%]"><CompanySwitcher /></div>
+            <div className="ml-auto flex min-w-0 items-center gap-1 lg:hidden"><div className="w-52 max-w-[45vw]"><CompanySwitcher /></div><SystemHealthIndicator /></div>
           </header>
-          <div className={contentClassName}>{children}</div>
+          <div className="px-4 pb-8 lg:px-14">
+            <h1 className="min-w-0 truncate text-2xl font-medium leading-8">{title}</h1>
+            <div className={`mt-3 ${contentClassName}`}>{children}</div>
+          </div>
         </main>
       </div>
     </div>

@@ -44,42 +44,18 @@ test("worker readiness distinguishes missing, stale, and current registrations",
   }
 });
 
-test("Codex readiness caches the bounded structured smoke", async () => {
+test("Codex readiness uses only version and local authentication checks", async () => {
   const calls: string[][] = [];
   const runner = async (_command: string, args: string[]) => {
     calls.push(args);
     if (args[0] === "--version") return { stdout: "codex-cli 0.144.1\n", stderr: "" };
     if (args[0] === "login") return { stdout: "Logged in using ChatGPT\n", stderr: "" };
-    return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"ok\\":true}"}}\n{"type":"turn.completed"}\n', stderr: "" };
+    throw new Error(`Unexpected Codex readiness command: ${args[0]}`);
   };
-  const probe = new CodexReadinessProbe("codex", runner, 60_000);
+  const probe = new CodexReadinessProbe("codex", runner);
 
   expect((await probe.check()).status).toBe("healthy");
-  expect((await probe.check()).status).toBe("healthy");
-  expect(calls.filter(([command]) => command === "exec").length).toBe(1);
-  expect(calls.length).toBe(5);
-});
-
-test("Codex readiness invalidates the smoke cache when version or authentication changes", async () => {
-  let version = "0.144.1";
-  let authenticated = true;
-  let smokeCalls = 0;
-  const probe = new CodexReadinessProbe("codex", async (_command, args) => {
-    if (args[0] === "--version") return { stdout: `codex-cli ${version}\n`, stderr: "" };
-    if (args[0] === "login" && !authenticated) throw new Error("not authenticated");
-    if (args[0] === "exec") smokeCalls += 1;
-    return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"ok\\":true}"}}\n{"type":"turn.completed"}\n', stderr: "" };
-  });
-
-  await probe.check();
-  version = "0.144.2";
-  await probe.check();
-  expect(smokeCalls).toBe(2);
-
-  authenticated = false;
-  const result = await probe.check();
-  expect(result.details.authentication).toBe("unavailable");
-  expect(smokeCalls).toBe(2);
+  expect(calls).toEqual([["--version"], ["login", "status"]]);
 });
 
 test("GitHub readiness parses bounded JSON without exposing account details", async () => {
@@ -91,21 +67,13 @@ test("GitHub readiness parses bounded JSON without exposing account details", as
   expect(result.details).toMatchObject({ command: "gh", authentication: "available", failure: "none" });
 });
 
-test("Codex readiness reports missing commands and malformed smoke output distinctly", async () => {
+test("Codex readiness reports command, version, and authentication failures distinctly", async () => {
   const missing = new CodexReadinessProbe("codex", async () => {
     const error = Object.assign(new Error("missing"), { code: "ENOENT" });
     throw error;
   });
   const missingResult = await missing.check();
   expect(missingResult.details.failure).toBe("command-missing");
-
-  const malformed = new CodexReadinessProbe("codex", async (_command, args) => {
-    if (args[0] === "--version") return { stdout: "codex-cli 1.0.0", stderr: "" };
-    if (args[0] === "login") return { stdout: "logged in", stderr: "" };
-    return { stdout: "not-json", stderr: "" };
-  });
-  const malformedResult = await malformed.check();
-  expect(malformedResult.details.failure).toBe("smoke-invalid-output");
 
   const unsupported = new CodexReadinessProbe("codex", async (_command, args) => {
     if (args[0] === "--version") return { stdout: "Codex CLI development build", stderr: "" };
@@ -122,13 +90,6 @@ test("Codex readiness reports missing commands and malformed smoke output distin
   const belowMinResult = await belowMin.check();
   expect(belowMinResult.details.failure).toBe("version-unsupported");
 
-  const falseSmoke = new CodexReadinessProbe("codex", async (_command, args) => {
-    if (args[0] === "--version") return { stdout: "codex-cli 1.0.0", stderr: "" };
-    if (args[0] === "login") return { stdout: "logged in", stderr: "" };
-    return { stdout: '{"type":"item.completed","item":{"type":"agent_message","text":"{\\"ok\\":false}"}}\n{"type":"turn.completed"}\n', stderr: "" };
-  });
-  expect((await falseSmoke.check()).details.failure).toBe("smoke-invalid-output");
-
   const versionTimeout = new CodexReadinessProbe("codex", async () => {
     throw new Error("codex timed out");
   });
@@ -139,11 +100,4 @@ test("Codex readiness reports missing commands and malformed smoke output distin
     throw new Error("codex timed out");
   });
   expect((await authTimeout.check()).details.failure).toBe("auth-timeout");
-
-  const smokeTimeout = new CodexReadinessProbe("codex", async (_command, args) => {
-    if (args[0] === "--version") return { stdout: "codex-cli 1.0.0", stderr: "" };
-    if (args[0] === "login") return { stdout: "logged in", stderr: "" };
-    throw new Error("codex timed out");
-  });
-  expect((await smokeTimeout.check()).details.failure).toBe("smoke-timeout");
 });

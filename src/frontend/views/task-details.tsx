@@ -1,6 +1,7 @@
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Button } from "../components/ui/button.js";
 import { Badge } from "../components/ui/badge.js";
+import { Card, CardAction, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card.js";
 import { Collapsible } from "../components/ui/collapsible.js";
 import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
@@ -12,6 +13,7 @@ import { ApplicationFrame } from "../components/app/application-frame.js";
 import { TaskHistory } from "../components/app/task-history.js";
 import { TaskLeadPlan } from "../components/app/task-lead-plan.js";
 import { TaskProgress } from "../components/app/task-progress.js";
+import { TaskStatus } from "../components/app/task-status.js";
 import { DeliveryReviewPanel } from "../components/app/delivery-review-panel.js";
 import { DeveloperRecoveryStatus } from "../components/app/developer-recovery-status.js";
 import type { DeveloperRecoveryAction } from "../components/app/developer-recovery-actions.js";
@@ -24,9 +26,8 @@ import { DeveloperEvidence, type DeveloperExecutionEventView } from "../componen
 import { adminDate, relativeTime, type ApiCi, type ApiProject, type ApiRelease, type ApiTask } from "../lib/view-shared.js";
 import { readJson, withCompany } from "../lib/api.js";
 import type { IssueCommandSlug } from "../../commands/registry.js";
-import { phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
 import { releaseFailureCopy } from "../../release-failures.js";
-import { Ellipsis } from "lucide-react";
+import { Ellipsis, LoaderCircle } from "lucide-react";
 import { lazy, Suspense, useEffect, useState, type ReactElement } from "react";
 
 const DeveloperDiff = lazy(() => import("../components/app/developer-diff.js"));
@@ -49,7 +50,7 @@ function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, 
   return (
     <div data-task-actions className="space-y-3">
       <div className="flex flex-wrap justify-end gap-2">
-      {task.allowedCommands.includes("start_planning") ? <Button size="sm" onClick={() => void onStartPlanning()} disabled={disabled}>{busy ? "Planning…" : "Start planning"}</Button> : null}
+      {task.allowedCommands.includes("start_planning") ? <Button size="sm" onClick={() => void onStartPlanning()} disabled={disabled}>{busy ? "Planning…" : task.phase === "failed" ? "Retry planning" : "Start planning"}</Button> : null}
       {supplementalCommand && supplementalSubject ? <Button size="sm" variant="outline" onClick={() => void onPlanAction(supplementalCommand.endpoint as TaskPlanAction, undefined, { subject: supplementalSubject, idempotencyKey: crypto.randomUUID() })} disabled={disabled}>Request review</Button> : null}
       {task.allowedCommands.includes("start_development") ? <Button size="sm" onClick={() => void onPlanAction("start-development")} disabled={disabled}>{busy ? "Executing…" : "Start development"}</Button> : null}
       {!task.developerRecovery && task.allowedCommands.includes("retry_development") ? <Button size="sm" onClick={() => void onPlanAction("retry-development")} disabled={disabled}>{busy ? "Retrying…" : "Retry development"}</Button> : null}
@@ -70,7 +71,7 @@ function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, 
       {task.allowedCommands.includes("accept_delivery") ? <Button size="sm" onClick={() => void onPlanAction("accept-delivery")} disabled={disabled}>{busy ? "Accepting…" : "Accept delivery"}</Button> : null}
       {task.allowedCommands.includes("reconcile_acceptance") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reconcile-acceptance")} disabled={disabled}>{busy ? "Checking…" : "Reconcile ready state"}</Button> : null}
       {task.allowedCommands.includes("reconcile_merge") ? <Button size="sm" onClick={() => void onPlanAction("reconcile-merge")} disabled={disabled}>{busy ? "Checking…" : "Check merge"}</Button> : null}
-      {task.allowedCommands.includes("cancel_issue") ? <Button size="sm" variant="ghost" onClick={() => void onPlanAction("cancel")} disabled={disabled}>Cancel</Button> : null}
+      {task.allowedCommands.includes("cancel_issue") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("cancel")} disabled={disabled}>Cancel</Button> : null}
       {canRevise ? <Button size="sm" variant="outline" onClick={() => setRevisionOpen((open) => !open)} disabled={disabled}>{revisionOpen ? "Close revision" : "Revise plan"}</Button> : null}
       {canContinue ? <Button size="sm" variant="outline" onClick={() => setContinueOpen((open) => !open)} disabled={disabled}>{continueOpen ? "Close continuation" : "Continue work"}</Button> : null}
       </div>
@@ -156,6 +157,41 @@ function TaskOptions(): ReactElement {
   );
 }
 
+function PlanningRunCard({ task }: { task: ApiTask }): ReactElement | null {
+  const invocation = [...task.agentInvocations].reverse().find((candidate) => candidate.role === "lead" && ["starting", "running", "cancelling"].includes(candidate.status));
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (task.phase !== "planning") return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [task.phase, invocation?.id]);
+  if (task.phase !== "planning") return null;
+  const planningStartedAt = [...task.timeline].reverse().find((event) => event.metadata.phase === "planning")?.createdAt;
+  const startedAt = invocation?.startedAt ?? task.capacity?.requestedAt ?? planningStartedAt;
+  const elapsedSeconds = startedAt ? Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1_000)) : 0;
+  const elapsed = elapsedSeconds < 60 ? `${elapsedSeconds}s` : elapsedSeconds < 3_600 ? `${Math.floor(elapsedSeconds / 60)}m` : `${Math.floor(elapsedSeconds / 3_600)}h ${Math.floor(elapsedSeconds % 3_600 / 60)}m`;
+  const status = task.capacity?.status === "queued" ? `Queued${task.capacity.position ? ` · ${task.capacity.position}` : ""}` : task.capacity?.status === "rate_limited" ? "Waiting" : invocation?.status === "cancelling" ? "Cancelling" : invocation || task.capacity?.status === "active" ? "Running" : elapsedSeconds >= 10 ? "Waiting to start" : "Starting";
+  const agentName = invocation?.profileName ?? task.capacity?.profileName ?? "Lead agent";
+  return (
+    <Card data-planning-run size="sm" aria-label="Planning run">
+      <CardHeader>
+        <CardTitle>Planning run</CardTitle>
+        <CardDescription>{agentName} · Lead · attempt {invocation?.attempt ?? 1}{invocation?.sessionPresent ? " · session connected" : ""}</CardDescription>
+        <CardAction><Badge variant="secondary">{status}</Badge></CardAction>
+      </CardHeader>
+      <CardContent>
+        <dl className="grid grid-cols-2 gap-3 text-xs lg:grid-cols-4">
+          <div><dt className="text-muted-foreground">Model</dt><dd>{invocation?.model ?? "Resolving…"}</dd></div>
+          <div><dt className="text-muted-foreground">Reasoning</dt><dd>{invocation?.reasoningLevel ?? "Resolving…"}</dd></div>
+          <div><dt className="text-muted-foreground">Priority</dt><dd>{invocation?.servicePriority ?? "Resolving…"}</dd></div>
+          <div><dt className="text-muted-foreground">Elapsed</dt><dd className="tabular-nums">{elapsed}</dd></div>
+        </dl>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void> }): ReactElement {
   const approveCommand = task.commands.find((command) => command.name === "approve_plan" && command.subject?.kind === "plan_decision");
   const revisionCommand = task.commands.find((command) => command.name === "request_plan_revision" && command.subject?.kind === "plan_decision");
@@ -172,19 +208,18 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
   const [answer, setAnswer] = useState("");
   useEffect(() => { setAnswer(""); }, [task.id, task.revision]);
   return (
-    <ApplicationFrame title={task.title} headerActions={<TaskOptions />}>
+    <ApplicationFrame title={task.issueKey ? `${task.issueKey} · ${task.title}` : task.title} headerActions={<TaskOptions />}>
       <article data-task-detail className="min-w-0">
         <div data-task-body className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_260px]">
           <div className="min-w-0">
             <header className="px-4 pt-4 pb-3 sm:px-6 lg:px-10">
               <div data-task-header-content className="mx-auto max-w-4xl space-y-4">
-                <div className="flex min-w-0 flex-wrap items-center gap-2"><h2 className="text-xl font-semibold tracking-tight">{task.title}</h2><Badge variant="secondary" data-status={task.phase}>{taskPhaseLabel(task.phase)}</Badge></div>
-                <div aria-live="polite" className="text-[11px] text-muted-foreground">{task.projection.status === "lagging" ? `Projection lag: r${task.projection.projectedRevision} → r${task.projection.authoritativeRevision}` : `Projection current · r${task.projection.projectedRevision}`}</div>
+                <div className="flex min-w-0 flex-wrap items-center gap-2"><h2 className="text-xl font-semibold tracking-tight">{task.title}</h2><Badge variant="secondary" data-status={task.phase}><TaskStatus phase={task.phase} /></Badge></div>
                 <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} />
                 {approveCommand && revisionCommand ? <Field><FieldLabel htmlFor="plan-decision-action">Decision</FieldLabel><Select value={decisionName} onValueChange={(value) => { if (value === "approve_plan" || value === "request_plan_revision") setDecisionName(value); }}><SelectTrigger id="plan-decision-action"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="approve_plan">Approve plan</SelectItem><SelectItem value="request_plan_revision">Request plan revision</SelectItem></SelectContent></Select></Field> : null}
-                {decisionCommand?.subject?.kind === "plan_decision" ? <PlanDecisionForm key={decisionCommand.name} command={{ endpoint: decisionCommand.endpoint, expectedRevision: decisionCommand.expectedRevision, subject: decisionCommand.subject.value }} actionLabel={decisionCommand.label} busy={busy} onSubmit={(payload) => onPlanAction(decisionCommand.endpoint as TaskPlanAction, payload.note, { subject: payload.subject, idempotencyKey: payload.idempotencyKey })} error={error} /> : blockerCommand?.subject?.kind === "plan_blocker" ? <PlanBlockerResponseForm subject={blockerCommand.subject.value} expectedRevision={blockerCommand.expectedRevision} busy={busy} onSubmit={(payload) => onPlanAction(blockerCommand.endpoint as TaskPlanAction, payload.answer, { subject: payload.subject, idempotencyKey: payload.idempotencyKey, expectedWorkflowRevision: payload.expectedWorkflowRevision })} error={error} /> : null}
+                {decisionCommand?.subject?.kind === "plan_decision" ? <PlanDecisionForm key={decisionCommand.name} command={{ endpoint: decisionCommand.endpoint, expectedRevision: decisionCommand.expectedRevision, subject: decisionCommand.subject.value }} actionLabel={decisionCommand.label} busy={busy} onSubmit={(payload) => onPlanAction(decisionCommand.endpoint as TaskPlanAction, payload.note, { subject: payload.subject, idempotencyKey: payload.idempotencyKey })} error={error} /> : null}
                 <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action === "cancel-issue" ? "cancel" : action)} />
-                {task.capacity ? <div className="text-xs text-muted-foreground">{task.capacity.status === "queued" ? `Queued${task.capacity.position ? ` · position ${task.capacity.position}` : ""}` : task.capacity.status === "rate_limited" ? `Waiting for profile reset${task.capacity.retryAt ? ` · ${relativeTime(task.capacity.retryAt)}` : ""}` : task.capacity.status === "active" ? `Running · ${task.capacity.profileName}` : task.capacity.status === "exhausted" ? "Capacity exhausted" : "Ownership needs verification"}</div> : null}
+                {task.capacity ? <div className="flex items-center gap-1.5 text-xs text-muted-foreground">{task.capacity.status === "active" ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : null}<span>{task.capacity.status === "queued" ? `Queued${task.capacity.position ? ` · position ${task.capacity.position}` : ""}` : task.capacity.status === "rate_limited" ? `Waiting for profile reset${task.capacity.retryAt ? ` · ${relativeTime(task.capacity.retryAt)}` : ""}` : task.capacity.status === "active" ? `Running · ${task.capacity.profileName}` : task.capacity.status === "exhausted" ? "Capacity exhausted" : "Ownership needs verification"}</span></div> : null}
                 {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
               </div>
             </header>
@@ -192,15 +227,16 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
               <div data-task-content-inner className="mx-auto max-w-4xl space-y-7">
                 <pre className="whitespace-pre-wrap font-sans text-[13px] leading-5">{task.description || "No description."}</pre>
                 <TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} />
+                <PlanningRunCard task={task} />
                 {task.images.length ? <section className="space-y-2"><h3 className="text-xs font-semibold">Attachments</h3><div className="flex flex-wrap gap-3">{task.images.map((image) => <a className="text-xs underline underline-offset-2" href={`/api/tasks/${task.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer" key={image.artifactId}>{image.filename}</a>)}</div></section> : null}
-                {task.leadOutput ? <TaskLeadPlan output={task.leadOutput} planRevision={task.planRevision} planMaterial={task.planMaterial} materialCategories={task.materialCategories ?? []} /> : null}
+                {task.leadOutput && (task.leadOutput.content.kind !== "decision_blocker" || !task.governance.blocker) ? <TaskLeadPlan output={task.leadOutput} planRevision={task.planRevision} planMaterial={task.planMaterial} materialCategories={task.materialCategories ?? []} /> : null}
                 {task.governance.originalPlan ? <PlanSubjectSummary subject={task.governance.originalPlan.subject} current={task.governance.originalPlan.status === "current"} label="Original plan" createdAt={task.governance.originalPlan.createdAt} /> : null}
                 {task.governance.finalPlan && task.governance.finalPlan.subject.outputId !== task.governance.originalPlan?.subject.outputId ? <PlanSubjectSummary subject={task.governance.finalPlan.subject} current={task.governance.finalPlan.status === "current"} label={`Final plan v${task.governance.finalPlan.subject.finalVersion}`} createdAt={task.governance.finalPlan.createdAt} /> : null}
                 {task.governance.previousPlans?.map((plan) => <PlanSubjectSummary key={plan.subject.outputId} subject={plan.subject} current={false} createdAt={plan.createdAt} />) ?? null}
                 {task.governance.materiality ? <MaterialitySummary value={{ categories: task.governance.materiality.categories, artifactId: task.governance.materiality.evidenceArtifactId, artifactSha256: task.governance.materiality.evidenceArtifactSha256, evidence: task.governance.materiality.evidence.map((entry) => ({ category: entry.category, rationale: entry.rationale, evidenceRefs: entry.refs })) }} /> : null}
                 {task.governance.supplementalReview ? <SupplementalReviewPanel value={{ reviewerProfileId: task.governance.supplementalReview.reviewerProfile.name, opinion: task.governance.supplementalReview.opinion, concerns: task.governance.supplementalReview.concerns, requiredChanges: task.governance.supplementalReview.requiredChanges, leadResponse: task.governance.supplementalReview.leadResponse.text }} /> : null}
                 {task.governance.decision ? <section className="space-y-1" data-plan-decision><h3 className="text-xs font-semibold">Member decision</h3><div className="text-[13px]">{task.governance.decision.decision} · {task.governance.decision.actor.displayName}</div><p className="whitespace-pre-wrap text-[12px]">{task.governance.decision.note}</p></section> : null}
-                {task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">Decision blocker</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}
+                {task.governance.blocker && blockerCommand?.subject?.kind === "plan_blocker" ? <PlanBlockerResponseForm blocker={task.governance.blocker} expectedRevision={blockerCommand.expectedRevision} busy={busy} onSubmit={(payload) => onPlanAction(blockerCommand.endpoint as TaskPlanAction, undefined, { subject: payload.subject, answer: payload.answer, idempotencyKey: payload.idempotencyKey, expectedWorkflowRevision: payload.expectedWorkflowRevision })} error={error} /> : task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">{task.governance.blocker.header}</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}
                 {task.leadOutput?.content.kind === "decision_blocker" && task.allowedCommands.includes("resolve_decision_blocker") ? <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); void onResolveDecisionBlocker(answer); }}><FieldLabel htmlFor="decision-answer">Decision</FieldLabel><Textarea id="decision-answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Answer the Lead's question" maxLength={8000} /><Button size="sm" type="submit" disabled={busy || !answer.trim()}>{busy ? "Saving…" : "Resolve decision"}</Button></form> : null}
                 {task.developerExecution ? <div className="space-y-4"><DeveloperEvidence taskId={task.id} execution={task.developerExecution} events={developerEvents} />{task.developerExecution.status === "completed" ? <Suspense fallback={<Skeleton className="h-40 w-full" />}><DeveloperDiff taskId={task.id} executionId={task.developerExecution.id} /></Suspense> : null}</div> : null}
                 <DeliveryReviewPanel task={task} />
@@ -215,13 +251,14 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
           <aside data-task-properties className="border-border border-t bg-muted/20 px-4 py-6 sm:px-6 lg:sticky lg:top-0 lg:h-fit lg:border-t-0 lg:border-l">
             <h3 className="mb-5 text-xs font-semibold">Properties</h3>
             <dl className="space-y-4 text-xs">
-              <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary">{taskPhaseLabel(task.phase)}</Badge></dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary" data-status={task.phase}><TaskStatus phase={task.phase} /></Badge></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Owner</dt><dd>{task.owner}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd>{task.pendingAction ?? "None"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Projection</dt><dd>{task.projection.status === "lagging" ? `Lagging r${task.projection.projectedRevision} → r${task.projection.authoritativeRevision}` : `Current · r${task.projection.projectedRevision}`}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Updated</dt><dd>{adminDate(task.updatedAt)}</dd></div>
+              {task.issueKey ? <div className="space-y-1"><dt className="text-muted-foreground">Issue key</dt><dd><code>{task.issueKey}</code></dd></div> : null}
               <div className="space-y-1"><dt className="text-muted-foreground">Task ID</dt><dd><code className="break-all text-[11px]">{task.id}</code></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Workflow</dt><dd><code className="break-all text-[11px]">{task.workflowId}</code></dd></div>
             </dl>

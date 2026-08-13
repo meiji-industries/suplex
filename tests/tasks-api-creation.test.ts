@@ -52,6 +52,7 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
   const projects = new ProjectService(database, auth, config, { localRepository, github });
   const company = auth.createCompany("admin-1", "API Creation Company");
+  auth.setCompanyIssueCode("admin-1", company.id, "apic");
   const profile = projects.createProfile("admin-1", { name: "API creation profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
   const project = await projects.createProject("admin-1", company.id, { name: "API creation project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, reviewer: profile.id, developer: profile.id } });
   const active = await projects.activateProject("admin-1", project.id);
@@ -67,7 +68,7 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
   try {
     const payload = { projectId: project.id, title: "API creation task", description: "# Details", idempotencyKey: "api-creation-0001", supplementalReview: true, images: [{ filename: "note.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] };
     const created = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload });
-    expect(created.statusCode).toBe(201); expect(created.json()).toMatchObject({ title: "API creation task", phase: "backlog", revision: 0, allowedCommands: ["start_planning"] });
+    expect(created.statusCode).toBe(201); expect(created.json()).toMatchObject({ issueKey: "APIC-1", title: "API creation task", phase: "backlog", revision: 0, allowedCommands: ["start_planning"] });
     const duplicate = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload });
     expect(duplicate.statusCode).toBe(200); expect(duplicate.json()).toMatchObject({ id: created.json().id, workflowId: created.json().workflowId });
     const task = created.json() as { id: string; workflowId: string };
@@ -79,7 +80,7 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
     expect(releaseBody.statusCode).toBe(200); expect(releaseBody.body).toBe("## Summary\n\nAPI creation task");
     const queued = new CapacityManager(database, config).request({ companyId: company.id, taskId: task.id, workflowId: task.workflowId, turnKind: "lead" });
     const taskResponse = await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } });
-    expect(taskResponse.json()).toMatchObject({ capacity: { profileId: profile.id, profileName: "API creation profile", status: "queued", position: 1, requestedAt: queued.requestedAt, retryAt: null } });
+    expect(taskResponse.json()).toMatchObject({ issueKey: "APIC-1", capacity: { profileId: profile.id, profileName: "API creation profile", status: "queued", position: 1, requestedAt: queued.requestedAt, retryAt: null } });
     expect(JSON.stringify(taskResponse.json().capacity)).not.toMatch(/requestId|laneKey|execution|session|wrapper|process|worktree|command|artifact/i);
   } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }
 });

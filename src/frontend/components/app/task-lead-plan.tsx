@@ -19,7 +19,8 @@ type DecisionBlockerContent = {
   summary: string;
   evidence: string;
   owner: "human";
-  question: string;
+  question?: string;
+  askUserQuestion?: { question: string };
   nextAction: string;
 };
 
@@ -45,6 +46,7 @@ export function TaskLeadPlan({
   materialCategories: string[];
 }) {
   if (output.content.kind === "decision_blocker") {
+    const question = output.content.askUserQuestion?.question ?? output.content.question ?? output.content.summary;
     return (
       <section data-task-lead-plan className="space-y-3">
         <div className="flex items-center justify-between gap-3">
@@ -52,7 +54,7 @@ export function TaskLeadPlan({
           <Badge variant="destructive">Human decision</Badge>
         </div>
         <Alert>
-          <AlertTitle>{output.content.question}</AlertTitle>
+          <AlertTitle>{question}</AlertTitle>
           <AlertDescription>
             <p>{output.content.evidence}</p>
             <p><span className="font-medium text-foreground">Next:</span> {output.content.nextAction}</p>

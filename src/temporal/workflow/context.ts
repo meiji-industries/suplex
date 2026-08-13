@@ -64,7 +64,7 @@ export interface IssueWorkflowContext {
   cancelCurrentCapacity: () => Promise<CapacityCancellation>;
   preserveAmbiguousCapacity: () => Promise<void>;
   settleCancelledCapacity: (executionId: string) => Promise<"settled" | "ambiguous" | "none">;
-  readonly permanentActivityFailure: (error: unknown) => Failure | undefined;
+  readonly permanentActivityFailure: (error: unknown, recoverExhausted?: boolean) => Failure | undefined;
   readonly failureBlockCategory: (code: string) => "authentication" | "configuration" | "capacity" | "execution_ownership" | undefined;
   readonly leadResultKind: (result: LeadPlanningResult) => "plan" | "decision_blocker";
   readonly applyLeadResult: (state: IssueWorkflowState, result: LeadPlanningResult) => IssueWorkflowState;
@@ -76,6 +76,7 @@ export interface IssueWorkflowContext {
   readonly durableCapacityPatch: string;
   readonly planGovernancePatch: string;
   readonly decisionResolutionProjectionPatch: string;
+  readonly exhaustedActivityRecoveryPatch: string;
   readonly developerFailureRecoveryPatch: string;
   readonly artifactBackedReviewPatch: string;
   readonly exactDeliveryReviewPatch: string;

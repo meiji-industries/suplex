@@ -99,8 +99,12 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
       expect(new URL(adminPage.url()).searchParams.get("company")).toBe(secondCompany.body.id);
       expect(await adminPage.evaluate(() => window.localStorage.getItem("forge.activeCompanyId"))).toBe(secondCompany.body.id);
 
-      await adminPage.getByLabel("Display name", { exact: true }).fill("Browser Member");
+      expect(await adminPage.getByPlaceholder("Search by name or username").isDisabled()).toBe(true);
+      expect(await adminPage.getByRole("button", { name: "Export CSV", exact: true }).isDisabled()).toBe(true);
       await adminPage.getByRole("button", { name: "Invite", exact: true }).click();
+      const inviteDialog = adminPage.getByRole("dialog", { name: "Invite user", exact: true });
+      await inviteDialog.getByLabel("Display name", { exact: true }).fill("Browser Member");
+      await inviteDialog.getByRole("button", { name: "Invite", exact: true }).click();
       await adminPage.locator("code").waitFor();
       const invitationToken = await adminPage.locator("code").innerText();
       expect(invitationToken).toMatch(/^invite_v1_user_/);
@@ -118,13 +122,14 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
 
       await adminPage.reload();
       expect(await adminPage.locator("body").innerText()).not.toContain(invitationToken);
-      await adminPage.getByText("Passkeys", { exact: true }).waitFor();
+      await adminPage.getByRole("heading", { name: "Passkeys", exact: true }).waitFor();
       await adminPage.getByRole("button", { name: /\+ Browser Member/ }).first().click();
       await adminPage.getByRole("button", { name: /− Browser Member/ }).first().waitFor();
       await adminPage.getByRole("button", { name: /− Browser Member/ }).first().click();
       await adminPage.getByRole("button", { name: /\+ Browser Member/ }).first().waitFor();
 
-      await adminPage.getByRole("button", { name: "Sign out" }).click();
+      await adminPage.getByRole("button", { name: "Switch company" }).click();
+      await adminPage.getByRole("menuitem", { name: "Sign out", exact: true }).click();
       await adminPage.locator("button", { hasText: "Sign in with passkey" }).waitFor();
 
       await adminPage.getByRole("button", { name: "Sign in with passkey" }).click();

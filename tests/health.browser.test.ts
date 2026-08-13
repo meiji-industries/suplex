@@ -16,6 +16,7 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
       { id: "gh-auth", label: "GitHub CLI authentication", status: "unhealthy", summary: "Local authentication is unavailable", details: {} },
     ],
   };
+  let currentSnapshot = snapshot;
   const app = createApp({
     config: createTestConfig("/tmp/forge-browser-test"),
     health: {
@@ -26,7 +27,7 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
       codexAuth: async () => snapshot.checks[0]!,
       ghAuth: async () => snapshot.checks[1]!,
     },
-    getHealth: async () => snapshot,
+    getHealth: async () => currentSnapshot,
   });
   await app.listen({ host: "127.0.0.1", port: 0 });
   const address = app.server.address();
@@ -40,16 +41,19 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
     await page.goto(`http://127.0.0.1:${address.port}/health`);
     await page.locator("h1").waitFor();
     await page.getByRole("heading", { name: "Owned services", exact: true }).waitFor();
+    const systemHealth = page.getByRole("button", { name: "System health: Degraded", exact: true });
+    await systemHealth.waitFor();
+    expect(await systemHealth.getAttribute("data-status")).toBe("amber");
     expect(await page.locator('[data-status="healthy"]').count()).toBe(1);
     expect(await page.locator('[data-status="unhealthy"]').count()).toBe(1);
     expect(await page.locator('[data-slot="health-row"]').count()).toBe(2);
     expect(await page.locator("body").innerText()).toMatch(/forge\.tailnet\.ts\.net/);
     expect(await page.locator("body").innerText()).not.toMatch(/Truthful readiness/);
 
-    const navigationTrigger = page.getByRole("button", { name: "Open navigation" });
+    const navigationTrigger = page.getByRole("button", { name: "Open settings navigation" });
     await navigationTrigger.focus();
     await page.keyboard.press("Enter");
-    expect(await page.locator('[data-slot="mobile-nav"]').isVisible()).toBe(true);
+    expect(await page.locator('[data-slot="settings-mobile-nav"]').isVisible()).toBe(true);
     await page.keyboard.press("Escape");
     expect(await navigationTrigger.evaluate((element) => element === document.activeElement)).toBe(true);
 
@@ -62,14 +66,38 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
     expect(apiHealth.status).toBe(200);
     expect(apiHealth.body.ready).toBe(true);
 
+    await systemHealth.click();
+    const healthDialog = page.getByRole("dialog", { name: "System health", exact: true });
+    await healthDialog.waitFor();
+    expect(await healthDialog.locator('[data-slot="health-row"]').count()).toBe(2);
+    await healthDialog.getByRole("button", { name: "Close", exact: true }).click();
+
+    currentSnapshot = {
+      ...snapshot,
+      ready: false,
+      checks: [
+        { ...snapshot.checks[0]!, status: "unhealthy", summary: "Database unavailable" },
+        { ...snapshot.checks[1]!, status: "healthy", summary: "Ready" },
+      ],
+    };
     const refreshResponse = page.waitForResponse((response) => response.url().endsWith("/api/health"));
     await page.getByRole("button", { name: "Refresh health" }).click();
     expect((await refreshResponse).status()).toBe(200);
+    const unavailable = page.getByRole("button", { name: "System health: Unavailable", exact: true });
+    await unavailable.waitFor();
+    expect(await unavailable.getAttribute("data-status")).toBe("red");
+
+    currentSnapshot = { ...snapshot, checks: snapshot.checks.map((check) => ({ ...check, status: "healthy" as const, summary: "Ready" })) };
+    await page.getByRole("button", { name: "Refresh health" }).click();
+    const healthy = page.getByRole("button", { name: "System health: Healthy", exact: true });
+    await healthy.waitFor();
+    expect(await healthy.getAttribute("data-status")).toBe("green");
 
     const desktop = await browser.newPage({ viewport: { width: 1280, height: 800 } });
     await desktop.goto(`http://127.0.0.1:${address.port}/health`);
     expect(await desktop.locator("aside").isVisible()).toBe(true);
     expect(await desktop.locator('[data-slot="health-row"]').count()).toBe(2);
+    expect(await desktop.getByRole("button", { name: "System health: Healthy", exact: true }).getAttribute("data-status")).toBe("green");
   } finally {
     await browser?.close();
     await app.close();
@@ -114,6 +142,7 @@ test("health makes a failed refresh visibly stale while retaining the last succe
     await page.getByRole("button", { name: "Refresh health" }).click();
     await page.locator('[data-health-freshness="stale"]').first().waitFor();
     expect(await page.locator('[data-health-freshness="stale"]').first().innerText()).toMatch(/^Stale · /);
+    expect(await page.getByRole("button", { name: "System health: Degraded", exact: true }).getAttribute("data-status")).toBe("amber");
     expect(await page.getByText("SQLite database", { exact: true }).isVisible()).toBe(true);
   } finally {
     await browser?.close();

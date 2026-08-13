@@ -8,5 +8,10 @@ if [ "$tailscale_command" = "tailscale" ] && [ -x "$macos_tailscale_command" ]; 
   tailscale_command="$macos_tailscale_command"
 fi
 
-"$tailscale_command" status --json \
+if ! tailscale_status=$("$tailscale_command" status --json 2>/dev/null); then
+  printf '%s\n' "${FORGE_TAILSCALE_ADDRESS:-}"
+  exit 0
+fi
+
+printf '%s\n' "$tailscale_status" \
   | jq -er '.Self.DNSName | strings | rtrimstr(".") | select(endswith(".ts.net"))'

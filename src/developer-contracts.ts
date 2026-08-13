@@ -62,7 +62,7 @@ export const DeveloperContextSchema = z.object({
   evidenceArtifactIds: uniqueStrings(id, 32),
   imageArtifactIds: uniqueStrings(id, 32),
   repositoryInstructionPaths: uniqueStrings(relativeRepositoryPath, 64),
-  artifactStepNumbers: z.record(id, uniqueNumbers(64)).default({}),
+  artifactStepNumbers: z.record(relativeRepositoryPath, uniqueNumbers(64)).default({}),
 });
 
 export type DeveloperContext = z.infer<typeof DeveloperContextSchema>;

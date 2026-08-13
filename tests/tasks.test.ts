@@ -179,6 +179,7 @@ test("concurrent identical submissions converge and conflicting submissions fail
 test("creates one durable backlog task, verifies immutable images, and starts planning with an expected revision", async () => {
   const value = await fixture();
   try {
+    value.auth.setCompanyIssueCode(value.adminId, value.companyId, "acme");
     const events: Array<{ type: "invalidate"; taskId: string; companyId: string; revision: number; attentionChanged: boolean }> = [];
     const unsubscribe = value.tasks.subscribe(value.adminId, (event) => events.push(event));
     const first = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Investigate queue", description: "## Reproduce\n\nPlease inspect the queue.", idempotencyKey: "queue-task-0001", supplementalReview: true, images: [{ filename: "evidence.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] });
@@ -186,6 +187,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     unsubscribe();
     expect(first.created).toBe(true);
     expect(first.task.phase).toBe("backlog");
+    expect(first.task.issueKey).toBe("ACME-1");
     expect(first.task.pendingAction).toBe("Start planning");
     expect(first.task.description).toContain("Reproduce");
     expect(first.task.images).toHaveLength(1);
@@ -329,15 +331,17 @@ test("company scope denies task discovery and mutation", async () => {
 test("continues terminal work as a new linked issue without rewriting the original history", async () => {
   const value = await fixture();
   try {
+    value.auth.setCompanyIssueCode(value.adminId, value.companyId, "acme");
     const original = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Finished issue", description: "Preserve this history.", idempotencyKey: "continue-task-0001", images: [] });
     const initialSnapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(original.task.id) as { state_json: string });
     const terminalState = { ...JSON.parse(initialSnapshot.state_json), phase: "done", revision: 7, owner: "human", allowedCommands: [], pendingAction: null, lastEventId: `${original.task.workflowId}:7` } as IssueWorkflowState;
     value.database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: terminalState.lastEventId, state: terminalState }));
     const continued = await value.tasks.continueWork(value.adminId, original.task.id, 7, "Continue implementation after the completed issue.");
+    expect([continued.original.issueKey, continued.successor.issueKey]).toEqual(["ACME-1", "ACME-2"]);
     expect(continued.original.phase).toBe("done");
     expect(continued.successor.predecessorTaskId).toBe(original.task.id);
-    expect(continued.original.successor).toMatchObject({ id: continued.successor.id, title: continued.successor.title, phase: "backlog" });
-    expect(continued.successor.predecessor).toMatchObject({ id: original.task.id, title: original.task.title, phase: "done" });
+    expect(continued.original.successor).toMatchObject({ id: continued.successor.id, issueKey: "ACME-2", title: continued.successor.title, phase: "backlog" });
+    expect(continued.successor.predecessor).toMatchObject({ id: original.task.id, issueKey: "ACME-1", title: original.task.title, phase: "done" });
     expect(continued.original.revisionHistory).toEqual([]);
     expect(continued.successor.id).not.toBe(original.task.id);
     expect(continued.successor.description).toContain(`Continued from Forge issue ${original.task.id}`);

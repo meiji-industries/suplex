@@ -62,6 +62,8 @@ export const forgeCompanies = sqliteTable("forge_companies", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
   status: text("status", { enum: ["active", "paused", "archived"] }).notNull(),
+  issueCode: text("issue_code"),
+  nextIssueNumber: integer("next_issue_number").notNull().default(1),
   createdAt: text("created_at").notNull(),
 });
 

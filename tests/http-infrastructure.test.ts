@@ -4,6 +4,7 @@ import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";
 import { createFastifyLogger } from "../src/logging.js";
 import type { HostHealthDependencies } from "../src/health.js";
+import { ProjectFailure } from "../src/projects.js";
 
 const health: HostHealthDependencies = {
   temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy" as const, summary: "Ready", details: {} }),
@@ -53,4 +54,21 @@ test("unexpected route errors are generic to callers and correlated in logs", as
   expect(response.body).not.toContain("provider secret");
   expect(lines.join("\n")).not.toContain("do-not-leak");
   expect(lines.some((line) => line.includes("Unhandled request error"))).toBe(true);
+});
+
+test("expected request failures retain sanitized reasons in logs", async () => {
+  const lines: string[] = [];
+  const app = createApp({
+    config: createTestConfig("/tmp/forge-http-rejection-test"),
+    health,
+    getHealth: async () => { throw new ProjectFailure("Repository provisioning failed", [{ code: "repository-unavailable", field: "repositoryUrl", message: "Git could not clone token=secret" }], 422); },
+    logger: createFastifyLogger((line) => lines.push(line)),
+  });
+
+  const response = await app.inject({ method: "GET", url: "/health" });
+  await app.close();
+
+  expect(response.statusCode).toBe(422);
+  expect(lines.join("\n")).not.toContain("token=secret");
+  expect(lines.some((line) => line.includes("Request rejected") && line.includes("Repository provisioning failed") && line.includes("repository-unavailable"))).toBe(true);
 });

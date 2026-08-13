@@ -2,42 +2,10 @@ import { Badge } from "../ui/badge.js";
 import { Button } from "../ui/button.js";
 import { Collapsible } from "../ui/collapsible.js";
 import type { ReactElement } from "react";
+import type { DeveloperExecutionEventResponse, TaskResponse } from "../../../http/contracts/tasks.js";
 
-export interface DeveloperExecutionView {
-  id: string;
-  status: string;
-  attempt: number;
-  branchName: string;
-  currentStep?: number | null | undefined;
-  targetBaseSha: string;
-  startingCommit?: string | null | undefined;
-  startingTree?: string | null | undefined;
-  resultCommit?: string | null | undefined;
-  resultTree?: string | null | undefined;
-  dirtyState?: string | null | undefined;
-  boundaryMode?: string | null | undefined;
-  providerObservation?: "matching" | "different" | "unavailable" | undefined;
-  verificationCommands?: Array<{ stepNumber: number; commands: string[] }> | undefined;
-  manifestArtifactId?: string | null | undefined;
-  rawReportArtifactId?: string | null | undefined;
-  reconciliationArtifactId?: string | null | undefined;
-  beforeProviderArtifactId?: string | null | undefined;
-  afterProviderArtifactId?: string | null | undefined;
-  evidenceArtifactId?: string | null | undefined;
-  failureCode?: string | null | undefined;
-  failureSummary?: string | null | undefined;
-}
-
-export interface DeveloperExecutionEventView {
-  eventId: string;
-  sequence: number;
-  kind: string;
-  stepNumber: number | null;
-  occurredAt: string;
-  summary: string;
-  exitCode: number | null;
-  artifactId: string | null;
-}
+export type DeveloperExecutionView = NonNullable<TaskResponse["developerExecution"]>;
+export type DeveloperExecutionEventView = DeveloperExecutionEventResponse;
 
 function shortHash(value: string | null | undefined): string {
   return value ? `${value.slice(0, 8)}…` : "—";

@@ -229,7 +229,7 @@ export async function launchAgentWrapper(manifestPath: string, launcher: { comma
 }
 
 export function wrapperDirectoryFromRuntime(runtimeRoot: string, executionId: string): AgentWrapperDirectory {
-  const manifest = AgentWrapperManifestSchema.parse({ runtimeRoot, executionId, command: "codex", args: [], cwd: "/", createdAt: new Date().toISOString() });
+  const manifest = AgentWrapperManifestSchema.parse({ runtimeRoot, executionId, command: "agent", args: [], cwd: "/", createdAt: new Date().toISOString() });
   return pathsForManifest(manifest);
 }
 

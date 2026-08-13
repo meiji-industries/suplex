@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { RevisedExecutionCoordinatesSchema, SuccessorReferenceSchema, durableId, exactSha } from "../primitives.js";
-import type { LeadPlanningActivityInput, LeadPlanningResult } from "../../../codex-lead-contracts.js";
+import type { LeadPlanningActivityInput, LeadPlanningResult } from "../../../lead-contracts.js";
 import type { PlanSubject, SupplementalReviewSubject } from "../../../plan-governance.js";
 
 export interface SupplementalReviewActivityInput {

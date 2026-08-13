@@ -3,19 +3,9 @@ import { CheckIcon, Clock3, XIcon } from "lucide-react";
 import { cn } from "../../lib/utils.js";
 import { Badge } from "../reui/badge.js";
 import { Timeline, TimelineContent, TimelineDate, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "../ui/timeline.js";
+import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
-export type TaskInvocation = {
-  id: string;
-  role: "lead" | "reviewer" | "developer";
-  status: string;
-  attempt: number;
-  sessionRef?: string | null;
-  startedAt: string;
-  finishedAt: string | null;
-  failureCode: string | null;
-  failureSummary: string | null;
-  evidenceArtifactId: string | null;
-};
+export type TaskInvocation = TaskResponse["agentInvocations"][number];
 
 function invocationDate(timestamp: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp));

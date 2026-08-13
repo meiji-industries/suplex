@@ -2,6 +2,7 @@ import { CheckIcon, CircleIcon, PlayIcon } from "lucide-react";
 
 import { cn } from "../../lib/utils.js";
 import { Timeline, TimelineContent, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "../ui/timeline.js";
+import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
 const stages = [
   { step: 1, title: "Plan" },
@@ -9,7 +10,7 @@ const stages = [
   { step: 3, title: "Release" },
 ] as const;
 
-type ProgressEvent = { metadata: Record<string, string | number | boolean>; createdAt: string };
+type ProgressEvent = Pick<TaskResponse["timeline"][number], "metadata" | "createdAt">;
 
 function taskProgressStep(phase: string, canRetryDevelopment: boolean): number {
   if (["backlog", "planning", "approval", "failed"].includes(phase)) return 1;

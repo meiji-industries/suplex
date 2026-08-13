@@ -4,15 +4,9 @@ import { type ReactElement } from "react";
 import { Collapsible } from "../ui/collapsible.js";
 import { Badge } from "../ui/badge.js";
 import { Button } from "../ui/button.js";
+import type { ReviewFindingResponse } from "../../../http/contracts/tasks.js";
 
-type Finding = {
-  id: string;
-  severity: "blocking" | "advisory";
-  rationale: string;
-  evidenceRef: string;
-  disposition: "open" | "accepted" | "repaired";
-  repairInstruction: string | null;
-};
+type Finding = ReviewFindingResponse;
 
 export function ReviewFindingRow({ finding }: { finding: Finding }): ReactElement {
   const blocking = finding.severity === "blocking";

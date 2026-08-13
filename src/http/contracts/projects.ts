@@ -49,3 +49,7 @@ export const ProjectResponseSchema = z.object({
   id: z.string(), companyId: z.string(), name: z.string(), repositoryPath: z.string(), worktreeRoot: z.string(), repository: z.string().optional(), baseBranch: z.string(), targetBranch: z.string(), setupCommand: z.string(), verificationCommand: z.string(), requiredChecks: z.array(z.string()), allowedProfileIds: z.array(z.string()), roleDefaults: ProjectRoleDefaultsSchema, status: z.enum(["draft", "active", "paused", "needs-reactivation", "archived"]), activeRevisionId: z.string().optional(), configurationRevision: z.number(), configurationIdentity: z.string().optional(), baseSha: z.string().optional(), targetSha: z.string().optional(), createdAt: z.string(), updatedAt: z.string(),
 });
 export const ProjectListResponseSchema = z.object({ projects: z.array(ProjectResponseSchema) });
+export type ProfileResponse = z.infer<typeof ProfileResponseSchema>;
+export type ModelResponse = z.infer<typeof ModelResponseSchema>;
+export type ProjectCheckResponse = z.infer<typeof ProjectCheckListResponseSchema>["checks"][number];
+export type ProjectResponse = z.infer<typeof ProjectResponseSchema>;

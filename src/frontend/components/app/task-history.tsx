@@ -2,31 +2,13 @@ import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "..
 import { Separator } from "../ui/separator.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Timeline, TimelineContent, TimelineDate, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "../ui/timeline.js";
-import { TaskInvocations, type TaskInvocation } from "./task-invocations.js";
+import { TaskInvocations } from "./task-invocations.js";
 import { TaskStatus } from "./task-status.js";
 import { withCompany } from "../../lib/api.js";
-import type { IssuePhase } from "../../../issue-phases.js";
+import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
-type TaskActivityEntry = {
-  id: string;
-  revision: number;
-  eventType: string;
-  createdAt: string;
-};
-
-type LinkedTask = { id: string; title: string; phase: IssuePhase; issueKey: string | null };
-type DurableTaskHistory = {
-  id: string;
-  timeline: TaskActivityEntry[];
-  agentInvocations: TaskInvocation[];
-  planHistory: Array<{ revision: number; kind: string; summary: string; outputArtifactId: string; evidenceArtifactId: string }>;
-  planDecisionHistory: Array<{ id: string; planRevision: number; decision: string; noteArtifactId: string }>;
-  revisionHistory: Array<{ id: string; requestRevision: number; disposition: string; status: string; blockerCode: string | null; branchName: string | null; exactBaseSha: string | null; reasonArtifactId: string }>;
-  developerExecutionHistory: Array<{ id: string; planRevision: number; attempt: number; status: string; branchName: string; resultCommit: string | null; failureSummary: string | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null }>;
-  deliveryReviewHistory: Array<{ id: string; planRevision: number; repairCycle: number; outcome: string; summary: string; opinionArtifactId: string; evidenceArtifactId: string }>;
-  predecessor?: LinkedTask | undefined;
-  successor?: LinkedTask | undefined;
-};
+type LinkedTask = NonNullable<TaskResponse["predecessor"]>;
+type DurableTaskHistory = Pick<TaskResponse, "id" | "timeline" | "agentInvocations" | "planHistory" | "planDecisionHistory" | "revisionHistory" | "developerExecutionHistory" | "deliveryReviewHistory" | "predecessor" | "successor">;
 
 function activityDate(timestamp: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp));

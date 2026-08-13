@@ -4,7 +4,7 @@ import type { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import { ATTENTION_CATEGORY_SEVERITY, attentionId } from "./attention-policy.js";
 import { AttentionCategorySchema, IssueBlockerActionSchema, type AttentionCategory, type IssueCommand } from "./temporal/issue-contracts.js";
-import { ATTENTION_ACTIVE_PHASES } from "./issue-phases.js";
+import { ATTENTION_ACTIVE_PHASES, type IssuePhase } from "./issue-phases.js";
 
 export const RECENT_OUTCOME_LIMIT = 5;
 export const RECENT_OUTCOME_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
@@ -57,7 +57,7 @@ export interface RecentOutcome {
   taskId: string;
   issueKey: string | null;
   taskTitle: string;
-  phase: string;
+  phase: IssuePhase;
   updatedAt: string;
   sourceRevision?: number;
 }
@@ -173,7 +173,7 @@ export class AttentionService {
       const attention = readAttention(company.id).flatMap((row) => this.publicAttention(row));
       const recentOutcomes = this.database.authQuery((db) => db.prepare(`SELECT ip.task_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title AS task_title, ip.phase, ip.state_changed_at AS updated_at, ip.revision AS source_revision
         FROM forge_issue_projections ip JOIN forge_tasks t ON t.id = ip.task_id JOIN forge_companies c ON c.id = ip.company_id WHERE ip.company_id = ? AND ip.phase IN ('done', 'cancelled', 'failed') AND ip.state_changed_at IS NOT NULL`).all(company.id) as RecentOutcomeRow[])
-        .map((row): RecentOutcome => ({ taskId: row.task_id, issueKey: row.issue_key, taskTitle: row.task_title, phase: row.phase, updatedAt: row.updated_at, sourceRevision: row.source_revision }))
+        .map((row): RecentOutcome => ({ taskId: row.task_id, issueKey: row.issue_key, taskTitle: row.task_title, phase: row.phase as IssuePhase, updatedAt: row.updated_at, sourceRevision: row.source_revision }))
         .filter((row) => Date.parse(row.updatedAt) >= now - RECENT_OUTCOME_WINDOW_MS)
         .sort((left, right) => left.updatedAt.localeCompare(right.updatedAt) * -1 || left.taskId.localeCompare(right.taskId))
         .slice(0, RECENT_OUTCOME_LIMIT);

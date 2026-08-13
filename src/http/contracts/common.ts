@@ -48,6 +48,10 @@ export const CredentialResponseSchema = z.object({ id: z.string(), userId: z.str
 export const CredentialListResponseSchema = z.object({ credentials: z.array(CredentialResponseSchema) });
 export const AuditEventResponseSchema = z.object({ id: z.string(), actorUserId: z.string().optional(), action: z.string(), targetUserId: z.string().optional(), companyId: z.string().optional(), metadata: z.record(z.string(), z.string()), createdAt: z.string() });
 export const AuditEventListResponseSchema = z.object({ events: z.array(AuditEventResponseSchema) });
+export type AuthUserResponse = z.infer<typeof AuthUserResponseSchema>;
+export type CompanyResponse = z.infer<typeof CompanyResponseSchema>;
+export type InvitationSummaryResponse = z.infer<typeof InvitationSummaryResponseSchema>;
+export type CredentialResponse = z.infer<typeof CredentialResponseSchema>;
 
 export const AuthEnvelopeSchema = z.object({ user: AuthUserResponseSchema });
 export const AuthStatusResponseSchema = z.object({ required: z.boolean(), authenticated: z.boolean() });

@@ -1,34 +1,9 @@
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert.js";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion.js";
 import { Badge } from "../ui/badge.js";
+import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
-type LeadPlanContent = {
-  kind: "plan";
-  summary: string;
-  reproduction: string | null;
-  rootCauseAnalysis: string | null;
-  steps: Array<{ number: number; instruction: string; entryPoint?: string | null | undefined; completionCriterion?: string | null | undefined; verification: string; verificationCommands?: string[] | undefined }>;
-  compatibilityAnalysis: string;
-  operationalAnalysis: string;
-  verificationStrategy: string;
-  unresolvedTechnicalQuestions: string[];
-};
-
-type DecisionBlockerContent = {
-  kind: "decision_blocker";
-  summary: string;
-  evidence: string;
-  owner: "human";
-  question?: string;
-  askUserQuestion?: { question: string };
-  nextAction: string;
-};
-
-export type TaskLeadOutput = {
-  kind: "plan" | "decision_blocker";
-  summary: string;
-  content: LeadPlanContent | DecisionBlockerContent;
-};
+export type TaskLeadOutput = NonNullable<TaskResponse["leadOutput"]>;
 
 function detailLabel(value: string): string {
   return value.replaceAll("_", " ");
@@ -46,7 +21,8 @@ export function TaskLeadPlan({
   materialCategories: string[];
 }) {
   if (output.content.kind === "decision_blocker") {
-    const question = output.content.askUserQuestion?.question ?? output.content.question ?? output.content.summary;
+    const content = output.content;
+    const question = ("askUserQuestion" in content ? content.askUserQuestion.question : undefined) ?? ("question" in content ? content.question : undefined) ?? content.summary;
     return (
       <section data-task-lead-plan className="space-y-3">
         <div className="flex items-center justify-between gap-3">

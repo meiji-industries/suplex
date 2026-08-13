@@ -5,8 +5,9 @@ import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { readJson } from "../../lib/api.js";
 import { Alert, AlertDescription } from "../ui/alert.js";
 import { Skeleton } from "../ui/skeleton.js";
+import type { TaskDeveloperDiffResponse } from "../../../http/contracts/tasks.js";
 
-type ApiDeveloperDiff = { patch: string; branchName: string; baseSha: string; headSha: string };
+type ApiDeveloperDiff = TaskDeveloperDiffResponse;
 
 function useAppThemeType(): "light" | "dark" {
   const readTheme = (): "light" | "dark" => document.documentElement.classList.contains("dark") ? "dark" : "light";

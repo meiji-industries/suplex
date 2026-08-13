@@ -1,25 +1,23 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { accessSync, constants, realpathSync } from "node:fs";
 import { chmod, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
-import { basename, delimiter, join, relative, resolve, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 import { z } from "zod";
 
 import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
-import { AgentFailure } from "./codex-lead-errors.js";
-import { LeadOutputSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type LeadOutput, type LeadPlanningActivityInput, type LeadPlanningResult } from "./codex-lead-contracts.js";
-import { CodexLeadOutputJsonSchema } from "./codex-lead-contracts.js";
-import { FileSessionStore, type SessionStore } from "./codex-session-store.js";
-import { CodexTurnSupervisor, sanitizeCodexLine } from "./codex-turn-supervisor.js";
-import { prepareCodexTurnWrapper, type CodexTurnWrapperRequest, type PreparedCodexTurnWrapper } from "./codex-turn-wrapper.js";
-import { catalogSupportsCodexTurn } from "./codex-turn.js";
+import { AgentFailure } from "./agent-failure.js";
+import { resolveAgentProvider } from "./agent-providers/index.js";
+import type { AgentProvider, AgentTurnWrapperRequest, LeadProcessResult, LeadProcessRunner, PreparedAgentTurnWrapper } from "./agent-providers/provider.js";
+import { LeadOutputSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type LeadOutput, type LeadPlanningActivityInput, type LeadPlanningResult } from "./lead-contracts.js";
+import { CodexLeadOutputJsonSchema } from "./lead-contracts.js";
+import type { SessionStore } from "./session-store.js";
 import { ForgeDatabase } from "./database.js";
 import { CapacityManager } from "./capacity.js";
 import { redact } from "./logging.js";
-import { cleanupAgentWrapper, createAgentWrapperManifest, inspectAgentWrapper, launchAgentWrapper, readAgentWrapperManifest } from "./agent-wrapper.js";
+import { cleanupAgentWrapper } from "./agent-wrapper.js";
 import { classifyPlanMateriality, materialitySummary } from "./plan-governance.js";
 import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./temporal/issue-contracts.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
@@ -39,8 +37,8 @@ const LeadReviewResponseSchema = z.object({
   reviewResponse: z.string().min(1).max(20_000),
   result: LeadOutputSchema,
 }).strict();
-export { AskUserQuestionSchema, DecisionBlockerSchema, LeadOutputSchema, LeadPlanSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type AskUserQuestion, type PersistedLeadOutput } from "./codex-lead-contracts.js";
-export type { DecisionBlocker, LeadOutput, LeadPlan, LeadPlanningActivityInput, LeadPlanningResult, LegacyLeadPlanningResult } from "./codex-lead-contracts.js";
+export { AskUserQuestionSchema, DecisionBlockerSchema, LeadOutputSchema, LeadPlanSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type AskUserQuestion, type PersistedLeadOutput } from "./lead-contracts.js";
+export type { DecisionBlocker, LeadOutput, LeadPlan, LeadPlanningActivityInput, LeadPlanningResult, LegacyLeadPlanningResult } from "./lead-contracts.js";
 export const SupplementalReviewSchema = z.object({
   kind: z.literal("review"),
   summary: z.string().min(1).max(2_000),
@@ -58,217 +56,18 @@ const DeliveryRepairLeadOutputSchema = z.object({
 });
 export type SupplementalReview = z.infer<typeof SupplementalReviewSchema>;
 
-export interface LeadInvocation {
-  command: string;
-  args: string[];
-  cwd: string;
-  env?: NodeJS.ProcessEnv;
-  detached?: boolean;
-  durable?: { runtimeRoot: string; executionId: string; pathOverride?: string };
-  signal?: AbortSignal;
-  onStart: (pid: number, startedAt: string, inspection?: ProcessInspection) => Promise<void>;
-  onLine: (line: string) => Promise<void>;
-}
-
-export interface LeadProcessResult {
-  exitCode: number;
-  stderr: string;
-}
-
-export type LeadProcessRunner = (invocation: LeadInvocation) => Promise<LeadProcessResult>;
+export type { LeadInvocation, LeadProcessResult, LeadProcessRunner } from "./agent-providers/provider.js";
 
 export function resolveAgentCommand(command: string, executablePath = process.env.PATH ?? ""): string {
-  if (command !== "codex") return command;
-  let fallback: string | undefined;
-  for (const directory of executablePath.split(delimiter).filter(Boolean)) {
-    const candidate = join(directory, command);
-    try {
-      accessSync(candidate, constants.X_OK);
-      fallback ??= candidate;
-      if (!/^mise(?:\.exe)?$/i.test(basename(realpathSync(candidate)))) return candidate;
-    } catch { /* Continue to the next PATH entry. */ }
-  }
-  return fallback ?? command;
+  return resolveAgentProvider().resolveCommand(command, executablePath);
 }
-export { AgentFailure } from "./codex-lead-errors.js";
-export { FileSessionStore } from "./codex-session-store.js";
-export type { SessionStore } from "./codex-session-store.js";
+export { AgentFailure } from "./agent-failure.js";
+export { FileSessionStore } from "./session-store.js";
+export type { SessionStore } from "./session-store.js";
+export { runCodexProcess } from "./agent-providers/codex.js";
 
-function forgeWrapperLauncher(): { command: string; args: string[] } {
-  const entry = process.argv[1] ?? "";
-  // Unit and real-proof runners execute services inside Vitest rather than
-  // through Forge's normal CLI entry point. Keep the same hidden CLI branch
-  // in that environment so durable wrappers are still real child processes.
-  if (entry.includes("vitest")) return { command: join(process.cwd(), "node_modules", ".bin", "tsx"), args: [join(process.cwd(), "src", "cli.ts")] };
-  const args = entry.includes(`${sep}.bin${sep}`) || entry.endsWith("/tsx") || entry.endsWith("\\tsx")
-    ? process.argv.slice(1, 3)
-    : process.argv.slice(1, 2);
-  return { command: process.execPath, args };
-}
-
-async function runDurableProcess(invocation: LeadInvocation & { durable: NonNullable<LeadInvocation["durable"]> }): Promise<LeadProcessResult> {
-  const expected = {
-    runtimeRoot: invocation.durable.runtimeRoot,
-    executionId: invocation.durable.executionId,
-    command: invocation.command,
-    args: invocation.args,
-    cwd: invocation.cwd,
-    ...(invocation.durable.pathOverride ? { pathOverride: invocation.durable.pathOverride } : {}),
-  };
-  const manifestPath = join(invocation.durable.runtimeRoot, "agent-executions", invocation.durable.executionId, "manifest.json");
-  let directory;
-  let existing = false;
-  try {
-    const loaded = await readAgentWrapperManifest(manifestPath);
-    if (loaded.manifest.runtimeRoot !== expected.runtimeRoot || loaded.manifest.executionId !== expected.executionId || loaded.manifest.command !== expected.command || loaded.manifest.cwd !== expected.cwd || JSON.stringify(loaded.manifest.args) !== JSON.stringify(expected.args) || (loaded.manifest.pathOverride ?? null) !== (expected.pathOverride ?? null)) throw new AgentFailure("wrapper-identity-mismatch", "The durable Codex wrapper manifest does not match the retried execution");
-    directory = loaded.paths;
-    existing = true;
-  } catch (error) {
-    if (!(error && typeof error === "object" && "code" in error && (error as { code?: unknown }).code === "ENOENT")) throw error;
-    directory = await createAgentWrapperManifest(expected);
-  }
-  const initialInspection = await inspectAgentWrapper(directory.manifestPath);
-  if (!existing || (!initialInspection.live && !initialInspection.result && !initialInspection.state)) await launchAgentWrapper(directory.manifestPath, forgeWrapperLauncher());
-  else if (!initialInspection.live && !initialInspection.result && initialInspection.state) throw new AgentFailure("wrapper-process-missing", "The durable Codex wrapper stopped without a stored result");
-  let stdoutOffset = 0;
-  let pending = "";
-  let started = false;
-  const readOutput = async (): Promise<void> => {
-    const bytes = await readFile(directory.stdoutPath).catch(() => Buffer.alloc(0));
-    if (bytes.length <= stdoutOffset) return;
-    pending += bytes.subarray(stdoutOffset).toString("utf8");
-    stdoutOffset = bytes.length;
-    const lines = pending.split(/\r?\n/);
-    pending = lines.pop() ?? "";
-    for (const line of lines) if (line.trim()) await invocation.onLine(line);
-  };
-  for (;;) {
-    await readOutput();
-    const inspection = await inspectAgentWrapper(directory.manifestPath);
-    if (!started && inspection.state?.childPid) {
-      const identity = inspection.state.childStartIdentity?.split(":").slice(1).join(":") || new Date().toISOString();
-      await invocation.onStart(inspection.state.childPid, identity);
-      started = true;
-    }
-    if (inspection.result) {
-      if (pending.trim()) {
-        await invocation.onLine(pending);
-        pending = "";
-      }
-      const stderr = await readFile(directory.stderrPath, "utf8").catch(() => "");
-      return { exitCode: inspection.result.exitCode, stderr: redact(stderr.slice(-16_384)) as string };
-    }
-    await new Promise((resolveWait) => setTimeout(resolveWait, 100));
-  }
-}
-
-function defaultProcessRunner(invocation: LeadInvocation): Promise<LeadProcessResult> {
-  if (invocation.durable) return runDurableProcess(invocation as LeadInvocation & { durable: NonNullable<LeadInvocation["durable"]> });
-  const turnSupervisor = new CodexTurnSupervisor();
-  return new Promise((resolve, reject) => {
-    const child = spawn(invocation.command, invocation.args, { cwd: invocation.cwd, env: invocation.env, detached: invocation.detached, stdio: ["ignore", "pipe", "pipe"] });
-    const startedAt = new Date().toISOString();
-    let stderr = "";
-    let buffer = "";
-    let settled = false;
-    let hookChain = Promise.resolve();
-    const queueLine = (line: string): void => {
-      hookChain = hookChain.then(() => invocation.onLine(line));
-    };
-    const finish = (result: LeadProcessResult): void => {
-      if (settled) return;
-      settled = true;
-      resolve(result);
-    };
-    child.once("error", (error) => {
-      if (!settled) {
-        settled = true;
-        reject(error);
-      }
-    });
-    if (!child.pid) {
-      reject(new AgentFailure("process-start-failed", "Codex process could not be started"));
-      return;
-    }
-    let inspection: ProcessInspection | undefined;
-    hookChain = hookChain.then(async () => {
-      inspection = await defaultProcessController.inspect(child.pid!);
-      await invocation.onStart(child.pid!, startedAt, inspection);
-    });
-    if (invocation.signal) {
-      const cancel = async (): Promise<void> => {
-        await hookChain.catch(() => undefined);
-        if (settled) return;
-        const owned = inspection ? {
-          name: "codex-wrapper",
-          pid: child.pid!,
-          command: inspection.command,
-          startedAt,
-          processGroup: inspection.processGroup,
-          startTime: inspection.startTime,
-          executable: inspection.executable,
-          argv: inspection.argv,
-        } : undefined;
-        if (!owned || !await turnSupervisor.cancelOwnedProcess(owned, inspection)) {
-          reject(new AgentFailure("ownership_ambiguous", "Codex wrapper ownership could not be verified"));
-          return;
-        }
-      };
-      if (invocation.signal.aborted) void cancel();
-      else invocation.signal.addEventListener("abort", () => void cancel(), { once: true });
-    }
-    child.stdout.on("data", (chunk: Buffer) => {
-      buffer += chunk.toString();
-      const lines = buffer.split(/\r?\n/);
-      buffer = lines.pop() ?? "";
-      for (const line of lines) if (line.trim()) queueLine(line);
-    });
-    child.stderr.on("data", (chunk: Buffer) => {
-      stderr = `${stderr}${chunk.toString()}`.slice(-16_384);
-    });
-    child.once("close", (code) => {
-      if (buffer.trim()) queueLine(buffer);
-      void hookChain.then(() => finish({ exitCode: code ?? -1, stderr: redact(stderr) as string })).catch((error: unknown) => {
-        if (!settled) {
-          settled = true;
-          reject(error);
-        }
-      });
-    });
-  });
-}
-
-export const runCodexProcess: LeadProcessRunner = defaultProcessRunner;
-
-function safeJsonLine(line: string): string {
-  return sanitizeCodexLine(line);
-}
-
-function eventValue(line: string): { type: string | undefined; threadId: string | undefined; sessionRef: string | undefined; itemText: string | undefined } {
-  try {
-    const event = JSON.parse(line) as Record<string, unknown>;
-    const item = event.item as Record<string, unknown> | undefined;
-    return {
-      type: typeof event.type === "string" ? event.type : undefined,
-      threadId: typeof event.thread_id === "string" ? event.thread_id : typeof event.threadId === "string" ? event.threadId : undefined,
-      sessionRef: typeof event.session_ref === "string" ? event.session_ref : typeof event.sessionRef === "string" ? event.sessionRef : undefined,
-      itemText: item && item.type === "agent_message" && typeof item.text === "string" ? item.text : undefined,
-    };
-  } catch {
-    return { type: undefined, threadId: undefined, sessionRef: undefined, itemText: undefined };
-  }
-}
-
-export function parseLeadOutput(lines: string[]): LeadOutput {
-  const messages = lines.flatMap((line) => {
-    try {
-      const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
-      return event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" ? [event.item.text] : [];
-    } catch {
-      return [];
-    }
-  });
-  const text = messages.at(-1);
+export function parseLeadOutput(lines: string[], provider: AgentProvider = resolveAgentProvider()): LeadOutput {
+  const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-output", "Codex did not return a Lead result");
   const normalized = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   let parsed: unknown;
@@ -318,16 +117,8 @@ export function parseLeadOutput(lines: string[]): LeadOutput {
   return result.data;
 }
 
-function parseLeadReviewResponse(lines: string[]): z.infer<typeof LeadReviewResponseSchema> {
-  const messages = lines.flatMap((line) => {
-    try {
-      const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
-      return event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" ? [event.item.text] : [];
-    } catch {
-      return [];
-    }
-  });
-  const text = messages.at(-1);
+function parseLeadReviewResponse(lines: string[], provider: AgentProvider): z.infer<typeof LeadReviewResponseSchema> {
+  const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-review-response", "Codex did not return a Lead supplemental-review response");
   let parsed: unknown;
   try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-review-response", "Codex returned malformed Lead supplemental-review response JSON"); }
@@ -336,16 +127,8 @@ function parseLeadReviewResponse(lines: string[]): z.infer<typeof LeadReviewResp
   return result.data;
 }
 
-function parseSupplementalReview(lines: string[]): SupplementalReview {
-  const messages = lines.flatMap((line) => {
-    try {
-      const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
-      return event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" ? [event.item.text] : [];
-    } catch {
-      return [];
-    }
-  });
-  const text = messages.at(-1);
+function parseSupplementalReview(lines: string[], provider: AgentProvider): SupplementalReview {
+  const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-output", "Supplemental review did not return an opinion");
   let parsed: unknown;
   try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-output", "Supplemental review returned malformed JSON"); }
@@ -354,16 +137,8 @@ function parseSupplementalReview(lines: string[]): SupplementalReview {
   return result.data;
 }
 
-function parseDeliveryReview(lines: string[]): DeliveryReview {
-  const messages = lines.flatMap((line) => {
-    try {
-      const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
-      return event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" ? [event.item.text] : [];
-    } catch {
-      return [];
-    }
-  });
-  const text = messages.at(-1);
+function parseDeliveryReview(lines: string[], provider: AgentProvider): DeliveryReview {
+  const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-review-output", "Codex Lead did not return a delivery review");
   let parsed: unknown;
   try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-review-output", "Codex Lead returned malformed delivery review JSON"); }
@@ -375,15 +150,8 @@ function parseDeliveryReview(lines: string[]): DeliveryReview {
   return result.data;
 }
 
-function parseDeliveryRepairPlan(lines: string[]): z.infer<typeof DeliveryRepairLeadOutputSchema> {
-  const messages = lines.flatMap((line) => {
-    try {
-      const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
-      return event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" ? [event.item.text] : [];
-    } catch { return [];
-    }
-  });
-  const text = messages.at(-1);
+function parseDeliveryRepairPlan(lines: string[], provider: AgentProvider): z.infer<typeof DeliveryRepairLeadOutputSchema> {
+  const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-repair-plan-output", "Codex Lead did not return a delivery repair plan");
   let parsed: unknown;
   try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-repair-plan-output", "Codex Lead returned malformed delivery repair plan JSON"); }
@@ -392,16 +160,8 @@ function parseDeliveryRepairPlan(lines: string[]): z.infer<typeof DeliveryRepair
   return result.data;
 }
 
-function parseMergeConflictPlan(lines: string[]): import("./temporal/issue-contracts.js").MergeConflictPlan {
-  const messages = lines.flatMap((line) => {
-    try {
-      const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
-      return event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" ? [event.item.text] : [];
-    } catch {
-      return [];
-    }
-  });
-  const text = messages.at(-1);
+function parseMergeConflictPlan(lines: string[], provider: AgentProvider): import("./temporal/issue-contracts.js").MergeConflictPlan {
+  const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-merge-conflict-plan", "Codex Lead did not return a merge-conflict plan");
   let parsed: unknown;
   try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-merge-conflict-plan", "Codex Lead returned malformed merge-conflict plan JSON"); }
@@ -410,14 +170,8 @@ function parseMergeConflictPlan(lines: string[]): import("./temporal/issue-contr
   return result.data;
 }
 
-function parseCiRepairPlan(lines: string[]): import("./temporal/issue-contracts.js").CiRepairPlan {
-  const messages = lines.flatMap((line) => {
-    try {
-      const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
-      return event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" ? [event.item.text] : [];
-    } catch { return []; }
-  });
-  const text = messages.at(-1);
+function parseCiRepairPlan(lines: string[], provider: AgentProvider): import("./temporal/issue-contracts.js").CiRepairPlan {
+  const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-ci-repair-plan", "Codex Lead did not return a CI repair plan");
   let parsed: unknown;
   try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-ci-repair-plan", "Codex Lead returned malformed CI repair plan JSON"); }
@@ -469,54 +223,8 @@ async function readDeliveryGitEvidence(worktreePath: string, targetBaseSha: stri
   };
 }
 
-function futureResetTimestamp(value: unknown, now = Date.now()): string | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    const millis = value > 10_000_000_000 ? value : value * 1_000;
-    if (millis > now && millis <= now + 7 * 24 * 60 * 60 * 1_000) return new Date(millis).toISOString();
-    return undefined;
-  }
-  if (typeof value !== "string") return undefined;
-  const parsed = Date.parse(value);
-  return parsed > now && parsed <= now + 7 * 24 * 60 * 60 * 1_000 ? new Date(parsed).toISOString() : undefined;
-}
-
-function rateLimitTiming(outputLines: string[]): { retryAt?: string; retryAfterMs?: number } {
-  for (const line of outputLines) {
-    try {
-      const parsed = JSON.parse(line) as unknown;
-      if (!parsed || typeof parsed !== "object") continue;
-      const record = parsed as Record<string, unknown>;
-      const nested = record.error && typeof record.error === "object" ? record.error as Record<string, unknown> : record;
-      for (const key of ["retry_at", "reset_at", "resets_at", "retryAt", "resetAt"]) {
-        const retryAt = futureResetTimestamp(nested[key]);
-        if (retryAt) return { retryAt };
-      }
-      for (const key of ["retry_after_seconds", "retryAfterSeconds"]) {
-        const seconds = typeof nested[key] === "number" ? nested[key] : typeof nested[key] === "string" ? Number(nested[key]) : Number.NaN;
-        if (Number.isFinite(seconds) && seconds >= 0 && seconds <= 7 * 24 * 60 * 60) return { retryAfterMs: Math.round(seconds * 1_000) };
-      }
-      for (const key of ["retry_after_ms", "retryAfterMs"]) {
-        const millis = typeof nested[key] === "number" ? nested[key] : typeof nested[key] === "string" ? Number(nested[key]) : Number.NaN;
-        if (Number.isFinite(millis) && millis >= 0 && millis <= 7 * 24 * 60 * 60 * 1_000) return { retryAfterMs: Math.round(millis) };
-      }
-    } catch { /* plain-text provider diagnostics are handled by regex below */ }
-  }
-  return {};
-}
-
 export function agentProcessFailure(result: LeadProcessResult, outputLines: string[] = [], model?: string): AgentFailure {
-  const diagnosticText = `${result.stderr}\n${outputLines.join("\n")}`;
-  if (/not logged in|login required|authentication required|unauthenticated|oauth authorization required/i.test(diagnosticText)) {
-    return new AgentFailure("login-expired", "Agent provider authentication is unavailable. Sign in again, then retry.", { nonRetryable: true });
-  }
-  if (/rate[ -]?limit|too many requests|\b429\b/i.test(diagnosticText)) {
-    return new AgentFailure("rate-limited", "Agent provider rate limiting prevented this invocation from completing.", rateLimitTiming(outputLines));
-  }
-  if (/model .*not supported|unsupported model|invalid model|unknown model|model_not_found|model metadata .*not found|model .*does not exist/i.test(diagnosticText)) {
-    const configuredModel = model ? ` “${model}”` : "";
-    return new AgentFailure("model-unavailable", `The configured model${configuredModel} is unavailable for the active provider account. Select a supported model, then retry.`, { nonRetryable: true });
-  }
-  return new AgentFailure(result.exitCode === 0 ? "process-output-failed" : "process-exited", "The agent invocation did not complete.");
+  return resolveAgentProvider().classifyProcessFailure(result, outputLines, model);
 }
 
 function deliveryBlockCode(failure: AgentFailure): import("./temporal/issue-contracts.js").DeliveryOperationBlockCode {
@@ -635,6 +343,7 @@ interface DeliveryReviewContext {
 
 export interface AgentServiceOptions {
   command?: string;
+  provider?: AgentProvider;
   processRunner?: LeadProcessRunner;
   sessionStore?: SessionStore;
   processController?: ProcessController;
@@ -643,6 +352,7 @@ export interface AgentServiceOptions {
 
 export class AgentService {
   private readonly artifacts: ArtifactStore;
+  private readonly provider: AgentProvider;
   private readonly command: string;
   private readonly processRunner: LeadProcessRunner;
   private readonly sessionStore: SessionStore;
@@ -651,9 +361,10 @@ export class AgentService {
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: AgentServiceOptions = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot);
-    this.command = resolveAgentCommand(options.command ?? process.env.FORGE_CODEX_COMMAND ?? "codex");
-    this.processRunner = options.processRunner ?? defaultProcessRunner;
-    this.sessionStore = options.sessionStore ?? new FileSessionStore(config.runtimeRoot);
+    this.provider = options.provider ?? resolveAgentProvider();
+    this.command = this.provider.resolveCommand(options.command);
+    this.processRunner = options.processRunner ?? this.provider.processRunner;
+    this.sessionStore = options.sessionStore ?? this.provider.createSessionStore(config.runtimeRoot);
     this.processController = options.processController ?? defaultProcessController;
     this.now = options.now ?? (() => new Date());
   }
@@ -670,7 +381,7 @@ export class AgentService {
     const rawSessionId = await this.sessionStore.read(input.leadSessionRef);
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
     const profile = this.executionProfile(input, undefined);
-    if (profile && profile.provider !== "codex") throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for delivery repair planning");
+    if (profile && profile.provider !== this.provider.id) throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for delivery repair planning");
     const active = this.activeCapacityExecution(input, "lead");
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const evidenceLines: string[] = [];
@@ -682,9 +393,9 @@ export class AgentService {
     });
     let output: z.infer<typeof DeliveryRepairLeadOutputSchema>;
     try {
-      const result = await this.processRunner({ command: this.command, args: ["exec", "resume", ...(profile ? this.profileArgs(profile) : []), rawSessionId, "--json", "--skip-git-repo-check", this.deliveryRepairPlanPrompt(input, openFindings)], cwd: worktreePath, durable: { runtimeRoot: this.config.runtimeRoot, executionId }, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.databaseHeartbeat(executionId, "running"); } });
-      if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines, "delivery-repair-plan");
-      output = parseDeliveryRepairPlan(outputLines);
+      const result = await this.processRunner({ command: this.command, args: this.provider.buildTurnArgs({ prompt: this.deliveryRepairPlanPrompt(input, openFindings), resumeSessionId: rawSessionId, profile }), cwd: worktreePath, durable: { runtimeRoot: this.config.runtimeRoot, executionId }, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { evidenceLines.push(this.provider.sanitizeLine(line)); outputLines.push(line); await this.databaseHeartbeat(executionId, "running"); } });
+      if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, outputLines, "delivery-repair-plan");
+      output = parseDeliveryRepairPlan(outputLines, this.provider);
     } catch (error) {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("repair-plan-failed", "Codex Lead delivery repair planning failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
@@ -749,10 +460,6 @@ export class AgentService {
     return this.database.authQuery((db) => db.prepare("SELECT id, name, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority, capacity FROM forge_profiles WHERE id = ?").get(profileId) as ProfileSettings | undefined);
   }
 
-  private profileArgs(profile: Pick<ProfileSettings, "model" | "reasoningLevel" | "servicePriority">): string[] {
-    return ["--model", profile.model, "-c", `model_reasoning_effort=\"${profile.reasoningLevel}\"`, "-c", `service_tier=\"${profile.servicePriority === "priority" ? "priority" : "default"}\"`];
-  }
-
   private activeCapacityExecution(input: { capacityRequestId?: string | undefined; taskId: string; companyId: string; workflowId: string }, role: "lead" | "reviewer"): { id: string; sessionRef: string | null } | undefined {
     if (!input.capacityRequestId) return undefined;
     return this.database.authQuery((db) => db.prepare(`SELECT id, session_ref AS sessionRef
@@ -777,7 +484,7 @@ export class AgentService {
     const completed = await this.completedPlanningResult(input);
     if (completed) return completed;
     const active = this.database.authQuery((db) => db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at, wrapper_pid, wrapper_process_group, wrapper_start_identity, process_pid, process_start_identity, spool_relative_path, status_relative_path, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND role = 'lead' AND turn_key = ? AND status IN ('starting', 'running', 'cancelling', 'failed') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`) as (ActiveLeadExecution & { profile_id: string | null }) | undefined);
-    const turnSupervisor = new CodexTurnSupervisor(this.processController);
+    const turnSupervisor = this.provider.createTurnSupervisor(this.processController);
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
     const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
     const revisionNote = input.revisionNoteArtifactId && input.revisionNoteSha256
@@ -816,9 +523,9 @@ export class AgentService {
     const pinned = resumeSessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND company_id = ? AND role = 'lead' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(resumeSessionRef, input.companyId) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const persisted = pinned ?? (active?.resolved_model && active.resolved_reasoning_level && active.resolved_service_priority ? { profileId: active.profile_id, model: active.resolved_model, reasoningLevel: active.resolved_reasoning_level, servicePriority: active.resolved_service_priority } : undefined);
     let leadProfile = persisted
-      ? { id: persisted.profileId ?? input.roleProfiles.lead ?? "pinned-lead", name: "Pinned Lead", provider: "codex", model: persisted.model, reasoningLevel: persisted.reasoningLevel, servicePriority: persisted.servicePriority, capacity: 0 }
+      ? { id: persisted.profileId ?? input.roleProfiles.lead ?? "pinned-lead", name: "Pinned Lead", provider: this.provider.id, model: persisted.model, reasoningLevel: persisted.reasoningLevel, servicePriority: persisted.servicePriority, capacity: 0 }
       : profileSettings.find((profile) => profile.id === input.roleProfiles.lead);
-    if (!leadProfile || leadProfile.provider !== "codex") throw new AgentFailure("profile-unavailable", "The configured Lead profile is unavailable");
+    if (!leadProfile || leadProfile.provider !== this.provider.id) throw new AgentFailure("profile-unavailable", "The configured Lead profile is unavailable");
     const revisionRequest = input.revisionRequestId ? this.database.authQuery((db) => db.prepare(`SELECT r.disposition, r.worktree_path AS worktreePath, r.branch_name AS branchName, r.base_sha AS baseSha, r.head_sha AS headSha, r.tree_sha AS treeSha, r.exact_base_sha AS exactBaseSha, a.storage_path AS reasonPath, a.sha256 AS reasonSha
       FROM forge_plan_revision_requests r JOIN forge_artifacts a ON a.id = r.reason_artifact_id AND a.company_id = r.company_id AND a.kind = 'plan-revision-reason'
       WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { disposition: "reuse" | "new"; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null; reasonPath: string; reasonSha: string } | undefined) : undefined;
@@ -827,7 +534,7 @@ export class AgentService {
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(leadProfile.model) || !["low", "medium", "high"].includes(leadProfile.reasoningLevel) || !["standard", "priority"].includes(leadProfile.servicePriority)) {
       throw new AgentFailure("scope_configuration", "The configured Lead profile has invalid turn settings", { nonRetryable: true });
     }
-    await this.assertCodexTurnCompatibility(leadProfile);
+    await this.assertTurnCompatibility(leadProfile);
     const repositoryEvidence = await this.repositoryEvidence(repositoryPath);
     const repositoryEvidenceArtifact = await this.artifacts.put(input.companyId, "repository-evidence", { filename: `${input.taskId}-${input.revision}.json`, mimeType: "application/json", bytes: Buffer.from(repositoryEvidence, "utf8") });
     const planningManifest = {
@@ -947,7 +654,7 @@ export class AgentService {
             if (evidenceBytes > 6 * 1024 * 1024) throw new AgentFailure("evidence-too-large", "Codex evidence exceeded the local artifact limit");
             evidenceLines.push(sanitized);
             lines.push(line);
-            const event = eventValue(line);
+            const event = this.provider.parseEvent(line);
             if (event.sessionRef) {
               try { turnSupervisor.assertSessionIdentity(sessionRef, event.sessionRef); } catch { throw new AgentFailure("session_identity_conflict", "Lead session identity changed"); }
               sessionRef = event.sessionRef;
@@ -964,11 +671,11 @@ export class AgentService {
           },
         }).finally(() => { clearInterval(heartbeat); stopCancellationTracking(); });
         if (result.exitCode !== 0) {
-          lastFailure = agentProcessFailure(result, lines, leadProfile.model);
+          lastFailure = this.provider.classifyProcessFailure(result, lines, leadProfile.model);
           break;
         }
         try {
-          const output = parseLeadOutput(lines);
+          const output = parseLeadOutput(lines, this.provider);
           if (!sessionRef || !rawSessionId) throw new AgentFailure("missing-session", "Codex did not return a Lead session reference");
           const artifacts = await this.persistOutput(input, executionId, sessionRef, evidenceLines, output, { id: manifestArtifact.id, sha256: manifestArtifact.sha256 });
           await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), artifacts.evidence.id, executionId));
@@ -1004,7 +711,7 @@ export class AgentService {
   async planMergeConflict(rawInput: MergeConflictPlanActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<MergeConflictPlanActivityResult> {
     const input = rawInput;
     const profile = this.executionProfile(input, undefined);
-    if (profile && profile.provider !== "codex") throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for merge-conflict planning");
+    if (profile && profile.provider !== this.provider.id) throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for merge-conflict planning");
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256
       FROM forge_tasks t
       JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
@@ -1064,14 +771,14 @@ export class AgentService {
         onStart: async (pid, processStartedAt, inspection) => { await this.recordLeadProcessStart(executionId, pid, processStartedAt, inspection); },
         onLine: async (line) => {
           await this.recordLeadChildStart(executionId, line);
-          const event = eventValue(line);
+          const event = this.provider.parseEvent(line);
           if (event.sessionRef && event.sessionRef !== input.leadSessionRef) throw new AgentFailure("session-identity-conflict", "Merge-conflict planning returned a different Lead session identity");
-          evidenceLines.push(safeJsonLine(line));
+          evidenceLines.push(this.provider.sanitizeLine(line));
           await this.databaseHeartbeat(executionId, "running", evidenceLines.length);
         },
       });
-      if (result.exitCode !== 0) throw agentProcessFailure(result, evidenceLines);
-      const output = parseMergeConflictPlan(evidenceLines);
+      if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, evidenceLines);
+      const output = parseMergeConflictPlan(evidenceLines, this.provider);
       if (output.resolutions.some((resolution) => resolution.number === undefined || !resolution.intendedResult || !resolution.issueInvariant || !resolution.baseInvariant || !resolution.compatibilityConcern) || output.resolutions.some((resolution, index) => resolution.number !== index + 1)) throw new AgentFailure("invalid-merge-conflict-plan", "The Lead conflict plan must number each resolution and state both invariants plus compatibility concerns");
       const plannedFiles = new Set(output.resolutions.map((resolution) => resolution.file));
       const missingFiles = conflict.conflictFiles.filter((file) => !plannedFiles.has(file));
@@ -1159,10 +866,10 @@ export class AgentService {
     let failure: AgentFailure | undefined;
     try {
       for (let turn = 0; turn < 2 && !plan; turn += 1) {
-        const result = await this.processRunner({ command: this.command, args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", turn === 0 ? prompt : `${prompt}\n\nReturn one corrected schema-valid object only.`], cwd: repositoryPath, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { const event = eventValue(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair planning returned a different Lead session identity"); evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.databaseHeartbeat(executionId, "running"); } });
-        if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines);
+        const result = await this.processRunner({ command: this.command, args: this.provider.buildTurnArgs({ prompt: turn === 0 ? prompt : `${prompt}\n\nReturn one corrected schema-valid object only.`, resumeSessionId: rawSessionId }), cwd: repositoryPath, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { const event = this.provider.parseEvent(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair planning returned a different Lead session identity"); evidenceLines.push(this.provider.sanitizeLine(line)); outputLines.push(line); await this.databaseHeartbeat(executionId, "running"); } });
+        if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, outputLines);
         try {
-          plan = parseCiRepairPlan(outputLines);
+          plan = parseCiRepairPlan(outputLines, this.provider);
           const expectedFailedNames = new Set(failedChecks.map((failed) => failed.name));
           if (plan.ciRunId !== input.ciRunId || plan.ciAttemptId !== input.ciAttemptId || plan.failedHeadSha.toLowerCase() !== input.failedHeadSha.toLowerCase() || plan.failedChecks.length !== expectedFailedNames.size || new Set(plan.failedChecks.map((check) => check.name)).size !== expectedFailedNames.size || plan.failedChecks.some((check) => !expectedFailedNames.has(check.name) || check.evidenceArtifactId !== input.evidenceArtifactId)) throw new AgentFailure("ci-repair-plan-identity-mismatch", "CI repair plan is not bounded to the exact failed attempt");
         } catch (error) { failure = error instanceof AgentFailure ? error : new AgentFailure("invalid-ci-repair-plan", "CI repair plan is invalid"); if (turn === 1) throw failure; }
@@ -1348,10 +1055,10 @@ export class AgentService {
           onStart: async (pid, processStartedAt, inspection) => { await this.recordLeadProcessStart(executionId, pid, processStartedAt, inspection); },
           onLine: async (line) => {
             await this.recordLeadChildStart(executionId, line);
-            const sanitized = safeJsonLine(line);
+            const sanitized = this.provider.sanitizeLine(line);
             evidenceBytes += Buffer.byteLength(line, "utf8") + 1;
             if (evidenceBytes > 6 * 1024 * 1024) throw new AgentFailure("evidence-too-large", "Codex evidence exceeded the local artifact limit");
-            const event = eventValue(line);
+            const event = this.provider.parseEvent(line);
             if (event.sessionRef && event.sessionRef !== leadSessionRef) throw new AgentFailure("session-identity-conflict", "Lead delivery review returned a different session identity");
             if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Lead delivery review returned a different session identity");
             evidenceLines.push(sanitized);
@@ -1359,13 +1066,13 @@ export class AgentService {
             await this.databaseHeartbeat(executionId, "running", evidenceLines.length);
           },
         });
-        if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines, leadProfile.model);
+        if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, outputLines, leadProfile.model);
         evidenceLines.push(JSON.stringify({ type: "forge.review-turn-end", turn }));
       };
       let review: DeliveryReview;
       try {
         await runTurn(1, initialPrompt);
-        review = DeliveryReviewSchema.parse(parseDeliveryReview(outputLines));
+        review = DeliveryReviewSchema.parse(parseDeliveryReview(outputLines, this.provider));
       } catch (firstError) {
         const firstFailure = firstError instanceof AgentFailure ? firstError : new AgentFailure("invalid-review-output", "Lead review output did not satisfy the required format");
         if (isFinalReview) throw firstFailure;
@@ -1375,7 +1082,7 @@ export class AgentService {
         await cleanupAgentWrapper(this.config.runtimeRoot, executionId);
         const correctionPrompt = (`The prior Lead response was not machine-readable. Format-only correction; do not change the review substance or scope. Validation issue: ${firstFailure.code}: ${firstFailure.message}\nReturn only the required delivery_review JSON object described in the prior prompt.`).slice(0, 2_000);
         await runTurn(2, correctionPrompt);
-        try { review = DeliveryReviewSchema.parse(parseDeliveryReview(outputLines)); }
+        try { review = DeliveryReviewSchema.parse(parseDeliveryReview(outputLines, this.provider)); }
         catch { throw new AgentFailure("correction-exhausted", safeBlockSummary("correction-exhausted", true)); }
       }
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
@@ -1436,7 +1143,7 @@ export class AgentService {
       try {
         const manifest = JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: pinnedManifest.storagePath, sha256: pinnedManifest.sha256 })).toString("utf8")) as { profiles?: { reviewer?: ProfileSettings | null } };
         const pinnedReviewer = manifest.profiles?.reviewer;
-        if (!pinnedReviewer || pinnedReviewer.id !== profile.id || pinnedReviewer.provider !== "codex" || !pinnedReviewer.model) throw new AgentFailure("reviewer-profile-unavailable", "The reviewer settings are not present in the pinned manifest");
+        if (!pinnedReviewer || pinnedReviewer.id !== profile.id || pinnedReviewer.provider !== this.provider.id || !pinnedReviewer.model) throw new AgentFailure("reviewer-profile-unavailable", "The reviewer settings are not present in the pinned manifest");
         reviewerProfile = { id: pinnedReviewer.id, model: pinnedReviewer.model, reasoningLevel: pinnedReviewer.reasoningLevel as "low" | "medium" | "high", servicePriority: pinnedReviewer.servicePriority as "standard" | "priority" };
       } catch (error) {
         if (error instanceof AgentFailure) throw error;
@@ -1485,9 +1192,9 @@ export class AgentService {
         onStart: async (pid, processStartedAt, inspection) => { await this.recordLeadProcessStart(executionId, pid, processStartedAt, inspection); },
         onLine: async (line) => {
           await this.recordLeadChildStart(executionId, line);
-          const sanitized = safeJsonLine(line);
+          const sanitized = this.provider.sanitizeLine(line);
           lines.push(sanitized);
-          const event = eventValue(line);
+          const event = this.provider.parseEvent(line);
           if (event.sessionRef) {
             if (sessionRef && sessionRef !== event.sessionRef) throw new AgentFailure("session-identity-conflict", "Supplemental review returned a different Lead session identity");
             sessionRef = event.sessionRef;
@@ -1501,8 +1208,8 @@ export class AgentService {
           await this.databaseHeartbeat(executionId, "running", lines.length);
         },
       });
-      if (result.exitCode !== 0) throw agentProcessFailure(result, lines, reviewerProfile.model);
-      const review = parseSupplementalReview(lines);
+      if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, lines, reviewerProfile.model);
+      const review = parseSupplementalReview(lines, this.provider);
       if (!sessionRef) throw new AgentFailure("missing-session", "Supplemental review did not return a session reference");
       if (input.primaryLeadSessionRef && sessionRef === input.primaryLeadSessionRef) throw new AgentFailure("session-identity-conflict", "Supplemental reviewer must use a fresh session");
       const evidence = await this.persistEvidence(input.companyId, executionId, lines);
@@ -1558,10 +1265,10 @@ export class AgentService {
       let lastFailure: AgentFailure | undefined;
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const wrapper = await this.prepareTurnWrapper(executionId, lead, repositoryPath, schemaPath, this.consolidationPrompt(draftText, reviewText, attempt > 0), { resumeSessionRef: rawInput.leadSessionRef, sessionRef: rawInput.leadSessionRef });
-        const result = await this.processRunner({ command: wrapper.command, args: wrapper.args, cwd: repositoryPath, detached: true, ...(runtime.signal ? { signal: runtime.signal } : {}), onStart: async (pid, processStartedAt, inspection) => { await this.recordLeadProcessStart(executionId, pid, processStartedAt, inspection); }, onLine: async (line) => { await this.recordLeadChildStart(executionId, line); lines.push(safeJsonLine(line)); await this.databaseHeartbeat(executionId, "running", lines.length); } });
-        if (result.exitCode !== 0) throw agentProcessFailure(result, lines, lead.model);
+        const result = await this.processRunner({ command: wrapper.command, args: wrapper.args, cwd: repositoryPath, detached: true, ...(runtime.signal ? { signal: runtime.signal } : {}), onStart: async (pid, processStartedAt, inspection) => { await this.recordLeadProcessStart(executionId, pid, processStartedAt, inspection); }, onLine: async (line) => { await this.recordLeadChildStart(executionId, line); lines.push(this.provider.sanitizeLine(line)); await this.databaseHeartbeat(executionId, "running", lines.length); } });
+        if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, lines, lead.model);
         try {
-          const parsed = parseLeadReviewResponse(lines);
+          const parsed = parseLeadReviewResponse(lines, this.provider);
           const expectedRevision = rawInput.originalPlanSubject?.originalPlanRevision ?? rawInput.revision;
           if (parsed.originalPlanRevision !== expectedRevision || parsed.reviewArtifactId !== rawInput.supplementalReviewArtifactId) throw new AgentFailure("invalid-review-response", "Lead supplemental-review response is not pinned to the exact review");
           response = parsed;
@@ -1669,8 +1376,8 @@ export class AgentService {
     const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND role = 'lead' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(sessionRef) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const profile = pinned ? undefined : this.database.authQuery((db) => (profileId
       ? db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId)
-      : db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE provider = 'codex' ORDER BY id LIMIT 1").get()) as { id: string; provider: string; model: string; reasoningLevel: string; servicePriority: string } | undefined);
-    if (!pinned && (!profile || profile.provider !== "codex")) throw new AgentFailure("profile-unavailable", `${label} profile is unavailable`);
+      : db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE provider = ? ORDER BY id LIMIT 1").get(this.provider.id)) as { id: string; provider: string; model: string; reasoningLevel: string; servicePriority: string } | undefined);
+    if (!pinned && (!profile || profile.provider !== this.provider.id)) throw new AgentFailure("profile-unavailable", `${label} profile is unavailable`);
     const model = pinned?.model ?? profile!.model;
     const reasoningLevel = pinned?.reasoningLevel ?? profile!.reasoningLevel;
     const servicePriority = pinned?.servicePriority ?? profile!.servicePriority;
@@ -1678,42 +1385,34 @@ export class AgentService {
       throw new AgentFailure("scope_configuration", `${label} profile has invalid pinned turn settings`, { nonRetryable: true });
     }
     const settings = { id: pinned?.profileId ?? profile!.id, model, reasoningLevel: reasoningLevel as "low" | "medium" | "high", servicePriority: servicePriority as "standard" | "priority" };
-    await this.assertCodexTurnCompatibility(settings);
+    await this.assertTurnCompatibility(settings);
     return settings;
   }
 
-  private async assertCodexTurnCompatibility(settings: Pick<ProfileSettings, "model" | "reasoningLevel" | "servicePriority">): Promise<void> {
-    if (this.processRunner !== defaultProcessRunner) return;
-    try {
-      const result = await execFileAsync(this.command, ["debug", "models", "--bundled"], { timeout: 8_000, maxBuffer: 2 * 1024 * 1024 });
-      if (!catalogSupportsCodexTurn(JSON.parse(result.stdout), settings)) {
-        throw new AgentFailure("scope_configuration", "The configured Codex model, reasoning level, or service tier is unavailable", { nonRetryable: true });
-      }
-    } catch (error) {
-      if (error instanceof AgentFailure) throw error;
-      throw new AgentFailure("version_incompatible", "The installed Codex CLI model catalog could not validate the pinned Lead settings", { nonRetryable: true });
-    }
+  private async assertTurnCompatibility(settings: Pick<ProfileSettings, "model" | "reasoningLevel" | "servicePriority">): Promise<void> {
+    if (this.processRunner !== this.provider.processRunner) return;
+    await this.provider.assertTurnCompatibility(this.command, settings);
   }
 
-  private async prepareTurnWrapper(executionId: string, settings: { model: string; reasoningLevel: "low" | "medium" | "high"; servicePriority: "standard" | "priority" }, repositoryPath: string, outputSchemaPath: string, prompt: string, options: { imagePaths?: string[]; resumeSessionRef?: string; sessionRef?: string } = {}): Promise<PreparedCodexTurnWrapper> {
+  private async prepareTurnWrapper(executionId: string, settings: { model: string; reasoningLevel: "low" | "medium" | "high"; servicePriority: "standard" | "priority" }, repositoryPath: string, outputSchemaPath: string, prompt: string, options: { imagePaths?: string[]; resumeSessionRef?: string; sessionRef?: string } = {}): Promise<PreparedAgentTurnWrapper> {
     const executionRoot = join(this.config.runtimeRoot, "agent-turns", executionId);
     const promptPath = join(executionRoot, "prompt.txt");
     const spoolPath = join(executionRoot, "spool.ndjson");
     const statusPath = join(executionRoot, "status.json");
     await mkdir(executionRoot, { recursive: true, mode: 0o700 });
     await writeFile(promptPath, prompt, { encoding: "utf8", mode: 0o600 });
-    const request: CodexTurnWrapperRequest = { command: this.command, cwd: repositoryPath, outputSchemaPath, promptPath, repositoryPath, sessionStoreRoot: this.config.runtimeRoot, spoolPath, statusPath, ...settings, ...(options.imagePaths ? { imagePaths: options.imagePaths } : {}), ...(options.resumeSessionRef ? { resumeSessionRef: options.resumeSessionRef } : {}), ...(options.sessionRef ? { sessionRef: options.sessionRef } : {}) };
-    const prepared = await prepareCodexTurnWrapper(request, executionRoot);
+    const request: AgentTurnWrapperRequest = { command: this.command, cwd: repositoryPath, outputSchemaPath, promptPath, repositoryPath, sessionStoreRoot: this.config.runtimeRoot, spoolPath, statusPath, ...settings, ...(options.imagePaths ? { imagePaths: options.imagePaths } : {}), ...(options.resumeSessionRef ? { resumeSessionRef: options.resumeSessionRef } : {}), ...(options.sessionRef ? { sessionRef: options.sessionRef } : {}) };
+    const prepared = await this.provider.prepareTurnWrapper(request, executionRoot);
     await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET spool_relative_path = ?, status_relative_path = ? WHERE id = ?").run(relative(this.config.runtimeRoot, prepared.spoolPath), relative(this.config.runtimeRoot, prepared.statusPath), executionId));
     return prepared;
   }
 
   private async recordLeadProcessStart(executionId: string, pid: number, fallback: string, inspection?: ProcessInspection): Promise<void> {
-    if (this.processRunner === defaultProcessRunner && !inspection) throw new AgentFailure("ownership_ambiguous", "Codex wrapper identity could not be inspected at launch");
+    if (this.processRunner === this.provider.processRunner && !inspection) throw new AgentFailure("ownership_ambiguous", "Codex wrapper identity could not be inspected at launch");
     const identity = inspection ? `${pid}:${inspection.startTime}` : await processStartIdentity(pid, fallback);
     const processGroup = inspection?.processGroup ?? pid;
     await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', wrapper_pid = ?, wrapper_process_group = ?, wrapper_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, processGroup, identity, this.now().toISOString(), executionId));
-    if (this.processRunner !== defaultProcessRunner) {
+    if (this.processRunner !== this.provider.processRunner) {
       await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET process_start_identity = ? WHERE id = ?").run(identity, executionId));
     }
   }
@@ -1821,8 +1520,8 @@ export class AgentService {
           const persisted = await this.completedPlanningResult(input);
           if (persisted) return persisted;
           const lines = (await readFile(spoolPath, "utf8")).split(/\r?\n/).filter(Boolean);
-          const output = parseLeadOutput(lines);
-          const sessionRef = active.session_ref ?? lines.map((line) => eventValue(line).sessionRef).find((value): value is string => Boolean(value));
+          const output = parseLeadOutput(lines, this.provider);
+          const sessionRef = active.session_ref ?? lines.map((line) => this.provider.parseEvent(line).sessionRef).find((value): value is string => Boolean(value));
           if (!sessionRef) throw new AgentFailure("missing-session", "The active Lead turn completed without a session reference");
           await this.sessionStore.read(sessionRef);
           const artifacts = await this.persistOutput(input, active.id, sessionRef, lines, output);
@@ -1838,8 +1537,8 @@ export class AgentService {
       }
       if (signal?.aborted) {
         if (!wrapper) throw new AgentFailure("ownership_ambiguous", "The active Lead wrapper could not be safely cancelled");
-        const owned = { name: "codex-wrapper", pid: wrapper.pid, command: wrapper.command, startedAt: active.heartbeat_at ?? wrapper.startTime, processGroup: wrapper.processGroup, startTime: wrapper.startTime, executable: wrapper.executable, argv: wrapper.argv };
-        if (!await new CodexTurnSupervisor(this.processController).cancelOwnedProcess(owned, wrapper)) throw new AgentFailure("ownership_ambiguous", "The active Lead wrapper could not be safely cancelled");
+        const owned = { name: `${this.provider.id}-wrapper`, pid: wrapper.pid, command: wrapper.command, startedAt: active.heartbeat_at ?? wrapper.startTime, processGroup: wrapper.processGroup, startTime: wrapper.startTime, executable: wrapper.executable, argv: wrapper.argv };
+        if (!await this.provider.createTurnSupervisor(this.processController).cancelOwnedProcess(owned, wrapper)) throw new AgentFailure("ownership_ambiguous", "The active Lead wrapper could not be safely cancelled");
         const cancelledAt = this.now().toISOString();
         this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'cancelled', finished_at = ?, heartbeat_at = ?, failure_code = 'cancelled', failure_summary = ?, cancelled_at = ? WHERE id = ?").run(cancelledAt, cancelledAt, "The Codex Lead turn was cancelled.", cancelledAt, active.id));
         throw new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true });

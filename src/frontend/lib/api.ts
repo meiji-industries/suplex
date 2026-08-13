@@ -1,21 +1,8 @@
-export type ApiUser = {
-  id: string;
-  displayName: string;
-  username: string;
-  role: "admin" | "member";
-  status: "pending" | "active" | "revoked";
-  companyIds: string[];
-};
+import type { AuthUserResponse, CompanyResponse } from "../../http/contracts/common.js";
 
-export type CompanyStatus = "active" | "paused" | "archived";
-
-export type ApiCompany = {
-  id: string;
-  name: string;
-  status: CompanyStatus;
-  issueCode: string | null;
-  createdAt: string;
-};
+export type ApiUser = AuthUserResponse;
+export type ApiCompany = CompanyResponse;
+export type CompanyStatus = ApiCompany["status"];
 
 export class ApiError extends Error {
   readonly statusCode: number;

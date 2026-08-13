@@ -3,16 +3,9 @@ import { Badge } from "../ui/badge.js";
 import type { ReactElement } from "react";
 
 import { DeveloperRecoveryActions, type DeveloperRecoveryAction } from "./developer-recovery-actions.js";
+import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
-export type DeveloperRecoveryView = {
-  status: "starting" | "active" | "reconnecting" | "result_pending_claim" | "interrupted" | "ownership_ambiguous" | "cancellation_requested" | "cancelling" | "cancelled" | "failed";
-  reasonCode: string | null;
-  summary: string | null;
-  lastHeartbeatAt: string | null;
-  currentOwner: "forge" | "operator";
-  evidenceArtifactId: string | null;
-  nextAction: { command: "retry_development" | "cancel_development" | "verify_developer_ownership" | "cancel_issue"; label: string; requiresConfirmation: boolean } | null;
-};
+export type DeveloperRecoveryView = NonNullable<TaskResponse["developerRecovery"]>;
 
 const labels: Record<DeveloperRecoveryView["status"], string> = {
   starting: "Starting",

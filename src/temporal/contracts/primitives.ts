@@ -1,8 +1,8 @@
 import { z } from "zod";
 export { ISSUE_PHASES, IssuePhaseSchema } from "../../issue-phases.js";
 import { IssuePhaseSchema } from "../../issue-phases.js";
-export { LeadResumeDescriptorSchema } from "../../codex-lead-contracts.js";
-export type { LeadPlanningActivityInput, LeadPlanningResult } from "../../codex-lead-contracts.js";
+export { LeadResumeDescriptorSchema } from "../../lead-contracts.js";
+export type { LeadPlanningActivityInput, LeadPlanningResult } from "../../lead-contracts.js";
 import { durableId, exactSha } from "../../commands/inputs.js";
 import { IssueCommandSchema } from "../../commands/registry.js";
 export { durableId, exactSha } from "../../commands/inputs.js";

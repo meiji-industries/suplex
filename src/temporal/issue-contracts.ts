@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 import { DecisionIdempotencyKeySchema, PlanBlockerSubjectSchema, PlanDecisionSubjectSchema } from "../plan-governance.js";
-export { LeadResumeDescriptorSchema } from "../codex-lead-contracts.js";
-export type { LeadPlanningActivityInput, LeadPlanningResult } from "../codex-lead-contracts.js";
+export { LeadResumeDescriptorSchema } from "../lead-contracts.js";
+export type { LeadPlanningActivityInput, LeadPlanningResult } from "../lead-contracts.js";
 import { durableId } from "../commands/inputs.js";
 
 // moved to src/commands/inputs.ts — re-exported for compatibility

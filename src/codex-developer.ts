@@ -9,7 +9,9 @@ import type Database from "better-sqlite3";
 
 import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
-import { AgentFailure, agentProcessFailure, FileSessionStore, resolveAgentCommand, runCodexProcess, type LeadProcessRunner, type SessionStore } from "./codex-lead.js";
+import { AgentFailure } from "./agent-failure.js";
+import { resolveAgentProvider } from "./agent-providers/index.js";
+import type { AgentProvider, LeadProcessRunner, SessionStore } from "./agent-providers/provider.js";
 import { CapacityManager } from "./capacity.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
@@ -18,7 +20,6 @@ import { createGitCommandGuard, WorktreeManager } from "./worktrees.js";
 import { activateOwnedWorktree, reserveOwnedWorktree } from "./worktrees.js";
 import { DeveloperEvidenceBuilder } from "./developer-evidence.js";
 import { collectDeveloperGitObservation, reconcileDeveloperDelivery } from "./developer-reconciliation.js";
-import { parseCodexJsonl } from "./codex-jsonl.js";
 import { AuthorizedPlanSubjectSchema, ExecutionReceiptSchema, type ExecutionReceipt } from "./developer-contracts.js";
 import { createGithubAdapter, type GithubAdapter, type GithubMutationSurface } from "./github.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
@@ -188,6 +189,7 @@ function isSupervisorTerminalError(error: unknown): boolean {
 
 export interface DeveloperServiceOptions {
   command?: string;
+  provider?: AgentProvider;
   processRunner?: LeadProcessRunner;
   sessionStore?: SessionStore;
   worktrees?: WorktreeManager;
@@ -200,18 +202,8 @@ function safeJsonLine(line: string): string {
   try { return JSON.stringify(redact(JSON.parse(line))) ?? JSON.stringify({ type: "empty" }); } catch { return JSON.stringify({ type: "text", text: redact(line) }); }
 }
 
-function eventValue(line: string): { threadId?: string | undefined; message?: string | undefined } {
-  try {
-    const event = JSON.parse(line) as { thread_id?: unknown; threadId?: unknown; type?: unknown; item?: { type?: unknown; text?: unknown } };
-    return {
-      threadId: typeof event.thread_id === "string" ? event.thread_id : typeof event.threadId === "string" ? event.threadId : undefined,
-      message: event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" ? event.item.text : undefined,
-    };
-  } catch { return {}; }
-}
-
-function parseDeliveryReport(lines: string[]): DeveloperDeliveryReport {
-  const text = lines.map((line) => eventValue(line).message).filter((value): value is string => Boolean(value)).at(-1);
+function parseDeliveryReport(lines: string[], provider: AgentProvider): DeveloperDeliveryReport {
+  const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-delivery-report", "Codex Developer did not return a delivery report");
   let parsed: unknown;
   try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-delivery-report", "Codex Developer returned malformed delivery JSON"); }
@@ -220,8 +212,8 @@ function parseDeliveryReport(lines: string[]): DeveloperDeliveryReport {
   return report.data;
 }
 
-function parseRepairReport(lines: string[]): z.infer<typeof DeveloperRepairReportSchema> {
-  const text = lines.map((line) => eventValue(line).message).filter((value): value is string => Boolean(value)).at(-1);
+function parseRepairReport(lines: string[], provider: AgentProvider): z.infer<typeof DeveloperRepairReportSchema> {
+  const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-repair-report", "Codex Developer did not return a repair report");
   let parsed: unknown;
   try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-repair-report", "Codex Developer returned malformed repair JSON"); }
@@ -230,8 +222,8 @@ function parseRepairReport(lines: string[]): z.infer<typeof DeveloperRepairRepor
   return result.data;
 }
 
-function parseMergeConflictResolutionReport(lines: string[]): z.infer<typeof DeveloperMergeConflictResolutionReportSchema> {
-  const text = lines.map((line) => eventValue(line).message).filter((value): value is string => Boolean(value)).at(-1);
+function parseMergeConflictResolutionReport(lines: string[], provider: AgentProvider): z.infer<typeof DeveloperMergeConflictResolutionReportSchema> {
+  const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-merge-resolution-report", "Codex Developer did not return a merge-conflict resolution report");
   let parsed: unknown;
   try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-merge-resolution-report", "Codex Developer returned malformed merge-conflict resolution JSON"); }
@@ -258,6 +250,7 @@ async function processStartIdentity(pid: number, fallback: string): Promise<stri
 
 export class DeveloperService {
   private readonly artifacts: ArtifactStore;
+  private readonly provider: AgentProvider;
   private readonly command: string;
   private readonly processRunner: LeadProcessRunner;
   private readonly sessionStore: SessionStore;
@@ -268,9 +261,10 @@ export class DeveloperService {
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: DeveloperServiceOptions = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot);
-    this.command = resolveAgentCommand(options.command ?? process.env.FORGE_CODEX_COMMAND ?? "codex");
-    this.processRunner = options.processRunner ?? runCodexProcess;
-    this.sessionStore = options.sessionStore ?? new FileSessionStore(config.runtimeRoot);
+    this.provider = options.provider ?? resolveAgentProvider();
+    this.command = this.provider.resolveCommand(options.command);
+    this.processRunner = options.processRunner ?? this.provider.processRunner;
+    this.sessionStore = options.sessionStore ?? this.provider.createSessionStore(config.runtimeRoot);
     this.worktrees = options.worktrees ?? new WorktreeManager();
     this.now = options.now ?? (() => new Date());
     this.github = options.github;
@@ -287,10 +281,6 @@ export class DeveloperService {
     if (input.capacityRequestId) return this.database.authQuery((db) => db.prepare("SELECT profile_id AS id, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_capacity_requests WHERE id = ? AND (? IS NULL OR profile_id = ?)").get(input.capacityRequestId, profileId ?? null, profileId ?? null) as DeveloperProfile | undefined);
     if (!profileId) return undefined;
     return this.database.authQuery((db) => db.prepare("SELECT id, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId) as DeveloperProfile | undefined);
-  }
-
-  private profileArgs(profile: DeveloperProfile): string[] {
-    return ["--model", profile.model, "-c", `model_reasoning_effort=\"${profile.reasoningLevel}\"`, "-c", `service_tier=\"${profile.servicePriority === "priority" ? "priority" : "default"}\"`];
   }
 
   async run(rawInput: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<DeveloperExecutionResult> {
@@ -330,7 +320,7 @@ export class DeveloperService {
     const plan = JSON.parse(planText) as { kind?: unknown; steps?: Array<{ number: number; instruction: string; verification: string }> };
     if (plan.kind !== "plan" || !Array.isArray(plan.steps) || !plan.steps.length) throw new AgentFailure("plan-unavailable", "A final Lead plan is required before development");
     const profile = this.executionProfile(input, input.roleProfiles.developer);
-    if (!profile || profile.provider !== "codex") throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
+    if (!profile || profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
     const prior = input.supersedesExecutionId
       ? this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.supersedesExecutionId, input.taskId, input.companyId, input.workflowId) as PriorDeveloperExecution | undefined)
       : this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND plan_revision = ? AND status IN ('interrupted', 'cancelled', 'failed', 'blocked') ORDER BY attempt DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.planRevision) as PriorDeveloperExecution | undefined);
@@ -384,7 +374,7 @@ export class DeveloperService {
       try {
         const result = await this.processRunner({
           command: this.command,
-          args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", ...metadataDirectories.flatMap((directory) => ["--add-dir", directory]), ...this.profileArgs(profile), prompt],
+          args: this.provider.buildTurnArgs({ prompt, profile, addDirectories: metadataDirectories }),
           cwd: worktree.worktreePath,
           env: guard.env,
           detached: true,
@@ -393,7 +383,7 @@ export class DeveloperService {
             const sanitized = safeJsonLine(line);
             evidenceLines.push(sanitized);
             outputLines.push(line);
-            const event = eventValue(line);
+            const event = this.provider.parseEvent(line);
             if (event.threadId && rawSessionId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer returned a different session identity for the same durable execution");
             if (event.threadId && !sessionRef) { rawSessionId = event.threadId; sessionRef = await this.sessionStore.create(rawSessionId); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET session_ref = ?, heartbeat_at = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), executionId)); }
             await this.heartbeat(executionId);
@@ -401,10 +391,10 @@ export class DeveloperService {
         });
         if (result.exitCode !== 0) {
           evidenceLines.push(JSON.stringify({ type: "forge.process-failure", exitCode: result.exitCode, stderr: redact(result.stderr) }));
-          throw agentProcessFailure(result, outputLines, profile.model);
+          throw this.provider.classifyProcessFailure(result, outputLines, profile.model);
         }
         if (!sessionRef || !rawSessionId || sessionRef === input.leadSessionRef) throw new AgentFailure("session-identity-conflict", "Developer session must be distinct from the Lead session");
-        const report = parseDeliveryReport(evidenceLines);
+        const report = parseDeliveryReport(evidenceLines, this.provider);
         const gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
         if (gitState.branchName !== worktree.branchName) throw new AgentFailure("delivery-revision-invalid", "Developer delivery was produced on the wrong issue branch");
         const expectedNumbers = plan.steps.map((step) => step.number).sort((a, b) => a - b);
@@ -468,7 +458,7 @@ export class DeveloperService {
     const authorization = AuthorizedPlanSubjectSchema.parse(input.authorization);
     if (authorization.taskId !== input.taskId || authorization.companyId !== input.companyId || authorization.projectId !== input.projectId || authorization.workflowId !== input.workflowId || authorization.planRevision !== input.planRevision || authorization.planArtifactId !== input.leadOutputArtifactId) throw new AgentFailure("plan-authorization-mismatch", "Developer authorization coordinates do not match the requested issue plan");
     const profile = this.executionProfile(input, input.roleProfiles.developer);
-    if (!profile || profile.provider !== "codex") throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
+    if (!profile || profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
     const executionId = input.developerTurnExecutionId ?? input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
     const stored = this.storedAuthorizedResult(executionId);
@@ -503,14 +493,14 @@ export class DeveloperService {
     try {
       const result = await this.processRunner({
         command: this.command,
-        args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", ...this.profileArgs(profile), ...staged.imagePaths.flatMap((path) => ["--image", path]), prompt],
+        args: this.provider.buildTurnArgs({ prompt, profile, imagePaths: staged.imagePaths }),
         cwd: activeWorktree.worktreePath,
         env: guard.env,
         detached: true,
         onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); },
-        onLine: async (line) => { outputLines.push(line); const event = eventValue(line); if (event.threadId && rawSessionId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer returned a different session identity"); if (event.threadId && !rawSessionId) { rawSessionId = event.threadId; sessionRef = await this.sessionStore.create(rawSessionId); } await this.heartbeat(executionId); },
+        onLine: async (line) => { outputLines.push(line); const event = this.provider.parseEvent(line); if (event.threadId && rawSessionId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer returned a different session identity"); if (event.threadId && !rawSessionId) { rawSessionId = event.threadId; sessionRef = await this.sessionStore.create(rawSessionId); } await this.heartbeat(executionId); },
       });
-      const parsed = parseCodexJsonl(outputLines, { executionId, attempt, worktreePath: activeWorktree.worktreePath, authorizedStepNumbers: evidence.manifest.verificationCommands.map((step) => step.stepNumber) });
+      const parsed = this.provider.parseExecutionTranscript(outputLines, { executionId, attempt, worktreePath: activeWorktree.worktreePath, authorizedStepNumbers: evidence.manifest.verificationCommands.map((step) => step.stepNumber) });
       if (parsed.threadId && rawSessionId && parsed.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer returned conflicting session identities");
       rawSessionId ??= parsed.threadId;
       sessionRef ??= rawSessionId ? await this.sessionStore.create(rawSessionId) : undefined;
@@ -568,7 +558,7 @@ export class DeveloperService {
     }
     const plan = (await this.artifacts.read({ companyId: input.companyId, storagePath: planRow.storage_path, sha256: planRow.sha256 })).toString("utf8");
     const profile = this.executionProfile(input);
-    if (profile && profile.provider !== "codex") throw new AgentFailure("developer-profile-unavailable", "Developer profile is unavailable for merge-conflict resolution");
+    if (profile && profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer profile is unavailable for merge-conflict resolution");
     const rawSessionId = await this.sessionStore.read(input.developerSessionRef);
     const executionId = input.developerTurnExecutionId ?? `developer_${randomBytes(12).toString("hex")}`;
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
@@ -587,20 +577,20 @@ export class DeveloperService {
     try {
       const result = await this.processRunner({
         command: this.command,
-        args: ["exec", "resume", ...(profile ? this.profileArgs(profile) : []), rawSessionId, "--json", "--skip-git-repo-check", this.mergeConflictResolutionPrompt(plan, input, conflict)],
+        args: this.provider.buildTurnArgs({ prompt: this.mergeConflictResolutionPrompt(plan, input, conflict), resumeSessionId: rawSessionId, profile }),
         cwd: input.worktreePath,
         env: guard.env,
         detached: true,
         onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); },
         onLine: async (line) => {
-          const event = eventValue(line);
+          const event = this.provider.parseEvent(line);
           if (event.threadId && event.threadId !== expectedRawSessionId) throw new AgentFailure("session-identity-conflict", "Merge-conflict resolution returned a different Developer session identity");
           evidenceLines.push(safeJsonLine(line));
           await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET heartbeat_at = ? WHERE id = ?").run(this.now().toISOString(), executionId));
         },
       });
-      if (result.exitCode !== 0) throw agentProcessFailure(result, evidenceLines);
-      const report = parseMergeConflictResolutionReport(evidenceLines);
+      if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, evidenceLines);
+      const report = parseMergeConflictResolutionReport(evidenceLines, this.provider);
       const missingFiles = conflict.conflictFiles.filter((file) => !report.resolvedFiles.includes(file));
       if (missingFiles.length || report.blocker !== null) throw new AgentFailure("merge-resolution-incomplete", missingFiles.length ? `The Developer did not resolve: ${missingFiles.join(", ")}` : report.blocker ?? "Merge-conflict resolution is blocked");
       const gitState = await this.worktrees.inspectDelivery(input.worktreePath);
@@ -685,7 +675,7 @@ export class DeveloperService {
     if (!prior || !review) throw new AgentFailure("repair-identity-mismatch", "Developer repair coordinates do not match the immutable review subject");
     const priorSubject = DeliveryReviewSubjectSchema.parse({ planRevision: review.plan_revision, targetBaseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, developerExecutionId: prior.id, deliveryArtifactId: prior.delivery_artifact_id, developerEvidenceArtifactId: prior.evidence_artifact_id, leadSessionRef: review.session_ref, developerSessionRef: prior.session_ref });
     const profile = this.executionProfile(input);
-    if (profile && profile.provider !== "codex") throw new AgentFailure("developer-profile-unavailable", "Developer profile is unavailable for repair");
+    if (profile && profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer profile is unavailable for repair");
     const executionId = input.developerTurnExecutionId ?? `developer_${randomBytes(12).toString("hex")}`;
     const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; planRevision: number; attempt: number; status: string; branchName: string; worktreePath: string; targetBaseSha: string; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
@@ -728,7 +718,7 @@ export class DeveloperService {
       try {
         const result = await this.processRunner({
           command: this.command,
-          args: ["exec", "resume", ...(profile ? this.profileArgs(profile) : []), rawSessionId, "--json", "--skip-git-repo-check", repairPrompt],
+          args: this.provider.buildTurnArgs({ prompt: repairPrompt, resumeSessionId: rawSessionId, profile }),
           cwd: worktreePath,
           env: guard.env,
           detached: true,
@@ -739,16 +729,16 @@ export class DeveloperService {
             if (evidenceBytes > 6 * 1024 * 1024) throw new AgentFailure("evidence-too-large", "Developer repair evidence exceeded the local artifact limit");
             evidenceLines.push(sanitized);
             outputLines.push(line);
-            const event = eventValue(line);
+            const event = this.provider.parseEvent(line);
             if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer repair returned a different session identity");
             await this.heartbeat(executionId);
           },
         });
         if (result.exitCode !== 0) {
           evidenceLines.push(JSON.stringify({ type: "forge.process-failure", exitCode: result.exitCode, stderr: redact(result.stderr) }));
-          throw agentProcessFailure(result, outputLines);
+          throw this.provider.classifyProcessFailure(result, outputLines);
         }
-        const report = parseRepairReport(outputLines);
+        const report = parseRepairReport(outputLines, this.provider);
         if (report.addressedFindingIds.some((id) => !input.blockingFindings.some((finding) => finding.findingId === id))) throw new AgentFailure("repair-scope-violation", "Developer repair reported a finding outside the bounded blocking set");
         const openBlockingIds = input.blockingFindings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open").map((finding) => finding.findingId);
         if (report.blocker === null && openBlockingIds.some((id) => !report.addressedFindingIds.includes(id))) throw new AgentFailure("repair-incomplete", "Developer repair did not address every open blocking finding");
@@ -875,9 +865,9 @@ export class DeveloperService {
     const evidenceLines = [JSON.stringify({ type: "forge.ci-repair-context", ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, failedHeadSha: input.failedHeadSha, plan: redact(planText), evidence: redact(evidenceText) })];
     const outputLines: string[] = [];
     try {
-      const result = await this.processRunner({ command: this.command, args: ["exec", "resume", rawSessionId, "--json", "--skip-git-repo-check", this.ciRepairPrompt(planText, { branchName: input.branchName, worktreePath, priorCommit: input.priorCommit, priorTree: input.priorTree })], cwd: worktreePath, env: guard.env, detached: true, onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); }, onLine: async (line) => { const event = eventValue(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair returned a different Developer session identity"); evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.heartbeat(executionId); } });
-      if (result.exitCode !== 0) throw agentProcessFailure(result, outputLines);
-      const report = parseRepairReport(outputLines);
+      const result = await this.processRunner({ command: this.command, args: this.provider.buildTurnArgs({ prompt: this.ciRepairPrompt(planText, { branchName: input.branchName, worktreePath, priorCommit: input.priorCommit, priorTree: input.priorTree }), resumeSessionId: rawSessionId }), cwd: worktreePath, env: guard.env, detached: true, onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); }, onLine: async (line) => { const event = this.provider.parseEvent(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair returned a different Developer session identity"); evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.heartbeat(executionId); } });
+      if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, outputLines);
+      const report = parseRepairReport(outputLines, this.provider);
       const gitState = await this.worktrees.inspectDelivery(worktreePath);
       const parent = (await execFileAsync("git", ["rev-parse", "HEAD^"], { cwd: worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
       if (gitState.branchName !== input.branchName || gitState.headSha.toLowerCase() === input.priorCommit.toLowerCase() || gitState.treeSha.toLowerCase() === input.priorTree.toLowerCase() || parent.toLowerCase() !== input.priorCommit.toLowerCase() || gitState.dirtyState !== "clean" || report.resultCommit.toLowerCase() !== gitState.headSha.toLowerCase() || report.resultTree.toLowerCase() !== gitState.treeSha.toLowerCase()) throw new AgentFailure("ci-repair-revision-invalid", "CI repair must create one clean ordinary child commit");

@@ -4,6 +4,133 @@ Forge is a local-first, Tailscale-only software-delivery control plane.
 
 The health surface uses a source-owned shadcn/Rhea-style component layer with Base UI primitives, Tailwind v4 design tokens, and a dense desktop application layout inspired by Linear and Paperclip.
 
+## Architecture
+
+### Processes and state
+
+Forge runs as two locally supervised Node processes that share one SQLite database and one on-disk artifact store, while Temporal owns durable orchestration state. `forge start` spawns both, records their verified identities in `.forge/data/runtime/owned-processes.json`, and optionally fronts the server with Tailscale Serve.
+
+```text
+              tailnet (Tailscale Serve HTTPS, or direct Tailscale HTTP)
+                                      │
+                                      ▼
+          ┌─────────────────────────────────────────────────┐
+          │ forge server (src/server.ts)                    │
+          │ Fastify API, passkey auth, React UI, /health    │
+          └───────┬─────────────────────────────┬───────────┘
+     reads read models,             starts workflows, sends
+     serves evidence                updates, reads queries
+                  │                             │
+                  ▼                             ▼
+          ┌───────────────┐          ┌──────────────────────────┐
+          │ SQLite (WAL)  │          │ Temporal                 │
+          │ projections,  │          │ Cloud in production,     │
+          │ capacity,     │          │ pinned local dev server  │
+          │ leases, auth  │          └────────────▲─────────────┘
+          └───────▲───────┘                       │ workflow + activity tasks
+                  │ activities write              │
+          ┌───────┴───────┐          ┌────────────┴─────────────┐
+          │ artifact store│◀─────────│ forge worker             │
+          │ briefs, plans,│  writes  │ (src/worker.ts)          │
+          │ evidence      │          │ issueWorkflow, activities│
+          └───────────────┘          └───┬──────────┬───────┬───┘
+                                         │          │       │
+                                   Codex CLI   developer   gh CLI
+                                   (Lead)      supervisor  (GitHub)
+                                               + worktrees
+```
+
+Content stays out of Temporal history by design: workflow payloads carry only small IDs, hashes, summaries, and artifact references, and a payload boundary interceptor (`src/temporal/payload-boundary-interceptors.ts`) enforces the size limit. Plans, reviews, transcripts, briefs, and delivery evidence live as immutable, hash-verified files in the company-scoped artifact store; provider credentials (GitHub CLI, Codex) are never stored anywhere — Forge uses the host's existing local sessions.
+
+### The durable issue workflow and its read models
+
+Each issue is one long-running Temporal `issueWorkflow` (`src/temporal/workflows.ts`). Every human action in the UI — start planning, approve a plan, review a delivery, accept the result — is a Temporal update on that workflow; the workflow validates it against the currently allowed commands, advances its state revision, and projects the new state back into SQLite through the `projectIssueState` activity. The kanban board, issue timeline, and “Action required” attention badges are read models derived from those projections; they are never edited directly, follow changes live over server-sent events, and can be rebuilt from Temporal history (for example during restore). Attention is workflow-authored: the workflow raises a typed blocker with a hash-verified evidence pointer, and the projection layer only derives the ledger row from it.
+
+```text
+  browser action                Temporal update            activity
+  POST /tasks/<id>/… ─────────▶ issueWorkflow ────────────▶ projectIssueState
+                                revision n+1                     │
+        ▲                                                        ▼
+        │              forge_issue_projections · forge_issue_timeline
+        │              forge_attention_items (action-required ledger)
+        └────────────────── read by the API and UI ◀─────────────┘
+```
+
+### Issue lifecycle
+
+An issue moves through explicit phases (`src/issue-phases.ts`); the workflow exposes only the legal commands for the current phase, so the board renders buttons instead of free-form transitions. The diagram shows the main path; short hand-off phases such as `ready_for_development`, `delivery_ready`, `delivery_reviewed`, and `ready_reconciliation` are elided.
+
+```text
+  backlog
+     │ member starts planning
+     ▼
+  planning ──▶ supplemental_review ──▶ plan_consolidation
+     │           (optional, one independent review per plan revision)
+     ▼
+  approval ──── material plans wait for an auditable member decision;
+     │          routine plans proceed automatically
+     ▼
+  development ◀───────────────────────────────┐
+     │ Developer delivers an exact commit     │ Developer executes the
+     ▼                                        │ Lead-authored repair plan
+  reviewing_delivery ──▶ repair_required ─────┘
+     │ Lead approves the exact revision
+     ▼
+  releasing ──▶ ci_waiting ──▶ final_review ──▶ accepted ──▶ done
+     ▲               │                                 (authoritative external
+     │               ▼                                  GitHub merge event)
+  merge_conflict_*                ci_repair_*
+  (target base advanced: forward  (Lead plans the fix, Developer
+   merge with a Lead-planned      repairs, the full verification
+   conflict resolution)           matrix reruns)
+```
+
+Blockers are typed and owned: `blocked` and `delivery_blocked` name who must act (a member decision, a capacity retry, a provider sign-in) and surface as attention items. `cancelled` and `failed` are terminal; the Continue action creates a successor execution with a fresh Lead session and worktree while the original remains immutable history.
+
+### Lead and Developer
+
+Judgment and execution are separated. The Lead owns one resumable Codex session per issue for planning, delivery review, repair planning, and merge-conflict planning; the Developer owns a separate session that implements the exact final plan. A Developer that finds repository evidence contradicting the plan stops and returns it to the Lead rather than improvising, and it never publishes branches or calls providers — release automation and `gh` operations run deterministically in the worker.
+
+Developer turns are isolated and crash-safe. The activity reserves a lease in SQLite, then hands the turn to a detached supervisor process, so a worker restart cannot orphan or duplicate an execution:
+
+```text
+  issueWorkflow (Temporal)
+     │ activity: runDeveloperExecutionSupervised
+     ▼
+  execution lease (SQLite) ──▶ detached developer supervisor process
+  token hash, worktree            │ control socket + heartbeats
+  identity, heartbeats            ▼
+                              Codex developer turn inside the issue worktree
+                              ~/forge/worktrees/<owner>/<repository>/…
+                                  │
+                                  ▼
+                              hash-verified result file
+                                  │ validated and claimed exactly once
+                                  ▼
+                  workflow records the exact commit + tree (delivery_ready)
+```
+
+Every issue gets its own Git worktree and branch; parallel issues on the same repository never share a working directory. When the target base advances, Forge forward-merges at explicit gates instead of rebasing, and a conflict blocks for a Lead-planned resolution.
+
+### Capacity lanes
+
+Agent turns are admitted through configurable capacity lanes rather than run unbounded. A lane admits independent issues in parallel but never concurrent turns for the same issue-role session or worktree; the queue is FIFO and shared across companies. Provider rate limits retry durably; an exhausted policy becomes an action-required blocker instead of a silent fallback.
+
+```text
+  turn needed ──▶ requestCapacity ──▶ lane queue (FIFO)
+                                          │ slot free
+                                          ▼
+                                     active turn ──▶ finalize
+                                          │ provider rate limit
+                                          ▼
+                              rate_limited (durable retry)
+                                          │ policy exhausted
+                                          ▼
+                              action-required blocker (retry or cancel)
+```
+
+The ubiquitous language behind these concepts — issue worktree, capacity lane, material plan decision, supplemental review, direct release, and the rest — is defined in `CONTEXT.md`, and the decisions behind capacity lanes, the owner-controlled pilot, provider polling, and passkey login are recorded in `docs/adr/`.
+
 ## Develop locally
 
 ```sh

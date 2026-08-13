@@ -10,6 +10,7 @@ import { ApplicationFailure } from "@temporalio/activity";
 import { ArtifactStore } from "../src/artifacts.js";
 import { CapacityManager } from "../src/capacity.js";
 import { AgentFailure, AgentService, LeadOutputSchema, parseLeadOutput, resolveAgentCommand, runCodexProcess, type LeadProcessRunner, type SessionStore } from "../src/codex-lead.js";
+import { CodexLeadOutputJsonSchema } from "../src/codex-lead-contracts.js";
 import { DeveloperService } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase, ProjectionIntegrityFailure } from "../src/database.js";
@@ -205,6 +206,24 @@ test("Lead output schema rejects unresolved technical questions and malformed bl
 test("Lead output parsing rejects unknown null fields", () => {
   const output = { kind: "plan", summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect", entryPoint: null, completionCriterion: "Inspected", verification: "Check" }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], unexpected: null };
   expect(() => parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })])).toThrow(/required schema/);
+});
+
+test("Codex Lead schema uses provider-compatible artifact step mappings", () => {
+  expect(JSON.stringify(CodexLeadOutputJsonSchema)).not.toContain("propertyNames");
+  const developerContextProperty = CodexLeadOutputJsonSchema.properties.developerContext as { anyOf?: Array<{ properties?: Record<string, { type?: string }> }> };
+  const developerContext = developerContextProperty.anyOf?.find((candidate) => candidate.properties);
+  expect(developerContext?.properties?.artifactStepNumbers?.type).toBe("array");
+});
+
+test("Lead output parsing canonicalizes provider artifact step mappings", () => {
+  const output = { kind: "plan", summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect", entryPoint: null, completionCriterion: "Inspected", verification: "Check", verificationCommands: [] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], preservedWorktreeCompatibility: null, affectedPaths: ["README.md"], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: ["artifact_1"], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: [{ artifactIdOrPath: "artifact_1", stepNumbers: [1] }] } };
+  const parsed = parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })]);
+  expect(parsed.kind === "plan" && parsed.developerContext.artifactStepNumbers).toEqual({ artifact_1: [1] });
+});
+
+test("Lead output parsing removes inactive plan placeholders from blockers", () => {
+  const output = { kind: "decision_blocker", category: "human_decision", summary: "A choice is required", evidence: "The brief does not specify the intended text", owner: "human", question: "What text should change?", nextAction: "Provide the intended edit", resumePhase: "planning", reproduction: "Inactive provider field", rootCauseAnalysis: null, steps: null, compatibilityAnalysis: null, operationalAnalysis: null, verificationStrategy: null, unresolvedTechnicalQuestions: null, materialCategories: null, preservedWorktreeCompatibility: null, affectedPaths: ["README.md"], materiality: null, developerContext: null };
+  expect(parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })])).toMatchObject({ kind: "decision_blocker", owner: "human" });
 });
 
 test.each(["live", "exited"] as const)("Lead planning finalizes stored completion when the wrapper is %s", async (wrapperState) => {

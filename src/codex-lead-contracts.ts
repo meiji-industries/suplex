@@ -125,7 +125,23 @@ for (const variant of leadOutputVariants) {
 }
 const leadOutputProperties = Object.fromEntries([...leadOutputPropertyEntries.entries()].map(([name, schema]) => {
   if (name === "kind") return [name, { type: "string", enum: ["plan", "decision_blocker"] }];
-  const schemaObject = schema as Record<string, unknown>;
+  const schemaObject = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
+  if (name === "developerContext") {
+    const contextSchema = schemaObject as { properties?: Record<string, unknown> };
+    if (contextSchema.properties) contextSchema.properties.artifactStepNumbers = {
+      type: "array",
+      maxItems: 128,
+      items: {
+        type: "object",
+        properties: {
+          artifactIdOrPath: { type: "string", minLength: 1, maxLength: 1_000 },
+          stepNumbers: { type: "array", maxItems: 64, items: { type: "integer", minimum: 1 } },
+        },
+        required: ["artifactIdOrPath", "stepNumbers"],
+        additionalProperties: false,
+      },
+    };
+  }
   return [name, sharedLeadOutputProperties.has(name) ? schemaObject : { anyOf: [schemaObject, { type: "null" }] }];
 }));
 // Codex structured outputs requires a plain object at the root and rejects a

@@ -33,7 +33,8 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
     if (!ctx.exactPlanAuthorityEnabled && ctx.captureInitialProjectionState) await condition(() => ctx.initialProjectionComplete);
     if (ctx.initialProjectionBarrierEnabled) await ctx.initialProjection;
     assertPayloadWithinLimit("startPlanning command", rawInput);
-    StartPlanningInputSchema.parse(rawInput);
+    const input = StartPlanningInputSchema.parse(rawInput);
+    if (ctx.state.revision !== input.expectedRevision || !ctx.state.allowedCommands.includes("start_planning")) throw new Error("Stale workflow revision");
     const next = IssueWorkflowStateSchema.parse({
       ...ctx.state,
       phase: "planning",

@@ -278,16 +278,33 @@ export function parseLeadOutput(lines: string[]): LeadOutput {
     throw new AgentFailure("malformed-output", "Codex returned malformed Lead JSON");
   }
   const providerObject = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : undefined;
+  if (providerObject?.kind === "plan") {
+    const developerContext = providerObject.developerContext;
+    if (developerContext && typeof developerContext === "object" && !Array.isArray(developerContext)) {
+      const context = developerContext as Record<string, unknown>;
+      if (Array.isArray(context.artifactStepNumbers)) {
+        const mappings = new Map<string, unknown>();
+        let validShape = true;
+        for (const entry of context.artifactStepNumbers) {
+          if (!entry || typeof entry !== "object" || Array.isArray(entry)) { validShape = false; break; }
+          const mapping = entry as Record<string, unknown>;
+          if (typeof mapping.artifactIdOrPath !== "string" || mappings.has(mapping.artifactIdOrPath)) { validShape = false; break; }
+          mappings.set(mapping.artifactIdOrPath, mapping.stepNumbers);
+        }
+        if (validShape) providerObject.developerContext = { ...context, artifactStepNumbers: Object.fromEntries(mappings) };
+      }
+    }
+  }
   // The provider-compatible closed schema requires inactive discriminated
-  // fields to be explicit nulls. Remove only those declared placeholders;
-  // canonical Zod validation still rejects every omitted or malformed active
-  // field and every unknown key.
+  // fields to be present even when the discriminator makes them inactive.
+  // Remove that declared inactive set before canonical Zod validation, which
+  // still rejects every omitted or malformed active field and every unknown key.
   const inactiveKeys = providerObject?.kind === "plan"
     ? new Set(["category", "evidence", "owner", "question", "nextAction", "resumePhase"])
     : providerObject?.kind === "decision_blocker"
-      ? new Set(["reproduction", "rootCauseAnalysis", "steps", "compatibilityAnalysis", "operationalAnalysis", "verificationStrategy", "unresolvedTechnicalQuestions", "materialCategories"])
+      ? new Set(["reproduction", "rootCauseAnalysis", "steps", "compatibilityAnalysis", "operationalAnalysis", "verificationStrategy", "unresolvedTechnicalQuestions", "materialCategories", "preservedWorktreeCompatibility", "affectedPaths", "materiality", "developerContext"])
       : undefined;
-  const canonicalInput = providerObject ? Object.fromEntries(Object.entries(providerObject).filter(([key, value]) => value !== null || !inactiveKeys?.has(key))) : parsed;
+  const canonicalInput = providerObject ? Object.fromEntries(Object.entries(providerObject).filter(([key]) => !inactiveKeys?.has(key))) : parsed;
   const result = LeadOutputSchema.safeParse(canonicalInput);
   if (!result.success) throw new AgentFailure("invalid-output-schema", "Codex returned a Lead result that does not satisfy the required schema");
   return result.data;
@@ -527,7 +544,7 @@ async function taskScopedPath(root: string, candidate: string): Promise<string> 
   const absoluteRoot = await realpath(root);
   const absoluteCandidate = await realpath(resolve(candidate));
   const relativePath = relative(absoluteRoot, absoluteCandidate);
-  if (relativePath.startsWith(`..${sep}`) || relativePath === "..") throw new AgentFailure("unsafe-working-directory", "Lead working directory is outside the configured repository root");
+  if (relativePath.startsWith(`..${sep}`) || relativePath === "..") throw new AgentFailure("unsafe-working-directory", "Lead working directory is outside the configured repository root", { nonRetryable: true });
   return absoluteCandidate;
 }
 
@@ -1613,7 +1630,7 @@ export class AgentService {
     const instruction = correction
       ? "Your previous response did not satisfy the exact envelope or pinned identifiers. Continue the same Lead session and return one corrected JSON object only."
       : "Reconsider the complete Lead plan in this same session after an independent supplemental review.";
-    return `${instruction} Return exactly this strict envelope: {"version":1,"originalPlanRevision":0,"reviewArtifactId":"review_artifact_id","reviewResponse":"Describe how each concrete review concern was addressed.","result":{"kind":"plan","summary":"...","reproduction":null,"rootCauseAnalysis":null,"steps":[{"number":1,"instruction":"...","verification":"...","verificationCommands":[]}],"compatibilityAnalysis":"...","operationalAnalysis":"...","verificationStrategy":"...","unresolvedTechnicalQuestions":[],"materialCategories":[],"affectedPaths":["path/to/affected/file"],"materiality":[{"category":"user_visible_behavior","rationale":"...","evidenceRefs":["step:1"]}],"developerContext":{"includeTaskBrief":false,"evidenceArtifactIds":[],"imageArtifactIds":[],"repositoryInstructionPaths":[],"artifactStepNumbers":{}}}}. The result may instead be a decision_blocker matching its required schema. Use the exact originalPlanRevision and reviewArtifactId supplied by Forge. Preserve correct steps, address concrete review concerns, and do not leave unresolved technical questions. Every step must declare exact verificationCommands. developerContext is the complete Developer evidence allowlist. Do not include markdown fences or commentary.\n\nDraft plan:\n${draft}\n\nSupplemental review:\n${review}`;
+    return `${instruction} Return exactly this strict envelope: {"version":1,"originalPlanRevision":0,"reviewArtifactId":"review_artifact_id","reviewResponse":"Describe how each concrete review concern was addressed.","result":{"kind":"plan","summary":"...","reproduction":null,"rootCauseAnalysis":null,"steps":[{"number":1,"instruction":"...","verification":"...","verificationCommands":[]}],"compatibilityAnalysis":"...","operationalAnalysis":"...","verificationStrategy":"...","unresolvedTechnicalQuestions":[],"materialCategories":[],"affectedPaths":["path/to/affected/file"],"materiality":[{"category":"user_visible_behavior","rationale":"...","evidenceRefs":["step:1"]}],"developerContext":{"includeTaskBrief":false,"evidenceArtifactIds":[],"imageArtifactIds":[],"repositoryInstructionPaths":[],"artifactStepNumbers":[]}}}. The result may instead be a decision_blocker matching its required schema. Use the exact originalPlanRevision and reviewArtifactId supplied by Forge. Preserve correct steps, address concrete review concerns, and do not leave unresolved technical questions. Every step must declare exact verificationCommands. developerContext is the complete Developer evidence allowlist; each artifactStepNumbers entry has artifactIdOrPath and stepNumbers. Do not include markdown fences or commentary.\n\nDraft plan:\n${draft}\n\nSupplemental review:\n${review}`;
   }
 
   private async consolidationRepositoryPath(input: ConsolidateLeadPlanActivityInput): Promise<string> {
@@ -1722,7 +1739,7 @@ export class AgentService {
   }
 
   private initialPrompt(title: string, brief: string, revision: string, profiles: ProfileSettings[], repositoryEvidence: string, revisionContext?: Record<string, unknown>): string {
-    return `You are Forge's Lead planner. Work read-only in the provided repository. Do not modify files, reveal credentials, or invent provider facts.\n\nReturn exactly one JSON object matching one of these shapes:\n{"kind":"plan","summary":"...","reproduction":null,"rootCauseAnalysis":null,"steps":[{"number":1,"instruction":"...","entryPoint":null,"completionCriterion":"...","verification":"...","verificationCommands":["exact command"]}],"compatibilityAnalysis":"...","operationalAnalysis":"...","verificationStrategy":"...","unresolvedTechnicalQuestions":[],"materialCategories":[],"affectedPaths":["path/to/affected/file"],"materiality":[{"category":"user_visible_behavior","rationale":"...","evidenceRefs":["step:1"]}],"preservedWorktreeCompatibility":null,"developerContext":{"includeTaskBrief":false,"evidenceArtifactIds":[],"imageArtifactIds":[],"repositoryInstructionPaths":[],"artifactStepNumbers":{}}}\n{"kind":"decision_blocker","category":"human_decision","summary":"...","evidence":"...","owner":"human","question":"...","nextAction":"...","resumePhase":"planning"}\nUse decision_blocker only for one unresolved human/business choice. A plan must have numbered prescriptive steps with exact verificationCommands, compatibility and operational analysis, a complete verification strategy, zero unresolved technical questions, a non-empty affectedPaths list naming repository-relative paths, materiality evidence whose categories and references are grounded in those paths or numbered steps, and developerContext as the complete Developer evidence allowlist. materialCategories must contain only categories directly implicated: architecture_dependencies, schema_data_migration, security_permissions, external_integration, production_operation, user_visible_behavior. For a revised reuse request, set preservedWorktreeCompatibility to true only when the preserved coordinates remain safe for the plan; otherwise set it to false and explain why in compatibilityAnalysis. Ordinary and new-worktree plans set it to null.\n\nTask: ${title}\nBrief:\n${brief}\n\nPinned Project revision:\n${revision}\n\nRole profile settings:\n${JSON.stringify(profiles)}\n\nRepository read evidence:\n${repositoryEvidence}${revisionContext ? `\n\nRevision request:\n${JSON.stringify(revisionContext)}` : ""}`;
+    return `You are Forge's Lead planner. Work read-only in the provided repository. Do not modify files, reveal credentials, or invent provider facts.\n\nReturn exactly one JSON object matching one of these shapes:\n{"kind":"plan","summary":"...","reproduction":null,"rootCauseAnalysis":null,"steps":[{"number":1,"instruction":"...","entryPoint":null,"completionCriterion":"...","verification":"...","verificationCommands":["exact command"]}],"compatibilityAnalysis":"...","operationalAnalysis":"...","verificationStrategy":"...","unresolvedTechnicalQuestions":[],"materialCategories":[],"affectedPaths":["path/to/affected/file"],"materiality":[{"category":"user_visible_behavior","rationale":"...","evidenceRefs":["step:1"]}],"preservedWorktreeCompatibility":null,"developerContext":{"includeTaskBrief":false,"evidenceArtifactIds":[],"imageArtifactIds":[],"repositoryInstructionPaths":[],"artifactStepNumbers":[]}}\n{"kind":"decision_blocker","category":"human_decision","summary":"...","evidence":"...","owner":"human","question":"...","nextAction":"...","resumePhase":"planning"}\nUse decision_blocker only for one unresolved human/business choice. A plan must have numbered prescriptive steps with exact verificationCommands, compatibility and operational analysis, a complete verification strategy, zero unresolved technical questions, a non-empty affectedPaths list naming repository-relative paths, materiality evidence whose categories and references are grounded in those paths or numbered steps, and developerContext as the complete Developer evidence allowlist. Each artifactStepNumbers entry has artifactIdOrPath and stepNumbers. materialCategories must contain only categories directly implicated: architecture_dependencies, schema_data_migration, security_permissions, external_integration, production_operation, user_visible_behavior. For a revised reuse request, set preservedWorktreeCompatibility to true only when the preserved coordinates remain safe for the plan; otherwise set it to false and explain why in compatibilityAnalysis. Ordinary and new-worktree plans set it to null.\n\nTask: ${title}\nBrief:\n${brief}\n\nPinned Project revision:\n${revision}\n\nRole profile settings:\n${JSON.stringify(profiles)}\n\nRepository read evidence:\n${repositoryEvidence}${revisionContext ? `\n\nRevision request:\n${JSON.stringify(revisionContext)}` : ""}`;
   }
 
   private correctionPrompt(): string {

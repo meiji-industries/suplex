@@ -198,6 +198,9 @@ test("projects desktop flow auto-activates valid clones and shows actionable val
       await expect.poll(async () => page.getByRole("option").allTextContents()).toEqual(expect.arrayContaining([expect.stringContaining("GPT-5.6 Sol"), expect.stringContaining("GPT-5.6 Terra")]));
       await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      await page.goto(`${baseUrl}/admin/agents`);
+      await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
+      await page.getByText("No agents configured.", { exact: true }).waitFor();
       await page.goto(`${baseUrl}/admin/models`);
       await page.getByRole("heading", { name: "Models", exact: true }).waitFor();
       await page.getByText("Model catalog", { exact: true }).waitFor();

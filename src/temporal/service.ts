@@ -14,6 +14,7 @@ import { clientPayloadInterceptor } from "./payload-boundary-interceptors.js";
 import { temporalDataConverter } from "./workflow-bundle.js";
 
 export const REQUIRED_SEARCH_ATTRIBUTES = ["CompanyId", "ProjectId", "IssueId"] as const;
+const UPDATE_ACCEPTANCE_TIMEOUT_MS = 10_000;
 
 export interface TemporalClientConnection {
   connection: Connection;
@@ -260,7 +261,7 @@ export async function acceptIssuePlanning(config: ForgeConfig, workflowId: strin
   const temporalClient = await connectTemporal(config);
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    await handle.startUpdate(issueUpdates.start_planning, { args: [validatedInput], waitForStage: WorkflowUpdateStage.ACCEPTED });
+    await temporalClient.client.workflow.withDeadline(Date.now() + UPDATE_ACCEPTANCE_TIMEOUT_MS, () => handle.startUpdate(issueUpdates.start_planning, { args: [validatedInput], waitForStage: WorkflowUpdateStage.ACCEPTED }));
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const state = IssueWorkflowStateSchema.parse(await handle.query(issueStateQuery));
       if (state.revision > validatedInput.expectedRevision) return state;
@@ -280,7 +281,7 @@ export async function acceptIssueDevelopment(config: ForgeConfig, workflowId: st
   const temporalClient = await connectTemporal(config);
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
-    await handle.startUpdate(issueUpdates[command], { args: [validatedInput], waitForStage: WorkflowUpdateStage.ACCEPTED });
+    await temporalClient.client.workflow.withDeadline(Date.now() + UPDATE_ACCEPTANCE_TIMEOUT_MS, () => handle.startUpdate(issueUpdates[command], { args: [validatedInput], waitForStage: WorkflowUpdateStage.ACCEPTED }));
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const state = IssueWorkflowStateSchema.parse(await handle.query(issueStateQuery));
       if (state.revision > validatedInput.expectedRevision) return state;

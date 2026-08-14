@@ -9,7 +9,7 @@ import { SidebarProvider } from "../ui/sidebar.js";
 import { companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 import { CompanySwitcher } from "./company-switcher.js";
-import { SystemHealthIndicator } from "./system-health.js";
+import { SystemHealthAlert, SystemHealthIndicator } from "./system-health.js";
 
 type SettingsNavItem = { label: string; href: string; icon: LucideIcon };
 
@@ -132,6 +132,7 @@ export function SettingsLayout({ title, companyId, backHref, activeHref, content
             <div className="lg:hidden"><SettingsMobileNavigation title={title} groups={groups} activeHref={activeHref} backHref={backHref} /></div>
             <div className="ml-auto flex min-w-0 items-center gap-1 lg:hidden"><div className="w-52 max-w-[45vw]"><CompanySwitcher /></div><SystemHealthIndicator /></div>
           </header>
+          <SystemHealthAlert />
           <div className="px-4 pb-8 lg:px-14">
             <h1 className="min-w-0 truncate text-2xl font-medium leading-8">{title}</h1>
             <div className={`mt-3 ${contentClassName}`}>{children}</div>

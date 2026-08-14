@@ -4,6 +4,7 @@ import { expect, test } from "vitest";
 
 import { DeveloperRecoveryActions } from "../src/frontend/components/app/developer-recovery-actions.js";
 import { DeveloperRecoveryStatus } from "../src/frontend/components/app/developer-recovery-status.js";
+import { SystemHealthProvider } from "../src/frontend/components/app/system-health.js";
 import { TaskActions } from "../src/frontend/views/task-details.js";
 import type { ApiTask } from "../src/frontend/lib/view-shared.js";
 
@@ -65,14 +66,14 @@ test("claimed Developer recovery does not hide delivery review actions", () => {
     developerExecution: { branchName: "work/readme-joke", worktreePath: "/tmp/forge/worktrees/task-1", resultCommit: "a".repeat(40) },
     developerRecovery: { status: "active" },
   } as unknown as ApiTask;
-  const html = renderToStaticMarkup(createElement(TaskActions, {
+  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
     task,
     busy: false,
     onStartPlanning: async () => undefined,
     onPlanAction: async () => undefined,
     onRevisePlan: async () => undefined,
     onContinueWork: async () => undefined,
-  }));
+  }) }));
   expect(html).toContain("Review completed delivery");
   expect(html).toContain("/tmp/forge/worktrees/task-1");
   expect(html).toContain("work/readme-joke");
@@ -89,7 +90,7 @@ test("shows the exact draft publication preview and diff action", () => {
     developerExecution: { status: "completed", branchName: "work/readme-joke", resultCommit: "a".repeat(40) },
     release: { repository: "acme/forge", baseBranch: "main", headBranch: "work/readme-joke", title: "Add a sound-decision pun", bodyPreview: "Summary\n\nA long description that reviewers should see before opening the diff." },
   } as unknown as ApiTask;
-  const html = renderToStaticMarkup(createElement(TaskActions, {
+  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
     task,
     busy: false,
     onStartPlanning: async () => undefined,
@@ -97,7 +98,7 @@ test("shows the exact draft publication preview and diff action", () => {
     onRevisePlan: async () => undefined,
     onContinueWork: async () => undefined,
     onOpenDiff: () => undefined,
-  }));
+  }) }));
   expect(html).toContain('data-task-publish-preview="true"');
   expect(html).toContain("What will be published?");
   expect(html).toContain("Add a sound-decision pun");

@@ -12,6 +12,7 @@ import { Skeleton } from "../components/ui/skeleton.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.js";
 import { ApplicationFrame } from "../components/app/application-frame.js";
+import { getWorkerHealthFailure, useSystemHealth } from "../components/app/system-health.js";
 import { TaskActivity, TaskHistory } from "../components/app/task-history.js";
 import DeveloperDiff, { useAppThemeType } from "../components/app/developer-diff.js";
 import { TaskLeadPlan } from "../components/app/task-lead-plan.js";
@@ -131,13 +132,14 @@ function PublicationPreview({ release }: { release: NonNullable<ApiTask["release
 }
 
 export function TaskActions({ task, project, busy, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onOpenDiff }: { task: ApiTask; project?: ApiProject | undefined; busy: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onOpenDiff?: () => void }): ReactElement {
+  const { snapshot: healthSnapshot } = useSystemHealth();
   const [revisionOpen, setRevisionOpen] = useState(false);
   const [revisionReason, setRevisionReason] = useState("");
   const [worktreeDisposition, setWorktreeDisposition] = useState<"reuse" | "new">(task.developerExecution ? "reuse" : "new");
   const [exactBaseSha, setExactBaseSha] = useState("");
   const [continueOpen, setContinueOpen] = useState(false);
   const [continueReason, setContinueReason] = useState("");
-  const disabled = busy || task.projection.status === "lagging";
+  const disabled = busy || task.projection.status === "lagging" || Boolean(getWorkerHealthFailure(healthSnapshot));
   const canRevise = task.allowedCommands.includes("revise_plan");
   const canContinue = task.allowedCommands.includes("continue_work");
   const canReviewDelivery = task.allowedCommands.includes("review_delivery");

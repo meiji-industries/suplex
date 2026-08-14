@@ -109,6 +109,7 @@ const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
   });
   app.get("/health", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
+    reply.header("Cache-Control", "no-store");
     return sendHtml(request, reply, renderHealthPage(await options.readHealth(), assetMode));
   });
 };

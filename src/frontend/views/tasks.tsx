@@ -15,6 +15,7 @@ import { Tabs, TabsList, TabsTrigger } from ".././components/ui/tabs.js";
 import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
+import { getWorkerHealthFailure, useSystemHealth } from ".././components/app/system-health.js";
 import { TaskStatus, TaskStatusIcon, taskStatusAppearance } from ".././components/app/task-status.js";
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { navigate } from ".././lib/navigation.js";
@@ -89,7 +90,9 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
               <Input id="task-title" aria-label="Task title" autoFocus placeholder="Task title" value={title} onChange={(event) => onTitleChange(event.target.value)} className="h-10 border-0 bg-transparent px-0 text-xl font-medium placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-xl" />
               <Textarea id="task-description" aria-label="Task description" placeholder="Add description…" value={description} onChange={(event) => onDescriptionChange(event.target.value)} className="min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-sm shadow-none focus-visible:ring-0" />
             </div>
-            <div className="flex flex-wrap items-center gap-2 px-5 py-4">
+            {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
+            <div className="mt-auto flex flex-wrap items-end gap-2 px-5 pb-4">
+              <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={onAddImages} onRemove={onRemoveImage} disabled={busy} />
               <Button type="button" variant="outline" size="sm" className="rounded-full px-2.5"><CircleDashed className="size-3.5 text-muted-foreground" />Backlog</Button>
               <Button type="button" variant="outline" size="sm" className="rounded-full px-2.5 text-muted-foreground"><span aria-hidden="true">—</span>Priority</Button>
               <DropdownMenu>
@@ -101,10 +104,6 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
               <Select value={projectId || null} onValueChange={(value) => onProjectChange(value ?? "")}><SelectTrigger id="task-project" aria-label="Project" size="sm" className="w-auto min-w-0 rounded-full border-border bg-background px-2.5 shadow-none"><FolderKanban className="size-3.5 text-muted-foreground" /><SelectValue placeholder="Project">{(value) => projects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Project")}</SelectValue></SelectTrigger><SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select>
               <Button type="button" variant="outline" size="sm" className="rounded-full px-2.5 text-muted-foreground"><Tags className="size-3.5" />Labels</Button>
               <Button type="button" variant="outline" size="icon-sm" className="rounded-full" aria-label="More task properties"><Ellipsis className="size-3.5" /></Button>
-            </div>
-            {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
-            <div className="mt-auto flex flex-wrap items-end gap-3 px-5 pb-4">
-              <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={onAddImages} onRemove={onRemoveImage} disabled={busy} />
               <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">
                 <Button type="submit" size="sm" variant="outline" disabled={busy || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button>
               </DialogFooter>
@@ -118,6 +117,9 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
 
 export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactElement {
   const { currentCompany, loading, user, error: companyError, reloadCompanies } = useCompanyContext();
+  const { snapshot: healthSnapshot } = useSystemHealth();
+  const workerFailure = getWorkerHealthFailure(healthSnapshot);
+  const planningUnavailable = workerFailure ? `${workerFailure.label} is unavailable. ${workerFailure.summary}` : "";
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [agents, setAgents] = useState<ApiAgent[]>([]);
   const [roleAgentOverrides, setRoleAgentOverrides] = useState<{ analyst?: string; implementer?: string; reviewer?: string }>({});
@@ -231,6 +233,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
       const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, roleAgents: newTaskRoleAgents, idempotencyKey: crypto.randomUUID() }) });
       const taskPath = withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId);
       if (result.allowedCommands.includes("start_planning")) {
+        if (planningUnavailable) { navigate(taskPath); setError(planningUnavailable); return; }
         try {
           await readJson<ApiTask>(`/api/tasks/${encodeURIComponent(result.id)}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: result.revision }) });
         } catch (reason) {
@@ -245,6 +248,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   };
   const startPlanning = async (): Promise<void> => {
     if (!selected) return;
+    if (planningUnavailable) { setError(planningUnavailable); return; }
     setBusy(true); setError("");
     const optimistic: ApiTask = { ...selected, phase: "planning", revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Analyst planning" };
     selectedRef.current = optimistic; setSelected(optimistic); setTasks((current) => current.map((task) => task.id === optimistic.id ? optimistic : task));

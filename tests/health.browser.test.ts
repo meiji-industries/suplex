@@ -6,7 +6,7 @@ import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/config.js";
 import type { HealthSnapshot } from "../src/health.js";
 
-test("mobile health page shows separate healthy and unhealthy states", async () => {
+test("mobile health page shows separate healthy and unhealthy states", { timeout: 60_000 }, async () => {
   const snapshot: HealthSnapshot = {
     generatedAt: "2026-08-11T00:00:00.000Z",
     reachableAddress: "http://forge.tailnet.ts.net:4111",
@@ -78,7 +78,7 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
       ...snapshot,
       ready: false,
       checks: [
-        { ...snapshot.checks[0]!, status: "unhealthy", summary: "Database unavailable" },
+        { id: "worker", label: "Worker and task queue", status: "unhealthy", summary: "No current worker registration was found", details: {} },
         { ...snapshot.checks[1]!, status: "healthy", summary: "Ready" },
       ],
     };
@@ -88,18 +88,26 @@ test("mobile health page shows separate healthy and unhealthy states", async () 
     const unavailable = page.getByRole("button", { name: "System health: Unavailable", exact: true });
     await unavailable.waitFor();
     expect(await unavailable.getAttribute("data-status")).toBe("red");
+    const workerAlert = page.getByRole("alert");
+    await workerAlert.getByText("Worker and task queue unavailable", { exact: true }).waitFor();
+    expect(await workerAlert.getByRole("link", { name: "View system health", exact: true }).getAttribute("href")).toBe("/health");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+    const desktop = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    await desktop.goto(`http://127.0.0.1:${address.port}/health`);
+    await desktop.getByRole("alert").getByText("Worker and task queue unavailable", { exact: true }).waitFor();
+    expect(await desktop.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     currentSnapshot = { ...snapshot, checks: snapshot.checks.map((check) => ({ ...check, status: "healthy" as const, summary: "Ready" })) };
     await page.getByRole("button", { name: "Refresh health" }).click();
+    await desktop.getByRole("button", { name: "Refresh health" }).click();
     const healthy = page.getByRole("button", { name: "System health: Healthy", exact: true });
     await healthy.waitFor();
     expect(await healthy.getAttribute("data-status")).toBe("green");
 
-    const desktop = await browser.newPage({ viewport: { width: 1280, height: 800 } });
-    await desktop.goto(`http://127.0.0.1:${address.port}/health`);
     expect(await desktop.locator("aside").isVisible()).toBe(true);
     expect(await desktop.locator('[data-slot="health-row"]').count()).toBe(3);
-    expect(await desktop.getByRole("button", { name: "System health: Healthy", exact: true }).getAttribute("data-status")).toBe("green");
+    expect(await desktop.locator("[data-system-health]").getAttribute("data-status")).toBe("green");
   } finally {
     await browser?.close();
     await app.close();

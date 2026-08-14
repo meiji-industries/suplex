@@ -3,6 +3,7 @@ import { type ReactElement, type ReactNode } from "react";
 import { Separator } from "../ui/separator.js";
 import { SidebarInset, SidebarProvider, SidebarTrigger } from "../ui/sidebar.js";
 import { AppSidebar } from "./navigation.js";
+import { SystemHealthAlert } from "./system-health.js";
 
 export function ApplicationFrame({ title, headerActions, headerRight, children }: { title: string; headerActions?: ReactElement | null | undefined; headerRight?: ReactElement | null | undefined; children: ReactNode }): ReactElement {
   return (
@@ -18,6 +19,7 @@ export function ApplicationFrame({ title, headerActions, headerRight, children }
             <div className="ml-auto flex items-center gap-2">{headerRight}</div>
           </div>
         </header>
+        <SystemHealthAlert />
         {children}
       </SidebarInset>
     </SidebarProvider>

@@ -5,6 +5,7 @@ import type { HealthCheck, HealthSnapshot } from "../../../health.js";
 import { isOwnedHealthCheck } from "../../../health-contract.js";
 import { relativeTime } from "../../lib/view-shared.js";
 import { Button } from "../ui/button.js";
+import { Alert, AlertDescription, AlertTitle } from "../ui/alert.js";
 import { Collapsible } from "../ui/collapsible.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "../ui/dialog.js";
 import { SidebarMenuButton } from "../ui/sidebar.js";
@@ -77,6 +78,25 @@ export function useSystemHealth(): SystemHealthContextValue {
   const value = useContext(SystemHealthContext);
   if (!value) throw new Error("System health is unavailable outside SystemHealthProvider");
   return value;
+}
+
+export function getWorkerHealthFailure(snapshot: HealthSnapshot | undefined): HealthCheck | undefined {
+  return snapshot?.checks.find((check) => check.id === "worker" && check.status === "unhealthy");
+}
+
+export function SystemHealthAlert(): ReactElement | null {
+  const health = useContext(SystemHealthContext);
+  const worker = getWorkerHealthFailure(health?.snapshot);
+  if (!worker) return null;
+  return (
+    <div data-system-health-alert className="border-b px-4 py-3 lg:px-6">
+      <Alert variant="destructive">
+        <Activity />
+        <AlertTitle>{worker.label} unavailable</AlertTitle>
+        <AlertDescription>{worker.summary}. Planning is paused until it recovers. <a href="/health">View system health</a>.</AlertDescription>
+      </Alert>
+    </div>
+  );
 }
 
 function CheckStatusIndicator({ check }: { check: HealthCheck }): ReactElement {

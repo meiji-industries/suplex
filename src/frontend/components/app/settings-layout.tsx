@@ -26,6 +26,7 @@ function useSettingsGroups(companyId: string, user?: ApiUser): SettingsNavGroup[
         { label: "Invitations", href: withCompany("/admin/invitations", companyId), icon: Mail },
         { label: "Passkeys", href: withCompany("/admin/passkeys", companyId), icon: KeyRound },
         { label: "Profiles", href: withCompany("/admin/profiles", companyId), icon: Terminal },
+        { label: "Agents", href: withCompany("/admin/agents", companyId), icon: Users },
         { label: "Models", href: withCompany("/admin/models", companyId), icon: Cpu },
       ]}] : []),
       { title: "System", items: [

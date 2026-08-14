@@ -122,7 +122,10 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
     const { auth, projects } = await startApi();
     const company = auth.createCompany("admin-1", "Temporal Browser");
     const profile = projects.createProfile("admin-1", { name: "Controlled profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 1 });
-    const project = await projects.createProject("admin-1", company.id, { name: "Temporal project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
+    const analyst = projects.createAgent("admin-1", { name: "Analyst", role: "analyst", profileId: profile.id });
+    const implementer = projects.createAgent("admin-1", { name: "Implementer", role: "implementer", profileId: profile.id });
+    const reviewer = projects.createAgent("admin-1", { name: "Reviewer", role: "reviewer", profileId: profile.id });
+    const project = await projects.createProject("admin-1", company.id, { name: "Temporal project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id } });
     await projects.activateProject("admin-1", project.id);
     await startWorker();
 
@@ -149,9 +152,9 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
       const pane = page.locator("[data-task-detail]");
       await pane.waitFor();
       await pane.getByRole("heading", { name: "Durable browser task", exact: true }).waitFor();
-      const persisted = apiDatabase!.authQuery((db) => db.prepare("SELECT id, workflow_id, role_profiles_json, supplemental_review FROM forge_tasks WHERE title = 'Durable browser task'").get() as { id: string; workflow_id: string; role_profiles_json: string; supplemental_review: number });
+      const persisted = apiDatabase!.authQuery((db) => db.prepare("SELECT id, workflow_id, role_agents_json, supplemental_review FROM forge_tasks WHERE title = 'Durable browser task'").get() as { id: string; workflow_id: string; role_agents_json: string; supplemental_review: number });
       workflowId = persisted.workflow_id;
-      expect(JSON.parse(persisted.role_profiles_json)).toMatchObject({ lead: profile.id, developer: profile.id });
+      expect(JSON.parse(persisted.role_agents_json)).toMatchObject({ analyst: profile.id, implementer: profile.id });
       expect(persisted.supplemental_review).toBe(0);
       expect(apiDatabase!.authQuery((db) => db.prepare("SELECT state FROM forge_task_creation_intents WHERE task_id = ?").get(persisted.id))).toEqual({ state: "started" });
       expect(apiDatabase!.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE id = ?").get(persisted.id))).toEqual({ count: 1 });

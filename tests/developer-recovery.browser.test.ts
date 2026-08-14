@@ -128,7 +128,7 @@ test.each([1280, 390])("INV-12 recovery journeys are truthful and fail closed at
       let current = taskState(company.id, "active");
       let cancellationListReads = 0;
       let staleCancellation = false;
-      await context.route("**/api/companies/*/projects", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ projects: [{ id: projectId, companyId: company.id, name: "Recovery project", repositoryPath: "repository", worktreeRoot: "worktrees", baseBranch: "main", targetBranch: "main", requiredChecks: [], allowedProfileIds: [], roleDefaults: {}, status: "active", configurationRevision: 1 }] }) }));
+      await context.route("**/api/companies/*/projects", async (route) => route.fulfill({ contentType: "application/json", body: JSON.stringify({ projects: [{ id: projectId, companyId: company.id, name: "Recovery project", repositoryPath: "repository", worktreeRoot: "worktrees", baseBranch: "main", targetBranch: "main", requiredChecks: [], roleDefaults: {}, status: "active", configurationRevision: 1 }] }) }));
       await context.route("**/api/companies/*/tasks", async (route) => {
         const recoveryState = current["developerRecovery"] as { status?: string } | undefined;
         if (recoveryState?.status === "cancelling") {

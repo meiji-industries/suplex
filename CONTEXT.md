@@ -49,7 +49,7 @@ A web-triggered snapshot action with visible last-backup age. It includes the Fo
 _Avoid_: Unobservable backup age, MVP backup scheduler
 
 **Active project**:
-A project is exactly one repository, whose local path may belong to only one company and project. Its local repository, worktree root, allowed agent profiles, and configured delivery-provider login must pass Forge’s web validation. Configuration changes apply to new issues only; each active issue remains pinned to its starting configuration revision.
+A project is exactly one repository, whose local path may belong to only one company and project. Its local repository, worktree root, role agents, and configured delivery-provider login must pass Forge’s web validation. Configuration changes apply to new issues only; each active issue remains pinned to its starting configuration revision.
 _Avoid_: Unvalidated project, first-task setup failure, mid-flight configuration mutation, cross-company repository reuse
 
 **Local GitHub login**:
@@ -105,11 +105,15 @@ A schema-validated status outcome—such as delivered, needs input, or failed—
 _Avoid_: Prose-inferred transition, unvalidated agent completion
 
 **Pragmatic review**:
-Lead review that targets roughly a nine-out-of-ten quality bar and returns work only for blocking correctness, acceptance, security, compatibility, or operational-safety findings. Nits and minor polish do not reopen implementation; advisory observations stay in the review artifact and never create follow-up work automatically.
+Analyst review that targets roughly a nine-out-of-ten quality bar and returns work only for blocking correctness, acceptance, security, compatibility, or operational-safety findings. Nits and minor polish do not reopen implementation; advisory observations stay in the review artifact and never create follow-up work automatically.
 _Avoid_: Perfection loop, nit-driven rework
 
+**Agent**:
+A named identity with an Analyst, Implementer, or Reviewer role and an avatar, assigned to an Agent profile. Projects and tasks select agents for each role; reassignment affects future turns while preserving the selected profile settings for each admitted turn.
+_Avoid_: Profile identity without role, silent agent reassignment
+
 **Agent profile**:
-A named preset in an uncapped global catalog, managed through Forge web settings and stored in the database, that fixes an agent provider, model, reasoning level, and service priority for a role turn. The MVP begins with seeded Codex examples but permits the administrator to create and tune additional profiles. Custom role prompts are not part of profiles. Projects select allowed profiles and role defaults; an issue may select an allowed profile separately for each role rather than assembling arbitrary settings. Profiles are editable without version-history management; each turn records the resolved settings it actually used. An unavailable profile retries through the configured durable capacity policy, then pauses with a typed blocker if that policy is exhausted; it never falls back silently.
+A named preset in an uncapped global catalog, managed through Forge web settings and stored in the database, that fixes an agent provider, model, reasoning level, and service priority for a role turn. Profiles do not carry avatars or task assignment. The MVP begins with seeded Codex examples but permits the administrator to create and tune additional profiles. Custom role prompts are not part of profiles. Projects select role agents, and each agent is assigned one profile. Profiles are editable without version-history management; each turn records the resolved settings it actually used. An unavailable profile retries through the configured durable capacity policy, then pauses with a typed blocker if that policy is exhausted; it never falls back silently.
 _Avoid_: Ad hoc model override, profile-version management
 
 **Capacity lane**:
@@ -117,11 +121,11 @@ A configurable admission limit for concurrent turns using an agent provider or p
 _Avoid_: Unlimited concurrency, global single-turn queue, reserved reviewer slot, company quota, no-op priority
 
 **Issue worktree**:
-The isolated Git worktree and branch assigned to one issue. Parallel issues targeting the same repository always use distinct issue worktrees, agent sessions, and commit boundaries. When the target base advances, Forge favors forward-merging the new base over rebasing at explicit review and release gates. A merge conflict blocks for a Lead-owned, prescriptive resolution that reconciles the intent and invariants of both branches rather than mechanically choosing a side. Forge reruns the full original verification matrix, then repeats Lead review for the resulting revision. A post-merge verification failure returns to the Lead for a repair plan before the Developer resumes.
+The isolated Git worktree and branch assigned to one issue. Parallel issues targeting the same repository always use distinct issue worktrees, agent sessions, and commit boundaries. When the target base advances, Forge favors forward-merging the new base over rebasing at explicit review and release gates. A merge conflict blocks for an Analyst-owned, prescriptive resolution that reconciles the intent and invariants of both branches rather than mechanically choosing a side. Forge reruns the full original verification matrix, then repeats Analyst review for the resulting revision. A post-merge verification failure returns to the Analyst for a repair plan before the Implementer resumes.
 _Avoid_: Shared working directory, reused issue branch, automatic conflict resolution
 
 **Direct release**:
-The delivery route for a direct-GitHub project. Forge creates or updates its draft pull request only after Lead approval of the exact revision and immediately before external CI evidence is required. It remains a draft after CI until any authenticated company member explicitly accepts the final result, then becomes ready for review. Forge never merges it automatically; an authoritative GitHub merge event marks the issue done. Release uses normal pushes only and rejects force-pushes, rebases, and amended commits after Lead approval. Cancelling after publication stops Forge but leaves the external draft unchanged and linked from the cancelled issue.
+The delivery route for a direct-GitHub project. Forge creates or updates its draft pull request only after Analyst approval of the exact revision and immediately before external CI evidence is required. It remains a draft after CI until any authenticated company member explicitly accepts the final result, then becomes ready for review. Forge never merges it automatically; an authoritative GitHub merge event marks the issue done. Release uses normal pushes only and rejects force-pushes, rebases, and amended commits after Analyst approval. Cancelling after publication stops Forge but leaves the external draft unchanged and linked from the cancelled issue.
 _Avoid_: Early draft publication, unreviewed external branch, automatic merge
 
 **Mirrored human release**:

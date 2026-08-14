@@ -1,5 +1,6 @@
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
+import { resolveAgentProfiles } from "./projects.js";
 import { IssueWorkflowStartFailure, startIssueWorkflow } from "./temporal/service.js";
 
 interface CreationIntentRow {
@@ -13,14 +14,14 @@ interface CreationIntentRow {
   brief_artifact_id: string;
   brief_sha256: string;
   image_artifact_ids_json: string;
-  role_profiles_json: string;
+  role_agents_json: string;
   supplemental_review: number;
 }
 
 /** Start committed task workflows that were interrupted before Temporal confirmation. */
 export async function reconcileTaskCreationIntents(database: ForgeDatabase, config: ForgeConfig, startWorkflow: typeof startIssueWorkflow = startIssueWorkflow): Promise<void> {
   const intents = database.authQuery((db) => db.prepare(`SELECT i.id, i.task_id, i.workflow_id, i.company_id, i.project_id, i.project_revision_id, i.request_hash,
-      t.brief_artifact_id, b.sha256 AS brief_sha256, t.image_artifact_ids_json, t.role_profiles_json, t.supplemental_review
+      t.brief_artifact_id, b.sha256 AS brief_sha256, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review
     FROM forge_task_creation_intents i
     JOIN forge_tasks t ON t.id = i.task_id AND t.company_id = i.company_id AND t.project_id = i.project_id AND t.workflow_id = i.workflow_id AND t.project_revision_id = i.project_revision_id
     JOIN forge_artifacts b ON b.id = t.brief_artifact_id AND b.company_id = i.company_id
@@ -38,7 +39,7 @@ export async function reconcileTaskCreationIntents(database: ForgeDatabase, conf
         briefSha256: intent.brief_sha256,
         imageArtifactIds: JSON.parse(intent.image_artifact_ids_json) as string[],
         requestHash: intent.request_hash,
-        roleProfiles: JSON.parse(intent.role_profiles_json) as { lead?: string; developer?: string; reviewer?: string },
+        roleProfiles: database.authQuery((db) => resolveAgentProfiles(db, JSON.parse(intent.role_agents_json) as { analyst?: string; implementer?: string; reviewer?: string })),
         supplementalReview: intent.supplemental_review === 1,
         repairCycleLimit: config.deliveryRepairCycleLimit,
       });

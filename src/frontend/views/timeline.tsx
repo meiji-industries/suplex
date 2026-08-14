@@ -11,13 +11,13 @@ import { ApplicationFrame } from "../components/app/application-frame.js";
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import { useCompanyContext } from "../components/app/company-context.js";
 import { readJson, withCompany } from "../lib/api.js";
-import type { ApiProfile, ApiProject, ApiTask } from "../lib/view-shared.js";
+import type { ApiProject, ApiTask } from "../lib/view-shared.js";
 
 type RangePreset = "today" | "7-days" | "30-days" | "custom";
-type AgentRole = "lead" | "reviewer" | "developer";
+type AgentRole = "analyst" | "reviewer" | "implementer";
 type TimelineRange = { start: number; end: number };
 
-export type TimelineTask = Pick<ApiTask, "id" | "projectId" | "issueKey" | "title" | "roleProfiles" | "agentInvocations">;
+export type TimelineTask = Pick<ApiTask, "id" | "projectId" | "issueKey" | "title" | "agentInvocations">;
 
 type WorkInterval = {
   id: string;
@@ -65,8 +65,8 @@ export type WorkTimelineSummary = {
 };
 
 const roleColors: Record<AgentRole, string> = {
-  lead: "bg-blue-500",
-  developer: "bg-amber-500",
+  analyst: "bg-blue-500",
+  implementer: "bg-amber-500",
   reviewer: "bg-violet-500",
 };
 
@@ -144,8 +144,7 @@ function addTotal(totals: Map<string, WorkTotal>, key: string, label: string, se
   }
 }
 
-export function summarizeAgentTime(tasks: TimelineTask[], profiles: Pick<ApiProfile, "id" | "name" | "avatarSeed">[], projects: Pick<ApiProject, "id" | "name">[], range: { start: number; end: number }, now: number): WorkTimelineSummary {
-  const profileMap = new Map(profiles.map((profile) => [profile.id, profile]));
+export function summarizeAgentTime(tasks: TimelineTask[], projects: Pick<ApiProject, "id" | "name">[], range: { start: number; end: number }, now: number): WorkTimelineSummary {
   const projectNames = new Map(projects.map((project) => [project.id, project.name]));
   const intervals: WorkInterval[] = [];
   const ticketTotals = new Map<string, WorkTotal>();
@@ -159,8 +158,7 @@ export function summarizeAgentTime(tasks: TimelineTask[], profiles: Pick<ApiProf
       const end = Math.min(rawEnd, range.end, now);
       if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
 
-      const profileId = task.roleProfiles[invocation.role];
-      const agentKey = profileId ?? `role:${invocation.role}`;
+      const agentKey = invocation.agentId ?? `role:${invocation.role}`;
       const interval: WorkInterval = {
         id: invocation.id,
         taskId: task.id,
@@ -168,8 +166,8 @@ export function summarizeAgentTime(tasks: TimelineTask[], profiles: Pick<ApiProf
         taskTitle: task.title,
         projectName: projectNames.get(task.projectId) ?? "Unknown project",
         agentKey,
-        agentName: profileId ? profileMap.get(profileId)?.name ?? titleCase(invocation.role) : titleCase(invocation.role),
-        ...(profileId && profileMap.get(profileId)?.avatarSeed ? { avatarSeed: profileMap.get(profileId)!.avatarSeed } : {}),
+        agentName: invocation.agentName ?? titleCase(invocation.role),
+        ...(invocation.avatarSeed ? { avatarSeed: invocation.avatarSeed } : {}),
         role: invocation.role,
         status: invocation.status,
         attempt: invocation.attempt,
@@ -431,7 +429,6 @@ export function TimelineView(): ReactElement {
   const companyId = currentCompany?.id ?? "";
   const [tasks, setTasks] = useState<ApiTask[]>([]);
   const [projects, setProjects] = useState<ApiProject[]>([]);
-  const [profiles, setProfiles] = useState<ApiProfile[]>([]);
   const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
@@ -444,15 +441,14 @@ export function TimelineView(): ReactElement {
   const reload = useCallback(async (): Promise<void> => {
     const token = ++requestToken.current;
     setError("");
-    if (!companyId || loading) { setLoadedCompanyId(""); setTasks([]); setProjects([]); setProfiles([]); return; }
+    if (!companyId || loading) { setLoadedCompanyId(""); setTasks([]); setProjects([]); return; }
     try {
-      const [taskResult, projectResult, profileResult] = await Promise.all([
+      const [taskResult, projectResult] = await Promise.all([
         readJson<{ tasks: ApiTask[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks`),
         readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
-        readJson<{ profiles: ApiProfile[] }>("/api/profiles"),
       ]);
       if (token !== requestToken.current) return;
-      setTasks(taskResult.tasks); setProjects(projectResult.projects); setProfiles(profileResult.profiles); setLoadedCompanyId(companyId); setNow(Date.now());
+      setTasks(taskResult.tasks); setProjects(projectResult.projects); setLoadedCompanyId(companyId); setNow(Date.now());
     } catch (reason) {
       if (token !== requestToken.current) return;
       if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
@@ -482,8 +478,8 @@ export function TimelineView(): ReactElement {
       return clampTimelineRange({ start: center - duration / 2, end: center + duration / 2 }, sourceRange);
     });
   }, [sourceRange]);
-  const overview = useMemo(() => summarizeAgentTime(tasks, profiles, projects, sourceRange, now), [now, profiles, projects, sourceRange, tasks]);
-  const summary = useMemo(() => summarizeAgentTime(tasks, profiles, projects, visibleRange, now), [now, profiles, projects, tasks, visibleRange]);
+  const overview = useMemo(() => summarizeAgentTime(tasks, projects, sourceRange, now), [now, projects, sourceRange, tasks]);
+  const summary = useMemo(() => summarizeAgentTime(tasks, projects, visibleRange, now), [now, projects, tasks, visibleRange]);
   const scopeLoaded = Boolean(companyId) && loadedCompanyId === companyId;
   const displayedStart = preset === "custom" ? customStart : dateInputValue(new Date(sourceRange.start));
   const displayedEnd = preset === "custom" ? customEnd : dateInputValue(new Date(sourceRange.end - 1));

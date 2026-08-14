@@ -12,7 +12,7 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
     let result;
     try {
       result = await ctx.acquireExternalTurn<contracts.FinalReviewActivityResult>(
-        { operation: "final_review", role: "lead", profileId: ctx.input.roleProfiles.lead, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
+        { operation: "final_review", role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
         (capacityRequestId) => activityProxies.finalReview({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, roleProfiles: ctx.input.roleProfiles, releaseId: ctx.state.releaseId!, deliveryReviewId: ctx.state.deliveryReviewId!, ciRunId: ctx.state.ciRunId!, ...(ctx.state.releaseRepository && ctx.state.baseBranch && ctx.state.pullRequestNumber ? { pullRequestNumber: ctx.state.pullRequestNumber, repository: ctx.state.releaseRepository, baseBranch: ctx.state.baseBranch } : {}), planRevision: ctx.state.planRevision ?? ctx.state.revision, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, developerExecutionId: ctx.state.developerExecutionId!, deliveryArtifactId: ctx.state.deliveryArtifactId!, evidenceArtifactId: ctx.state.developerEvidenceArtifactId!, ...(ctx.state.worktreePath ? { worktreePath: ctx.state.worktreePath } : {}), branchName: ctx.state.branchName!, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (review) => review.leadExecutionId,
       );
@@ -31,7 +31,7 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
     if (result.outcome === "blocking") {
       try {
         const planned = await ctx.acquireExternalTurn<contracts.DeliveryRepairPlanResult>(
-          { operation: "delivery_repair_plan", role: "lead", profileId: ctx.input.roleProfiles.lead, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
+          { operation: "delivery_repair_plan", role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
           (capacityRequestId) => activityProxies.planDeliveryRepair({
           taskId: ctx.input.issueId,
           companyId: ctx.input.companyId,
@@ -97,7 +97,7 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
       const finding = { findingId: `member_requested_changes_${ctx.state.revision}`, severity: "blocking" as const, rationale: note, evidenceRef: result.reasonArtifactId ?? "member acceptance decision", disposition: "open" as const, repairInstruction: note };
       try {
         const planned = await ctx.acquireExternalTurn<contracts.DeliveryRepairPlanResult>(
-          { operation: "delivery_repair_plan", role: "lead", profileId: ctx.input.roleProfiles.lead, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
+          { operation: "delivery_repair_plan", role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
           (capacityRequestId) => activityProxies.planDeliveryRepair({
           taskId: ctx.input.issueId,
           companyId: ctx.input.companyId,

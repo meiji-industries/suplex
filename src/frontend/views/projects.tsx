@@ -13,7 +13,7 @@ import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
-import { reconcileScopedNotFound, type ApiCheck, type ApiProfile, type ApiProject } from "../lib/view-shared.js";
+import { reconcileScopedNotFound, type ApiAgent, type ApiCheck, type ApiProject } from "../lib/view-shared.js";
 
 function CreateProjectDialog({
   open,
@@ -96,24 +96,23 @@ type ProjectSettingsForm = {
   setupCommand: string;
   verificationCommand: string;
   requiredChecks: string;
-  allowedProfileIds: string[];
-  leadProfile: string;
-  developerProfile: string;
-  reviewerProfile: string;
+  analystAgent: string;
+  implementerAgent: string;
+  reviewerAgent: string;
 };
 
 type ActivationRequirement = { key: string; label: string; complete: boolean };
 
-function activationRequirements(input: { requiredChecks: string[]; allowedProfileIds: string[]; leadProfile: string | undefined; developerProfile: string | undefined }): ActivationRequirement[] {
+function activationRequirements(input: { requiredChecks: string[]; analystAgent: string | undefined; implementerAgent: string | undefined; reviewerAgent: string | undefined }): ActivationRequirement[] {
   return [
     { key: "checks", label: "Add at least one required GitHub check", complete: input.requiredChecks.length > 0 },
-    { key: "profiles", label: "Allow at least one Codex profile", complete: input.allowedProfileIds.length > 0 },
-    { key: "lead", label: "Choose a Lead default", complete: Boolean(input.leadProfile) },
-    { key: "developer", label: "Choose a Developer default", complete: Boolean(input.developerProfile) },
+    { key: "analyst", label: "Choose an Analyst default", complete: Boolean(input.analystAgent) },
+    { key: "implementer", label: "Choose an Implementer default", complete: Boolean(input.implementerAgent) },
+    { key: "reviewer", label: "Choose a Reviewer default", complete: Boolean(input.reviewerAgent) },
   ];
 }
 
-function settingsForm(project: ApiProject, profiles: ApiProfile[]): ProjectSettingsForm {
+function settingsForm(project: ApiProject): ProjectSettingsForm {
   return {
     name: project.name,
     baseBranch: project.baseBranch,
@@ -121,21 +120,20 @@ function settingsForm(project: ApiProject, profiles: ApiProfile[]): ProjectSetti
     setupCommand: project.setupCommand,
     verificationCommand: project.verificationCommand,
     requiredChecks: project.requiredChecks.join(", "),
-    allowedProfileIds: project.allowedProfileIds.length ? project.allowedProfileIds : profiles.map((profile) => profile.id),
-    leadProfile: project.roleDefaults.lead ?? "",
-    developerProfile: project.roleDefaults.developer ?? "",
-    reviewerProfile: project.roleDefaults.reviewer ?? "",
+    analystAgent: project.roleDefaults.analyst ?? "",
+    implementerAgent: project.roleDefaults.implementer ?? "",
+    reviewerAgent: project.roleDefaults.reviewer ?? "",
   };
 }
 
 function ProjectSettingsDialog({
   project,
-  profiles,
+  agents,
   onOpenChange,
   onSaved,
 }: {
   project: ApiProject | undefined;
-  profiles: ApiProfile[];
+  agents: ApiAgent[];
   onOpenChange: (open: boolean) => void;
   onSaved: () => Promise<void>;
 }): ReactElement {
@@ -149,7 +147,7 @@ function ProjectSettingsDialog({
 
   useEffect(() => {
     let cancelled = false;
-    setForm(project ? settingsForm(project, profiles) : undefined);
+    setForm(project ? settingsForm(project) : undefined);
     setFindings([]);
     setError("");
     setBusy(false);
@@ -176,23 +174,10 @@ function ProjectSettingsDialog({
       }
     }
     return () => { cancelled = true; };
-  }, [project, profiles]);
+  }, [project, agents]);
 
   const setField = <Key extends keyof ProjectSettingsForm>(key: Key, value: ProjectSettingsForm[Key]): void => {
     setForm((current) => current ? { ...current, [key]: value } : current);
-  };
-
-  const toggleProfile = (profileId: string): void => {
-    if (!form) return;
-    const enabled = form.allowedProfileIds.includes(profileId);
-    const allowedProfileIds = enabled ? form.allowedProfileIds.filter((id) => id !== profileId) : [...form.allowedProfileIds, profileId];
-    setForm({
-      ...form,
-      allowedProfileIds,
-      leadProfile: enabled && form.leadProfile === profileId ? "" : form.leadProfile,
-      developerProfile: enabled && form.developerProfile === profileId ? "" : form.developerProfile,
-      reviewerProfile: enabled && form.reviewerProfile === profileId ? "" : form.reviewerProfile,
-    });
   };
 
   const toggleCheck = (checkName: string): void => {
@@ -227,8 +212,7 @@ function ProjectSettingsDialog({
           setupCommand: form.setupCommand,
           verificationCommand: form.verificationCommand,
           requiredChecks: form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean),
-          allowedProfileIds: form.allowedProfileIds,
-          roleDefaults: { lead: form.leadProfile, developer: form.developerProfile, reviewer: form.reviewerProfile },
+          roleDefaults: { analyst: form.analystAgent, implementer: form.implementerAgent, reviewer: form.reviewerAgent },
         }),
       });
       await onSaved();
@@ -241,12 +225,11 @@ function ProjectSettingsDialog({
     }
   };
 
-  const allowedProfiles = profiles.filter((profile) => form?.allowedProfileIds.includes(profile.id));
   const requirements = form ? activationRequirements({
     requiredChecks: form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean),
-    allowedProfileIds: form.allowedProfileIds,
-    leadProfile: form.leadProfile,
-    developerProfile: form.developerProfile,
+    analystAgent: form.analystAgent,
+    implementerAgent: form.implementerAgent,
+    reviewerAgent: form.reviewerAgent,
   }) : [];
   const missingRequirements = requirements.filter((requirement) => !requirement.complete);
   const selectedChecks = form?.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean) ?? [];
@@ -273,10 +256,15 @@ function ProjectSettingsDialog({
                 <FieldDescription>Exact check names fetched from GitHub for the target branch.</FieldDescription>
               </FieldSet>
               <FieldSet>
-                <FieldLegend variant="label">Profiles</FieldLegend>
-                {profiles.length ? <FieldGroup data-slot="checkbox-group">{profiles.map((profile) => <Field orientation="horizontal" key={profile.id}><Checkbox id={`project-profile-${profile.id}`} checked={form.allowedProfileIds.includes(profile.id)} onCheckedChange={() => toggleProfile(profile.id)} /><FieldLabel htmlFor={`project-profile-${profile.id}`}><span className="flex items-center gap-2"><ProfileAvatar name={profile.name} seed={profile.avatarSeed} />{profile.name}</span></FieldLabel></Field>)}</FieldGroup> : <FieldDescription>No Codex profiles configured. <a href={withCompany("/admin/profiles", project.companyId)}>Create a profile</a> before activating this project.</FieldDescription>}
+                <FieldLegend variant="label">Default agents</FieldLegend>
+                {(["analystAgent", "implementerAgent", "reviewerAgent"] as const).map((key) => {
+                  const role = key === "analystAgent" ? "analyst" : key === "implementerAgent" ? "implementer" : "reviewer";
+                  const options = agents.filter((agent) => agent.role === role);
+                  const selected = options.find((agent) => agent.id === form[key]);
+                  return <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{role.slice(0, 1).toUpperCase() + role.slice(1)} default</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><ProfileAvatar name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent><SelectItem value={null}>None</SelectItem>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select></Field>;
+                })}
+                {agents.length === 0 ? <FieldDescription>No agents configured. <a href={withCompany("/admin/agents", project.companyId)}>Create an agent</a> before activating this project.</FieldDescription> : null}
               </FieldSet>
-              {(["leadProfile", "developerProfile", "reviewerProfile"] as const).map((key) => <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{key === "leadProfile" ? "Lead default" : key === "developerProfile" ? "Developer default" : "Reviewer default (optional)"}</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None">{(value) => { const profile = allowedProfiles.find((candidate) => candidate.id === value); return profile ? <span className="flex items-center gap-2"><ProfileAvatar name={profile.name} seed={profile.avatarSeed} />{profile.name}</span> : value ? "Unavailable profile" : "None"; }}</SelectValue></SelectTrigger><SelectContent><SelectItem value={null}>None</SelectItem>{allowedProfiles.map((profile) => <SelectItem key={profile.id} value={profile.id}><ProfileAvatar name={profile.name} seed={profile.avatarSeed} />{profile.name}</SelectItem>)}</SelectContent></Select></Field>)}
               <DialogFooter>{missingRequirements.length ? <span className="mr-auto text-[11px] text-amber-800">Complete the missing requirements to save.</span> : null}<DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><Button type="submit" size="sm" disabled={busy || missingRequirements.length > 0}>{busy ? "Saving…" : "Save settings"}</Button></DialogFooter>
             </FieldGroup>
           </form> : null}
@@ -289,7 +277,7 @@ function ProjectSettingsDialog({
 
 export function ProjectsView(): ReactElement {
   const { currentCompany, loading, user, error: companyError, reloadCompanies } = useCompanyContext();
-  const [profiles, setProfiles] = useState<ApiProfile[]>([]);
+  const [agents, setAgents] = useState<ApiAgent[]>([]);
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [loadError, setLoadError] = useState("");
@@ -306,17 +294,17 @@ export function ProjectsView(): ReactElement {
       loadedCompanyIdRef.current = "";
       setLoadedCompanyId("");
       setProjects([]);
-      setProfiles([]);
+      setAgents([]);
     }
     if (!companyId || loading) return;
     try {
-      const [profileResult, projectResult] = await Promise.all([
-        readJson<{ profiles: ApiProfile[] }>("/api/profiles"),
+      const [agentResult, projectResult] = await Promise.all([
+        readJson<{ agents: ApiAgent[] }>("/api/agents"),
         readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
       ]);
       if (token !== requestToken.current) return;
       loadedCompanyIdRef.current = companyId;
-      setProfiles(profileResult.profiles); setProjects(projectResult.projects); setLoadedCompanyId(companyId);
+      setAgents(agentResult.agents); setProjects(projectResult.projects); setLoadedCompanyId(companyId);
     } catch (reason) {
       if (token !== requestToken.current) return;
       if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
@@ -342,7 +330,7 @@ export function ProjectsView(): ReactElement {
           {currentCompany ? (
             <div className="grid gap-3">
               {visibleProjects.map((project) => {
-                const requirements = activationRequirements({ requiredChecks: project.requiredChecks, allowedProfileIds: project.allowedProfileIds, leadProfile: project.roleDefaults.lead, developerProfile: project.roleDefaults.developer });
+                const requirements = activationRequirements({ requiredChecks: project.requiredChecks, analystAgent: project.roleDefaults.analyst, implementerAgent: project.roleDefaults.implementer, reviewerAgent: project.roleDefaults.reviewer });
                 const missingRequirements = requirements.filter((requirement) => !requirement.complete);
                 const ready = missingRequirements.length === 0;
                 return (
@@ -352,7 +340,7 @@ export function ProjectsView(): ReactElement {
                       <CardTitle><div className="flex min-w-0 flex-wrap items-center gap-2"><span className="text-[13px]">{project.name}</span>{project.status === "draft" ? <Badge variant="secondary" data-status="draft"><span className="size-1.5 rounded-full bg-amber-500" />Draft</Badge> : <Badge variant="secondary" data-status={project.status}>{project.status}</Badge>}<span className="text-[11px] font-normal text-muted-foreground">revision {project.configurationRevision}</span></div></CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Revision hash {project.configurationIdentity ? `${project.configurationIdentity.slice(0, 8)}…` : "unaccepted"}</span><span>Base {project.baseBranch} · {project.baseSha ? `${project.baseSha.slice(0, 8)}…` : "unaccepted"}</span><span>Target {project.targetBranch} · {project.targetSha ? `${project.targetSha.slice(0, 8)}…` : "unaccepted"}</span><span>{project.requiredChecks.length} required checks</span><span>Defaults: Lead {project.roleDefaults.lead ?? "—"} · Developer {project.roleDefaults.developer ?? "—"}</span>{project.status === "draft" && missingRequirements.length ? <span className="font-medium text-amber-700 sm:col-span-2">{missingRequirements.length} activation requirements missing: {missingRequirements.map((requirement) => requirement.label).join(" · ")}</span> : null}</div>
+                      <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Revision hash {project.configurationIdentity ? `${project.configurationIdentity.slice(0, 8)}…` : "unaccepted"}</span><span>Base {project.baseBranch} · {project.baseSha ? `${project.baseSha.slice(0, 8)}…` : "unaccepted"}</span><span>Target {project.targetBranch} · {project.targetSha ? `${project.targetSha.slice(0, 8)}…` : "unaccepted"}</span><span>{project.requiredChecks.length} required checks</span><span>Defaults: Analyst {agents.find((agent) => agent.id === project.roleDefaults.analyst)?.name ?? "—"} · Implementer {agents.find((agent) => agent.id === project.roleDefaults.implementer)?.name ?? "—"} · Reviewer {agents.find((agent) => agent.id === project.roleDefaults.reviewer)?.name ?? "—"}</span>{project.status === "draft" && missingRequirements.length ? <span className="font-medium text-amber-700 sm:col-span-2">{missingRequirements.length} activation requirements missing: {missingRequirements.map((requirement) => requirement.label).join(" · ")}</span> : null}</div>
                     </CardContent>
                     <CardFooter className="border-t"><div className="flex w-full flex-wrap justify-end gap-1.5">{project.status === "draft" && ready ? <Button size="sm" onClick={() => void changeStatus(project.id, "activate")}>Activate</Button> : null}{project.status === "needs-reactivation" || project.status === "paused" ? <Button size="sm" onClick={() => void changeStatus(project.id, "reactivate")}>Reactivate</Button> : null}{project.status === "active" || project.status === "needs-reactivation" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "pause")}>Pause</Button> : null}{project.status !== "archived" ? <Button variant={project.status === "draft" && !ready ? "default" : "ghost"} size="sm" onClick={() => setSettingsProject(project)}>Configure</Button> : null}{project.status !== "archived" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "archive")}>Archive</Button> : null}<a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></CardFooter>
                     </Card>
@@ -365,7 +353,7 @@ export function ProjectsView(): ReactElement {
           {loadError ? <div className="mt-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{loadError}</AlertDescription></Alert></div> : null}
         </section>
         <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} companyId={companyId} companyStatus={currentCompany?.status} onCreated={reload} reloadCompanies={reloadCompanies} />
-        <ProjectSettingsDialog project={settingsProject} profiles={profiles} onOpenChange={() => setSettingsProject(undefined)} onSaved={reload} />
+        <ProjectSettingsDialog project={settingsProject} agents={agents} onOpenChange={() => setSettingsProject(undefined)} onSaved={reload} />
       </div>
     </ApplicationFrame>
   );

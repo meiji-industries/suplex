@@ -37,7 +37,7 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
       await ctx.project();
       try {
         const plan = await ctx.acquireExternalTurn<contracts.MergeConflictPlanActivityResult>(
-          { operation: "merge_conflict_plan", role: "lead", profileId: ctx.input.roleProfiles.lead, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
+          { operation: "merge_conflict_plan", role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
           (capacityRequestId) => {
             const legacyPlanInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, branchName: ctx.state.branchName!, priorHead: ctx.state.forwardMergePriorHead!, targetBaseSha: ctx.state.forwardMergeTargetBaseSha!, ...(ctx.state.mergeConflictEvidence ? { conflictEvidence: ctx.state.mergeConflictEvidence } : { conflictFiles: ctx.state.forwardMergeConflictFiles ?? [], conflictDiff: ctx.state.forwardMergeConflictDiff ?? "" }), ...(ctx.state.forwardMergeId ? { forwardMergeId: ctx.state.forwardMergeId } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) } as unknown as Parameters<typeof activityProxies.planMergeConflict>[0];
             return activityProxies.planMergeConflict(legacyPlanInput);

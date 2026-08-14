@@ -138,6 +138,10 @@ test("the mandatory release seam proves HTTP, Temporal, real Codex, browser reso
 
     const company = await releaseRequest<{ id: string }>(server, "POST", "/api/admin/companies", enrolled.sessionToken, csrfToken, { name: "Real Release Company" });
     const profile = await releaseRequest<{ id: string }>(server, "POST", "/api/admin/profiles", enrolled.sessionToken, csrfToken, { name: "Real Release Lead", model, reasoningLevel: "low", servicePriority: "standard", capacity: 1 });
+    const createAgent = async (name: string, role: "analyst" | "implementer" | "reviewer") => releaseRequest<{ id: string }>(server!, "POST", "/api/admin/agents", enrolled.sessionToken, csrfToken, { name, role, profileId: profile.id });
+    const analyst = await createAgent("Real Release Analyst", "analyst");
+    const implementer = await createAgent("Real Release Implementer", "implementer");
+    const reviewer = await createAgent("Real Release Reviewer", "reviewer");
     const projectDraft = await releaseRequest<{ id: string }>(server, "POST", `/api/companies/${company.id}/projects`, enrolled.sessionToken, csrfToken, {
       name: "Real Release Project",
       repositoryPath,
@@ -148,8 +152,7 @@ test("the mandatory release seam proves HTTP, Temporal, real Codex, browser reso
       setupCommand: "pnpm install",
       verificationCommand: "pnpm test",
       requiredChecks: ["Tests / unit"],
-      allowedProfileIds: [profile.id],
-      roleDefaults: { lead: profile.id, developer: profile.id },
+      roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id },
     });
     const project = await releaseRequest<{ id: string; status: string; activeRevisionId?: string }>(server, "POST", `/api/projects/${projectDraft.id}/activate`, enrolled.sessionToken, csrfToken);
     expect(project.status).toBe("active");
@@ -162,7 +165,7 @@ test("the mandatory release seam proves HTTP, Temporal, real Codex, browser reso
       description,
       idempotencyKey,
       images: withImage ? [{ filename: "release.png", mimeType: "image/png", base64: image }] : [],
-      roleProfiles: { lead: profile.id },
+      roleAgents: { analyst: analyst.id },
     });
     const getTask = (taskId: string) => releaseRequest<Record<string, unknown>>(server!, "GET", `/api/tasks/${taskId}`, enrolled.sessionToken, csrfToken);
     const startPlanning = async (taskId: string, revision: number) => {

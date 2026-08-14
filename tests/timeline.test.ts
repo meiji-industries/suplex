@@ -6,22 +6,22 @@ function at(day: number, hour: number, minute = 0): string {
   return new Date(2026, 7, day, hour, minute).toISOString();
 }
 
-function invocation(id: string, role: "lead" | "developer", startedAt: string, finishedAt: string | null) {
-  return { id, role, status: finishedAt ? "completed" : "running", attempt: 1, sessionPresent: true, sessionRef: id, startedAt, finishedAt, failureCode: null, failureSummary: null, evidenceArtifactId: null };
+function invocation(id: string, role: "analyst" | "implementer", startedAt: string, finishedAt: string | null, agentId: string, agentName: string, avatarSeed: string) {
+  return { id, role, status: finishedAt ? "completed" : "running", attempt: 1, sessionPresent: true, sessionRef: id, startedAt, finishedAt, failureCode: null, failureSummary: null, evidenceArtifactId: null, agentId, agentName, avatarSeed };
 }
 
 test("agent time is split by local day and summed per ticket", () => {
   const tasks: TimelineTask[] = [
     {
-      id: "ticket-a", projectId: "project-a", issueKey: "ADAM-1", title: "First ticket", roleProfiles: { lead: "lead-profile", developer: "developer-profile" },
-      agentInvocations: [invocation("lead-a", "lead", at(10, 23, 30), at(11, 0, 30)), invocation("developer-a", "developer", at(11, 0), at(11, 1))],
+      id: "ticket-a", projectId: "project-a", issueKey: "ADAM-1", title: "First ticket",
+      agentInvocations: [invocation("analyst-a", "analyst", at(10, 23, 30), at(11, 0, 30), "analyst-agent", "Analyst agent", "a".repeat(32)), invocation("implementer-a", "implementer", at(11, 0), at(11, 1), "implementer-agent", "Implementer agent", "b".repeat(32))],
     },
     {
-      id: "ticket-b", projectId: "project-a", issueKey: null, title: "Second ticket", roleProfiles: { lead: "lead-profile", developer: "developer-profile" },
-      agentInvocations: [invocation("lead-b", "lead", at(11, 0, 15), at(11, 0, 45)), invocation("developer-b", "developer", at(11, 1, 45), null)],
+      id: "ticket-b", projectId: "project-a", issueKey: null, title: "Second ticket",
+      agentInvocations: [invocation("analyst-b", "analyst", at(11, 0, 15), at(11, 0, 45), "analyst-agent", "Analyst agent", "a".repeat(32)), invocation("implementer-b", "implementer", at(11, 1, 45), null, "implementer-agent", "Implementer agent", "b".repeat(32))],
     },
   ];
-  const summary = summarizeAgentTime(tasks, [{ id: "lead-profile", name: "Lead agent", avatarSeed: "a".repeat(32) }, { id: "developer-profile", name: "Developer agent", avatarSeed: "b".repeat(32) }], [{ id: "project-a", name: "Forge" }], { start: new Date(2026, 7, 10).getTime(), end: new Date(2026, 7, 12).getTime() }, new Date(2026, 7, 11, 2).getTime());
+  const summary = summarizeAgentTime(tasks, [{ id: "project-a", name: "Forge" }], { start: new Date(2026, 7, 10).getTime(), end: new Date(2026, 7, 12).getTime() }, new Date(2026, 7, 11, 2).getTime());
 
   expect(summary.durationMs).toBe(165 * 60_000);
   expect(summary.ticketTotals.map(({ key, durationMs }) => ({ key, durationMs }))).toEqual([
@@ -33,7 +33,7 @@ test("agent time is split by local day and summed per ticket", () => {
     { key: "2026-08-11", durationMs: 135 * 60_000, invocationCount: 4 },
     { key: "2026-08-10", durationMs: 30 * 60_000, invocationCount: 1 },
   ]);
-  expect(summary.lanes.find((lane) => lane.key === "lead-profile")).toMatchObject({ name: "Lead agent", trackCount: 2, durationMs: 90 * 60_000 });
+  expect(summary.lanes.find((lane) => lane.key === "analyst-agent")).toMatchObject({ name: "Analyst agent", trackCount: 2, durationMs: 90 * 60_000 });
 });
 
 test("timeline selections stay inside the source window and keep a usable width", () => {

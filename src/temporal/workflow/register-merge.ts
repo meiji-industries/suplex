@@ -49,7 +49,7 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
     try {
       const mergeInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, planRevision, ...prior };
       const outcome = await ctx.acquireExternalTurn(
-        { operation: "merge_conflict_resolution", role: "developer", profileId: ctx.input.roleProfiles.developer, sessionRef: prior.developerSessionRef, worktreePath: ctx.state.worktreePath },
+        { operation: "merge_conflict_resolution", role: "implementer", profileId: ctx.input.roleProfiles.implementer, sessionRef: prior.developerSessionRef, worktreePath: ctx.state.worktreePath },
         (capacityRequestId) => ctx.supervisedDeveloperTurns
           ? activityProxies.resolveMergeConflictSupervised({ ...mergeInput, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "merge_conflict_resolution", ...(capacityRequestId ? { capacityRequestId } : {}) })
           : activityProxies.resolveMergeConflict({ ...mergeInput, ...(capacityRequestId ? { capacityRequestId } : {}) }).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),

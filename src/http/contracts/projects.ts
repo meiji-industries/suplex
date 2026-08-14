@@ -2,13 +2,12 @@ import { z } from "zod";
 
 import { AdminCapacityLaneSchema } from "../../capacity-contracts.js";
 
-const ProjectRoleDefaultsSchema = z.object({ lead: z.string().optional(), developer: z.string().optional(), reviewer: z.string().optional() });
+const ProjectRoleDefaultsSchema = z.object({ analyst: z.string().optional(), implementer: z.string().optional(), reviewer: z.string().optional() });
 
 const OptionalCapacitySchema = z.preprocess((value) => value === "" ? null : value, z.coerce.number().int().min(1).max(32).nullable().optional());
 
 export const ProfileBodySchema = z.object({
   name: z.string().default(""),
-  avatarSeed: z.string().regex(/^[a-f0-9]{32}$/).optional(),
   model: z.string().default(""),
   reasoningLevel: z.enum(["low", "medium", "high"]),
   servicePriority: z.enum(["standard", "priority"]),
@@ -26,9 +25,13 @@ export const ProjectBodySchema = z.object({
   setupCommand: z.string().default(""),
   verificationCommand: z.string().default(""),
   requiredChecks: z.array(z.string()).default([]),
-  allowedProfileIds: z.array(z.string()).default([]),
   roleDefaults: ProjectRoleDefaultsSchema.default({}),
 }).strict();
+
+export const AgentBodySchema = z.object({ name: z.string().min(1), role: z.enum(["analyst", "implementer", "reviewer"]), avatarSeed: z.string().regex(/^[a-f0-9]{32}$/).optional(), profileId: z.string().min(1) }).strict();
+export const AgentResponseSchema = z.object({ id: z.string(), name: z.string(), role: z.enum(["analyst", "implementer", "reviewer"]), avatarSeed: z.string(), profileId: z.string(), createdAt: z.string(), updatedAt: z.string() });
+export const AgentListResponseSchema = z.object({ agents: z.array(AgentResponseSchema) });
+export type AgentResponse = z.infer<typeof AgentResponseSchema>;
 
 export const ProjectRepositoryBodySchema = z.object({
   repositoryUrl: z.string().default(""),
@@ -36,7 +39,7 @@ export const ProjectRepositoryBodySchema = z.object({
 
 export const ProjectCreateBodySchema = z.union([ProjectRepositoryBodySchema, ProjectBodySchema]);
 
-export const ProfileResponseSchema = z.object({ id: z.string(), name: z.string(), avatarSeed: z.string(), provider: z.literal("codex"), model: z.string(), reasoningLevel: z.enum(["low", "medium", "high"]), servicePriority: z.enum(["standard", "priority"]), capacity: z.number().nullable(), effectiveCapacity: z.number().int().min(1).max(32), createdAt: z.string(), updatedAt: z.string() });
+export const ProfileResponseSchema = z.object({ id: z.string(), name: z.string(), provider: z.literal("codex"), model: z.string(), reasoningLevel: z.enum(["low", "medium", "high"]), servicePriority: z.enum(["standard", "priority"]), capacity: z.number().nullable(), effectiveCapacity: z.number().int().min(1).max(32), createdAt: z.string(), updatedAt: z.string() });
 export const ProfileListResponseSchema = z.object({ profiles: z.array(ProfileResponseSchema) });
 export const AdminCapacityListResponseSchema = z.object({ lanes: z.array(AdminCapacityLaneSchema) });
 export const ModelResponseSchema = z.object({ id: z.string(), displayName: z.string(), description: z.string(), status: z.enum(["active", "retired"]), sortOrder: z.number(), createdAt: z.string(), updatedAt: z.string() });
@@ -47,7 +50,7 @@ export const ModelIdParamsSchema = z.object({ modelId: z.string() });
 export const ProjectCheckListResponseSchema = z.object({ checks: z.array(z.object({ name: z.string(), status: z.string(), conclusion: z.string().optional() })) });
 export const ProjectRepositoryDefaultsResponseSchema = z.object({ setupCommand: z.string(), verificationCommand: z.string() });
 export const ProjectResponseSchema = z.object({
-  id: z.string(), companyId: z.string(), name: z.string(), repositoryPath: z.string(), worktreeRoot: z.string(), repository: z.string().optional(), baseBranch: z.string(), targetBranch: z.string(), setupCommand: z.string(), verificationCommand: z.string(), requiredChecks: z.array(z.string()), allowedProfileIds: z.array(z.string()), roleDefaults: ProjectRoleDefaultsSchema, status: z.enum(["draft", "active", "paused", "needs-reactivation", "archived"]), activeRevisionId: z.string().optional(), configurationRevision: z.number(), configurationIdentity: z.string().optional(), baseSha: z.string().optional(), targetSha: z.string().optional(), createdAt: z.string(), updatedAt: z.string(),
+  id: z.string(), companyId: z.string(), name: z.string(), repositoryPath: z.string(), worktreeRoot: z.string(), repository: z.string().optional(), baseBranch: z.string(), targetBranch: z.string(), setupCommand: z.string(), verificationCommand: z.string(), requiredChecks: z.array(z.string()), roleDefaults: ProjectRoleDefaultsSchema, status: z.enum(["draft", "active", "paused", "needs-reactivation", "archived"]), activeRevisionId: z.string().optional(), configurationRevision: z.number(), configurationIdentity: z.string().optional(), baseSha: z.string().optional(), targetSha: z.string().optional(), createdAt: z.string(), updatedAt: z.string(),
 });
 export const ProjectListResponseSchema = z.object({ projects: z.array(ProjectResponseSchema) });
 export type ProfileResponse = z.infer<typeof ProfileResponseSchema>;

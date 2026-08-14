@@ -11,7 +11,7 @@ import type { PublicCapacityStatus } from "./capacity-contracts.js";
 import { ForgeDatabase, projectionStateHash } from "./database.js";
 import { canonicalJson } from "./canonical-json.js";
 import { redact } from "./logging.js";
-import { ProjectFailure, ProjectService, type ProjectRole } from "./projects.js";
+import { ProjectFailure, ProjectService, resolveAgentProfiles, type ProjectRole, type RoleAssignments } from "./projects.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
 import { acceptIssueDevelopment, acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, reviseIssuePlan, startIssueWorkflow } from "./temporal/service.js";
 import { issueCommands } from "./commands/registry.js";
@@ -90,7 +90,7 @@ export interface TaskInput {
   description: string;
   idempotencyKey: string;
   images: TaskImageInput[];
-  roleProfiles?: Partial<Record<ProjectRole, string>>;
+  roleAgents?: RoleAssignments;
   supplementalReview?: boolean;
 }
 
@@ -116,7 +116,7 @@ export interface TaskActivityEntry extends TaskTimelineEntry {
 
 export interface TaskAgentInvocation {
   id: string;
-  role: "lead" | "reviewer" | "developer";
+  role: "analyst" | "reviewer" | "implementer";
   status: string;
   attempt: number;
   sessionPresent: boolean;
@@ -127,7 +127,8 @@ export interface TaskAgentInvocation {
   failureSummary: string | null;
   evidenceArtifactId: string | null;
   profileId?: string | null;
-  profileName?: string | null;
+  agentId?: string | null;
+  agentName?: string | null;
   avatarSeed?: string | null;
   model?: string | null;
   reasoningLevel?: string | null;
@@ -371,7 +372,7 @@ export interface ForgeTask {
   description: string;
   briefArtifactId: string;
   images: TaskImage[];
-  roleProfiles: Partial<Record<ProjectRole, string>>;
+  roleAgents: RoleAssignments;
   supplementalReview: boolean;
   workflowId: string;
   projectRevisionId: string;
@@ -669,7 +670,7 @@ interface TaskRow {
   title: string;
   brief_artifact_id: string;
   image_artifact_ids_json: string;
-  role_profiles_json: string;
+  role_agents_json: string;
   supplemental_review: number;
   workflow_id: string;
   project_revision_id: string;
@@ -731,7 +732,7 @@ interface CreationIntentRow {
 
 interface AgentInvocationRow {
   id: string;
-  role: "lead" | "reviewer" | "developer";
+  role: "analyst" | "reviewer" | "implementer";
   status: string;
   attempt: number;
   session_ref: string | null;
@@ -741,7 +742,8 @@ interface AgentInvocationRow {
   failure_summary: string | null;
   evidence_artifact_id: string | null;
   profile_id: string | null;
-  profile_name: string | null;
+  agent_id: string | null;
+  agent_name: string | null;
   avatar_seed: string | null;
   resolved_model: string | null;
   resolved_reasoning_level: string | null;
@@ -790,8 +792,8 @@ function parseImageIds(raw: string): string[] {
   return json<string[]>(raw, []).filter((value) => typeof value === "string");
 }
 
-function parseProfiles(raw: string): Partial<Record<ProjectRole, string>> {
-  return json<Partial<Record<ProjectRole, string>>>(raw, {});
+function parseRoleAgents(raw: string): RoleAssignments {
+  return json<RoleAssignments>(raw, {});
 }
 
 function parseMaterialCategories(raw: string | null): PlanMaterialCategory[] {
@@ -838,18 +840,18 @@ export function creationRequestHash(input: {
   title: string;
   description: string;
   imageHashes: string[];
-  roleProfiles: Partial<Record<ProjectRole, string>>;
+  roleAgents: RoleAssignments;
   supplementalReview: boolean;
   projectRevisionId: string;
 }): string {
-  const roles = Object.fromEntries(Object.entries(input.roleProfiles).sort(([left], [right]) => left.localeCompare(right)));
+  const roles = Object.fromEntries(Object.entries(input.roleAgents).sort(([left], [right]) => left.localeCompare(right)));
   return createHash("sha256").update(canonicalJson({
     companyId: normalizeText(input.companyId),
     projectId: normalizeText(input.projectId),
     title: normalizeText(input.title),
     description: normalizeText(input.description),
     imageHashes: input.imageHashes,
-    roleProfiles: roles,
+    roleAgents: roles,
     supplementalReview: input.supplementalReview,
     projectRevisionId: normalizeText(input.projectRevisionId),
   })).digest("hex");
@@ -969,6 +971,25 @@ export class TaskService {
     return this.publicTask(actorUserId, row);
   }
 
+  updateTaskAgents(actorUserId: string, taskId: string, partial: RoleAssignments): ForgeTask {
+    const current = this.getTask(actorUserId, taskId);
+    const merged = { ...current.roleAgents };
+    this.database.authTransaction((db) => {
+      for (const [role, agentId] of Object.entries(partial)) {
+        if (!agentId) continue;
+        const agent = db.prepare("SELECT id FROM forge_agents WHERE id = ? AND role = ?").get(agentId, role) as { id: string } | undefined;
+        if (!agent) throw new TaskFailure("Task agent assignment is invalid", [finding("agent-ineligible", `roleAgents.${role}`, "Selected agent is unavailable or has a different role")], 422);
+        merged[role as ProjectRole] = agentId;
+      }
+      const now = this.now().toISOString();
+      // Deliberate last-write-wins: this single-user app does not need expectedRevision here.
+      db.prepare("UPDATE forge_tasks SET role_agents_json = ?, updated_at = ? WHERE id = ? AND company_id = ?").run(JSON.stringify(merged), now, taskId, current.companyId);
+      this.auth.recordAuditEventInTransaction(db, actorUserId, "task_agents_updated", undefined, current.companyId, { taskId, roleAgents: JSON.stringify(partial) });
+      db.prepare("INSERT INTO forge_projection_invalidations (id, company_id, task_id, revision, attention_changed, created_at) VALUES (?, ?, ?, ?, 0, ?)").run(`task-agents-${randomBytes(8).toString("hex")}`, current.companyId, taskId, current.revision, now);
+    });
+    return this.getTask(actorUserId, taskId);
+  }
+
   async getDeveloperDiff(actorUserId: string, taskId: string): Promise<TaskDeveloperDiff> {
     const task = this.getTask(actorUserId, taskId);
     const execution = task.developerExecution;
@@ -1005,8 +1026,8 @@ export class TaskService {
     const validation = this.validateTaskInput(input);
     if (validation.length) throw new TaskFailure("Task brief is invalid", validation, 422);
 
-    const roleProfiles = this.resolveRoleProfiles(project.roleDefaults, project.allowedProfileIds, input.roleProfiles ?? {});
-    if (input.supplementalReview === true && !roleProfiles.reviewer) throw new TaskFailure("Task brief is invalid", [finding("reviewer-profile-required", "supplementalReview", "A permitted reviewer profile is required when supplemental review is enabled")], 422);
+    const roleAgents = this.resolveRoleAgents(project.roleDefaults, input.roleAgents ?? {});
+    const roleProfiles = this.database.authQuery((db) => resolveAgentProfiles(db, roleAgents));
     let decodedImages: Array<{ image: TaskImageInput; bytes: Buffer }>;
     try {
       decodedImages = input.images.map((image) => ({ image, bytes: this.decodeImage(image) }));
@@ -1020,7 +1041,7 @@ export class TaskService {
       title: input.title,
       description: input.description,
       imageHashes: decodedImages.map(({ bytes }) => createHash("sha256").update(bytes).digest("hex")),
-      roleProfiles,
+      roleAgents,
       supplementalReview: input.supplementalReview === true,
       projectRevisionId: project.activeRevisionId,
     });
@@ -1065,12 +1086,12 @@ export class TaskService {
       if (!briefArtifact) throw new ArtifactFailure("artifact-corrupt", "Task brief could not be stored");
       await this.maybeFault("after_artifact_staged", { intentId: reserved.intent.id, taskId });
       const now = this.now().toISOString();
-      const initialState = createInitialIssueWorkflowState({ issueId: taskId, companyId, projectId: input.projectId, workflowId, projectRevisionId: project.activeRevisionId, requestHash, briefArtifactId: briefArtifact.id, briefSha256: briefArtifact.sha256, imageArtifactIds: imageArtifacts.map((artifact) => artifact.id), roleProfiles, supplementalReview: input.supplementalReview === true });
+      const initialState = createInitialIssueWorkflowState({ issueId: taskId, companyId, projectId: input.projectId, workflowId, projectRevisionId: project.activeRevisionId, requestHash, briefArtifactId: briefArtifact.id, briefSha256: briefArtifact.sha256, imageArtifactIds: imageArtifacts.map((artifact) => artifact.id), roleProfiles, supplementalReview: input.supplementalReview === true, repairCycleLimit: 2 });
       const eventHash = projectionStateHash(initialState);
       this.database.authTransaction((db) => {
         db.prepare(`INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(briefArtifact!.id, companyId, briefArtifact!.kind, briefArtifact!.filename, briefArtifact!.mimeType, briefArtifact!.byteSize, briefArtifact!.sha256, briefArtifact!.storagePath, briefArtifact!.createdAt);
         for (const artifact of imageArtifacts) db.prepare(`INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(artifact.id, companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-        db.prepare(`INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(taskId, companyId, input.projectId, input.title.trim(), briefArtifact!.id, JSON.stringify(imageArtifacts.map((artifact) => artifact.id)), JSON.stringify(roleProfiles), input.supplementalReview === true ? 1 : 0, workflowId, project.activeRevisionId, idempotencyKey, requestHash, now, now);
+        db.prepare(`INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(taskId, companyId, input.projectId, input.title.trim(), briefArtifact!.id, JSON.stringify(imageArtifacts.map((artifact) => artifact.id)), JSON.stringify(roleAgents), input.supplementalReview === true ? 1 : 0, workflowId, project.activeRevisionId, idempotencyKey, requestHash, now, now);
         db.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, authoritative_event_hash, projected_at) VALUES (?, ?, ?, ?, 0, 'backlog', 'human', ?, ?, ?, ?, ?, 0, ?, ?)`).run(taskId, companyId, input.projectId, workflowId, JSON.stringify(["start_planning"]), "Start planning", now, `${workflowId}:0`, eventHash, eventHash, now);
         db.prepare(`INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, 0, 'task_created', ?, ?, ?)`).run(`${workflowId}:0`, taskId, companyId, workflowId, JSON.stringify({ revision: 0, stateHash: eventHash }), now, eventHash);
         db.prepare(`INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, ?, ?, 0, ?, ?)`).run(taskId, companyId, workflowId, JSON.stringify(initialState), now);
@@ -1079,7 +1100,7 @@ export class TaskService {
         this.auth.recordAuditEventInTransaction(db, actorUserId, "task_created", undefined, companyId, { taskId, projectId: input.projectId, workflowId });
       });
       await this.maybeFault("after_task_committed", { intentId: reserved.intent.id, taskId });
-      await this.startCreationWorkflow(reserved.intent.id, reserved.intent.lease_token, taskId, companyId, input.projectId, project.activeRevisionId, briefArtifact, imageArtifacts, roleProfiles, input.supplementalReview === true, requestHash, workflowId);
+      await this.startCreationWorkflow(reserved.intent.id, reserved.intent.lease_token, taskId, companyId, input.projectId, project.activeRevisionId, briefArtifact, imageArtifacts, roleAgents, input.supplementalReview === true, requestHash, workflowId);
       const task = this.getTask(actorUserId, taskId);
       await this.maybeFault("before_response", { intentId: reserved.intent.id, taskId });
       return { task, created: true };
@@ -1189,7 +1210,7 @@ export class TaskService {
       return { task, created: false };
     }
     if (intent.state === "workflow_starting") {
-      const task = this.database.authQuery((db) => db.prepare("SELECT t.id, t.company_id, t.project_id, t.project_revision_id, t.brief_artifact_id, t.image_artifact_ids_json, t.role_profiles_json, t.supplemental_review, t.workflow_id, b.sha256 AS brief_sha256 FROM forge_tasks t JOIN forge_artifacts b ON b.id = t.brief_artifact_id WHERE t.id = ? AND t.company_id = ?").get(intent.task_id, intent.company_id) as { id: string; company_id: string; project_id: string; project_revision_id: string; brief_artifact_id: string; image_artifact_ids_json: string; role_profiles_json: string; supplemental_review: number; workflow_id: string; brief_sha256: string } | undefined);
+      const task = this.database.authQuery((db) => db.prepare("SELECT t.id, t.company_id, t.project_id, t.project_revision_id, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.workflow_id, b.sha256 AS brief_sha256 FROM forge_tasks t JOIN forge_artifacts b ON b.id = t.brief_artifact_id WHERE t.id = ? AND t.company_id = ?").get(intent.task_id, intent.company_id) as { id: string; company_id: string; project_id: string; project_revision_id: string; brief_artifact_id: string; image_artifact_ids_json: string; role_agents_json: string; supplemental_review: number; workflow_id: string; brief_sha256: string } | undefined);
       if (task) {
         const imageIds = parseImageIds(task.image_artifact_ids_json);
         const images = this.database.authQuery((db) => {
@@ -1197,7 +1218,7 @@ export class TaskService {
           const placeholders = imageIds.map(() => "?").join(",");
           return db.prepare(`SELECT id, sha256 FROM forge_artifacts WHERE company_id = ? AND id IN (${placeholders}) ORDER BY rowid`).all(intent.company_id, ...imageIds) as Array<{ id: string; sha256: string }>;
         });
-        await this.startCreationWorkflow(intent.id, intent.lease_token, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), JSON.parse(task.role_profiles_json) as Partial<Record<ProjectRole, string>>, task.supplemental_review === 1, intent.request_hash, task.workflow_id);
+        await this.startCreationWorkflow(intent.id, intent.lease_token, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), JSON.parse(task.role_agents_json) as RoleAssignments, task.supplemental_review === 1, intent.request_hash, task.workflow_id);
         const updated = this.getTask(actorUserId, task.id);
         return { task: updated, created: false };
       }
@@ -1220,10 +1241,11 @@ export class TaskService {
     return this.createTask(actorUserId, intent.company_id, input);
   }
 
-  private async startCreationWorkflow(intentId: string, leaseToken: string | null, taskId: string, companyId: string, projectId: string, projectRevisionId: string, briefArtifact: Pick<StoredArtifact, "id" | "sha256">, imageArtifacts: Array<Pick<StoredArtifact, "id" | "sha256">>, roleProfiles: Partial<Record<ProjectRole, string>>, supplementalReview: boolean, requestHash: string, workflowId: string): Promise<void> {
+  private async startCreationWorkflow(intentId: string, leaseToken: string | null, taskId: string, companyId: string, projectId: string, projectRevisionId: string, briefArtifact: Pick<StoredArtifact, "id" | "sha256">, imageArtifacts: Array<Pick<StoredArtifact, "id" | "sha256">>, roleAgents: RoleAssignments, supplementalReview: boolean, requestHash: string, workflowId: string): Promise<void> {
     let accepted = false;
     try {
       await this.maybeFault("before_workflow_start", { intentId, taskId });
+      const roleProfiles = this.database.authQuery((db) => resolveAgentProfiles(db, roleAgents));
       await this.workflow.start({ companyId, projectId, issueId: taskId, projectRevisionId, briefArtifactId: briefArtifact.id, briefSha256: briefArtifact.sha256, imageArtifactIds: imageArtifacts.map((artifact) => artifact.id), requestHash, roleProfiles, supplementalReview, repairCycleLimit: this.config.deliveryRepairCycleLimit, workflowId });
       accepted = true;
       await this.maybeFault("after_workflow_accepted", { intentId, taskId });
@@ -1557,15 +1579,21 @@ export class TaskService {
     return findings;
   }
 
-  private resolveRoleProfiles(defaults: Partial<Record<ProjectRole, string>>, allowed: string[], overrides: Partial<Record<ProjectRole, string>>): Partial<Record<ProjectRole, string>> {
-    const result: Partial<Record<ProjectRole, string>> = { ...defaults };
-    for (const role of ["lead", "developer", "reviewer"] as const) {
-      const selected = overrides[role];
-      if (selected !== undefined) {
-        if (!allowed.includes(selected)) throw new TaskFailure("Task brief is invalid", [finding("profile-ineligible", `roleProfiles.${role}`, "Selected role profile is not allowed by the project")], 422);
-        result[role] = selected;
+  private resolveRoleAgents(defaults: RoleAssignments, overrides: RoleAssignments): RoleAssignments {
+    const result: RoleAssignments = { ...defaults };
+    this.database.authQuery((db) => {
+      for (const role of ["analyst", "implementer", "reviewer"] as const) {
+        const selected = overrides[role];
+        if (selected !== undefined) {
+          const agent = db.prepare("SELECT id FROM forge_agents WHERE id = ? AND role = ?").get(selected, role) as { id: string } | undefined;
+          if (!agent) throw new TaskFailure("Task brief is invalid", [finding("agent-ineligible", `roleAgents.${role}`, "Selected agent is unavailable or has a different role")], 422);
+          result[role] = selected;
+        }
+        if (!result[role]) throw new TaskFailure("Task brief is invalid", [finding("missing-agent", `roleAgents.${role}`, "An agent is required for every role")], 422);
+        const assigned = db.prepare("SELECT id FROM forge_agents WHERE id = ? AND role = ?").get(result[role], role) as { id: string } | undefined;
+        if (!assigned) throw new TaskFailure("Task brief is invalid", [finding("agent-ineligible", `roleAgents.${role}`, "Assigned agent is unavailable or has a different role")], 422);
       }
-    }
+    });
     return result;
   }
 
@@ -1844,14 +1872,17 @@ export class TaskService {
     });
     const activity: TaskActivityEntry[] = [...timeline.map((entry): TaskActivityEntry => ({ ...entry, kind: "workflow", ...(entry.eventType === "task_created" && creator ? { actor: { id: creator.actor_id, displayName: creator.actor_name, username: creator.actor_username, avatarSeed: creator.actor_avatar_seed || creator.actor_username } } : {}) })), ...commandActivity, ...decisionActivity]
       .sort((left, right) => left.revision - right.revision || (left.kind === right.kind ? left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id) : left.kind === "member" ? -1 : 1));
+    // ponytail: display agent resolved via current task assignment; add agent_id columns to execution tables if history fidelity ever matters
     const agentInvocations = this.database.authQuery((db) => db.prepare(`SELECT e.id, e.role, e.status, e.attempt, e.session_ref, e.started_at, e.finished_at, e.failure_code, e.failure_summary, e.evidence_artifact_id,
-        e.profile_id, p.name AS profile_name, p.avatar_seed, e.resolved_model, e.resolved_reasoning_level, e.resolved_service_priority
-      FROM forge_agent_executions e LEFT JOIN forge_profiles p ON p.id = e.profile_id
+        e.profile_id, ag.id AS agent_id, ag.name AS agent_name, ag.avatar_seed, e.resolved_model, e.resolved_reasoning_level, e.resolved_service_priority
+      FROM forge_agent_executions e
+      LEFT JOIN forge_agents ag ON ag.id = json_extract((SELECT role_agents_json FROM forge_tasks WHERE id = e.task_id), '$.' || e.role)
       WHERE e.task_id = ? AND e.company_id = ?
       UNION ALL
-      SELECT d.id, 'developer' AS role, d.status, d.attempt, d.session_ref, d.started_at, d.finished_at, d.failure_code, d.failure_summary, d.evidence_artifact_id,
-        d.profile_id, p.name AS profile_name, p.avatar_seed, NULL AS resolved_model, NULL AS resolved_reasoning_level, NULL AS resolved_service_priority
-      FROM forge_developer_executions d LEFT JOIN forge_profiles p ON p.id = d.profile_id
+      SELECT d.id, 'implementer' AS role, d.status, d.attempt, d.session_ref, d.started_at, d.finished_at, d.failure_code, d.failure_summary, d.evidence_artifact_id,
+        d.profile_id, ag.id AS agent_id, ag.name AS agent_name, ag.avatar_seed, NULL AS resolved_model, NULL AS resolved_reasoning_level, NULL AS resolved_service_priority
+      FROM forge_developer_executions d
+      LEFT JOIN forge_agents ag ON ag.id = json_extract((SELECT role_agents_json FROM forge_tasks WHERE id = d.task_id), '$.implementer')
       WHERE d.task_id = ? AND d.company_id = ?
       ORDER BY 6, 1`).all(row.id, row.company_id, row.id, row.company_id) as AgentInvocationRow[]).map((invocation) => ({
         id: invocation.id,
@@ -1865,8 +1896,9 @@ export class TaskService {
         failureCode: invocation.failure_code,
         failureSummary: invocation.failure_summary,
         evidenceArtifactId: invocation.evidence_artifact_id,
+        agentId: invocation.agent_id,
         profileId: invocation.profile_id,
-        profileName: invocation.profile_name,
+        agentName: invocation.agent_name,
         avatarSeed: invocation.avatar_seed,
         model: invocation.resolved_model,
         reasoningLevel: invocation.resolved_reasoning_level,
@@ -1942,11 +1974,12 @@ export class TaskService {
     };
     const deliveryGate = this.deliveryGate(row, workflowState);
     const governanceView = { ...(this.planGovernanceView(row, workflowState) ?? {}), ...(workflowState.originalPlanSubject !== undefined ? { originalPlanSubject: workflowState.originalPlanSubject } : {}), ...(workflowState.finalPlanSubject !== undefined ? { finalPlanSubject: workflowState.finalPlanSubject } : {}), ...(workflowState.materialityEvidence !== undefined ? { materialityEvidence: workflowState.materialityEvidence } : {}), ...(workflowState.supplementalReviewSubject !== undefined ? { supplementalReviewSubject: workflowState.supplementalReviewSubject } : {}), ...(workflowState.planBlockerSubject !== undefined ? { planBlockerSubject: workflowState.planBlockerSubject } : {}), ...(workflowState.planDecisionReceipt !== undefined ? { planDecisionReceipt: workflowState.planDecisionReceipt } : {}), ...(workflowState.planBlockerResponseReceipt !== undefined ? { planBlockerResponseReceipt: workflowState.planBlockerResponseReceipt } : {}) };
-    const profiles = parseProfiles(row.role_profiles_json);
-    const commands = taskCommandDescriptors(allowedCommands, { expectedRevision: row.projection_revision, ...(profiles.reviewer ? { reviewerProfileId: profiles.reviewer } : {}), ...(workflowState.originalPlanSubject !== undefined ? { originalPlanSubject: workflowState.originalPlanSubject } : {}), ...(workflowState.finalPlanSubject !== undefined ? { finalPlanSubject: workflowState.finalPlanSubject } : {}), ...(workflowState.materialityEvidence !== undefined ? { materialityEvidence: workflowState.materialityEvidence } : {}), ...(workflowState.planBlockerSubject !== undefined ? { planBlockerSubject: workflowState.planBlockerSubject } : {}) });
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: profiles, supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, capacity, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), timeline, activity, agentInvocations, targetBaseReconciliation, reviewLineage, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, ...(planAuthorization ? { planAuthorizationId: planAuthorization.id, planArtifactSha256: planAuthorization.plan_sha256 } : {}), planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: parseMaterialCategories(governance.material_categories_json), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(deliveryGate ? { deliveryGate } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status === "completed" && !developerExecution.reconciliationArtifactId ? "unverified" : developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.reconciliationArtifactId ?? developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, reconciliationArtifactId: developerExecution.reconciliationArtifactId, manifestArtifactId: developerExecution.manifestArtifactId, rawReportArtifactId: developerExecution.rawReportArtifactId, beforeProviderArtifactId: developerExecution.beforeProviderArtifactId, afterProviderArtifactId: developerExecution.afterProviderArtifactId, boundaryMode: developerExecution.boundaryMode ?? undefined, providerObservation: developerExecution.beforeProviderSha256 && developerExecution.afterProviderSha256 ? developerExecution.beforeProviderSha256 === developerExecution.afterProviderSha256 ? "matching" : "different" : "unavailable", startingCommit: developerExecution.startingCommit, startingTree: developerExecution.startingTree, verificationCommands, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(ci ? { ci } : {}) };
+    const roleAgents = parseRoleAgents(row.role_agents_json);
+    const reviewerProfileId = this.database.authQuery((db) => resolveAgentProfiles(db, roleAgents.reviewer ? { reviewer: roleAgents.reviewer } : {})).reviewer;
+    const commands = taskCommandDescriptors(allowedCommands, { expectedRevision: row.projection_revision, ...(reviewerProfileId ? { reviewerProfileId } : {}), ...(workflowState.originalPlanSubject !== undefined ? { originalPlanSubject: workflowState.originalPlanSubject } : {}), ...(workflowState.finalPlanSubject !== undefined ? { finalPlanSubject: workflowState.finalPlanSubject } : {}), ...(workflowState.materialityEvidence !== undefined ? { materialityEvidence: workflowState.materialityEvidence } : {}), ...(workflowState.planBlockerSubject !== undefined ? { planBlockerSubject: workflowState.planBlockerSubject } : {}) });
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleAgents, supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, capacity, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), timeline, activity, agentInvocations, targetBaseReconciliation, reviewLineage, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, ...(planAuthorization ? { planAuthorizationId: planAuthorization.id, planArtifactSha256: planAuthorization.plan_sha256 } : {}), planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: parseMaterialCategories(governance.material_categories_json), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(deliveryGate ? { deliveryGate } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status === "completed" && !developerExecution.reconciliationArtifactId ? "unverified" : developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.reconciliationArtifactId ?? developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, reconciliationArtifactId: developerExecution.reconciliationArtifactId, manifestArtifactId: developerExecution.manifestArtifactId, rawReportArtifactId: developerExecution.rawReportArtifactId, beforeProviderArtifactId: developerExecution.beforeProviderArtifactId, afterProviderArtifactId: developerExecution.afterProviderArtifactId, boundaryMode: developerExecution.boundaryMode ?? undefined, providerObservation: developerExecution.beforeProviderSha256 && developerExecution.afterProviderSha256 ? developerExecution.beforeProviderSha256 === developerExecution.afterProviderSha256 ? "matching" : "different" : "unavailable", startingCommit: developerExecution.startingCommit, startingTree: developerExecution.startingTree, verificationCommands, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(ci ? { ci } : {}) };
 /* Superseded by the richer projection above.
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleProfiles: parseProfiles(row.role_profiles_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), ...(typeof reconciliationState.leadInputManifestArtifactId === "string" ? { leadInputManifestArtifactId: reconciliationState.leadInputManifestArtifactId } : {}), ...(typeof reconciliationState.leadInputManifestSha256 === "string" ? { leadInputManifestSha256: reconciliationState.leadInputManifestSha256 } : {}), ...(typeof reconciliationState.leadEvidenceSha256 === "string" ? { leadEvidenceSha256: reconciliationState.leadEvidenceSha256 } : {}), ...(typeof reconciliationState.leadOutputSha256 === "string" ? { leadOutputSha256: reconciliationState.leadOutputSha256 } : {}), ...(typeof reconciliationState.blockedCategory === "string" ? { blockedCategory: reconciliationState.blockedCategory as ForgeTask["blockedCategory"] } : {}), ...(reconciliationState.blockedResumePhase === "planning" ? { blockedResumePhase: reconciliationState.blockedResumePhase } : {}), ...(typeof reconciliationState.blockerArtifactId === "string" ? { blockerArtifactId: reconciliationState.blockerArtifactId } : {}), ...(typeof reconciliationState.blockerArtifactSha256 === "string" ? { blockerArtifactSha256: reconciliationState.blockerArtifactSha256 } : {}), timeline, agentInvocations, targetBaseReconciliation, reviewLineage, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(deliveryGate ? { deliveryGate } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleAgents: parseRoleAgents(row.role_agents_json), supplementalReview: row.supplemental_review === 1, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands: json<string[]>(row.allowed_commands_json, []), pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.authoritative_revision > row.projection_revision ? "lagging" : "current" }, ...(row.predecessor_task_id ? { predecessorTaskId: row.predecessor_task_id } : {}), ...(row.successor_task_id ? { successorTaskId: row.successor_task_id } : {}), ...(typeof reconciliationState.leadInputManifestArtifactId === "string" ? { leadInputManifestArtifactId: reconciliationState.leadInputManifestArtifactId } : {}), ...(typeof reconciliationState.leadInputManifestSha256 === "string" ? { leadInputManifestSha256: reconciliationState.leadInputManifestSha256 } : {}), ...(typeof reconciliationState.leadEvidenceSha256 === "string" ? { leadEvidenceSha256: reconciliationState.leadEvidenceSha256 } : {}), ...(typeof reconciliationState.leadOutputSha256 === "string" ? { leadOutputSha256: reconciliationState.leadOutputSha256 } : {}), ...(typeof reconciliationState.blockedCategory === "string" ? { blockedCategory: reconciliationState.blockedCategory as ForgeTask["blockedCategory"] } : {}), ...(reconciliationState.blockedResumePhase === "planning" ? { blockedResumePhase: reconciliationState.blockedResumePhase } : {}), ...(typeof reconciliationState.blockerArtifactId === "string" ? { blockerArtifactId: reconciliationState.blockerArtifactId } : {}), ...(typeof reconciliationState.blockerArtifactSha256 === "string" ? { blockerArtifactSha256: reconciliationState.blockerArtifactSha256 } : {}), timeline, agentInvocations, targetBaseReconciliation, reviewLineage, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null, ...(release !== undefined ? { release } : {}), ...(governance ? { planRevision: governance.plan_revision, planMaterial: governance.plan_material === null ? null : governance.plan_material === 1, materialCategories: json<string[]>(governance.material_categories_json ?? "[]", []), supplementalReviewUsed: governance.supplemental_review_used === 1, ...(governance.supplemental_review_artifact_id ? { supplementalReviewArtifactId: governance.supplemental_review_artifact_id } : {}), ...(governance.decision_id ? { decisionId: governance.decision_id } : {}) } : {}), ...(decision ? { deliveryDecisionArtifactId: decision.artifact_id } : {}), ...(review ? { deliveryReview: { id: review.id, outcome: review.outcome, summary: review.summary, planRevision: review.plan_revision, baseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, leadExecutionId: review.lead_execution_id, opinionArtifactId: review.opinion_artifact_id, evidenceArtifactId: review.evidence_artifact_id, repairCycle: review.repair_cycle, findings: findings.map((finding) => ({ id: finding.id, severity: finding.severity, rationale: finding.rationale, evidenceRef: finding.evidence_ref, disposition: finding.disposition, repairInstruction: finding.repair_instruction })) } } : {}), ...(deliveryGate ? { deliveryGate } : {}), ...(leadOutput ? { leadOutput } : {}), ...(developerExecution ? { developerExecution: { id: developerExecution.id, status: developerExecution.status, attempt: developerExecution.attempt, branchName: developerExecution.branch_name, targetBaseSha: developerExecution.targetBaseSha, currentStep: developerExecution.currentStep ?? null, resultCommit: developerExecution.resultCommit ?? null, resultTree: developerExecution.resultTree ?? null, dirtyState: developerExecution.dirtyState ?? null, deliveryArtifactId: developerExecution.deliveryArtifactId ?? null, evidenceArtifactId: developerExecution.evidenceArtifactId ?? null, failureCode: developerExecution.failureCode ?? null, failureSummary: developerExecution.failureSummary ?? null } } : {}), ...(ci ? { ci } : {}) };
 */
   }
 
@@ -2028,7 +2061,7 @@ export class TaskService {
   }
 
   private taskQuery(scope: string): string {
-    return `SELECT t.id, t.company_id, t.project_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title, t.brief_artifact_id, t.image_artifact_ids_json, t.role_profiles_json, t.supplemental_review, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.successor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.authoritative_revision, ip.projected_at, ip.phase, ip.owner, ip.allowed_commands_json, ip.pending_action, COALESCE((SELECT s.state_json FROM forge_workflow_snapshots s WHERE s.task_id = t.id ORDER BY s.revision DESC LIMIT 1), '{}') AS state_json, (SELECT a.filename FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS description FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope} ORDER BY t.created_at, t.id`;
+    return `SELECT t.id, t.company_id, t.project_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.successor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.authoritative_revision, ip.projected_at, ip.phase, ip.owner, ip.allowed_commands_json, ip.pending_action, COALESCE((SELECT s.state_json FROM forge_workflow_snapshots s WHERE s.task_id = t.id ORDER BY s.revision DESC LIMIT 1), '{}') AS state_json, (SELECT a.filename FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS description FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope} ORDER BY t.created_at, t.id`;
   }
 
   private async deleteTask(taskId: string, artifacts: Array<StoredArtifact | undefined>): Promise<void> {

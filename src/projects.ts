@@ -14,7 +14,8 @@ import { ForgeDatabase } from "./database.js";
 const execFileAsync = promisify(execFile);
 
 export type ProjectStatus = "draft" | "active" | "paused" | "needs-reactivation" | "archived";
-export type ProjectRole = "lead" | "developer" | "reviewer";
+export type ProjectRole = "analyst" | "implementer" | "reviewer";
+export type RoleAssignments = Partial<Record<ProjectRole, string | undefined>>;
 export type ReasoningLevel = "low" | "medium" | "high";
 export type ServicePriority = "standard" | "priority";
 
@@ -41,7 +42,6 @@ export class ProjectFailure extends Error {
 export interface CodexProfile {
   id: string;
   name: string;
-  avatarSeed: string;
   provider: "codex";
   model: string;
   reasoningLevel: ReasoningLevel;
@@ -52,7 +52,19 @@ export interface CodexProfile {
   updatedAt: string;
 }
 
-type ProfileInput = { name: string; avatarSeed?: string | undefined; model: string; reasoningLevel: ReasoningLevel; servicePriority: ServicePriority; capacity?: number | null };
+type ProfileInput = { name: string; model: string; reasoningLevel: ReasoningLevel; servicePriority: ServicePriority; capacity?: number | null };
+
+export interface Agent {
+  id: string;
+  name: string;
+  role: ProjectRole;
+  avatarSeed: string;
+  profileId: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type AgentInput = { name: string; role: ProjectRole; avatarSeed?: string | undefined; profileId: string };
 
 export type ModelStatus = "active" | "retired";
 
@@ -82,8 +94,7 @@ export interface ProjectInput {
   setupCommand: string;
   verificationCommand: string;
   requiredChecks: string[];
-  allowedProfileIds: string[];
-  roleDefaults: Partial<Record<ProjectRole, string>>;
+  roleDefaults: RoleAssignments;
   baseSha?: string | undefined;
   targetSha?: string | undefined;
 }
@@ -100,8 +111,7 @@ export interface Project {
   setupCommand: string;
   verificationCommand: string;
   requiredChecks: string[];
-  allowedProfileIds: string[];
-  roleDefaults: Partial<Record<ProjectRole, string>>;
+  roleDefaults: RoleAssignments;
   status: ProjectStatus;
   activeRevisionId?: string;
   configurationRevision: number;
@@ -153,7 +163,6 @@ interface ProjectRow {
   setup_command: string;
   verification_command: string;
   required_checks_json: string;
-  allowed_profiles_json: string;
   role_defaults_json: string;
   status: ProjectStatus;
   active_revision_id: string | null;
@@ -169,12 +178,21 @@ interface ProjectRow {
 interface ProfileRow {
   id: string;
   name: string;
-  avatar_seed: string;
   provider: "codex";
   model: string;
   reasoning_level: ReasoningLevel;
   service_priority: ServicePriority;
   capacity: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentRow {
+  id: string;
+  name: string;
+  role: ProjectRole;
+  avatar_seed: string;
+  profile_id: string;
   created_at: string;
   updated_at: string;
 }
@@ -262,8 +280,7 @@ function normalizedInput(input: ProjectInput, paths: { repositoryPath: string; w
     setupCommand: input.setupCommand.trim(),
     verificationCommand: input.verificationCommand.trim(),
     requiredChecks: [...new Set(input.requiredChecks.map((check) => check.trim()).filter(Boolean))].sort(),
-    allowedProfileIds: [...new Set(input.allowedProfileIds.map((profileId) => profileId.trim()).filter(Boolean))].sort(),
-    roleDefaults: Object.fromEntries(Object.entries(input.roleDefaults).flatMap(([role, profileId]) => typeof profileId === "string" && profileId.trim().length > 0 ? [[role, profileId.trim()] as [string, string]] : []).sort(([left], [right]) => left.localeCompare(right))) as Partial<Record<ProjectRole, string>>,
+    roleDefaults: Object.fromEntries(Object.entries(input.roleDefaults).flatMap(([role, profileId]) => typeof profileId === "string" && profileId.trim().length > 0 ? [[role, profileId.trim()] as [string, string]] : []).sort(([left], [right]) => left.localeCompare(right))) as RoleAssignments,
   };
   return normalized;
 }
@@ -280,7 +297,6 @@ function publicProfile(row: ProfileRow, config: Pick<ForgeConfig, "externalTurnC
   return {
     id: row.id,
     name: row.name,
-    avatarSeed: row.avatar_seed,
     provider: row.provider,
     model: row.model,
     reasoningLevel: row.reasoning_level,
@@ -290,6 +306,20 @@ function publicProfile(row: ProfileRow, config: Pick<ForgeConfig, "externalTurnC
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+export function publicAgent(row: AgentRow): Agent {
+  return { id: row.id, name: row.name, role: row.role, avatarSeed: row.avatar_seed, profileId: row.profile_id, createdAt: row.created_at, updatedAt: row.updated_at };
+}
+
+export function resolveAgentProfiles(db: import("better-sqlite3").Database, roleAgents: RoleAssignments): RoleAssignments {
+  const resolved: RoleAssignments = {};
+  for (const [role, agentId] of Object.entries(roleAgents)) {
+    if (!agentId) continue;
+    const agent = db.prepare("SELECT profile_id FROM forge_agents WHERE id = ? AND role = ?").get(agentId, role) as { profile_id: string } | undefined;
+    if (agent) resolved[role as ProjectRole] = agent.profile_id;
+  }
+  return resolved;
 }
 
 function publicModel(row: ModelRow): CodexModel {
@@ -310,8 +340,7 @@ function publicProject(row: ProjectRow): Project {
     setupCommand: row.setup_command,
     verificationCommand: row.verification_command,
     requiredChecks: asJson<string[]>(row.required_checks_json, []),
-    allowedProfileIds: asJson<string[]>(row.allowed_profiles_json, []),
-    roleDefaults: asJson<Partial<Record<ProjectRole, string>>>(row.role_defaults_json, {}),
+    roleDefaults: asJson<RoleAssignments>(row.role_defaults_json, {}),
     status: needsReactivation ? "needs-reactivation" : row.status,
     ...(row.active_revision_id ? { activeRevisionId: row.active_revision_id } : {}),
     configurationRevision: row.configuration_revision ?? 0,
@@ -554,7 +583,7 @@ export class ProjectService {
     this.repositoryProvisioner = options.repositoryProvisioner ?? defaultRepositoryProvisioner();
   }
 
-  private validateProfileInput(input: ProfileInput): Omit<Required<ProfileInput>, "avatarSeed"> & { avatarSeed?: string } {
+  private validateProfileInput(input: ProfileInput): Required<ProfileInput> {
     const name = input.name.trim();
     const model = input.model.trim();
     const capacity = input.capacity ?? null;
@@ -564,8 +593,7 @@ export class ProjectService {
     if (!["low", "medium", "high"].includes(input.reasoningLevel)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-reasoning", "reasoningLevel", "Reasoning level is invalid")]);
     if (!["standard", "priority"].includes(input.servicePriority)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-priority", "servicePriority", "Service priority is invalid")]);
     if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 32)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-capacity", "capacity", "Capacity must be an integer from 1 to 32")]);
-    if (input.avatarSeed !== undefined && !avatarSeedPattern.test(input.avatarSeed)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-avatar", "avatarSeed", "Avatar seed is invalid")]);
-    return { name, ...(input.avatarSeed ? { avatarSeed: input.avatarSeed } : {}), model, reasoningLevel: input.reasoningLevel, servicePriority: input.servicePriority, capacity };
+    return { name, model, reasoningLevel: input.reasoningLevel, servicePriority: input.servicePriority, capacity };
   }
 
   createProfile(actorUserId: string, input: ProfileInput): CodexProfile {
@@ -573,11 +601,11 @@ export class ProjectService {
     void actor;
     const profileInput = this.validateProfileInput(input);
     const now = this.now().toISOString();
-    const profile = { id: identifier("profile"), name: profileInput.name, avatarSeed: profileInput.avatarSeed ?? randomBytes(16).toString("hex"), provider: "codex" as const, model: profileInput.model, reasoningLevel: profileInput.reasoningLevel, capacity: profileInput.capacity, servicePriority: profileInput.servicePriority, effectiveCapacity: profileInput.capacity ?? this.config.externalTurnCapacity, createdAt: now, updatedAt: now };
+    const profile = { id: identifier("profile"), name: profileInput.name, provider: "codex" as const, model: profileInput.model, reasoningLevel: profileInput.reasoningLevel, capacity: profileInput.capacity, servicePriority: profileInput.servicePriority, effectiveCapacity: profileInput.capacity ?? this.config.externalTurnCapacity, createdAt: now, updatedAt: now };
     try {
       this.database.authTransaction((db) => {
-        db.prepare(`INSERT INTO forge_profiles (id, name, avatar_seed, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, ?, ?, 'codex', ?, ?, ?, ?, ?, ?)`)
-          .run(profile.id, profile.name, profile.avatarSeed, profile.model, profile.reasoningLevel, profile.servicePriority, profile.capacity, now, now);
+        db.prepare(`INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, ?, 'codex', ?, ?, ?, ?, ?, ?)`)
+          .run(profile.id, profile.name, profile.model, profile.reasoningLevel, profile.servicePriority, profile.capacity, now, now);
         this.auth.recordAuditEventInTransaction(db, actorUserId, "profile_created", undefined, undefined, { profileId: profile.id });
       });
     } catch {
@@ -592,7 +620,7 @@ export class ProjectService {
     const now = this.now().toISOString();
     try {
       const changed = this.database.authTransaction((db) => {
-        const result = db.prepare("UPDATE forge_profiles SET name = ?, avatar_seed = COALESCE(?, avatar_seed), model = ?, reasoning_level = ?, service_priority = ?, capacity = ?, updated_at = ? WHERE id = ?").run(profileInput.name, profileInput.avatarSeed ?? null, profileInput.model, profileInput.reasoningLevel, profileInput.servicePriority, profileInput.capacity, now, profileId);
+        const result = db.prepare("UPDATE forge_profiles SET name = ?, model = ?, reasoning_level = ?, service_priority = ?, capacity = ?, updated_at = ? WHERE id = ?").run(profileInput.name, profileInput.model, profileInput.reasoningLevel, profileInput.servicePriority, profileInput.capacity, now, profileId);
         if (result.changes !== 1) throw new ProjectFailure("Profile not found", [], 404);
         this.auth.recordAuditEventInTransaction(db, actorUserId, "profile_updated", undefined, undefined, { profileId });
         return db.prepare("SELECT * FROM forge_profiles WHERE id = ?").get(profileId) as ProfileRow;
@@ -607,6 +635,55 @@ export class ProjectService {
   listProfiles(actorUserId: string): CodexProfile[] {
     this.user(actorUserId);
     return this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_profiles ORDER BY name").all() as ProfileRow[]).map((row) => publicProfile(row, this.config)));
+  }
+
+  private validateAgentInput(input: AgentInput): Required<AgentInput> {
+    const name = input.name.trim();
+    const profileId = input.profileId.trim();
+    if (!namePattern.test(name)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-name", "name", "Agent name is invalid")]);
+    if (!(["analyst", "implementer", "reviewer"] as ProjectRole[]).includes(input.role)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-role", "role", "Agent role is invalid")]);
+    const profile = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_profiles WHERE id = ?").get(profileId) as { id: string } | undefined);
+    if (!profile) throw new ProjectFailure("Agent configuration is invalid", [finding("profile-unavailable", "profileId", "Agent profile is unavailable")]);
+    if (input.avatarSeed !== undefined && !avatarSeedPattern.test(input.avatarSeed)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-avatar", "avatarSeed", "Avatar seed is invalid")]);
+    return { name, role: input.role, avatarSeed: input.avatarSeed ?? randomBytes(16).toString("hex"), profileId };
+  }
+
+  createAgent(actorUserId: string, input: AgentInput): Agent {
+    this.requireAdmin(actorUserId);
+    const agentInput = this.validateAgentInput(input);
+    const now = this.now().toISOString();
+    const id = identifier("agent");
+    try {
+      this.database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_agents (id, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, agentInput.name, agentInput.role, agentInput.avatarSeed, agentInput.profileId, now, now);
+        this.auth.recordAuditEventInTransaction(db, actorUserId, "agent_created", undefined, undefined, { agentId: id });
+      });
+    } catch {
+      throw new ProjectFailure("Agent configuration is invalid", [finding("duplicate-name", "name", "Agent name is already in use")], 409);
+    }
+    return this.database.authQuery((db) => publicAgent(db.prepare("SELECT * FROM forge_agents WHERE id = ?").get(id) as AgentRow));
+  }
+
+  updateAgent(actorUserId: string, agentId: string, input: AgentInput): Agent {
+    this.requireAdmin(actorUserId);
+    const agentInput = this.validateAgentInput(input);
+    const now = this.now().toISOString();
+    try {
+      return this.database.authTransaction((db) => {
+        const result = db.prepare("UPDATE forge_agents SET name = ?, role = ?, avatar_seed = ?, profile_id = ?, updated_at = ? WHERE id = ?").run(agentInput.name, agentInput.role, agentInput.avatarSeed, agentInput.profileId, now, agentId);
+        if (result.changes !== 1) throw new ProjectFailure("Agent not found", [], 404);
+        this.auth.recordAuditEventInTransaction(db, actorUserId, "agent_updated", undefined, undefined, { agentId });
+        return publicAgent(db.prepare("SELECT * FROM forge_agents WHERE id = ?").get(agentId) as AgentRow);
+      });
+    } catch (error) {
+      if (error instanceof ProjectFailure) throw error;
+      throw new ProjectFailure("Agent configuration is invalid", [finding("duplicate-name", "name", "Agent name is already in use")], 409);
+    }
+  }
+
+  listAgents(actorUserId: string): Agent[] {
+    this.user(actorUserId);
+    return this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_agents ORDER BY role, name").all() as AgentRow[]).map(publicAgent));
   }
 
   updateProfileCapacity(actorUserId: string, profileId: string, capacity: number | null): CodexProfile {
@@ -685,7 +762,7 @@ export class ProjectService {
   }
 
   createProject(actorUserId: string, companyId: string, input: ProjectInput): Promise<Project> {
-    return this.mutateProject(actorUserId, companyId, input, false);
+    return this.mutateProject(actorUserId, companyId, input, false, undefined, true);
   }
 
   async createProjectFromRepository(actorUserId: string, companyId: string, repositoryUrl: string): Promise<Project> {
@@ -708,8 +785,12 @@ export class ProjectService {
         ? [...new Set((await this.github.listChecks({ cwd: repositoryPath, nameWithOwner: coordinate.repository, ref: "main" })).map((check) => check.name))]
         : [];
     } catch {}
-    const profiles = this.listProfiles(actorUserId).slice(0, 16);
-    const defaultProfileId = profiles[0]?.id;
+    const agents = this.listAgents(actorUserId);
+    const roleDefaults = Object.fromEntries(([
+      ["analyst", agents.find((agent) => agent.role === "analyst")?.id],
+      ["implementer", agents.find((agent) => agent.role === "implementer")?.id],
+      ["reviewer", agents.find((agent) => agent.role === "reviewer")?.id],
+    ] as const).filter((entry) => Boolean(entry[1]))) as RoleAssignments;
     const draft = await this.mutateProject(actorUserId, companyId, {
       name: coordinate.name,
       repositoryPath,
@@ -720,8 +801,7 @@ export class ProjectService {
       setupCommand: commands.setupCommand,
       verificationCommand: commands.verificationCommand,
       requiredChecks,
-      allowedProfileIds: profiles.map((profile) => profile.id),
-      roleDefaults: defaultProfileId ? { lead: defaultProfileId, developer: defaultProfileId } : {},
+      roleDefaults,
     }, false, undefined, true);
     try {
       return await this.activateProject(actorUserId, draft.id);
@@ -733,7 +813,7 @@ export class ProjectService {
 
   async updateProject(actorUserId: string, projectId: string, input: ProjectInput): Promise<Project> {
     const existing = this.getProject(actorUserId, projectId);
-    return this.mutateProject(actorUserId, existing.companyId, input, true, projectId);
+    return this.mutateProject(actorUserId, existing.companyId, input, true, projectId, true);
   }
 
   async activateProject(actorUserId: string, projectId: string): Promise<Project> {
@@ -743,12 +823,13 @@ export class ProjectService {
     if (project.status === "archived") throw new ProjectFailure("Project activation failed", [finding("project-archived", "status", "Archived projects cannot be activated")], 409);
     const findings: ProjectFinding[] = [];
     const local = await this.localRepositoryPromise;
-    const profiles = project.allowedProfileIds.length === 0
-      ? []
-      : this.database.authQuery((db) => db.prepare("SELECT id FROM forge_profiles WHERE id IN (" + project.allowedProfileIds.map(() => "?").join(",") + ")").all(...project.allowedProfileIds) as Array<{ id: string }>);
-    const profileIds = new Set(profiles.map((profile) => profile.id));
-    for (const profileId of project.allowedProfileIds) if (!profileIds.has(profileId)) findings.push(finding("profile-unavailable", "allowedProfileIds", "Every allowed role profile must exist"));
-    for (const [role, profileId] of Object.entries(project.roleDefaults)) if (!project.allowedProfileIds.includes(profileId) || !profileIds.has(profileId)) findings.push(finding("profile-ineligible", `roleDefaults.${role}`, "Role defaults must reference an allowed profile"));
+    const agents = this.database.authQuery((db) => db.prepare("SELECT id, role FROM forge_agents").all() as Array<{ id: string; role: ProjectRole }>);
+    const agentRoles = new Map(agents.map((agent) => [agent.id, agent.role]));
+    for (const role of ["analyst", "implementer", "reviewer"] as const) {
+      const agentId = project.roleDefaults[role];
+      if (!agentId) findings.push(finding("missing-default", `roleDefaults.${role}`, `An ${role} agent default is required`));
+      else if (agentRoles.get(agentId) !== role) findings.push(finding("agent-ineligible", `roleDefaults.${role}`, "Role defaults must reference an agent with the matching role"));
+    }
     if (!repositoryPattern.test(project.repository ?? "")) findings.push(finding("repository-identity", "repository", "Repository must use owner/name identity without credentials"));
     if (!branchPattern.test(project.baseBranch)) findings.push(finding("unsafe-branch", "baseBranch", "Base branch is unsafe"));
     if (!branchPattern.test(project.targetBranch)) findings.push(finding("unsafe-branch", "targetBranch", "Target branch is unsafe"));
@@ -801,7 +882,6 @@ export class ProjectService {
       setupCommand: project.setupCommand,
       verificationCommand: project.verificationCommand,
       requiredChecks: project.requiredChecks,
-      allowedProfileIds: project.allowedProfileIds,
       roleDefaults: project.roleDefaults,
       baseSha: inspection?.baseSha,
       targetSha: inspection?.targetSha,
@@ -866,14 +946,17 @@ export class ProjectService {
     if (!isApprovedCommand(input.verificationCommand, "verification")) findings.push(finding("unapproved-command", "verificationCommand", "Verification must be one approved literal command"));
     if (secretPattern.test(input.repository) || secretPattern.test(input.baseBranch) || secretPattern.test(input.targetBranch)) findings.push(finding("secret-shaped-value", "configuration", "Secret-shaped configuration values are not accepted"));
     if (!Array.isArray(input.requiredChecks) || (!allowIncompleteDraft && input.requiredChecks.length === 0) || input.requiredChecks.length > 32 || input.requiredChecks.some((check) => !checkPattern.test(check.trim()))) findings.push(finding("invalid-check", "requiredChecks", "At least one safe required check is required"));
-    if (!Array.isArray(input.allowedProfileIds) || (!allowIncompleteDraft && input.allowedProfileIds.length === 0) || input.allowedProfileIds.length > 16) findings.push(finding("invalid-profiles", "allowedProfileIds", "At least one allowed profile is required"));
     if (worktree.path) {
       try { await access(worktree.path, constants.W_OK); } catch { findings.push(finding("worktree-unwritable", "worktreeRoot", "Worktree root must be writable")); }
     }
     const normalized = normalizedInput(input, { repositoryPath: repository.path ?? resolve(input.repositoryPath), worktreeRoot: worktree.path ?? resolve(input.worktreeRoot) });
-    if (!allowIncompleteDraft && !normalized.roleDefaults.lead) findings.push(finding("missing-default", "roleDefaults.lead", "A Lead profile default is required"));
-    if (!allowIncompleteDraft && !normalized.roleDefaults.developer) findings.push(finding("missing-default", "roleDefaults.developer", "A Developer profile default is required"));
-    for (const [role, profileId] of Object.entries(normalized.roleDefaults)) if (!normalized.allowedProfileIds.includes(profileId)) findings.push(finding("profile-ineligible", `roleDefaults.${role}`, "Role defaults must reference an allowed profile"));
+    const agentRows = this.database.authQuery((db) => db.prepare("SELECT id, role FROM forge_agents").all() as Array<{ id: string; role: ProjectRole }>);
+    const agentRoles = new Map(agentRows.map((agent) => [agent.id, agent.role]));
+    for (const role of ["analyst", "implementer", "reviewer"] as const) {
+      const agentId = normalized.roleDefaults[role];
+      if (!allowIncompleteDraft && !agentId) findings.push(finding("missing-default", `roleDefaults.${role}`, `An ${role} agent default is required`));
+      else if (agentId && agentRoles.get(agentId) !== role) findings.push(finding("agent-ineligible", `roleDefaults.${role}`, "Role defaults must reference an agent with the matching role"));
+    }
     if (findings.length) throw new ProjectFailure("Project configuration is invalid", findings, 422);
     const now = this.now().toISOString();
     let row: { id: string };
@@ -884,9 +967,9 @@ export class ProjectService {
         const existing = this.rowForProject(db, id);
         if (!existing || existing.company_id !== companyId) throw new ProjectFailure("Not found", [], 404);
         if (existing.status === "archived") throw new ProjectFailure("Project configuration is invalid", [finding("project-archived", "status", "Archived projects cannot be edited")], 409);
-        db.prepare("UPDATE forge_projects SET name = ?, repository_path = ?, worktree_root = ?, repository_identity = ?, base_branch = ?, target_branch = ?, setup_command = ?, verification_command = ?, required_checks_json = ?, allowed_profiles_json = ?, role_defaults_json = ?, status = 'draft', active_revision_id = NULL, updated_at = ? WHERE id = ?").run(normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.allowedProfileIds), JSON.stringify(normalized.roleDefaults), now, id);
+        db.prepare("UPDATE forge_projects SET name = ?, repository_path = ?, worktree_root = ?, repository_identity = ?, base_branch = ?, target_branch = ?, setup_command = ?, verification_command = ?, required_checks_json = ?, role_defaults_json = ?, status = 'draft', active_revision_id = NULL, updated_at = ? WHERE id = ?").run(normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, id);
       } else {
-        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NULL, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.allowedProfileIds), JSON.stringify(normalized.roleDefaults), now, now);
+        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NULL, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, now);
       }
       this.auth.recordAuditEventInTransaction(db, actorUserId, updating ? "project_updated" : "project_created", undefined, companyId, { projectId: id });
       return { id };

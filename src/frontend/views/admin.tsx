@@ -13,7 +13,7 @@ import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { readJson, withCompany, type ApiUser } from ".././lib/api.js";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { adminDate, type ApiCredential, type ApiInvitation, type ApiModel, type ApiProfile } from "../lib/view-shared.js";
-import { Ellipsis, Pencil, RefreshCw, Save } from "lucide-react";
+import { Ellipsis, Pencil, Save } from "lucide-react";
 
 const USER_COLUMNS: SettingsTableColumn[] = [
   { key: "indent", width: 60 },
@@ -37,6 +37,13 @@ const PROFILE_COLUMNS: SettingsTableColumn[] = [
   { key: "save", width: 28 },
   { key: "end", width: 32 },
 ];
+const AGENT_COLUMNS: SettingsTableColumn[] = [
+  { key: "indent", width: 60 },
+  { key: "name", label: "Name ↓", width: 240 },
+  { key: "role", label: "Role", width: 140 },
+  { key: "profile", label: "Profile", width: 220 },
+  { key: "end", width: 32 },
+];
 
 const USER_GROUPS: Array<{ label: string; status: ApiUser["status"] }> = [
   { label: "Active", status: "active" },
@@ -50,17 +57,23 @@ export function AdminView(): ReactElement {
   const [invitations, setInvitations] = useState<ApiInvitation[]>([]);
   const [credentials, setCredentials] = useState<ApiCredential[]>([]);
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
+  const [agents, setAgents] = useState<import("../lib/view-shared.js").ApiAgent[]>([]);
   const [models, setModels] = useState<ApiModel[]>([]);
   const [displayName, setDisplayName] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
   const [profileName, setProfileName] = useState("");
-  const [profileAvatarSeed, setProfileAvatarSeed] = useState("");
   const [profileModel, setProfileModel] = useState("gpt-5.6-sol");
   const [profileReasoning, setProfileReasoning] = useState("medium");
   const [profilePriority, setProfilePriority] = useState("standard");
   const [profileCapacity, setProfileCapacity] = useState("");
   const [profileOpen, setProfileOpen] = useState(false);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
+  const [agentName, setAgentName] = useState("");
+  const [agentRole, setAgentRole] = useState<"analyst" | "implementer" | "reviewer">("analyst");
+  const [agentAvatarSeed, setAgentAvatarSeed] = useState("");
+  const [agentProfileId, setAgentProfileId] = useState("");
+  const [agentOpen, setAgentOpen] = useState(false);
+  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [capacityLanes, setCapacityLanes] = useState<Array<{ profileId: string; activeCount: number; queuedCount: number }>>([]);
   const [capacityEdits, setCapacityEdits] = useState<Record<string, string>>({});
   const [modelId, setModelId] = useState("");
@@ -74,11 +87,12 @@ export function AdminView(): ReactElement {
 
   const reload = useCallback(async (): Promise<void> => {
     try {
-      const [userList, invitationList, credentialList, profileList, modelList, laneList] = await Promise.all([
+      const [userList, invitationList, credentialList, profileList, agentList, modelList, laneList] = await Promise.all([
         readJson<{ users: ApiUser[] }>("/api/admin/users"),
         readJson<{ invitations: ApiInvitation[] }>("/api/admin/invitations"),
         readJson<{ credentials: ApiCredential[] }>("/api/admin/credentials"),
         readJson<{ profiles: ApiProfile[] }>("/api/profiles").catch(() => ({ profiles: [] })),
+        readJson<{ agents: import("../lib/view-shared.js").ApiAgent[] }>("/api/agents").catch(() => ({ agents: [] })),
         readJson<{ models: ApiModel[] }>("/api/admin/models").catch(() => ({ models: [] })),
         readJson<{ lanes: Array<{ profileId: string; activeCount: number; queuedCount: number }> }>("/api/admin/capacity").catch(() => ({ lanes: [] })),
       ]);
@@ -86,6 +100,7 @@ export function AdminView(): ReactElement {
       setInvitations(invitationList.invitations);
       setCredentials(credentialList.credentials);
       setProfiles(profileList.profiles);
+      setAgents(agentList.agents);
       setModels(modelList.models);
       setCapacityLanes(laneList.lanes);
       const activeModels = modelList.models.filter((model) => model.status === "active");
@@ -115,17 +130,26 @@ export function AdminView(): ReactElement {
     } catch { setError("Unable to copy invitation"); }
   };
   const openNewProfile = (): void => {
-    setEditingProfileId(null); setProfileName(""); setProfileAvatarSeed(crypto.randomUUID().replaceAll("-", "")); setProfileReasoning("medium"); setProfilePriority("standard"); setProfileCapacity(""); setProfileOpen(true);
+    setEditingProfileId(null); setProfileName(""); setProfileReasoning("medium"); setProfilePriority("standard"); setProfileCapacity(""); setProfileOpen(true);
   };
   const openEditProfile = (profile: ApiProfile): void => {
-    setEditingProfileId(profile.id); setProfileName(profile.name); setProfileAvatarSeed(profile.avatarSeed); setProfileModel(profile.model); setProfileReasoning(profile.reasoningLevel); setProfilePriority(profile.servicePriority); setProfileCapacity(profile.capacity === null ? "" : String(profile.capacity)); setProfileOpen(true);
+    setEditingProfileId(profile.id); setProfileName(profile.name); setProfileModel(profile.model); setProfileReasoning(profile.reasoningLevel); setProfilePriority(profile.servicePriority); setProfileCapacity(profile.capacity === null ? "" : String(profile.capacity)); setProfileOpen(true);
   };
   const saveProfile = async (): Promise<void> => {
     const editing = editingProfileId !== null;
     try {
-      await readJson(editing ? `/api/admin/profiles/${encodeURIComponent(editingProfileId)}` : "/api/admin/profiles", { method: editing ? "PATCH" : "POST", body: JSON.stringify({ name: profileName, avatarSeed: profileAvatarSeed, model: profileModel, reasoningLevel: profileReasoning, servicePriority: profilePriority, capacity: profileCapacity.trim() === "" ? null : Number(profileCapacity) }) });
+      await readJson(editing ? `/api/admin/profiles/${encodeURIComponent(editingProfileId)}` : "/api/admin/profiles", { method: editing ? "PATCH" : "POST", body: JSON.stringify({ name: profileName, model: profileModel, reasoningLevel: profileReasoning, servicePriority: profilePriority, capacity: profileCapacity.trim() === "" ? null : Number(profileCapacity) }) });
       setProfileName(""); setProfileCapacity(""); setEditingProfileId(null); setProfileOpen(false); await reload();
     } catch { setError(editing ? "Unable to update profile" : "Unable to create profile"); }
+  };
+  const openNewAgent = (): void => { setEditingAgentId(null); setAgentName(""); setAgentRole("analyst"); setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", "")); setAgentProfileId(profiles[0]?.id ?? ""); setAgentOpen(true); };
+  const openEditAgent = (agent: import("../lib/view-shared.js").ApiAgent): void => { setEditingAgentId(agent.id); setAgentName(agent.name); setAgentRole(agent.role); setAgentAvatarSeed(agent.avatarSeed); setAgentProfileId(agent.profileId); setAgentOpen(true); };
+  const saveAgent = async (): Promise<void> => {
+    const editing = editingAgentId !== null;
+    try {
+      await readJson(editing ? `/api/admin/agents/${encodeURIComponent(editingAgentId)}` : "/api/admin/agents", { method: editing ? "PATCH" : "POST", body: JSON.stringify({ name: agentName, role: agentRole, avatarSeed: agentAvatarSeed, profileId: agentProfileId }) });
+      setAgentOpen(false); setEditingAgentId(null); await reload();
+    } catch { setError(editing ? "Unable to update agent" : "Unable to create agent"); }
   };
   const updateCapacity = async (profile: ApiProfile): Promise<void> => {
     const raw = capacityEdits[profile.id] ?? (profile.capacity === null ? "" : String(profile.capacity));
@@ -180,11 +204,12 @@ export function AdminView(): ReactElement {
     } catch { setError("Unable to revoke passkey"); }
   };
   const isProfiles = window.location.pathname.endsWith("/profiles");
+  const isAgents = window.location.pathname.endsWith("/agents");
   const isModels = window.location.pathname.endsWith("/models");
   const isCompanies = window.location.pathname.endsWith("/companies");
   const isInvitations = window.location.pathname.endsWith("/invitations");
   const isPasskeys = window.location.pathname.endsWith("/passkeys");
-  const viewTitle = isProfiles ? "Profiles" : isModels ? "Models" : isCompanies ? "Companies" : isInvitations ? "Invitations" : isPasskeys ? "Passkeys" : "Users";
+  const viewTitle = isProfiles ? "Profiles" : isAgents ? "Agents" : isModels ? "Models" : isCompanies ? "Companies" : isInvitations ? "Invitations" : isPasskeys ? "Passkeys" : "Users";
   const activeHref = withCompany(window.location.pathname, currentCompany?.id);
   const backHref = withCompany("/projects", currentCompany?.id);
 
@@ -205,7 +230,7 @@ export function AdminView(): ReactElement {
 
   return (
     <SettingsLayout title={viewTitle} companyId={currentCompany?.id ?? ""} backHref={backHref} activeHref={activeHref} contentClassName="">
-      <div>{!isProfiles && !isModels && !isCompanies && !isInvitations && !isPasskeys ? (<>
+      <div>{!isProfiles && !isAgents && !isModels && !isCompanies && !isInvitations && !isPasskeys ? (<>
         <section>
           <SettingsToolbar searchLabel="Search users" searchPlaceholder="Search by name or username" filterLabel="All" actions={<SettingsToolbarAction disabled>Export CSV</SettingsToolbarAction>} />
           <SettingsDataTable label="Users" columns={USER_COLUMNS} className="mt-5">
@@ -218,11 +243,18 @@ export function AdminView(): ReactElement {
           <section>
             <SettingsToolbar searchLabel="Filter profiles by name" searchPlaceholder="Filter by name…" filterLabel="All models" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={openNewProfile}>New profile</SettingsToolbarAction>} />
             <SettingsDataTable label="Profiles" columns={PROFILE_COLUMNS} className="mt-10">
-              <tbody>{profiles.map((profile) => { const lane = capacityLanes.find((item) => item.profileId === profile.id); const edit = capacityEdits[profile.id] ?? (profile.capacity === null ? "" : String(profile.capacity)); const saved = profile.capacity === null ? "" : String(profile.capacity); const formId = `capacity-${profile.id}`; return <SettingsTableRow aria-label={`Edit ${profile.name}`} key={profile.id} onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input")) openEditProfile(profile); }} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); openEditProfile(profile); } }} tabIndex={0}><SettingsTableCell className="p-0" /><SettingsTableCell><span className="flex min-w-0 items-center gap-3"><ProfileAvatar name={profile.name} seed={profile.avatarSeed} /><span className="min-w-0"><span className="block truncate">{profile.name}</span><span className="block truncate text-[10px] leading-3 text-muted-foreground">{profile.capacity === null ? `Default · ${profile.effectiveCapacity} slots effective` : `Override · ${profile.capacity} slots`} · {lane?.activeCount ?? 0} active / {lane?.queuedCount ?? 0} queued</span></span></span></SettingsTableCell><SettingsTableCell className="truncate">{profile.model}</SettingsTableCell><SettingsTableCell className="truncate text-muted-foreground">{profile.reasoningLevel}</SettingsTableCell><SettingsTableCell className="truncate text-muted-foreground">{profile.servicePriority}</SettingsTableCell><SettingsTableCell><form id={formId} onSubmit={(event) => { event.preventDefault(); void updateCapacity(profile); }}><input aria-label={`${profile.name} capacity`} className="h-7 w-[86px] rounded-md border-[0.5px] border-border bg-transparent px-2 text-[12px] outline-none focus:border-ring" inputMode="numeric" placeholder="Default" value={edit} onChange={(event) => setCapacityEdits((current) => ({ ...current, [profile.id]: event.target.value }))} /></form></SettingsTableCell><SettingsTableCell className="p-0"><button aria-label="Save" className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-black/5 hover:text-foreground disabled:opacity-30" disabled={edit === saved} form={formId} title="Save capacity" type="submit"><Save className="size-3.5" /></button></SettingsTableCell><SettingsTableCell className="p-0"><Button variant="ghost" size="icon-xs" aria-label={`Edit ${profile.name}`} title={`Edit ${profile.name}`} onClick={() => openEditProfile(profile)}><Pencil /></Button></SettingsTableCell></SettingsTableRow>; })}</tbody>
+              <tbody>{profiles.map((profile) => { const lane = capacityLanes.find((item) => item.profileId === profile.id); const edit = capacityEdits[profile.id] ?? (profile.capacity === null ? "" : String(profile.capacity)); const saved = profile.capacity === null ? "" : String(profile.capacity); const formId = `capacity-${profile.id}`; return <SettingsTableRow aria-label={`Edit ${profile.name}`} key={profile.id} onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input")) openEditProfile(profile); }} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); openEditProfile(profile); } }} tabIndex={0}><SettingsTableCell className="p-0" /><SettingsTableCell><span className="flex min-w-0 items-center gap-3"><span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{profile.name[0]?.toUpperCase()}</span><span className="min-w-0"><span className="block truncate">{profile.name}</span><span className="block truncate text-[10px] leading-3 text-muted-foreground">{profile.capacity === null ? `Default · ${profile.effectiveCapacity} slots effective` : `Override · ${profile.capacity} slots`} · {lane?.activeCount ?? 0} active / {lane?.queuedCount ?? 0} queued</span></span></span></SettingsTableCell><SettingsTableCell className="truncate">{profile.model}</SettingsTableCell><SettingsTableCell className="truncate text-muted-foreground">{profile.reasoningLevel}</SettingsTableCell><SettingsTableCell className="truncate text-muted-foreground">{profile.servicePriority}</SettingsTableCell><SettingsTableCell><form id={formId} onSubmit={(event) => { event.preventDefault(); void updateCapacity(profile); }}><input aria-label={`${profile.name} capacity`} className="h-7 w-[86px] rounded-md border-[0.5px] border-border bg-transparent px-2 text-[12px] outline-none focus:border-ring" inputMode="numeric" placeholder="Default" value={edit} onChange={(event) => setCapacityEdits((current) => ({ ...current, [profile.id]: event.target.value }))} /></form></SettingsTableCell><SettingsTableCell className="p-0"><button aria-label="Save" className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-black/5 hover:text-foreground disabled:opacity-30" disabled={edit === saved} form={formId} title="Save capacity" type="submit"><Save className="size-3.5" /></button></SettingsTableCell><SettingsTableCell className="p-0"><Button variant="ghost" size="icon-xs" aria-label={`Edit ${profile.name}`} title={`Edit ${profile.name}`} onClick={() => openEditProfile(profile)}><Pencil /></Button></SettingsTableCell></SettingsTableRow>; })}</tbody>
               {profiles.length === 0 ? <SettingsTableEmpty columnCount={PROFILE_COLUMNS.length}>No profiles configured.</SettingsTableEmpty> : null}
             </SettingsDataTable>
           </section>
-          <Dialog open={profileOpen} onOpenChange={(open) => { setProfileOpen(open); if (!open) setEditingProfileId(null); }}><DialogContent><DialogHeader><DialogTitle>{editingProfileId ? "Edit profile" : "New profile"}</DialogTitle><DialogDescription>Configure a reusable Codex execution profile.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void saveProfile(); }}><FieldGroup><Field><FieldLabel htmlFor="profile-name">Profile name</FieldLabel><Input id="profile-name" autoFocus value={profileName} onChange={(event) => setProfileName(event.target.value)} /></Field><Field><FieldLabel>Avatar</FieldLabel><div className="flex items-center gap-2"><ProfileAvatar name={profileName || "Profile"} seed={profileAvatarSeed} size="lg" /><Button type="button" variant="outline" size="sm" onClick={() => setProfileAvatarSeed(crypto.randomUUID().replaceAll("-", ""))}><RefreshCw />Regenerate</Button></div></Field><Field><FieldLabel htmlFor="profile-model">Model</FieldLabel><Select value={profileModel || null} onValueChange={(value) => setProfileModel(value ?? "")}><SelectTrigger id="profile-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{models.filter((model) => model.status === "active").map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field><Field><FieldLabel htmlFor="profile-reasoning">Reasoning level</FieldLabel><Select value={profileReasoning} onValueChange={(value) => setProfileReasoning(value ?? "medium")}><SelectTrigger id="profile-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem></SelectContent></Select></Field><Field><FieldLabel htmlFor="profile-priority">Service priority</FieldLabel><Select value={profilePriority} onValueChange={(value) => setProfilePriority(value ?? "standard")}><SelectTrigger id="profile-priority"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="standard">Standard</SelectItem><SelectItem value="priority">Priority</SelectItem></SelectContent></Select></Field><Field><FieldLabel htmlFor="profile-capacity">Capacity override</FieldLabel><Input id="profile-capacity" inputMode="numeric" placeholder="Default" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><FieldDescription>Blank inherits the host default.</FieldDescription></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!profileName.trim() || !profileModel}>{editingProfileId ? "Save changes" : "Create profile"}</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
+          <Dialog open={profileOpen} onOpenChange={(open) => { setProfileOpen(open); if (!open) setEditingProfileId(null); }}><DialogContent><DialogHeader><DialogTitle>{editingProfileId ? "Edit profile" : "New profile"}</DialogTitle><DialogDescription>Configure a reusable Codex execution profile.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void saveProfile(); }}><FieldGroup><Field><FieldLabel htmlFor="profile-name">Profile name</FieldLabel><Input id="profile-name" autoFocus value={profileName} onChange={(event) => setProfileName(event.target.value)} /></Field><Field><FieldLabel htmlFor="profile-model">Model</FieldLabel><Select value={profileModel || null} onValueChange={(value) => setProfileModel(value ?? "")}><SelectTrigger id="profile-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{models.filter((model) => model.status === "active").map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field><Field><FieldLabel htmlFor="profile-reasoning">Reasoning level</FieldLabel><Select value={profileReasoning} onValueChange={(value) => setProfileReasoning(value ?? "medium")}><SelectTrigger id="profile-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem></SelectContent></Select></Field><Field><FieldLabel htmlFor="profile-priority">Service priority</FieldLabel><Select value={profilePriority} onValueChange={(value) => setProfilePriority(value ?? "standard")}><SelectTrigger id="profile-priority"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="standard">Standard</SelectItem><SelectItem value="priority">Priority</SelectItem></SelectContent></Select></Field><Field><FieldLabel htmlFor="profile-capacity">Capacity override</FieldLabel><Input id="profile-capacity" inputMode="numeric" placeholder="Default" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><FieldDescription>Blank inherits the host default.</FieldDescription></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!profileName.trim() || !profileModel}>{editingProfileId ? "Save changes" : "Create profile"}</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
+        </>) : null}
+        {isAgents ? (<>
+          <section>
+            <SettingsToolbar searchLabel="Filter agents by name" searchPlaceholder="Filter by name…" filterLabel="All roles" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={openNewAgent}>New agent</SettingsToolbarAction>} />
+            <SettingsDataTable label="Agents" columns={AGENT_COLUMNS} className="mt-10"><tbody>{agents.map((agent) => <SettingsTableRow aria-label={`Edit ${agent.name}`} key={agent.id} onClick={() => openEditAgent(agent)} tabIndex={0}><SettingsTableCell className="p-0" /><SettingsTableCell><span className="flex items-center gap-3"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><span>{agent.name}</span></span></SettingsTableCell><SettingsTableCell className="capitalize">{agent.role}</SettingsTableCell><SettingsTableCell className="truncate">{profiles.find((profile) => profile.id === agent.profileId)?.name ?? agent.profileId}</SettingsTableCell><SettingsTableCell className="p-0"><Button variant="ghost" size="icon-xs" aria-label={`Edit ${agent.name}`} title={`Edit ${agent.name}`} onClick={() => openEditAgent(agent)}><Pencil /></Button></SettingsTableCell></SettingsTableRow>)}</tbody>{agents.length === 0 ? <SettingsTableEmpty columnCount={AGENT_COLUMNS.length}>No agents configured.</SettingsTableEmpty> : null}</SettingsDataTable>
+          </section>
+          <Dialog open={agentOpen} onOpenChange={(open) => { setAgentOpen(open); if (!open) setEditingAgentId(null); }}><DialogContent><DialogHeader><DialogTitle>{editingAgentId ? "Edit agent" : "New agent"}</DialogTitle><DialogDescription>Assign a stable role identity to an execution profile.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void saveAgent(); }}><FieldGroup><Field><FieldLabel>Avatar</FieldLabel><span className="flex items-center gap-3"><ProfileAvatar name={agentName || "Agent"} seed={agentAvatarSeed} /><Button type="button" variant="outline" size="sm" onClick={() => setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", ""))}>Randomize</Button></span></Field><Field><FieldLabel htmlFor="agent-name">Agent name</FieldLabel><Input id="agent-name" autoFocus value={agentName} onChange={(event) => setAgentName(event.target.value)} /></Field><Field><FieldLabel htmlFor="agent-role">Role</FieldLabel><Select value={agentRole} onValueChange={(value) => setAgentRole((value ?? "analyst") as typeof agentRole)}><SelectTrigger id="agent-role"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="analyst">Analyst</SelectItem><SelectItem value="implementer">Implementer</SelectItem><SelectItem value="reviewer">Reviewer</SelectItem></SelectContent></Select></Field><Field><FieldLabel htmlFor="agent-profile">Execution profile</FieldLabel><Select value={agentProfileId || null} onValueChange={(value) => setAgentProfileId(value ?? "")}><SelectTrigger id="agent-profile"><SelectValue placeholder="Select a profile" /></SelectTrigger><SelectContent>{profiles.map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>)}</SelectContent></Select></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!agentName.trim() || !agentProfileId}>{editingAgentId ? "Save changes" : "Create agent"}</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
         </>) : null}
         {isCompanies ? (<>
           <section><div className="flex h-8 items-center justify-between gap-3"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Companies</h2><span className="text-[11px] text-muted-foreground">{companies.length}</span></div></div><div className="mt-5">{companies.map((company) => <div className="rounded-lg px-1 py-2.5 text-xs hover:bg-black/[0.025]" key={company.id}><div className="mb-2 flex flex-wrap items-center justify-between gap-2"><span className="min-w-0 truncate"><span className="font-medium">{company.name}</span> <span className="text-muted-foreground">· {company.status}</span></span><a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={withCompany(`/companies/${encodeURIComponent(company.id)}/settings`, company.id)}>Settings</a></div><div className="flex flex-wrap gap-1.5">{users.filter((candidate) => candidate.role === "member" && candidate.status === "active").map((candidate) => { const assigned = candidate.companyIds.includes(company.id); const action = `membership:${company.id}:${candidate.id}`; return <span className="flex items-center gap-1" key={candidate.id}><Button variant={assigned ? "secondary" : "outline"} size="sm" onClick={() => void changeMembership(company.id, candidate.id, !assigned)}>{assigned ? "− " : "+ "}{candidate.displayName}</Button>{pendingAction === action ? <><span className="text-[11px] text-muted-foreground">Confirm remove</span><Button variant="outline" size="sm" onClick={() => setPendingAction("")}>Cancel</Button></> : null}</span>; })}</div></div>)}</div></section>

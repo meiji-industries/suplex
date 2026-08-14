@@ -4,21 +4,21 @@ import { z } from "zod";
 
 import type { TaskEvent } from "../../tasks.js";
 import type { TaskService } from "../../tasks.js";
-import type { ProjectRole } from "../../projects.js";
+import type { RoleAssignments } from "../../projects.js";
 import type { PlanCommandInput } from "../../temporal/issue-contracts.js";
 import { routedIssueCommands, type IssueCommand } from "../../commands/registry.js";
 import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, HttpPlanDecisionBodySchema, ResolveDecisionBlockerBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
-import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, PlanRevisionBodySchema, TaskBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, PlanRevisionBodySchema, TaskAgentsBodySchema, TaskBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
 import developmentEvents from "./development-events.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;
 }
 
-function cleanRoleProfiles(value: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined }): Partial<Record<ProjectRole, string>> {
-  const result: Partial<Record<ProjectRole, string>> = {};
-  if (value.lead !== undefined) result.lead = value.lead;
-  if (value.developer !== undefined) result.developer = value.developer;
+function cleanRoleAgents(value: { analyst?: string | undefined; implementer?: string | undefined; reviewer?: string | undefined }): RoleAssignments {
+  const result: RoleAssignments = {};
+  if (value.analyst !== undefined) result.analyst = value.analyst;
+  if (value.implementer !== undefined) result.implementer = value.implementer;
   if (value.reviewer !== undefined) result.reviewer = value.reviewer;
   return result;
 }
@@ -32,11 +32,12 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   typed.get("/api/tasks", { schema: { response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id) }));
   typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId) }));
   typed.post("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, body: TaskBodySchema, response: { 200: TaskResponseSchema, 201: TaskResponseSchema } } }, async (request, reply) => {
-    const { roleProfiles: rawRoleProfiles, ...body } = request.body;
-    const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, { ...body, ...(rawRoleProfiles ? { roleProfiles: cleanRoleProfiles(rawRoleProfiles) } : {}) });
+    const { roleAgents: rawRoleAgents, ...body } = request.body;
+    const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, { ...body, ...(rawRoleAgents ? { roleAgents: cleanRoleAgents(rawRoleAgents) } : {}) });
     return reply.code(result.created ? 201 : 200).send(result.task);
   });
   typed.get("/api/tasks/:taskId", { schema: { params: TaskIdParamsSchema, ...taskResponse } }, async (request, reply) => reply.send(tasks.getTask(request.forgeUser.id, request.params.taskId)));
+  typed.patch("/api/tasks/:taskId/agents", { schema: { params: TaskIdParamsSchema, body: TaskAgentsBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(tasks.updateTaskAgents(request.forgeUser.id, request.params.taskId, request.body)));
   typed.get("/api/tasks/:taskId/release", { schema: { params: TaskIdParamsSchema, response: { 200: TaskReleaseResponseSchema, 404: z.object({ error: z.string() }) } } }, async (request, reply) => {
     const release = tasks.getRelease(request.forgeUser.id, request.params.taskId);
     if (!release) return reply.code(404).send({ error: "Not found" });

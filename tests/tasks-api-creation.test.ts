@@ -54,7 +54,10 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
   const company = auth.createCompany("admin-1", "API Creation Company");
   auth.setCompanyIssueCode("admin-1", company.id, "apic");
   const profile = projects.createProfile("admin-1", { name: "API creation profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const project = await projects.createProject("admin-1", company.id, { name: "API creation project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, reviewer: profile.id, developer: profile.id } });
+  const analyst = projects.createAgent("admin-1", { name: "Analyst", role: "analyst", profileId: profile.id });
+  const implementer = projects.createAgent("admin-1", { name: "Implementer", role: "implementer", profileId: profile.id });
+  const reviewer = projects.createAgent("admin-1", { name: "Reviewer", role: "reviewer", profileId: profile.id });
+  const project = await projects.createProject("admin-1", company.id, { name: "API creation project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, reviewer: reviewer.id, implementer: implementer.id } });
   const active = await projects.activateProject("admin-1", project.id);
   const workflow = createWorkflowPortFake({ companyId: company.id, projectId: active.id, projectRevisionId: active.activeRevisionId!, projectState: (state) => { database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state })); return state; } });
   const tasks = new TaskService(database, auth, projects, config, { workflow });
@@ -80,7 +83,7 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
     expect(releaseBody.statusCode).toBe(200); expect(releaseBody.body).toBe("## Summary\n\nAPI creation task");
     const queued = new CapacityManager(database, config).request({ companyId: company.id, taskId: task.id, workflowId: task.workflowId, turnKind: "lead" });
     const taskResponse = await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } });
-    expect(taskResponse.json()).toMatchObject({ issueKey: "APIC-1", capacity: { profileId: profile.id, profileName: "API creation profile", status: "queued", position: 1, requestedAt: queued.requestedAt, retryAt: null } });
+    expect(taskResponse.json()).toMatchObject({ issueKey: "APIC-1", capacity: { profileId: profile.id, agentName: "Analyst", status: "queued", position: 1, requestedAt: queued.requestedAt, retryAt: null } });
     expect(JSON.stringify(taskResponse.json().capacity)).not.toMatch(/requestId|laneKey|execution|session|wrapper|process|worktree|command|artifact/i);
   } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }
 });

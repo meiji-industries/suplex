@@ -278,7 +278,7 @@ export class DeveloperService {
   }
 
   private executionProfile(input: { capacityRequestId?: string | undefined }, profileId?: string): DeveloperProfile | undefined {
-    if (input.capacityRequestId) return this.database.authQuery((db) => db.prepare("SELECT profile_id AS id, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_capacity_requests WHERE id = ? AND (? IS NULL OR profile_id = ?)").get(input.capacityRequestId, profileId ?? null, profileId ?? null) as DeveloperProfile | undefined);
+    if (input.capacityRequestId) return this.database.authQuery((db) => db.prepare("SELECT profile_id AS id, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_capacity_requests WHERE id = ?").get(input.capacityRequestId) as DeveloperProfile | undefined);
     if (!profileId) return undefined;
     return this.database.authQuery((db) => db.prepare("SELECT id, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId) as DeveloperProfile | undefined);
   }
@@ -319,7 +319,7 @@ export class DeveloperService {
     ]);
     const plan = JSON.parse(planText) as { kind?: unknown; steps?: Array<{ number: number; instruction: string; verification: string }> };
     if (plan.kind !== "plan" || !Array.isArray(plan.steps) || !plan.steps.length) throw new AgentFailure("plan-unavailable", "A final Lead plan is required before development");
-    const profile = this.executionProfile(input, input.roleProfiles.developer);
+    const profile = this.executionProfile(input, input.roleProfiles.implementer);
     if (!profile || profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
     const prior = input.supersedesExecutionId
       ? this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.supersedesExecutionId, input.taskId, input.companyId, input.workflowId) as PriorDeveloperExecution | undefined)
@@ -459,7 +459,7 @@ export class DeveloperService {
   private async runAuthorized(input: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity> & { authorization: NonNullable<DeveloperExecutionActivityInput["authorization"]> }): Promise<DeveloperExecutionResult> {
     const authorization = AuthorizedPlanSubjectSchema.parse(input.authorization);
     if (authorization.taskId !== input.taskId || authorization.companyId !== input.companyId || authorization.projectId !== input.projectId || authorization.workflowId !== input.workflowId || authorization.planRevision !== input.planRevision || authorization.planArtifactId !== input.leadOutputArtifactId) throw new AgentFailure("plan-authorization-mismatch", "Developer authorization coordinates do not match the requested issue plan");
-    const profile = this.executionProfile(input, input.roleProfiles.developer);
+    const profile = this.executionProfile(input, input.roleProfiles.implementer);
     if (!profile || profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
     const executionId = input.developerTurnExecutionId ?? input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;

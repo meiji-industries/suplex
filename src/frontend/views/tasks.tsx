@@ -12,6 +12,7 @@ import { Kanban, KanbanBoard, KanbanColumn, KanbanColumnContent } from ".././com
 import { Badge as ReuiBadge } from ".././components/reui/badge.js";
 import { Tabs, TabsList, TabsTrigger } from ".././components/ui/tabs.js";
 import { ApplicationFrame } from ".././components/app/application-frame.js";
+import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { TaskStatus, TaskStatusIcon, taskStatusAppearance } from ".././components/app/task-status.js";
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
@@ -19,7 +20,7 @@ import { navigate } from ".././lib/navigation.js";
 import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES as blockedTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
 import { CheckCircle2, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, Filter, Layers3, ListFilter, Plus } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
-import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiProject, type ApiTask, type TaskPhase } from "../lib/view-shared.js";
+import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiProject, type ApiTask, type TaskPhase } from "../lib/view-shared.js";
 import { TaskDetailsPage, TaskDetailsNotFound, TaskDetailsSkeleton, type PlanRevisionInput, type TaskPlanAction } from "./task-details.js";
 
 async function fileAsImage(file: File): Promise<{ filename: string; mimeType: string; base64: string }> {
@@ -40,13 +41,16 @@ function taskListDate(timestamp: string): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
-function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId, onProjectChange, title, onTitleChange, description, onDescriptionChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
+function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId, onProjectChange, agents, roleAgents, onRoleAgentChange, title, onTitleChange, description, onDescriptionChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   companyStatus: CompanyStatus | undefined;
   projects: ApiProject[];
   projectId: string;
   onProjectChange: (projectId: string) => void;
+  agents: ApiAgent[];
+  roleAgents: { analyst?: string | undefined; implementer?: string | undefined; reviewer?: string | undefined };
+  onRoleAgentChange: (role: "analyst" | "implementer" | "reviewer", agentId: string) => void;
   title: string;
   onTitleChange: (title: string) => void;
   description: string;
@@ -69,6 +73,7 @@ function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId,
           <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); void onSubmit(); }}>
             <FieldGroup>
               <Field><FieldLabel htmlFor="task-project">Project</FieldLabel><Select value={projectId || null} onValueChange={(value) => onProjectChange(value ?? "")}><SelectTrigger id="task-project"><SelectValue placeholder="Select a project">{(value) => projects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Select a project")}</SelectValue></SelectTrigger><SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select></Field>
+              {(["analyst", "implementer", "reviewer"] as const).map((role) => { const selected = agents.find((agent) => agent.id === roleAgents[role]); const options = agents.filter((agent) => agent.role === role); return <Field key={role}><FieldLabel htmlFor={`task-agent-${role}`}>{role.slice(0, 1).toUpperCase() + role.slice(1)}</FieldLabel><Select value={roleAgents[role] ?? null} onValueChange={(value) => { if (value) onRoleAgentChange(role, value); }}><SelectTrigger id={`task-agent-${role}`}><SelectValue placeholder="Select agent">{selected ? <span className="flex items-center gap-2"><ProfileAvatar name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "Select agent"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select></Field>; })}
               <Field><FieldLabel htmlFor="task-title">Task title</FieldLabel><Input id="task-title" autoFocus value={title} onChange={(event) => onTitleChange(event.target.value)} /></Field>
               <Field><FieldLabel htmlFor="task-description">Task description</FieldLabel><Textarea id="task-description" placeholder="Markdown description" value={description} onChange={(event) => onDescriptionChange(event.target.value)} /></Field>
               <InlineAttachmentPicker attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={onAddImages} onRemove={onRemoveImage} disabled={busy} />
@@ -88,6 +93,8 @@ function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId,
 export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): ReactElement {
   const { currentCompany, loading, user, error: companyError, reloadCompanies } = useCompanyContext();
   const [projects, setProjects] = useState<ApiProject[]>([]);
+  const [agents, setAgents] = useState<ApiAgent[]>([]);
+  const [roleAgentOverrides, setRoleAgentOverrides] = useState<{ analyst?: string; implementer?: string; reviewer?: string }>({});
   const [tasks, setTasks] = useState<ApiTask[]>([]);
   const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [selectedState, setSelected] = useState<ApiTask>();
@@ -113,12 +120,13 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     setError("");
     if (!companyId || loading) { setLoadedCompanyId(""); setProjects([]); setTasks([]); return; }
     try {
-      const [projectResult, taskResult] = await Promise.all([
+      const [projectResult, taskResult, agentResult] = await Promise.all([
         readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
         readJson<{ tasks: ApiTask[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks`),
+        readJson<{ agents: ApiAgent[] }>("/api/agents"),
       ]);
       if (token !== requestToken.current) return;
-      setProjects(projectResult.projects); setTasks(taskResult.tasks);
+      setProjects(projectResult.projects); setTasks(taskResult.tasks); setAgents(agentResult.agents);
       setProjectId((current) => projectResult.projects.some((project) => project.id === current && project.status === "active") ? current : projectResult.projects.find((project) => project.status === "active")?.id ?? "");
       const detailPrefix = mode === "board" ? "/board/" : "/tasks/";
       const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
@@ -148,7 +156,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   }, [mode]);
   useEffect(() => {
     selectedRef.current = undefined;
-    setSelected(undefined); setProjectId(""); setTitle(""); setDescription(""); setImages([]); setCreateError(""); setDetailNotFound(false);
+    setSelected(undefined); setProjectId(""); setRoleAgentOverrides({}); setTitle(""); setDescription(""); setImages([]); setCreateError(""); setDetailNotFound(false);
   }, [companyId]);
   useEffect(() => {
     const events = new EventSource("/api/tasks/events");
@@ -167,6 +175,12 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const taskBoard = Object.fromEntries(taskPhases.map((phase) => [phase, boardTasks.filter((task) => task.phase === phase)])) as Record<(typeof taskPhases)[number], ApiTask[]>;
   const selected = scopeLoaded ? selectedState : undefined;
   const availableProjects = visibleProjects.filter((project) => project.companyId === companyId && project.status === "active");
+  const newTaskProject = availableProjects.find((project) => project.id === projectId);
+  const newTaskRoleAgents = {
+    analyst: roleAgentOverrides.analyst ?? newTaskProject?.roleDefaults.analyst,
+    implementer: roleAgentOverrides.implementer ?? newTaskProject?.roleDefaults.implementer,
+    reviewer: roleAgentOverrides.reviewer ?? newTaskProject?.roleDefaults.reviewer,
+  };
   const activeCount = visibleTasks.filter((task) => activeTaskPhases.has(task.phase)).length;
   const backlogCount = visibleTasks.filter((task) => task.phase === "backlog").length;
   const taskGroups = [
@@ -188,7 +202,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     if (!companyId || currentCompany?.status !== "active") return;
     setBusy(true); setCreateError(""); setError("");
     try {
-      const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, idempotencyKey: crypto.randomUUID() }) });
+      const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, roleAgents: newTaskRoleAgents, idempotencyKey: crypto.randomUUID() }) });
       const taskPath = withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId);
       if (result.allowedCommands.includes("start_planning")) {
         try {
@@ -206,7 +220,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const startPlanning = async (): Promise<void> => {
     if (!selected) return;
     setBusy(true); setError("");
-    const optimistic: ApiTask = { ...selected, phase: "planning", revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Lead planning" };
+    const optimistic: ApiTask = { ...selected, phase: "planning", revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Analyst planning" };
     selectedRef.current = optimistic; setSelected(optimistic); setTasks((current) => current.map((task) => task.id === optimistic.id ? optimistic : task));
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); selectedRef.current = updated; setSelected(updated); setTasks((current) => current.map((task) => task.id === updated.id ? updated : task)); await reload(); }
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
@@ -358,7 +372,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
           })}
         </div> : null}
         {!currentCompany && scopeLoaded ? <div className="px-4 py-8 text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</div> : null}
-        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); }} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={setProjectId} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} />
+        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); }} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setRoleAgentOverrides({}); }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => ({ ...current, [role]: agentId }))} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} />
       </div>
     </ApplicationFrame>
   );

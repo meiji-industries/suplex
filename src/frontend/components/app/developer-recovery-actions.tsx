@@ -23,7 +23,7 @@ export function DeveloperRecoveryActions({ allowedCommands, busy, isAdmin, onAct
     <AlertDialog open={confirmAction !== undefined} onOpenChange={(open) => { if (!open) setConfirmAction(undefined); }}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>{confirmAction === "retry-development" ? "Retry this Developer turn?" : "Cancel this Developer turn?"}</AlertDialogTitle>
+      <AlertDialogTitle>{confirmAction === "retry-development" ? "Retry this Implementer turn?" : "Cancel this Implementer turn?"}</AlertDialogTitle>
           <AlertDialogDescription>{confirmAction === "retry-development" ? "Forge will reconnect to the recorded worktree and retry only after the interrupted turn is no longer owned." : "Forge will ask the owned supervisor to terminate the turn and will only mark it cancelled after confirmed exit."}</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

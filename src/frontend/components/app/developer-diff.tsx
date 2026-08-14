@@ -60,14 +60,14 @@ export default function DeveloperDiff({ taskId, executionId, onFileCount }: Deve
       .then((value) => { setDiff(value); setLoading(false); })
       .catch((reason: unknown) => {
         if (controller.signal.aborted) return;
-        setError(reason instanceof Error ? reason.message : "Unable to load the Developer diff"); setLoading(false);
+        setError(reason instanceof Error ? reason.message : "Unable to load the Implementer diff"); setLoading(false);
       });
     return () => controller.abort();
   }, [taskId, executionId]);
 
   const files = useMemo(() => diff?.patch ? parsePatchFiles(diff.patch, executionId, true).flatMap((patch) => patch.files) : [], [diff?.patch, executionId]);
   useEffect(() => { if (diff) onFileCount?.(files.length); }, [diff, files.length, onFileCount]);
-  if (loading) return <div className="space-y-2" aria-busy="true" aria-label="Loading Developer diff"><Skeleton className="h-5 w-36" /><Skeleton className="h-40 w-full" /></div>;
+  if (loading) return <div className="space-y-2" aria-busy="true" aria-label="Loading Implementer diff"><Skeleton className="h-5 w-36" /><Skeleton className="h-40 w-full" /></div>;
   if (error) return <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>;
   if (!diff || files.length === 0) return <p className="text-xs text-muted-foreground">No changes from the target base.</p>;
 

@@ -51,8 +51,8 @@ export function TaskInvocations({ invocations }: { invocations: TaskInvocation[]
               <TimelineHeader>
                 <TimelineSeparator className="bg-input! group-data-[orientation=vertical]/timeline:-left-7 group-data-[orientation=vertical]/timeline:h-[calc(100%-1.5rem-0.25rem)] group-data-[orientation=vertical]/timeline:translate-y-6.5" />
                 <div className="flex items-center gap-2">
-                  {invocation.profileName && invocation.avatarSeed ? <ProfileAvatar name={invocation.profileName} seed={invocation.avatarSeed} /> : null}
-                  <TimelineTitle className="text-sm">{invocation.profileName ? `${invocation.profileName} · ` : ""}{invocation.role} · attempt {invocation.attempt}</TimelineTitle>
+                  {invocation.agentName && invocation.avatarSeed ? <ProfileAvatar name={invocation.agentName} seed={invocation.avatarSeed} /> : null}
+                  <TimelineTitle className="text-sm">{invocation.agentName ? `${invocation.agentName} · ` : ""}{invocation.role} · attempt {invocation.attempt}</TimelineTitle>
                   <Badge variant={statusBadgeVariant(invocation.status)} size="sm">{invocation.status}</Badge>
                 </div>
                 <TimelineIndicator className={cn(

@@ -32,7 +32,13 @@ export const IssueWorkflowInputSchema = z.object({
   // creation request without putting task content in Temporal history.
   requestHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   predecessorTaskId: durableId.optional(),
-  roleProfiles: z.object({ lead: durableId.optional(), developer: durableId.optional(), reviewer: durableId.optional() }),
+  roleProfiles: z.preprocess((value) => {
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const v = value as Record<string, unknown>;
+      return { analyst: v.analyst ?? v.lead, implementer: v.implementer ?? v.developer, reviewer: v.reviewer };
+    }
+    return value;
+  }, z.object({ analyst: durableId.optional(), implementer: durableId.optional(), reviewer: durableId.optional() })),
   supplementalReview: z.boolean(),
   repairCycleLimit: z.number().int().min(0).max(5).default(2),
 }).merge(IssueWorkflowInputWithContinuationSchema);
@@ -94,7 +100,7 @@ export const WorkflowPlanBlockerResponseCommandSchema = z.object({
   idempotencyKey: DecisionIdempotencyKeySchema,
 }).strict();
 
-export type IssueWorkflowInput = z.input<typeof IssueWorkflowInputSchema>;
+export type IssueWorkflowInput = Omit<z.output<typeof IssueWorkflowInputSchema>, "repairCycleLimit"> & { repairCycleLimit?: number };
 export type IssueWorkflowState = z.infer<typeof IssueWorkflowStateSchema>;
 export type WorkflowPlanDecisionCommand = z.infer<typeof WorkflowPlanDecisionCommandSchema>;
 export type WorkflowPlanBlockerResponseCommand = z.infer<typeof WorkflowPlanBlockerResponseCommandSchema>;

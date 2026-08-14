@@ -2,10 +2,11 @@ import { isApiError } from "./api.js";
 import { ISSUE_PHASES, type IssuePhase } from "../../issue-phases.js";
 import type { AttentionActionResponse, AttentionEvidenceResponse, AttentionItemResponse, CompanyAttentionResponse } from "../../http/contracts/attention.js";
 import type { CredentialResponse, InvitationSummaryResponse } from "../../http/contracts/common.js";
-import type { ModelResponse, ProfileResponse, ProjectCheckResponse, ProjectResponse } from "../../http/contracts/projects.js";
+import type { AgentResponse, ModelResponse, ProfileResponse, ProjectCheckResponse, ProjectResponse } from "../../http/contracts/projects.js";
 import type { TaskResponse } from "../../http/contracts/tasks.js";
 
 export type ApiProfile = ProfileResponse;
+export type ApiAgent = AgentResponse;
 export type ApiModel = ModelResponse;
 export type ApiCheck = ProjectCheckResponse;
 export type ApiInvitation = InvitationSummaryResponse;

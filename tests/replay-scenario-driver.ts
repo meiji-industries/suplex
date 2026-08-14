@@ -277,7 +277,7 @@ async function driveScenario(definition: ReplayScenarioDefinitionUnion, input: {
   const worker = await Worker.create({ connection: input.connection, namespace: input.namespace, taskQueue: input.taskQueue, workflowBundle: input.workflowBundle, dataConverter: temporalDataConverter, activities: createIssueActivitiesFake({ ...shared, ...overrides }) });
   const workerRun = worker.run();
   try {
-    const workflowInput: IssueWorkflowInput = { workflowId, companyId: "fixture-company", projectId: "fixture-project", issueId: `fixture-issue-${definition.name}`, projectRevisionId: "fixture-project-revision", briefArtifactId: "fixture-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { lead: "fixture-profile", developer: "fixture-profile" }, supplementalReview: false, ...( "workflowInput" in definition ? definition.workflowInput : {}) };
+    const workflowInput: IssueWorkflowInput = { workflowId, companyId: "fixture-company", projectId: "fixture-project", issueId: `fixture-issue-${definition.name}`, projectRevisionId: "fixture-project-revision", briefArtifactId: "fixture-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { analyst: "fixture-profile", implementer: "fixture-profile" }, supplementalReview: false, ...( "workflowInput" in definition ? definition.workflowInput : {}) };
     const handle = await input.client.start(issueWorkflow, { workflowId, taskQueue: input.taskQueue, args: [workflowInput] });
     const helpers: ReplayScenarioScriptHelpers = {
       scenario: definition.name,

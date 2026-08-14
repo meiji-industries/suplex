@@ -18,8 +18,10 @@ export const CapacityOperationSchema = z.enum([
 ]);
 export type CapacityOperation = z.infer<typeof CapacityOperationSchema>;
 
-export const CapacityRoleSchema = z.enum(["lead", "developer", "reviewer"]);
+export const CapacityRoleSchema = z.enum(["analyst", "implementer", "reviewer"]);
 export type CapacityRole = z.infer<typeof CapacityRoleSchema>;
+
+const PersistedCapacityRoleSchema = z.preprocess((value) => value === "lead" ? "analyst" : value === "developer" ? "implementer" : value, CapacityRoleSchema);
 
 export const CapacityRequestStatusSchema = z.enum(["queued", "active", "rate_limited", "released", "cancelled", "stale", "ownership_ambiguous", "exhausted"]);
 export type CapacityRequestStatus = z.infer<typeof CapacityRequestStatusSchema>;
@@ -44,7 +46,7 @@ export const WorkflowCapacityStateSchema = z.object({
   logicalTurnKey: z.string().min(1).max(512),
   workflowRevision: z.number().int().nonnegative().default(0),
   operation: CapacityOperationSchema,
-  role: CapacityRoleSchema,
+  role: PersistedCapacityRoleSchema,
   profileId: durableId,
   laneKey: z.string().regex(/^codex:[A-Za-z0-9][A-Za-z0-9._:-]*$/),
   status: CapacityRequestStatusSchema,
@@ -133,7 +135,7 @@ export type CapacityExecutionOwner = z.infer<typeof CapacityExecutionOwnerSchema
 
 export const PublicCapacityStatusSchema = z.object({
   profileId: durableId,
-  profileName: z.string().min(1).max(120),
+  agentName: z.string().min(1).max(120),
   avatarSeed: z.string(),
   status: z.enum(["queued", "active", "rate_limited", "ownership_ambiguous", "exhausted"]),
   position: z.number().int().positive().nullable(),
@@ -146,7 +148,6 @@ export type PublicCapacityStatus = z.infer<typeof PublicCapacityStatusSchema>;
 export const AdminCapacityLaneSchema = z.object({
   profileId: durableId,
   profileName: z.string().min(1).max(120),
-  avatarSeed: z.string(),
   provider: z.literal("codex"),
   capacity: z.number().int().min(1).max(32).nullable(),
   effectiveCapacity: z.number().int().min(1).max(32),

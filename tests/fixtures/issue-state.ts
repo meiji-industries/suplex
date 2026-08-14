@@ -10,7 +10,7 @@ export const initialIssueWorkflowInput = {
   briefSha256: "a".repeat(64),
   imageArtifactIds: [],
   requestHash: "b".repeat(64),
-  roleProfiles: { lead: "profile-lead" },
+  roleProfiles: { analyst: "profile-analyst" },
   supplementalReview: false,
   repairCycleLimit: 2,
   stateChangedAt: "2026-08-11T00:00:00.000Z",

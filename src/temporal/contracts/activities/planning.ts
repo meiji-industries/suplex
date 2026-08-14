@@ -11,7 +11,7 @@ export interface SupplementalReviewActivityInput {
   projectRevisionId: string;
   briefArtifactId: string;
   imageArtifactIds: string[];
-  roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
+  roleProfiles: { analyst?: string | undefined; implementer?: string | undefined; reviewer?: string | undefined };
   revision: number;
   leadOutputArtifactId: string;
   leadEvidenceArtifactId: string;
@@ -43,7 +43,7 @@ export interface ConsolidateLeadPlanActivityInput {
   projectRevisionId: string;
   briefArtifactId: string;
   imageArtifactIds: string[];
-  roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
+  roleProfiles: { analyst?: string | undefined; implementer?: string | undefined; reviewer?: string | undefined };
   revision: number;
   leadSessionRef: string;
   leadOutputArtifactId: string;

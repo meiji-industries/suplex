@@ -50,6 +50,9 @@ test.skipIf(!runRealGithubProof)("activates through the production GitHub adapte
     const model = projects.listModels("real-gh-admin")[0]?.id;
     if (!model) throw new Error("No active model is available for the real GitHub proof");
     const profile = projects.createProfile("real-gh-admin", { name: "Real GitHub proof", model, reasoningLevel: "medium", servicePriority: "standard", capacity: 1 });
+    const analyst = projects.createAgent("real-gh-admin", { name: "Analyst", role: "analyst", profileId: profile.id });
+    const implementer = projects.createAgent("real-gh-admin", { name: "Implementer", role: "implementer", profileId: profile.id });
+    const reviewer = projects.createAgent("real-gh-admin", { name: "Reviewer", role: "reviewer", profileId: profile.id });
     const project = await projects.createProject("real-gh-admin", company.id, {
       name: "Real GitHub proof",
       repositoryPath,
@@ -60,8 +63,7 @@ test.skipIf(!runRealGithubProof)("activates through the production GitHub adapte
       setupCommand: "pnpm install",
       verificationCommand: "pnpm test",
       requiredChecks: ["Tests / unit"],
-      allowedProfileIds: [profile.id],
-      roleDefaults: { lead: profile.id, developer: profile.id },
+      roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id },
     });
     const github = createGithubAdapter();
     const before = {

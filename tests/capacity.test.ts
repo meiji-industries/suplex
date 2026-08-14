@@ -18,19 +18,19 @@ async function fixture() {
   database.authTransaction((db) => {
     db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin', 'Admin', 'admin', 'admin', 'active', ?, ?)").run(now, now);
     db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(now);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES ('project', 'company', 'Project', '/tmp/repo', '/tmp/worktrees', 'main', 'main', 'setup', 'test', '[]', '[]', '{}', 'active', 'revision', ?, ?)").run(now, now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES ('project', 'company', 'Project', '/tmp/repo', '/tmp/worktrees', 'main', 'main', 'setup', 'test', '[]', '{}', 'active', 'revision', ?, ?)").run(now, now);
     db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, created_at) VALUES ('revision', 'project', 1, 'identity', '{}', ?, ?, 'admin', ?)").run("a".repeat(40), "b".repeat(40), now);
     db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES ('profile', 'Profile', 'codex', 'gpt-5.6-sol', 'medium', 'standard', 2, ?, ?)").run(now, now);
     for (const taskId of ["task-a", "task-b", "task-c", "task-d"]) {
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company', 'task-brief', ?, 'text/plain', 1, ?, ?, ?)").run(`brief-${taskId}`, `${taskId}.txt`, "a".repeat(64), `company/${taskId}`, now);
-      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES (?, 'company', 'project', ?, ?, '[]', ?, 0, ?, 'revision', ?, ?, ?)").run(taskId, taskId, `brief-${taskId}`, JSON.stringify({ developer: "profile", lead: "profile", reviewer: "profile" }), `workflow-${taskId}`, `key-${taskId}`, now, now);
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES (?, 'company', 'project', ?, ?, '[]', ?, 0, ?, 'revision', ?, ?, ?)").run(taskId, taskId, `brief-${taskId}`, JSON.stringify({ implementer: "profile", analyst: "profile", reviewer: "profile" }), `workflow-${taskId}`, `key-${taskId}`, now, now);
     }
   });
   return { root, config, database };
 }
 
 function input(taskId: string, logicalTurnKey: string, requestedAt?: string, workflowRevision = 0) {
-  return { logicalTurnKey, companyId: "company", taskId, workflowId: `workflow-${taskId}`, projectRevisionId: "revision", workflowRevision, operation: "developer_execution" as const, role: "developer" as const, profileId: "profile", ...(requestedAt ? { requestedAt } : {}) };
+  return { logicalTurnKey, companyId: "company", taskId, workflowId: `workflow-${taskId}`, projectRevisionId: "revision", workflowRevision, operation: "developer_execution" as const, role: "implementer" as const, profileId: "profile", ...(requestedAt ? { requestedAt } : {}) };
 }
 
 test("admits FIFO requests per profile lane and releases exactly one slot", async () => {
@@ -90,7 +90,7 @@ test("does not release an Agent slot while its execution is cancelling", async (
     const request = capacity.request(input("task-a", "cancelling-agent"));
     expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
     capacity.bindExecution(request.id, { executionKind: "agent", executionId: "agent-cancelling" });
-    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES ('agent-cancelling', 'task-a', 'company', 'workflow-task-a', 'lead', 'cancelling', 1, ?)").run(now));
+    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES ('agent-cancelling', 'task-a', 'company', 'workflow-task-a', 'analyst', 'cancelling', 1, ?)").run(now));
     expect(() => capacity.finalize(request.id, "agent-cancelling", "cancelled")).toThrowError("Capacity request invalid-status");
     expect(capacity.inspect(request.id).status).toBe("active");
   } finally {
@@ -108,7 +108,7 @@ test("does not release a slot while the bound wrapper is still live", async () =
     expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
     capacity.bindExecution(request.id, { executionKind: "agent", executionId: "agent-live" });
     await writeFile(join(wrapperRoot, "state.json"), JSON.stringify({ wrapperPid: 2, wrapperProcessGroupId: 2, wrapperStartIdentity: "2:live", childPid: 3, childProcessGroupId: 3, childStartIdentity: "3:live", heartbeatAt: now, status: "running" }));
-    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, wrapper_path, started_at) VALUES ('agent-live', 'task-a', 'company', 'workflow-task-a', 'lead', 'failed', 1, ?, ?)").run(wrapperRoot, now));
+    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, wrapper_path, started_at) VALUES ('agent-live', 'task-a', 'company', 'workflow-task-a', 'analyst', 'failed', 1, ?, ?)").run(wrapperRoot, now));
     expect(() => capacity.finalize(request.id, "agent-live", "process_failed")).toThrowError("Capacity request invalid-status");
     expect(capacity.inspect(request.id).status).toBe("active");
   } finally {

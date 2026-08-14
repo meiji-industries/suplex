@@ -1,5 +1,6 @@
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
+import { resolveAgentProfiles } from "./projects.js";
 import { startIssueWorkflow } from "./temporal/service.js";
 
 interface SuccessorIntentRow {
@@ -20,9 +21,9 @@ interface SuccessorIntentRow {
 export async function reconcileSuccessorIntents(database: ForgeDatabase, config: ForgeConfig, startWorkflow: typeof startIssueWorkflow = startIssueWorkflow): Promise<void> {
   const intents = database.authQuery((db) => db.prepare("SELECT id, predecessor_task_id, predecessor_workflow_id, accepted_revision, successor_task_id, successor_workflow_id, company_id, project_id, project_revision_id, actor_user_id, state FROM forge_successor_intents WHERE state IN ('prepared', 'workflow_starting', 'started') ORDER BY created_at, id").all() as SuccessorIntentRow[]);
   for (const intent of intents) {
-    const task = database.authQuery((db) => db.prepare(`SELECT t.brief_artifact_id AS briefArtifactId, b.sha256 AS briefSha256, t.image_artifact_ids_json AS imageIdsJson, t.role_profiles_json AS roleProfilesJson, t.supplemental_review AS supplementalReview, t.request_hash AS requestHash
+    const task = database.authQuery((db) => db.prepare(`SELECT t.brief_artifact_id AS briefArtifactId, b.sha256 AS briefSha256, t.image_artifact_ids_json AS imageIdsJson, t.role_agents_json AS roleAgentsJson, t.supplemental_review AS supplementalReview, t.request_hash AS requestHash
       FROM forge_tasks t JOIN forge_artifacts b ON b.id = t.brief_artifact_id
-      WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.predecessor_task_id = ? AND t.project_revision_id = ?`).get(intent.successor_task_id, intent.company_id, intent.successor_workflow_id, intent.predecessor_task_id, intent.project_revision_id) as { briefArtifactId: string; briefSha256: string; imageIdsJson: string; roleProfilesJson: string; supplementalReview: number; requestHash: string | null } | undefined);
+      WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.predecessor_task_id = ? AND t.project_revision_id = ?`).get(intent.successor_task_id, intent.company_id, intent.successor_workflow_id, intent.predecessor_task_id, intent.project_revision_id) as { briefArtifactId: string; briefSha256: string; imageIdsJson: string; roleAgentsJson: string; supplementalReview: number; requestHash: string | null } | undefined);
     if (!task) continue;
     try {
       await startWorkflow(config, {
@@ -36,7 +37,7 @@ export async function reconcileSuccessorIntents(database: ForgeDatabase, config:
         briefSha256: task.briefSha256,
         imageArtifactIds: JSON.parse(task.imageIdsJson) as string[],
         requestHash: task.requestHash ?? undefined,
-        roleProfiles: JSON.parse(task.roleProfilesJson) as { lead?: string; developer?: string; reviewer?: string },
+        roleProfiles: database.authQuery((db) => resolveAgentProfiles(db, JSON.parse(task.roleAgentsJson) as { analyst?: string; implementer?: string; reviewer?: string })),
         supplementalReview: task.supplementalReview === 1,
         repairCycleLimit: config.deliveryRepairCycleLimit,
       });

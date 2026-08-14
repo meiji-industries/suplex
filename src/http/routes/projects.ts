@@ -2,18 +2,18 @@ import type { FastifyPluginAsync } from "fastify";
 import { type ZodTypeProvider } from "@fastify/type-provider-zod";
 
 import type { ProjectService } from "../../projects.js";
-import type { ProjectRole } from "../../projects.js";
+import type { RoleAssignments } from "../../projects.js";
 import { CompanyIdParamsSchema, ProjectIdParamsSchema } from "../contracts/common.js";
-import { ModelListResponseSchema, ProfileListResponseSchema, ProjectBodySchema, ProjectCheckListResponseSchema, ProjectCreateBodySchema, ProjectListResponseSchema, ProjectRepositoryDefaultsResponseSchema, ProjectResponseSchema } from "../contracts/projects.js";
+import { AgentListResponseSchema, ModelListResponseSchema, ProfileListResponseSchema, ProjectBodySchema, ProjectCheckListResponseSchema, ProjectCreateBodySchema, ProjectListResponseSchema, ProjectRepositoryDefaultsResponseSchema, ProjectResponseSchema } from "../contracts/projects.js";
 
 export interface ProjectRoutesOptions {
   projects: ProjectService;
 }
 
-function roleDefaults(value: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined }): Partial<Record<ProjectRole, string>> {
-  const result: Partial<Record<ProjectRole, string>> = {};
-  if (value.lead !== undefined) result.lead = value.lead;
-  if (value.developer !== undefined) result.developer = value.developer;
+function roleDefaults(value: { analyst?: string | undefined; implementer?: string | undefined; reviewer?: string | undefined }): RoleAssignments {
+  const result: RoleAssignments = {};
+  if (value.analyst !== undefined) result.analyst = value.analyst;
+  if (value.implementer !== undefined) result.implementer = value.implementer;
   if (value.reviewer !== undefined) result.reviewer = value.reviewer;
   return result;
 }
@@ -22,6 +22,7 @@ const projects: FastifyPluginAsync<ProjectRoutesOptions> = async (app, options) 
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const { projects } = options;
   typed.get("/api/profiles", { schema: { response: { 200: ProfileListResponseSchema } } }, async (request, reply) => reply.send({ profiles: projects.listProfiles(request.forgeUser.id) }));
+  typed.get("/api/agents", { schema: { response: { 200: AgentListResponseSchema } } }, async (request, reply) => reply.send({ agents: projects.listAgents(request.forgeUser.id) }));
   typed.get("/api/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: projects.listModels(request.forgeUser.id) }));
   typed.get("/api/projects", { schema: { response: { 200: ProjectListResponseSchema } } }, async (request, reply) => reply.send({ projects: projects.listProjects(request.forgeUser.id) }));
   typed.get("/api/companies/:companyId/projects", { schema: { params: CompanyIdParamsSchema, response: { 200: ProjectListResponseSchema } } }, async (request, reply) => reply.send({ projects: projects.listProjects(request.forgeUser.id, request.params.companyId) }));

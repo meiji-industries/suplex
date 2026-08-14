@@ -39,7 +39,7 @@ function activeDuration(startedAt: string, now: number): string {
 }
 
 function activeAgent(phase: string, invocations: AgentInvocation[]): AgentInvocation | undefined {
-  const role = phase === "planning" ? "lead" : ["ready_for_development", "development", "repair_required"].includes(phase) ? "developer" : "lead";
+  const role = phase === "planning" ? "analyst" : ["ready_for_development", "development", "repair_required"].includes(phase) ? "implementer" : "reviewer";
   return [...invocations].reverse().find((invocation) => invocation.role === role && ["starting", "running", "cancelling"].includes(invocation.status));
 }
 
@@ -84,7 +84,7 @@ export function TaskProgress({ phase, allowedCommands, createdAt, updatedAt, tim
                 </TimelineIndicator>
               </TimelineHeader>
               <TimelineContent className="text-xs">
-                {status === "current" ? <div className="flex items-center gap-1">{agent?.profileName ? <ProfileAvatar name={agent.profileName} seed={agent.avatarSeed ?? agent.profileName} size="xs" /> : null}<span>{agent?.profileName ?? "In progress"}</span><span>·</span><span className="tabular-nums">{duration}</span></div> : <div className="tabular-nums">{duration}</div>}
+                {status === "current" ? <div className="flex items-center gap-1">{agent?.agentName ? <ProfileAvatar name={agent.agentName} seed={agent.avatarSeed ?? agent.agentName} size="xs" /> : null}<span>{agent?.agentName ?? "In progress"}</span><span>·</span><span className="tabular-nums">{duration}</span></div> : <div className="tabular-nums">{duration}</div>}
               </TimelineContent>
             </TimelineItem>
           );

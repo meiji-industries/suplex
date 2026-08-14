@@ -78,7 +78,7 @@ function input(issueId: string, checkpoint: TargetBaseCheckpoint): IssueWorkflow
     briefArtifactId: "brief_test",
     briefSha256: "0".repeat(64),
     imageArtifactIds: [],
-    roleProfiles: { lead: "profile", developer: "profile" },
+    roleProfiles: { analyst: "profile", implementer: "profile" },
     supplementalReview: false,
     continuationState: continuation(checkpoint),
   };

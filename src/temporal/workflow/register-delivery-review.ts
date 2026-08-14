@@ -28,7 +28,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
       const subject = { planRevision: ctx.state.planRevision ?? ctx.state.revision, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, developerExecutionId: ctx.state.developerExecutionId!, deliveryArtifactId: ctx.state.deliveryArtifactId!, developerEvidenceArtifactId: ctx.state.developerEvidenceArtifactId!, leadSessionRef: ctx.state.leadSessionRef!, developerSessionRef: ctx.state.developerSessionRef! };
       const common = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, branchName: ctx.state.branchName! };
       result = await ctx.acquireExternalTurn<contracts.DeliveryReviewActivityResult | LegacyReviewResult>(
-        { operation: "delivery_review", role: "lead", profileId: ctx.input.roleProfiles.lead, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
+        { operation: "delivery_review", role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
         (capacityRequestId) => activityProxies.reviewDelivery({ ...common, subject, worktreePath: ctx.state.worktreePath!, supersedesReviewId: ctx.state.deliveryReviewSupersedesId ?? null, ...(capacityRequestId ? { capacityRequestId } : {}) }) as unknown as Promise<contracts.DeliveryReviewActivityResult | LegacyReviewResult>,
         (value) => "attemptId" in value ? (value.outcome === "completed" ? value.review.leadExecutionId : value.executionId) : undefined,
       );
@@ -110,7 +110,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
     let outcome: Awaited<ReturnType<typeof activityProxies.runDeveloperRepairSupervised>> | { status: "completed"; result: contracts.WorkflowDeveloperRepairResult | LegacyDeveloperRepairResult; resultHash: string };
     try {
       outcome = await ctx.acquireExternalTurn(
-        { operation: "developer_repair", role: "developer", profileId: ctx.input.roleProfiles.developer, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
+        { operation: "developer_repair", role: "implementer", profileId: ctx.input.roleProfiles.implementer, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
         (capacityRequestId) => ctx.supervisedDeveloperTurns
           ? activityProxies.runDeveloperRepairSupervised({ ...repairInput, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "repair", ...(capacityRequestId ? { capacityRequestId } : {}) })
           : (activityProxies.runDeveloperRepair({ ...repairInput, ...(capacityRequestId ? { capacityRequestId } : {}) }) as unknown as Promise<contracts.WorkflowDeveloperRepairResult | LegacyDeveloperRepairResult>).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),

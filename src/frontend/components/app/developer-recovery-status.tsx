@@ -31,7 +31,7 @@ export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, bus
   return <Card data-developer-recovery role="alert" size="sm">
       <CardHeader>
         <CardTitle>Development <Badge variant={attention ? "destructive" : "secondary"}>{labels[recovery.status]}</Badge></CardTitle>
-        <CardDescription>{ambiguous ? "Forge cannot prove ownership of the previous Developer process. Inspect the host process and worktree, stop it outside Forge if necessary, then recheck ownership." : recovery.summary ?? "Forge is tracking the Developer turn."}</CardDescription>
+        <CardDescription>{ambiguous ? "Forge cannot prove ownership of the previous Implementer process. Inspect the host process and worktree, stop it outside Forge if necessary, then recheck ownership." : recovery.summary ?? "Forge is tracking the Implementer turn."}</CardDescription>
       </CardHeader>
       <CardContent>
         {children}

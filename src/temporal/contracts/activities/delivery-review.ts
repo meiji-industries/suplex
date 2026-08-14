@@ -12,7 +12,7 @@ const DeliveryReviewActivityInputCoreSchema = z.object({
   projectRevisionId: durableId,
   briefArtifactId: durableId,
   planRevision: z.number().int().nonnegative(),
-  roleProfiles: z.object({ lead: durableId.optional(), developer: durableId.optional(), reviewer: durableId.optional() }),
+  roleProfiles: z.object({ analyst: durableId.optional(), implementer: durableId.optional(), reviewer: durableId.optional() }),
   leadOutputArtifactId: durableId,
   subject: DeliveryReviewSubjectSchema,
   worktreePath: z.string().min(1).max(1_000),

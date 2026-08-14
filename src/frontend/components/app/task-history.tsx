@@ -18,7 +18,7 @@ import { DeliveryReviewPanel } from "./delivery-review-panel.js";
 
 export type TaskActivityEntry = TaskResponse["activity"][number];
 type LinkedTask = NonNullable<TaskResponse["predecessor"]>;
-type ProcessingActivity = { profileName: string; avatarSeed: string };
+type ProcessingActivity = { agentName: string; avatarSeed: string };
 type DurableTaskHistory = Pick<TaskResponse, "id" | "timeline" | "agentInvocations" | "planHistory" | "planDecisionHistory" | "revisionHistory" | "developerExecutionHistory" | "deliveryReviewHistory" | "predecessor" | "successor">;
 type TaskHistoryContext = { originalPlan?: { content: ReactNode; current: boolean }; materiality?: { content: ReactNode; routine: boolean }; memberDecision?: ReactNode };
 
@@ -57,13 +57,13 @@ function activityCopy(entry: TaskActivityEntry): string {
 function activityActor(entry: TaskActivityEntry, actionIndex: number, invocations: TaskInvocation[], processing?: ProcessingActivity): { label: string; initials: string; avatarSeed?: string; avatarCollection?: DiceBearCollection } {
   if (entry.actor) return { label: entry.actor.displayName, initials: entry.actor.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?", avatarSeed: entry.actor.avatarSeed ?? entry.actor.username ?? entry.actor.displayName, avatarCollection: "pixel-art-neutral" };
   if (entry.eventType === "task_created") return { label: "Forge", initials: "F" };
-  const profileInvocations = invocations.filter((invocation) => invocation.profileName);
+  const profileInvocations = invocations.filter((invocation) => invocation.agentName);
   const invocation = profileInvocations[Math.min(actionIndex, profileInvocations.length - 1)];
-  const profileName = invocation?.profileName ?? (entry.eventType === "planning_started" ? processing?.profileName : undefined);
-  const role = invocation?.role ? `${invocation.role.charAt(0).toUpperCase()}${invocation.role.slice(1)}` : profileName ? "Lead" : "";
-  const label = profileName ? `${profileName} · ${role}` : "Forge";
+  const agentName = invocation?.agentName ?? (entry.eventType === "planning_started" ? processing?.agentName : undefined);
+  const role = invocation?.role ? `${invocation.role.charAt(0).toUpperCase()}${invocation.role.slice(1)}` : "";
+  const label = agentName ? `${agentName}${role ? ` · ${role}` : ""}` : "Forge";
   const avatarSeed = invocation?.avatarSeed ?? (entry.eventType === "planning_started" ? processing?.avatarSeed : undefined);
-  return { label, initials: profileName?.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "F", ...(avatarSeed ? { avatarSeed } : {}) };
+  return { label, initials: agentName?.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "F", ...(avatarSeed ? { avatarSeed } : {}) };
 }
 
 export function extractAgentTranscript(evidence: string): string {
@@ -150,7 +150,7 @@ function ActivityTimeline({ taskId, timeline, invocations = [], revisionContent,
       {processing ? <TimelineItem step={timeline.length + 1} data-task-activity-processing>
         <TimelineHeader className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
           <TimelineSeparator />
-          <TimelineTitle className="text-xs">{processing.profileName}</TimelineTitle>
+          <TimelineTitle className="text-xs">{processing.agentName}</TimelineTitle>
           <span className="text-xs text-muted-foreground">is working</span>
           <TimelineIndicator className="flex size-6 items-center justify-center border bg-muted text-muted-foreground"><LoaderCircle className="size-3 animate-spin" /></TimelineIndicator>
         </TimelineHeader>

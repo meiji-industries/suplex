@@ -6,6 +6,7 @@ import { Collapsible } from "../components/ui/collapsible.js";
 import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { Textarea } from "../components/ui/textarea.js";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.js";
@@ -24,8 +25,8 @@ import { PlanSubjectSummary } from "../components/app/plan-subject-summary.js";
 import { SupplementalReviewPanel } from "../components/app/supplemental-review-panel.js";
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import type { DeveloperExecutionEventView } from "../components/tasks/developer-evidence.js";
-import { adminDate, type ApiCi, type ApiProject, type ApiTask } from "../lib/view-shared.js";
-import { withCompany } from "../lib/api.js";
+import { adminDate, type ApiAgent, type ApiCi, type ApiProject, type ApiTask } from "../lib/view-shared.js";
+import { readJson, withCompany } from "../lib/api.js";
 import type { IssueCommandSlug } from "../../commands/registry.js";
 import { releaseFailureCopy } from "../../release-failures.js";
 import { Check, Copy, Ellipsis, ExternalLink, GitPullRequest, LoaderCircle } from "lucide-react";
@@ -81,7 +82,7 @@ function DevelopmentRun({ taskId, onStatus, onEvents, onRefresh }: { taskId: str
   const label = stale ? "No recent heartbeat" : state.status === "starting" ? "In Progress" : state.status === "result_pending_claim" ? "Finishing development" : state.status === "running" ? "Running" : state.status === "cancelling" ? "Cancelling" : state.status === "queued" ? "Queued" : state.status === "rate_limited" ? "Rate limited" : state.status === "completed" ? "Completed" : state.status === "blocked" ? "Blocked" : state.status === "failed" ? "Failed" : state.status;
   const elapsed = execution ? formatDuration((execution.finishedAt ? Date.parse(execution.finishedAt) : now) - Date.parse(execution.startedAt)) : "—";
   const visibleActivity = activity.filter((event) => !(event.kind === "command_started" || event.kind === "command_finished") || !event.summary.includes("forge-step"));
-  return <section className="space-y-2 text-xs" data-development-run><div className="flex flex-wrap items-center gap-x-3 gap-y-1"><span className="flex items-center gap-1.5" role="status" aria-live="polite">{active && Boolean(execution?.lastHeartbeatAt) && !stale ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : null}<span>{label}</span>{execution?.currentStep ? <span className="text-muted-foreground">Step {execution.currentStep}</span> : null}</span><span className="tabular-nums text-muted-foreground">{elapsed}</span></div>{visibleActivity.length ? <div className="space-y-1" data-developer-activity><h3 className="font-medium">Developer activity</h3><ol className="space-y-1 text-[11px] text-muted-foreground">{visibleActivity.map((event) => <DeveloperActivityLine event={event} key={event.eventId} />)}</ol></div> : null}</section>;
+  return <section className="space-y-2 text-xs" data-development-run><div className="flex flex-wrap items-center gap-x-3 gap-y-1"><span className="flex items-center gap-1.5" role="status" aria-live="polite">{active && Boolean(execution?.lastHeartbeatAt) && !stale ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : null}<span>{label}</span>{execution?.currentStep ? <span className="text-muted-foreground">Step {execution.currentStep}</span> : null}</span><span className="tabular-nums text-muted-foreground">{elapsed}</span></div>{visibleActivity.length ? <div className="space-y-1" data-developer-activity><h3 className="font-medium">Implementer activity</h3><ol className="space-y-1 text-[11px] text-muted-foreground">{visibleActivity.map((event) => <DeveloperActivityLine event={event} key={event.eventId} />)}</ol></div> : null}</section>;
 }
 
 export type TaskPlanAction = Exclude<IssueCommandSlug, "revise-plan" | "continue-work" | "record-progress" | "resolve-decision-blocker"> | "reject-plan";
@@ -267,7 +268,7 @@ function CiPanel({ task, ci }: { task: ApiTask; ci: ApiCi }): ReactElement {
         {ci.reason || latestAttempt?.summary ? <p className="break-words text-[12px]">{ci.reason ? `${ci.reason}: ` : ""}{latestAttempt?.summary ?? ""}</p> : null}
       </CardContent>
       <CardFooter>
-        <div className="flex flex-wrap gap-2 text-[11px]">{latestAttempt?.evidenceArtifactId ? <a className="underline" href={`/api/tasks/${task.id}/artifacts/${latestAttempt.evidenceArtifactId}`}>CI evidence</a> : null}{ci.repairPlan ? <a className="underline" href={`/api/tasks/${task.id}/artifacts/${ci.repairPlan.planArtifactId}`}>Repair plan · {ci.repairPlan.status}</a> : null}<span>Lead continuity {ci.leadSessionContinuity ? "verified" : "—"}</span><span>Developer continuity {ci.developerSessionContinuity ? "verified" : "—"}</span></div>
+        <div className="flex flex-wrap gap-2 text-[11px]">{latestAttempt?.evidenceArtifactId ? <a className="underline" href={`/api/tasks/${task.id}/artifacts/${latestAttempt.evidenceArtifactId}`}>CI evidence</a> : null}{ci.repairPlan ? <a className="underline" href={`/api/tasks/${task.id}/artifacts/${ci.repairPlan.planArtifactId}`}>Repair plan · {ci.repairPlan.status}</a> : null}<span>Analyst continuity {ci.leadSessionContinuity ? "verified" : "—"}</span><span>Implementer continuity {ci.developerSessionContinuity ? "verified" : "—"}</span></div>
       </CardFooter>
     </Card>
   </div>;
@@ -287,7 +288,7 @@ function FinalGatePanel({ task }: { task: ApiTask }): ReactElement | null {
         <div><dt className="text-muted-foreground">Pull request</dt><dd><a className="underline underline-offset-2" href={gate.release.pullRequestUrl} target="_blank" rel="noreferrer">#{gate.release.pullRequestNumber}</a> · {gate.release.repository}</dd></div>
         <div><dt className="text-muted-foreground">Exact identity</dt><dd className="break-all"><span title={gate.release.baseSha}>base {gate.release.baseSha.slice(0, 8)}…</span> · <span title={gate.release.headSha}>head {gate.release.headSha.slice(0, 8)}…</span> · <span title={gate.release.headTree}>tree {gate.release.headTree.slice(0, 8)}…</span></dd></div>
         <div><dt className="text-muted-foreground">CI</dt><dd>{gate.ci ? `${gate.ci.status}: ${gate.ci.summary}` : "Not recorded"}</dd>{gate.ci?.checks.length ? <ul className="mt-1 space-y-0.5 text-muted-foreground">{gate.ci.checks.map((check) => <li key={check.name}>{check.name}: {check.conclusion ?? check.status}</li>)}</ul> : null}</div>
-        <div><dt className="text-muted-foreground">Final review</dt><dd>{gate.finalReview ? `${gate.finalReview.outcome}: ${gate.finalReview.summary}` : "Not recorded"}</dd>{gate.finalReview ? <div className="text-muted-foreground">Lead session: <span className="break-all">{gate.finalReview.sessionRef}</span></div> : null}</div>
+        <div><dt className="text-muted-foreground">Final review</dt><dd>{gate.finalReview ? `${gate.finalReview.outcome}: ${gate.finalReview.summary}` : "Not recorded"}</dd>{gate.finalReview ? <div className="text-muted-foreground">Analyst session: <span className="break-all">{gate.finalReview.sessionRef}</span></div> : null}</div>
         <div><dt className="text-muted-foreground">Acceptance</dt><dd>{gate.acceptance ? `${gate.acceptance.decision}: ${gate.acceptance.status} by ${gate.acceptance.actorUserId}` : "Not recorded"}</dd>{gate.acceptance ? <div className="text-muted-foreground">decided {adminDate(gate.acceptance.decidedAt)}{gate.acceptance.readyAt ? ` · ready ${adminDate(gate.acceptance.readyAt)}` : ""}</div> : null}</div>
         <div><dt className="text-muted-foreground">Merge</dt><dd>{gate.merge.outcome ?? "Not observed"}{gate.merge.observationId ? ` · observation ${gate.merge.observationId}` : ""}{gate.merge.observedAt ? ` · observed ${adminDate(gate.merge.observedAt)}` : ""}{gate.merge.mergedAt ? ` · merged ${adminDate(gate.merge.mergedAt)}` : ""}{gate.merge.receiptId ? ` · receipt ${gate.merge.receiptId}` : ""}</dd></div>
         <div><dt className="text-muted-foreground">Deployment</dt><dd>Deployment: unknown / out of scope</dd></div>
@@ -315,7 +316,7 @@ function TaskOptions({ canCancel, busy, onCancel }: { canCancel: boolean; busy: 
 }
 
 function PlanningRunCard({ task }: { task: ApiTask }): ReactElement | null {
-  const invocation = [...task.agentInvocations].reverse().find((candidate) => candidate.role === "lead" && ["starting", "running", "cancelling"].includes(candidate.status));
+  const invocation = [...task.agentInvocations].reverse().find((candidate) => candidate.role === "analyst" && ["starting", "running", "cancelling"].includes(candidate.status));
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (task.phase !== "planning") return;
@@ -329,12 +330,12 @@ function PlanningRunCard({ task }: { task: ApiTask }): ReactElement | null {
   const elapsedSeconds = startedAt ? Math.max(0, Math.floor((now - Date.parse(startedAt)) / 1_000)) : 0;
   const elapsed = elapsedSeconds < 60 ? `${elapsedSeconds}s` : elapsedSeconds < 3_600 ? `${Math.floor(elapsedSeconds / 60)}m` : `${Math.floor(elapsedSeconds / 3_600)}h ${Math.floor(elapsedSeconds % 3_600 / 60)}m`;
   const status = task.capacity?.status === "queued" ? `Queued${task.capacity.position ? ` · ${task.capacity.position}` : ""}` : task.capacity?.status === "rate_limited" ? "Waiting" : invocation?.status === "cancelling" ? "Cancelling" : invocation || task.capacity?.status === "active" ? "Running" : elapsedSeconds >= 10 ? "Waiting to start" : "Starting";
-  const agentName = invocation?.profileName ?? task.capacity?.profileName ?? "Lead agent";
+  const agentName = invocation?.agentName ?? task.capacity?.agentName ?? "Analyst agent";
   return (
     <Card data-planning-run size="sm" aria-label="Planning run">
       <CardHeader>
         <CardTitle>Planning run</CardTitle>
-        <CardDescription><span className="flex items-center gap-2">{invocation?.avatarSeed ? <ProfileAvatar name={agentName} seed={invocation.avatarSeed} /> : task.capacity?.avatarSeed ? <ProfileAvatar name={agentName} seed={task.capacity.avatarSeed} /> : null}<span>{agentName} · Lead · attempt {invocation?.attempt ?? 1}{invocation?.sessionPresent ? " · session connected" : ""}</span></span></CardDescription>
+        <CardDescription><span className="flex items-center gap-2">{invocation?.avatarSeed ? <ProfileAvatar name={agentName} seed={invocation.avatarSeed} /> : task.capacity?.avatarSeed ? <ProfileAvatar name={agentName} seed={task.capacity.avatarSeed} /> : null}<span>{agentName} · Analyst · attempt {invocation?.attempt ?? 1}{invocation?.sessionPresent ? " · session connected" : ""}</span></span></CardDescription>
         <CardAction><Badge variant="secondary">{status}</Badge></CardAction>
       </CardHeader>
       <CardContent>
@@ -347,6 +348,30 @@ function PlanningRunCard({ task }: { task: ApiTask }): ReactElement | null {
       </CardContent>
     </Card>
   );
+}
+
+function TaskAgentAssignments({ task, onRefresh }: { task: ApiTask; onRefresh: () => Promise<void> }): ReactElement {
+  const [agents, setAgents] = useState<ApiAgent[]>([]);
+  const [error, setError] = useState("");
+  const [savingRole, setSavingRole] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    void readJson<{ agents: ApiAgent[] }>("/api/agents").then((response) => { if (active) setAgents(response.agents); }).catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : "Agents could not be loaded"); });
+    return () => { active = false; };
+  }, []);
+  const update = async (role: "analyst" | "implementer" | "reviewer", agentId: string): Promise<void> => {
+    setSavingRole(role);
+    setError("");
+    try {
+      await readJson<ApiTask>(`/api/tasks/${encodeURIComponent(task.id)}/agents`, { method: "PATCH", body: JSON.stringify({ [role]: agentId }) });
+      await onRefresh();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Agent assignment could not be saved");
+    } finally {
+      setSavingRole(null);
+    }
+  };
+  return <section className="mb-6 space-y-3" aria-label="Task agents"><h3 className="text-xs font-semibold">Agents</h3>{(["analyst", "implementer", "reviewer"] as const).map((role) => { const selected = agents.find((agent) => agent.id === task.roleAgents[role]); const options = agents.filter((agent) => agent.role === role); return <Field key={role}><FieldLabel htmlFor={`task-agent-${role}`}>{role.slice(0, 1).toUpperCase() + role.slice(1)}</FieldLabel><Select value={task.roleAgents[role] ?? null} onValueChange={(value) => { if (value) void update(role, value); }}><SelectTrigger id={`task-agent-${role}`}><SelectValue placeholder="Select agent">{selected ? <span className="flex items-center gap-2"><ProfileAvatar name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "Unassigned"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select>{savingRole === role ? <span className="text-[11px] text-muted-foreground">Saving…</span> : null}</Field>; })}{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}</section>;
 }
 
 export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onRefresh }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onRefresh: () => Promise<void> }): ReactElement {
@@ -428,7 +453,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
                     {currentPlan ?? decisionControls}
                     {task.governance.blocker && blockerCommand?.subject?.kind === "plan_blocker" ? <PlanBlockerResponseForm blocker={task.governance.blocker} expectedRevision={blockerCommand.expectedRevision} busy={busy} onSubmit={(payload) => onPlanAction(blockerCommand.endpoint as TaskPlanAction, undefined, { subject: payload.subject, answer: payload.answer, idempotencyKey: payload.idempotencyKey, expectedWorkflowRevision: payload.expectedWorkflowRevision })} error={error} /> : task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">{task.governance.blocker.header}</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}
-                    {task.leadOutput?.content.kind === "decision_blocker" && task.allowedCommands.includes("resolve_decision_blocker") ? <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); void onResolveDecisionBlocker(answer); }}><FieldLabel htmlFor="decision-answer">Decision</FieldLabel><Textarea id="decision-answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Answer the Lead's question" maxLength={8000} /><Button size="sm" type="submit" disabled={busy || !answer.trim()}>{busy ? "Saving…" : "Resolve decision"}</Button></form> : null}
+                    {task.leadOutput?.content.kind === "decision_blocker" && task.allowedCommands.includes("resolve_decision_blocker") ? <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); void onResolveDecisionBlocker(answer); }}><FieldLabel htmlFor="decision-answer">Decision</FieldLabel><Textarea id="decision-answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Answer the Analyst's question" maxLength={8000} /><Button size="sm" type="submit" disabled={busy || !answer.trim()}>{busy ? "Saving…" : "Resolve decision"}</Button></form> : null}
                   </div>
                 </div>
                 <Tabs data-task-work-tabs defaultValue="activity">
@@ -460,6 +485,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
           </div>
           <aside data-task-properties className="border-border border-t bg-muted/20 px-4 py-6 sm:px-6 lg:sticky lg:top-0 lg:h-fit lg:border-t-0 lg:border-l">
             <div className="mb-6 space-y-4"><TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} agentInvocations={task.agentInvocations} activeCapacity={task.capacity?.status === "active" ? task.capacity : undefined} developerLiveness={developerLiveness} /><PullRequestCard task={task} /></div>
+            <TaskAgentAssignments task={task} onRefresh={onRefresh} />
             <h3 className="mb-5 text-xs font-semibold">Properties</h3>
             <dl className="space-y-4 text-xs">
               <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary" data-status={task.phase}><TaskStatus phase={task.phase} /></Badge></dd></div>

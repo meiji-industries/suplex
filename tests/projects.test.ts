@@ -18,6 +18,7 @@ interface Fixture {
   adminId: string;
   companyId: string;
   profileId: string;
+  roleDefaults: { analyst: string; implementer: string; reviewer: string };
   repositoryPath: string;
   worktreeRoot: string;
 }
@@ -49,7 +50,10 @@ async function fixture(): Promise<Fixture> {
   const projects = new ProjectService(database, auth, config, { localRepository, github });
   const company = auth.createCompany("admin-1", "Acme");
   const profile = projects.createProfile("admin-1", { name: "Default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  return { root, database, auth, projects, adminId: "admin-1", companyId: company.id, profileId: profile.id, repositoryPath, worktreeRoot };
+  const analyst = projects.createAgent("admin-1", { name: "Analyst", role: "analyst", profileId: profile.id });
+  const implementer = projects.createAgent("admin-1", { name: "Implementer", role: "implementer", profileId: profile.id });
+  const reviewer = projects.createAgent("admin-1", { name: "Reviewer", role: "reviewer", profileId: profile.id });
+  return { root, database, auth, projects, adminId: "admin-1", companyId: company.id, profileId: profile.id, roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id }, repositoryPath, worktreeRoot };
 }
 
 async function close(value: Fixture): Promise<void> {
@@ -68,8 +72,7 @@ function input(value: Fixture, overrides: Record<string, unknown> = {}) {
     setupCommand: "pnpm install",
     verificationCommand: "pnpm test",
     requiredChecks: ["Tests / unit"],
-    allowedProfileIds: [value.profileId],
-    roleDefaults: { lead: value.profileId, developer: value.profileId },
+    roleDefaults: value.roleDefaults,
     ...overrides,
   };
 }
@@ -121,9 +124,7 @@ test("updates every editable profile setting", async () => {
   const value = await fixture();
   try {
     const profile = value.projects.createProfile(value.adminId, { name: "Editable", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-    expect(profile.avatarSeed).toMatch(/^[a-f0-9]{32}$/);
-    const avatarSeed = "a".repeat(32);
-    expect(value.projects.updateProfile(value.adminId, profile.id, { name: "Updated", avatarSeed, model: "gpt-5.6-terra", reasoningLevel: "high", servicePriority: "priority", capacity: 4 })).toMatchObject({ id: profile.id, name: "Updated", avatarSeed, model: "gpt-5.6-terra", reasoningLevel: "high", servicePriority: "priority", capacity: 4, effectiveCapacity: 4 });
+    expect(value.projects.updateProfile(value.adminId, profile.id, { name: "Updated", model: "gpt-5.6-terra", reasoningLevel: "high", servicePriority: "priority", capacity: 4 })).toMatchObject({ id: profile.id, name: "Updated", model: "gpt-5.6-terra", reasoningLevel: "high", servicePriority: "priority", capacity: 4, effectiveCapacity: 4 });
   } finally {
     await close(value);
   }
@@ -155,8 +156,7 @@ test("clones and activates a GitHub repository under the configured Forge roots"
       status: "active",
       configurationRevision: 1,
       requiredChecks: ["Tests / unit"],
-      allowedProfileIds: [value.profileId],
-      roleDefaults: { lead: value.profileId, developer: value.profileId },
+      roleDefaults: value.roleDefaults,
     });
     expect(provisioned).toEqual([expect.objectContaining({ cloneUrl: "https://github.com/meiji-industries/sampler.git", repository: "meiji-industries/sampler" })]);
   } finally {
@@ -203,7 +203,12 @@ test("rejects traversal, symlink ambiguity, unsafe commands, and invalid branche
     await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { repositoryPath: symlinkPath }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "symlink-ambiguous" })]) });
     await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { setupCommand: "pnpm test && curl https://example.com" }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "unapproved-command" })]) });
     await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { targetBranch: "feature..token" }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "unsafe-branch" })]) });
-    await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { requiredChecks: [] }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "invalid-check" })]) });
+    const invalidChecksRepository = join(value.root, "repositories", "invalid-checks");
+    const invalidChecksWorktree = join(value.worktreeRoot, "invalid-checks");
+    await mkdir(invalidChecksRepository, { recursive: true });
+    await mkdir(invalidChecksWorktree, { recursive: true });
+    const invalidChecks = await value.projects.createProject(value.adminId, value.companyId, input(value, { name: "Invalid checks", repositoryPath: invalidChecksRepository, worktreeRoot: invalidChecksWorktree, repository: "acme/invalid-checks", requiredChecks: [] }));
+    await expect(value.projects.activateProject(value.adminId, invalidChecks.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "invalid-check" })]) });
     expect(() => value.projects.createProfile(value.adminId, { name: "Secret profile", model: "ghp_should-not-persist", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 })).toThrowError("Profile configuration is invalid");
     expect(() => value.projects.createProfile(value.adminId, { name: "Invalid capacity", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 0 })).toThrowError("Profile configuration is invalid");
   } finally {
@@ -211,7 +216,7 @@ test("rejects traversal, symlink ambiguity, unsafe commands, and invalid branche
   }
 });
 
-test("fails closed for provider mismatch, unavailable profiles, and cross-company project access", async () => {
+test("fails closed for provider mismatch, unavailable agents, and cross-company project access", async () => {
   const value = await fixture();
   try {
     const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
@@ -224,8 +229,7 @@ test("fails closed for provider mismatch, unavailable profiles, and cross-compan
     const unavailableWorktree = join(value.worktreeRoot, "unavailable");
     await mkdir(unavailableRepository, { recursive: true });
     await mkdir(unavailableWorktree, { recursive: true });
-    const unavailable = await value.projects.createProject(value.adminId, value.companyId, input(value, { name: "Unavailable", repositoryPath: unavailableRepository, worktreeRoot: unavailableWorktree, repository: "acme/unavailable", allowedProfileIds: ["missing-profile"], roleDefaults: { lead: "missing-profile", developer: "missing-profile" } }));
-    await expect(value.projects.activateProject(value.adminId, unavailable.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "profile-unavailable" })]) });
+    await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { name: "Unavailable", repositoryPath: unavailableRepository, worktreeRoot: unavailableWorktree, repository: "acme/unavailable", roleDefaults: { analyst: "missing-agent", implementer: "missing-agent", reviewer: "missing-agent" } }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "agent-ineligible" })]) });
 
     value.database.authQuery((db) => {
       db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('member-1', 'Member', 'member@forge.local', 'member', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run();
@@ -275,15 +279,21 @@ test("rejects duplicate repository identity across companies and preserves exact
   }
 });
 
-test("rejects unwritable worktree root and missing lead or developer defaults", async () => {
+test("rejects unwritable worktree root and missing analyst or implementer defaults", async () => {
   const value = await fixture();
   const readOnly = join(value.worktreeRoot, "readonly");
   await mkdir(readOnly, { recursive: true });
   await chmod(readOnly, 0o555);
   try {
     await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { worktreeRoot: readOnly }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "worktree-unwritable" })]) });
-    await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { roleDefaults: { lead: value.profileId } }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "missing-default", field: "roleDefaults.developer" })]) });
-    await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { roleDefaults: { developer: value.profileId } }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "missing-default", field: "roleDefaults.lead" })]) });
+    const missingImplementer = await value.projects.createProject(value.adminId, value.companyId, input(value, { roleDefaults: { analyst: value.roleDefaults.analyst } }));
+    await expect(value.projects.activateProject(value.adminId, missingImplementer.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "missing-default", field: "roleDefaults.implementer" })]) });
+    const missingAnalystRepository = join(value.root, "repositories", "missing-analyst");
+    const missingAnalystWorktree = join(value.worktreeRoot, "missing-analyst");
+    await mkdir(missingAnalystRepository, { recursive: true });
+    await mkdir(missingAnalystWorktree, { recursive: true });
+    const missingAnalyst = await value.projects.createProject(value.adminId, value.companyId, input(value, { name: "Missing analyst", repositoryPath: missingAnalystRepository, worktreeRoot: missingAnalystWorktree, repository: "acme/missing-analyst", roleDefaults: {} }));
+    await expect(value.projects.activateProject(value.adminId, missingAnalyst.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "missing-default", field: "roleDefaults.analyst" })]) });
   } finally {
     await chmod(readOnly, 0o755);
     await close(value);

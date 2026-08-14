@@ -8,13 +8,16 @@ import { expect, test } from "vitest";
 import { applyMigrations } from "../src/database.js";
 
 const drizzleRoot = join(process.cwd(), "drizzle");
+const agentsMigration = "20260814021311549_agents.sql";
+const durableMigrationTimestamp = 20260812065000;
 const now = "2026-08-12T00:00:00.000Z";
 
 async function migrationFolder(root: string): Promise<string> {
   const destination = join(root, "drizzle");
   await mkdir(destination, { recursive: true });
   for (const filename of await readdir(drizzleRoot)) {
-    if (/^\d{14}(?:\d{3})?_.*\.sql$/.test(filename) && filename !== "20260812065000_durable_capacity_lanes.sql") await cp(join(drizzleRoot, filename), join(destination, filename));
+    const timestamp = Number(filename.slice(0, 14));
+    if (/^\d{14}(?:\d{3})?_.*\.sql$/.test(filename) && timestamp < durableMigrationTimestamp) await cp(join(drizzleRoot, filename), join(destination, filename));
   }
   return destination;
 }
@@ -30,8 +33,8 @@ function seedLegacyDatabase(database: Database.Database): void {
     database.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company', 'task-brief', ?, 'text/plain', 1, ?, ?, ?)").run(`brief-${suffix}`, `${suffix}.txt`, "c".repeat(64), `company/${suffix}`, now);
     database.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES (?, 'company', 'project', ?, ?, '[]', ?, 0, ?, 'revision', ?, ?, ?)").run(`task-${suffix}`, suffix, `brief-${suffix}`, JSON.stringify({ lead: "profile", reviewer: "profile", developer: "profile" }), `workflow-${suffix}`, `key-${suffix}`, now, now);
   }
-  database.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES ('agent-unique', 'task-unique', 'company', 'workflow-unique', 'lead', 'running', 1, 'session-unique', ?)").run(now);
-  database.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES ('agent-ambiguous-lead', 'task-ambiguous', 'company', 'workflow-ambiguous', 'lead', 'running', 1, 'session-ambiguous-lead', ?)").run(now);
+  database.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES ('agent-unique', 'task-unique', 'company', 'workflow-unique', 'analyst', 'running', 1, 'session-unique', ?)").run(now);
+  database.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES ('agent-ambiguous-lead', 'task-ambiguous', 'company', 'workflow-ambiguous', 'analyst', 'running', 1, 'session-ambiguous-lead', ?)").run(now);
   database.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES ('agent-ambiguous-reviewer', 'task-ambiguous', 'company', 'workflow-ambiguous', 'reviewer', 'running', 1, 'session-ambiguous-reviewer', ?)").run(now);
   database.prepare("INSERT INTO forge_capacity_requests (id, company_id, task_id, workflow_id, turn_kind, status, requested_at, acquired_at) VALUES ('capacity-unique', 'company', 'task-unique', 'workflow-unique', 'lead', 'active', ?, ?)").run(now, now);
   database.prepare("INSERT INTO forge_capacity_requests (id, company_id, task_id, workflow_id, turn_kind, status, requested_at, acquired_at) VALUES ('capacity-ambiguous', 'company', 'task-ambiguous', 'workflow-ambiguous', 'review', 'active', ?, ?)").run(now, now);
@@ -47,6 +50,13 @@ test("the durable capacity migration preserves legacy history, binds a unique ow
     seedLegacyDatabase(sqlite);
 
     await cp(join(drizzleRoot, "20260812065000_durable_capacity_lanes.sql"), join(folder, "20260812065000_durable_capacity_lanes.sql"));
+    applyMigrations(sqlite, folder);
+    for (const filename of await readdir(drizzleRoot)) {
+      const timestamp = Number(filename.slice(0, 14));
+      if (/^\d{14}(?:\d{3})?_.*\.sql$/.test(filename) && timestamp > durableMigrationTimestamp && filename !== agentsMigration) await cp(join(drizzleRoot, filename), join(folder, filename));
+    }
+    applyMigrations(sqlite, folder);
+    await cp(join(drizzleRoot, agentsMigration), join(folder, agentsMigration));
     applyMigrations(sqlite, folder);
 
     const rows = sqlite.prepare("SELECT id, logical_turn_key, profile_id, provider, model, reasoning_level, service_priority, lane_key, requested_capacity, status, execution_kind, execution_id, terminal_reason FROM forge_capacity_requests ORDER BY id").all() as Array<Record<string, unknown>>;

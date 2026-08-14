@@ -61,7 +61,7 @@ export function TaskLeadPlan({
     if (stepProgress) setOpenSteps(activeStep ? [activeStep] : []);
   }, [activeStep, stepProgress?.execution.id]);
 
-  const heading = <span className="font-semibold">Plan: {output.content.gitPresentation?.pullRequestTitle ?? "Lead plan"}</span>;
+  const heading = <span className="font-semibold">Plan: {output.content.gitPresentation?.pullRequestTitle ?? "Analyst plan"}</span>;
   const details = <>
     <p className="whitespace-pre-wrap text-[13px] leading-5">{output.summary}</p>
         <Accordion multiple value={openSteps} onValueChange={setOpenSteps}>

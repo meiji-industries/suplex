@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
+import { resolveAgentProfiles } from "./projects.js";
 import { AgentWrapperResultSchema, AgentWrapperStateSchema } from "./agent-wrapper.js";
 import {
   CapacityExecutionOwnerSchema,
@@ -21,7 +22,7 @@ import {
 export type ExternalTurnKind = "lead" | "developer" | "review" | "ci-repair";
 
 export class CapacityFailure extends Error {
-  constructor(readonly code: "not-found" | "not-owner" | "duplicate" | "conflict" | "stale-revision" | "profile-unavailable" | "profile-not-allowed" | "invalid-status" | "stale-owner" | "ownership-ambiguous" | "deadline-exhausted") {
+  constructor(readonly code: "not-found" | "not-owner" | "duplicate" | "conflict" | "stale-revision" | "profile-unavailable" | "invalid-status" | "stale-owner" | "ownership-ambiguous" | "deadline-exhausted") {
     super(`Capacity request ${code}`);
     this.name = "CapacityFailure";
   }
@@ -49,11 +50,11 @@ function wrapperIsLive(wrapperPath: string | null | undefined): boolean {
   }
 }
 
-function legacyOperation(turnKind: ExternalTurnKind): { operation: CapacityOperation; role: "lead" | "developer" | "reviewer" } {
-  if (turnKind === "lead") return { operation: "lead_planning", role: "lead" };
+function legacyOperation(turnKind: ExternalTurnKind): { operation: CapacityOperation; role: "analyst" | "implementer" | "reviewer" } {
+  if (turnKind === "lead") return { operation: "lead_planning", role: "analyst" };
   if (turnKind === "review") return { operation: "supplemental_review", role: "reviewer" };
-  if (turnKind === "ci-repair") return { operation: "developer_repair", role: "developer" };
-  return { operation: "developer_execution", role: "developer" };
+  if (turnKind === "ci-repair") return { operation: "developer_repair", role: "implementer" };
+  return { operation: "developer_execution", role: "implementer" };
 }
 
 function row(raw: Record<string, unknown>): CapacityRequestSnapshot {
@@ -125,10 +126,12 @@ export class CapacityManager {
     const input = "turnKind" in rawInput
       ? (() => {
         const legacy = legacyOperation(rawInput.turnKind);
-        const selected = this.database.authQuery((db) => db.prepare("SELECT role_profiles_json FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(rawInput.taskId, rawInput.companyId, rawInput.workflowId) as { role_profiles_json: string } | undefined);
-        let profiles: Record<string, unknown> = {};
-        try { profiles = selected ? JSON.parse(selected.role_profiles_json) as Record<string, unknown> : {}; } catch {}
-        const profileId = typeof profiles[legacy.role] === "string" ? String(profiles[legacy.role]) : "legacy-unresolved";
+        const profileId = this.database.authQuery((db) => {
+          const selected = db.prepare("SELECT role_agents_json FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(rawInput.taskId, rawInput.companyId, rawInput.workflowId) as { role_agents_json: string } | undefined;
+          let agents: Record<string, string> = {};
+          try { agents = selected ? JSON.parse(selected.role_agents_json) as Record<string, string> : {}; } catch {}
+          return resolveAgentProfiles(db, { [legacy.role]: agents[legacy.role] })[legacy.role] ?? "legacy-unresolved";
+        });
         return { logicalTurnKey: `${rawInput.workflowId}:0:${legacy.operation}`, companyId: rawInput.companyId, taskId: rawInput.taskId, workflowId: rawInput.workflowId, projectRevisionId: "legacy", workflowRevision: 0, operation: legacy.operation, role: legacy.role, profileId, ...(rawInput.requestedAt ? { requestedAt: rawInput.requestedAt } : {}) } satisfies CapacityRequestInput;
       })()
       : CapacityRequestInputSchema.parse(rawInput);
@@ -139,29 +142,26 @@ export class CapacityManager {
     const existingRaw = db.prepare("SELECT * FROM forge_capacity_requests WHERE logical_turn_key = ? AND status IN ('queued', 'active', 'rate_limited', 'ownership_ambiguous')").get(input.logicalTurnKey) as Record<string, unknown> | undefined;
     if (existingRaw) {
       const existing = row(existingRaw);
-      const immutableMatches = existing.companyId === input.companyId && existing.taskId === input.taskId && existing.workflowId === input.workflowId && existing.projectRevisionId === input.projectRevisionId && existing.workflowRevision === input.workflowRevision && existing.operation === input.operation && existing.role === input.role && existing.profileId === input.profileId;
+      const immutableMatches = existing.companyId === input.companyId && existing.taskId === input.taskId && existing.workflowId === input.workflowId && existing.projectRevisionId === input.projectRevisionId && existing.workflowRevision === input.workflowRevision && existing.operation === input.operation && existing.role === input.role;
       if (!immutableMatches) throw new CapacityFailure("conflict");
       return existing;
     }
 
-    const profile = input.profileId === "legacy-unresolved"
-      ? undefined
-      : db.prepare("SELECT id, provider, model, reasoning_level, service_priority, capacity FROM forge_profiles WHERE id = ?").get(input.profileId) as { id: string; provider: string; model: string; reasoning_level: string; service_priority: string; capacity: number | null } | undefined;
-    if (!profile && input.profileId !== "legacy-unresolved") throw new CapacityFailure("profile-unavailable");
     const task = input.projectRevisionId === "legacy"
-      ? db.prepare("SELECT role_profiles_json FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(input.taskId, input.companyId, input.workflowId) as { role_profiles_json: string } | undefined
-      : db.prepare("SELECT role_profiles_json FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ? AND project_revision_id = ?").get(input.taskId, input.companyId, input.workflowId, input.projectRevisionId) as { role_profiles_json: string } | undefined;
-    if (input.projectRevisionId !== "legacy") {
-      if (!task) throw new CapacityFailure("profile-not-allowed");
-      let profiles: Record<string, unknown>;
-      try { profiles = JSON.parse(task.role_profiles_json) as Record<string, unknown>; } catch { throw new CapacityFailure("profile-not-allowed"); }
-      if (profiles[input.role] !== input.profileId) throw new CapacityFailure("profile-not-allowed");
-    } else if (profile && task) {
-      let profiles: Record<string, unknown> = {};
-      try { profiles = JSON.parse(task.role_profiles_json) as Record<string, unknown>; } catch {}
-      const selected = profiles[input.role];
-      if (typeof selected === "string" && selected !== input.profileId) throw new CapacityFailure("profile-not-allowed");
+      ? db.prepare("SELECT role_agents_json FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(input.taskId, input.companyId, input.workflowId) as { role_agents_json: string } | undefined
+      : db.prepare("SELECT role_agents_json FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ? AND project_revision_id = ?").get(input.taskId, input.companyId, input.workflowId, input.projectRevisionId) as { role_agents_json: string } | undefined;
+    let effectiveProfileId = input.profileId;
+    if (task) {
+      let roleAgents: Record<string, string> = {};
+      try { roleAgents = JSON.parse(task.role_agents_json) as Record<string, string>; } catch {}
+      const agentId = roleAgents[input.role];
+      const agent = typeof agentId === "string" ? db.prepare("SELECT profile_id FROM forge_agents WHERE id = ? AND role = ?").get(agentId, input.role) as { profile_id: string } | undefined : undefined;
+      if (agent) effectiveProfileId = agent.profile_id;
     }
+    const profile = effectiveProfileId === "legacy-unresolved"
+      ? undefined
+      : db.prepare("SELECT id, provider, model, reasoning_level, service_priority, capacity FROM forge_profiles WHERE id = ?").get(effectiveProfileId) as { id: string; provider: string; model: string; reasoning_level: string; service_priority: string; capacity: number | null } | undefined;
+    if (!profile && effectiveProfileId !== "legacy-unresolved") throw new CapacityFailure("profile-unavailable");
     const requestedAt = input.requestedAt ?? new Date().toISOString();
     const requestedCapacity = profile?.capacity ?? this.config.externalTurnCapacity;
     const requestId = id();
@@ -409,18 +409,18 @@ export class CapacityManager {
 
   statusForTask(taskId: string): PublicCapacityStatus | null {
     return this.database.authQuery((db) => {
-      const raw = db.prepare(`SELECT c.*, p.name AS profile_name, p.avatar_seed FROM forge_capacity_requests c LEFT JOIN forge_profiles p ON p.id = c.profile_id WHERE c.task_id = ? AND c.status IN ('queued', 'active', 'rate_limited', 'ownership_ambiguous', 'exhausted') ORDER BY c.requested_at DESC, c.id DESC LIMIT 1`).get(taskId) as (Record<string, unknown> & { profile_name: string | null; avatar_seed: string | null }) | undefined;
-      if (!raw || !raw.profile_name) return null;
+      const raw = db.prepare(`SELECT c.*, ag.name AS agent_name, ag.avatar_seed FROM forge_capacity_requests c LEFT JOIN forge_tasks t ON t.id = c.task_id LEFT JOIN forge_agents ag ON ag.id = json_extract(t.role_agents_json, '$.' || c.role) WHERE c.task_id = ? AND c.status IN ('queued', 'active', 'rate_limited', 'ownership_ambiguous', 'exhausted') ORDER BY c.requested_at DESC, c.id DESC LIMIT 1`).get(taskId) as (Record<string, unknown> & { agent_name: string | null; avatar_seed: string | null }) | undefined;
+      if (!raw || !raw.agent_name) return null;
       const request = row(raw);
       const position = request.status === "queued" ? this.positionInTransaction(db, request.id) : null;
-      return PublicCapacityStatusSchema.parse({ profileId: request.profileId, profileName: raw.profile_name, avatarSeed: raw.avatar_seed, status: request.status, position, reason: request.waitReason, requestedAt: request.requestedAt, retryAt: request.retryAt });
+      return PublicCapacityStatusSchema.parse({ profileId: request.profileId, agentName: raw.agent_name, avatarSeed: raw.avatar_seed, status: request.status, position, reason: request.waitReason, requestedAt: request.requestedAt, retryAt: request.retryAt });
     });
   }
 
   listAdminLanes(): AdminCapacityLane[] {
-    return this.database.authQuery((db) => (db.prepare("SELECT id, name, avatar_seed, capacity FROM forge_profiles ORDER BY name, id").all() as Array<{ id: string; name: string; avatar_seed: string; capacity: number | null }>).map((profile) => {
+    return this.database.authQuery((db) => (db.prepare("SELECT id, name, capacity FROM forge_profiles ORDER BY name, id").all() as Array<{ id: string; name: string; capacity: number | null }>).map((profile) => {
       const counts = db.prepare("SELECT SUM(status = 'active' OR status = 'ownership_ambiguous') AS active_count, SUM(status = 'queued') AS queued_count, SUM(status = 'rate_limited') AS rate_limited_count, MIN(CASE WHEN status = 'queued' THEN requested_at END) AS oldest_queued_at FROM forge_capacity_requests WHERE lane_key = ?").get(`codex:${profile.id}`) as { active_count: number | null; queued_count: number | null; rate_limited_count: number | null; oldest_queued_at: string | null };
-      return { profileId: profile.id, profileName: profile.name, avatarSeed: profile.avatar_seed, provider: "codex" as const, capacity: profile.capacity, effectiveCapacity: profile.capacity ?? this.config.externalTurnCapacity, activeCount: Number(counts.active_count ?? 0), queuedCount: Number(counts.queued_count ?? 0), rateLimitedCount: Number(counts.rate_limited_count ?? 0), oldestQueuedAt: counts.oldest_queued_at };
+      return { profileId: profile.id, profileName: profile.name, provider: "codex" as const, capacity: profile.capacity, effectiveCapacity: profile.capacity ?? this.config.externalTurnCapacity, activeCount: Number(counts.active_count ?? 0), queuedCount: Number(counts.queued_count ?? 0), rateLimitedCount: Number(counts.rate_limited_count ?? 0), oldestQueuedAt: counts.oldest_queued_at };
     }));
   }
 

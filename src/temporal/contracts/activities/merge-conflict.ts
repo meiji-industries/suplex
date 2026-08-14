@@ -10,7 +10,7 @@ export interface MergeConflictPlanActivityInput {
   briefArtifactId: string;
   planRevision: number;
   forwardMergeId: string;
-  roleProfiles?: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
+  roleProfiles?: { analyst?: string | undefined; implementer?: string | undefined; reviewer?: string | undefined };
   leadSessionRef: string;
   leadOutputArtifactId: string;
   worktreePath: string;

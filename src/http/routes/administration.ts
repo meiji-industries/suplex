@@ -11,7 +11,7 @@ import type { ForgeConfig } from "../../config.js";
 import { ProjectionRebuildFailure, ProjectionRebuildService } from "../../projection-rebuild.js";
 import { AuditEventListResponseSchema, CredentialIdParamsSchema, CredentialListResponseSchema, ErrorResponseSchema, InvitationResponseSchema, InvitationSummaryListResponseSchema, UserIdParamsSchema, UserListResponseSchema } from "../contracts/common.js";
 import { DisplayNameBodySchema } from "../contracts/auth.js";
-import { AdminCapacityListResponseSchema, ModelBodySchema, ModelIdParamsSchema, ModelListResponseSchema, ModelResponseSchema, ModelStatusBodySchema, ProfileBodySchema, ProfileCapacityBodySchema, ProfileResponseSchema } from "../contracts/projects.js";
+import { AdminCapacityListResponseSchema, AgentBodySchema, AgentResponseSchema, ModelBodySchema, ModelIdParamsSchema, ModelListResponseSchema, ModelResponseSchema, ModelStatusBodySchema, ProfileBodySchema, ProfileCapacityBodySchema, ProfileResponseSchema } from "../contracts/projects.js";
 
 const ProjectionRebuildBodySchema = z.object({ companyId: z.string().optional(), taskId: z.string().optional() }).default({});
 
@@ -44,6 +44,8 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     typed.post("/api/admin/profiles", { schema: { body: ProfileBodySchema, response: { 201: ProfileResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.createProfile(request.forgeUser.id, { ...request.body, capacity: request.body.capacity ?? null })));
     typed.patch("/api/admin/profiles/:profileId", { schema: { params: z.object({ profileId: z.string() }), body: ProfileBodySchema, response: { 200: ProfileResponseSchema } } }, async (request, reply) => reply.send(projects.updateProfile(request.forgeUser.id, request.params.profileId, { ...request.body, capacity: request.body.capacity ?? null })));
     typed.patch("/api/admin/profiles/:profileId/capacity", { schema: { params: z.object({ profileId: z.string() }), body: ProfileCapacityBodySchema, response: { 200: ProfileResponseSchema } } }, async (request, reply) => reply.send(projects.updateProfileCapacity(request.forgeUser.id, request.params.profileId, request.body.capacity ?? null)));
+    typed.post("/api/admin/agents", { schema: { body: AgentBodySchema, response: { 201: AgentResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.createAgent(request.forgeUser.id, request.body)));
+    typed.patch("/api/admin/agents/:agentId", { schema: { params: z.object({ agentId: z.string() }), body: AgentBodySchema, response: { 200: AgentResponseSchema } } }, async (request, reply) => reply.send(projects.updateAgent(request.forgeUser.id, request.params.agentId, request.body)));
     typed.get("/api/admin/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: projects.listModels(request.forgeUser.id, true) }));
     typed.post("/api/admin/models", { schema: { body: ModelBodySchema, response: { 201: ModelResponseSchema } } }, async (request, reply) => reply.code(201).send(projects.createModel(request.forgeUser.id, request.body)));
     typed.patch("/api/admin/models/:modelId", { schema: { params: ModelIdParamsSchema, body: ModelStatusBodySchema, response: { 200: ModelResponseSchema } } }, async (request, reply) => reply.send(projects.setModelStatus(request.forgeUser.id, request.params.modelId, request.body.status)));

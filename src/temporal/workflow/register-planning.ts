@@ -59,7 +59,7 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
       const durablePlanningCapacity = ctx.durablePlanningCapacityEnabled();
       try {
         const runPlanningTurn = () => ctx.acquireExternalTurn<LeadPlanningResult>(
-          { operation: "lead_planning", role: "lead", profileId: ctx.input.roleProfiles.lead },
+          { operation: "lead_planning", role: "analyst", profileId: ctx.input.roleProfiles.analyst },
           (capacityRequestId) => runLeadPlanning({
             taskId: ctx.input.issueId,
             companyId: ctx.input.companyId,
@@ -188,7 +188,7 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, phase: "plan_consolidation", owner: "lead", allowedCommands: [], revision: ctx.state.revision + 1, pendingAction: "Lead consolidation", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, supplementalReviewUsed: true, supplementalReviewArtifactId: review.reviewArtifactId, supplementalReviewSubject: review.subject ?? null, supplementalReviewArtifactSha256: review.reviewArtifactSha256 ?? null });
     await ctx.project();
     const consolidated = await ctx.acquireExternalTurn<LeadPlanningResult>(
-      { operation: "lead_consolidation", role: "lead", profileId: ctx.input.roleProfiles.lead, sessionRef: ctx.state.leadSessionRef },
+      { operation: "lead_consolidation", role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef },
       (capacityRequestId) => consolidateLeadPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supplementalReviewArtifactId: review.reviewArtifactId, ...(ctx.state.originalPlanSubject ? { originalPlanSubject: ctx.state.originalPlanSubject, evidenceManifestArtifactId: ctx.state.originalPlanSubject.evidenceManifestArtifactId, evidenceManifestSha256: ctx.state.originalPlanSubject.evidenceManifestSha256 } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) }),
       (result) => result.leadExecutionId,
     );

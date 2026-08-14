@@ -33,7 +33,10 @@ async function fixture(): Promise<{ root: string; config: ForgeConfig; database:
   const projects = new ProjectService(database, auth, config, { localRepository, github });
   const company = auth.createCompany("admin-1", "Acme");
   const profile = projects.createProfile("admin-1", { name: "Default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const project = await projects.createProject("admin-1", company.id, { name: "Forge", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id, reviewer: profile.id } });
+  const analyst = projects.createAgent("admin-1", { name: "Analyst", role: "analyst", profileId: profile.id });
+  const implementer = projects.createAgent("admin-1", { name: "Implementer", role: "implementer", profileId: profile.id });
+  const reviewer = projects.createAgent("admin-1", { name: "Reviewer", role: "reviewer", profileId: profile.id });
+  const project = await projects.createProject("admin-1", company.id, { name: "Forge", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id } });
   await projects.activateProject("admin-1", project.id);
   const stateByTask = new Map<string, IssueWorkflowState>();
   let tasks!: TaskService;
@@ -269,7 +272,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     expect(first.task.description).toContain("Reproduce");
     expect(first.task.images).toHaveLength(1);
     expect(first.task.supplementalReview).toBe(true);
-    expect(first.task.roleProfiles.lead).toBe(value.profileId);
+    expect(first.task.roleAgents.analyst).toBeTruthy();
     expect(events).toEqual([{ type: "invalidate", taskId: first.task.id, companyId: value.companyId, revision: 0, attentionChanged: false }]);
     const initialSnapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(first.task.id) as { state_json: string });
     const initialState = JSON.parse(initialSnapshot.state_json) as IssueWorkflowState;
@@ -288,8 +291,8 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
       expect.objectContaining({ kind: "member", eventType: "member_action", revision: 1, actor: { id: "admin-1", displayName: "Admin", username: "user_v1_admin-1", avatarSeed: "user_v1_admin-1" }, metadata: expect.objectContaining({ command: "start_planning", actionLabel: "Start planning" }) }),
       expect.objectContaining({ kind: "workflow", eventType: "planning_started", revision: 1 }),
     ]);
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'lead', 'failed', 1, '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId));
-    expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "lead", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry." })]);
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'analyst', 'failed', 1, '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId));
+    expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "analyst", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry." })]);
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }

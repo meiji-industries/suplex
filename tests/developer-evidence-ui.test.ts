@@ -13,11 +13,11 @@ test("shows live receipts inside the active step and rolls up completed steps", 
 
   expect(html).toContain("Step 1 · completed");
   expect(html).toContain("Step 2 · active");
-  expect(html).toContain("Developer execution");
+  expect(html).toContain("Implementer execution");
   expect(html).toContain("Plan: Stream progress");
   expect(html).not.toContain("Revision 1");
   expect(html).not.toContain(">Material<");
-  expect(html.indexOf("Developer execution")).toBeGreaterThan(html.indexOf("Step 2 · active"));
+  expect(html.indexOf("Implementer execution")).toBeGreaterThan(html.indexOf("Step 2 · active"));
   expect(html).toContain("Active command");
   expect(html).not.toContain("Completed command");
   expect(html).not.toContain("Verification receipts");
@@ -40,12 +40,12 @@ test("labels planning capacity lifecycle entries", () => {
     { id: "planning-active", revision: 2, eventType: "planning_started", metadata: { planningStage: "active" }, createdAt, kind: "workflow" as const },
     { id: "planning-completed", revision: 3, eventType: "planning_started", metadata: { planningStage: "completed" }, createdAt, kind: "workflow" as const },
   ];
-  const html = renderToStaticMarkup(createElement(TaskActivity, { timeline, agentInvocations: [], processing: { profileName: "Default", avatarSeed: "default" } }));
+  const html = renderToStaticMarkup(createElement(TaskActivity, { timeline, agentInvocations: [], processing: { agentName: "Analyst", avatarSeed: "default" } }));
 
   expect(html).toContain("started planning");
   expect(html).toContain("planning began");
   expect(html).toContain("planning completed");
-  expect(html).toContain("Default · Lead");
+  expect(html).toContain("Analyst");
   expect(html).not.toContain("Forge");
 });
 

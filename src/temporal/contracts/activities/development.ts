@@ -14,7 +14,7 @@ export const DeveloperRepairActivityInputSchema = z.object({
   projectId: durableId,
   projectRevisionId: durableId,
   planRevision: z.number().int().nonnegative(),
-  roleProfiles: z.object({ lead: durableId.optional(), developer: durableId.optional(), reviewer: durableId.optional() }),
+  roleProfiles: z.object({ analyst: durableId.optional(), implementer: durableId.optional(), reviewer: durableId.optional() }),
   leadSessionRef: durableId,
   developerSessionRef: durableId,
   developerExecutionId: durableId,
@@ -84,7 +84,7 @@ export interface DeveloperExecutionActivityInput {
   projectId: string;
   projectRevisionId: string;
   planRevision: number;
-  roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
+  roleProfiles: { analyst?: string | undefined; implementer?: string | undefined; reviewer?: string | undefined };
   leadSessionRef: string;
   leadOutputArtifactId: string;
   revisionRequestId?: string;
@@ -170,7 +170,7 @@ export interface DeveloperRepairActivityInput {
   projectId: string;
   projectRevisionId: string;
   planRevision: number;
-  roleProfiles: { lead?: string | undefined; developer?: string | undefined; reviewer?: string | undefined };
+  roleProfiles: { analyst?: string | undefined; implementer?: string | undefined; reviewer?: string | undefined };
   leadSessionRef: string;
   developerSessionRef: string;
   developerExecutionId: string;

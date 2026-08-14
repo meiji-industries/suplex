@@ -40,7 +40,10 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
   const company = auth.createCompany("admin-1", "Browser Tasks");
   auth.setCompanyIssueCode("admin-1", company.id, "task");
   const profile = projects.createProfile("admin-1", { name: "Browser task profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const project = await projects.createProject("admin-1", company.id, { name: "Browser task project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], allowedProfileIds: [profile.id], roleDefaults: { lead: profile.id, developer: profile.id } });
+  const analyst = projects.createAgent("admin-1", { name: "Analyst", role: "analyst", profileId: profile.id });
+  const implementer = projects.createAgent("admin-1", { name: "Implementer", role: "implementer", profileId: profile.id });
+  const reviewer = projects.createAgent("admin-1", { name: "Reviewer", role: "reviewer", profileId: profile.id });
+  const project = await projects.createProject("admin-1", company.id, { name: "Browser task project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id } });
   const activeProject = await projects.activateProject("admin-1", project.id);
   let plannedState: IssueWorkflowState | undefined;
   let finishPlanning = (): void => {};
@@ -54,7 +57,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
     const taskId = workflowId.split("-issue-")[1]!;
     plannedState = { ...plannedState!, revision: expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${expectedRevision + 1}` };
     projectState(plannedState);
-    database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, started_at) VALUES ('agent_browser', ?, ?, ?, 'lead', 'running', 1, 'planning', ?, ?, ?, ?, ?)").run(taskId, company.id, workflowId, profile.id, profile.model, profile.reasoningLevel, profile.servicePriority, new Date().toISOString()));
+    database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, started_at) VALUES ('agent_browser', ?, ?, ?, 'analyst', 'running', 1, 'planning', ?, ?, ?, ?, ?)").run(taskId, company.id, workflowId, profile.id, profile.model, profile.reasoningLevel, profile.servicePriority, new Date().toISOString()));
     return plannedState;
   };
   const completePlanning = async (workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> => {

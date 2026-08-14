@@ -120,6 +120,26 @@ test("preserves inherited capacity and applies integer profile overrides", async
   }
 });
 
+test("sorts agents by active execution count", async () => {
+  const value = await fixture();
+  try {
+    const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
+    const now = new Date().toISOString();
+    value.database.authQuery((db) => {
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-agent-leaderboard', ?, 'task-brief', 'brief.md', 'text/markdown', 0, ?, 'brief-agent-leaderboard.md', ?)").run(value.companyId, "a".repeat(64), now);
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-agent-leaderboard', ?, ?, 'Agent leaderboard', 'brief-agent-leaderboard', '[]', ?, 0, 'workflow-agent-leaderboard', 'revision-agent-leaderboard', 'agent-leaderboard', ?, ?)").run(value.companyId, project.id, JSON.stringify(value.roleDefaults), now, now);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('developer-agent-leaderboard', 'task-agent-leaderboard', ?, 'workflow-agent-leaderboard', 1, 1, 'running', 'work/leaderboard', '/tmp/leaderboard', ?, ?)").run(value.companyId, "b".repeat(40), now);
+    });
+    expect(value.projects.listAgents(value.adminId).map(({ role, activeCount }) => ({ role, activeCount }))).toEqual([
+      { role: "implementer", activeCount: 1 },
+      { role: "analyst", activeCount: 0 },
+      { role: "reviewer", activeCount: 0 },
+    ]);
+  } finally {
+    await close(value);
+  }
+});
+
 test("updates every editable profile setting", async () => {
   const value = await fixture();
   try {

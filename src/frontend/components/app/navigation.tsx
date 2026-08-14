@@ -10,6 +10,7 @@ import { companySettingsPath, withCompany } from "../../lib/api.js";
 import { navigate } from "../../lib/navigation.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 import { CompanySwitcher } from "./company-switcher.js";
+import { AgentsLeaderboard } from "./agents-leaderboard.js";
 import { ProfileAvatar } from "./profile-avatar.js";
 import { RecentTasks } from "./recent-tasks.js";
 import { SystemHealthIndicator } from "./system-health.js";
@@ -100,7 +101,7 @@ export function AppSidebar(): ReactElement {
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
       <SidebarHeader><div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div><span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div></SidebarHeader>
-      <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} /><SecondaryNavigation close={close} /></SidebarContent>
+      <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} /><AgentsLeaderboard /><SecondaryNavigation close={close} /></SidebarContent>
       <SidebarFooter><UserMenu /></SidebarFooter>
     </Sidebar>
   );

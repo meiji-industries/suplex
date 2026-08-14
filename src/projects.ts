@@ -60,6 +60,7 @@ export interface Agent {
   role: ProjectRole;
   avatarSeed: string;
   profileId: string;
+  activeCount: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -193,6 +194,7 @@ export interface AgentRow {
   role: ProjectRole;
   avatar_seed: string;
   profile_id: string;
+  active_count?: number;
   created_at: string;
   updated_at: string;
 }
@@ -309,7 +311,7 @@ function publicProfile(row: ProfileRow, config: Pick<ForgeConfig, "externalTurnC
 }
 
 export function publicAgent(row: AgentRow): Agent {
-  return { id: row.id, name: row.name, role: row.role, avatarSeed: row.avatar_seed, profileId: row.profile_id, createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: row.id, name: row.name, role: row.role, avatarSeed: row.avatar_seed, profileId: row.profile_id, activeCount: row.active_count ?? 0, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 export function resolveAgentProfiles(db: import("better-sqlite3").Database, roleAgents: RoleAssignments): RoleAssignments {
@@ -681,9 +683,15 @@ export class ProjectService {
     }
   }
 
-  listAgents(actorUserId: string): Agent[] {
-    this.user(actorUserId);
-    return this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_agents ORDER BY role, name").all() as AgentRow[]).map(publicAgent));
+  listAgents(actorUserId: string, companyId?: string): Agent[] {
+    const user = this.user(actorUserId);
+    if (companyId) this.auth.requireCompanyAccess(actorUserId, companyId);
+    const scope = companyId ? " AND t.company_id = ?" : user.role === "admin" ? "" : " AND EXISTS (SELECT 1 FROM forge_memberships m WHERE m.user_id = ? AND m.company_id = t.company_id)";
+    const params = companyId ? [companyId, companyId] : user.role === "admin" ? [] : [actorUserId, actorUserId];
+    return this.database.authQuery((db) => (db.prepare(`SELECT a.*,
+      (SELECT COUNT(*) FROM forge_agent_executions e JOIN forge_tasks t ON t.id = e.task_id WHERE e.status IN ('starting', 'running', 'cancelling') AND json_extract(t.role_agents_json, '$.' || e.role) = a.id${scope})
+      + (SELECT COUNT(*) FROM forge_developer_executions d JOIN forge_tasks t ON t.id = d.task_id WHERE d.status IN ('starting', 'running', 'cancelling') AND json_extract(t.role_agents_json, '$.implementer') = a.id${scope}) AS active_count
+      FROM forge_agents a ORDER BY active_count DESC, a.name COLLATE NOCASE, a.id`).all(...params) as AgentRow[]).map(publicAgent));
   }
 
   updateProfileCapacity(actorUserId: string, profileId: string, capacity: number | null): CodexProfile {

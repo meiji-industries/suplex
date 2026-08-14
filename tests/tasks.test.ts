@@ -291,8 +291,8 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
       expect.objectContaining({ kind: "member", eventType: "member_action", revision: 1, actor: { id: "admin-1", displayName: "Admin", username: "user_v1_admin-1", avatarSeed: "user_v1_admin-1" }, metadata: expect.objectContaining({ command: "start_planning", actionLabel: "Start planning" }) }),
       expect.objectContaining({ kind: "workflow", eventType: "planning_started", revision: 1 }),
     ]);
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'analyst', 'failed', 1, '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId));
-    expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "analyst", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry." })]);
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, profile_id, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'analyst', 'failed', 1, ?, '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId, value.profileId));
+    expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "analyst", profileName: "Default", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry." })]);
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }

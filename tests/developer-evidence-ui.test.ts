@@ -3,7 +3,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import { TaskLeadPlan } from "../src/frontend/components/app/task-lead-plan.js";
 import { activityRelativeDate, extractAgentTranscript, TaskActivity } from "../src/frontend/components/app/task-history.js";
+import { invocationActorLabel } from "../src/frontend/components/app/task-invocations.js";
 import type { DeveloperExecutionEventView, DeveloperExecutionView } from "../src/frontend/components/tasks/developer-evidence.js";
+
+test("labels an agent with its execution profile", () => {
+  expect(invocationActorLabel({ agentName: "Analyst", profileName: "Smart", role: "analyst" })).toBe("Analyst (Smart)");
+});
 
 test("shows live receipts inside the active step and rolls up completed steps", () => {
   const execution: DeveloperExecutionView = { id: "developer_1", status: "running", attempt: 1, branchName: "work/task", currentStep: 1, targetBaseSha: "a".repeat(40), verificationCommands: [{ stepNumber: 1, commands: ["test one"] }, { stepNumber: 2, commands: ["test two"] }] };
@@ -13,6 +18,8 @@ test("shows live receipts inside the active step and rolls up completed steps", 
 
   expect(html).toContain("Step 1 · completed");
   expect(html).toContain("Step 2 · active");
+  expect(html).toContain('data-plan-steps="true"');
+  expect(html).toContain('data-orientation="vertical"');
   expect(html).toContain("Implementer execution");
   expect(html).toContain("Plan: Stream progress");
   expect(html).not.toContain("Revision 1");
@@ -83,6 +90,7 @@ test("shows relative activity times", () => {
   expect(activityRelativeDate("2026-08-13T10:47:28.000Z", now)).toBe("1m 32s ago");
   expect(activityRelativeDate("2026-08-13T09:17:00.000Z", now)).toBe("1h 32m ago");
   expect(activityRelativeDate("2026-08-13T10:39:00.000Z", now)).toBe("10m ago");
+  expect(activityRelativeDate("2026-08-11T07:22:00.000Z", now)).toBe("2d 3h 27m ago");
   const timestamp = new Date(Date.now() - 10 * 60_000).toISOString();
   const html = renderToStaticMarkup(createElement(TaskActivity, { timeline: [{ id: "created", revision: 0, eventType: "task_created", metadata: {}, createdAt: timestamp, kind: "member" as const }], agentInvocations: [] }));
   expect(html).toContain("10m ago");

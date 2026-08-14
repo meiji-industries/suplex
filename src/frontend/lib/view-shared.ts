@@ -36,9 +36,14 @@ export function adminDate(timestamp: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp));
 }
 
-export function relativeTime(timestamp: string): string {
-  const elapsed = Math.max(0, Date.now() - Date.parse(timestamp));
-  if (elapsed < 10_000) return "just now";
-  if (elapsed < 60_000) return `${Math.floor(elapsed / 1_000)}s ago`;
-  return `${Math.floor(elapsed / 60_000)}m ago`;
+export function relativeTime(timestamp: string, now = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((now - Date.parse(timestamp)) / 1_000));
+  if (seconds < 10) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m${seconds % 60 ? ` ${seconds % 60}s` : ""} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ""} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d${hours % 24 ? ` ${hours % 24}h` : ""}${minutes % 60 ? ` ${minutes % 60}m` : ""} ago`;
 }

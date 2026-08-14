@@ -9,10 +9,11 @@ import { Collapsible } from "../ui/collapsible.js";
 import { Separator } from "../ui/separator.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Timeline, TimelineContent, TimelineDate, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "../ui/timeline.js";
-import { TaskInvocations, type TaskInvocation } from "./task-invocations.js";
+import { invocationActorLabel, TaskInvocations, type TaskInvocation } from "./task-invocations.js";
 import { ProfileAvatar, type DiceBearCollection } from "./profile-avatar.js";
 import { TaskStatus } from "./task-status.js";
 import { withCompany } from "../../lib/api.js";
+import { relativeTime } from "../../lib/view-shared.js";
 import { phaseLabel, type IssuePhase } from "../../../issue-phases.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
 import { CommitSha } from "./commit-sha.js";
@@ -31,16 +32,7 @@ function activityDate(timestamp: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp));
 }
 
-export function activityRelativeDate(timestamp: string, now = Date.now()): string {
-  const seconds = Math.max(0, Math.floor((now - Date.parse(timestamp)) / 1_000));
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m${seconds % 60 ? ` ${seconds % 60}s` : ""} ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ""} ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d${hours % 24 ? ` ${hours % 24}h` : ""} ago`;
-}
+export const activityRelativeDate = relativeTime;
 
 function activityCopy(entry: TaskActivityEntry): string {
   if (entry.eventType === "member_action") return `chose ${String(entry.metadata?.actionLabel ?? entry.metadata?.command ?? "an action")}`;
@@ -65,8 +57,7 @@ function activityActor(entry: TaskActivityEntry, actionIndex: number, invocation
   const profileInvocations = invocations.filter((invocation) => invocation.agentName);
   const invocation = profileInvocations[Math.min(actionIndex, profileInvocations.length - 1)];
   const agentName = invocation?.agentName ?? (entry.eventType === "planning_started" ? processing?.agentName : undefined);
-  const role = invocation?.role ? `${invocation.role.charAt(0).toUpperCase()}${invocation.role.slice(1)}` : "";
-  const label = agentName ? `${agentName}${role ? ` · ${role}` : ""}` : "Forge";
+  const label = invocation ? invocationActorLabel(invocation) : agentName ?? "Forge";
   const avatarSeed = invocation?.avatarSeed ?? (entry.eventType === "planning_started" ? processing?.avatarSeed : undefined);
   return { label, initials: agentName?.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "F", ...(avatarSeed ? { avatarSeed } : {}) };
 }

@@ -8,6 +8,10 @@ import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
 export type TaskInvocation = TaskResponse["agentInvocations"][number];
 
+export function invocationActorLabel(invocation: Pick<TaskInvocation, "agentName" | "profileName" | "role">): string {
+  return invocation.agentName ? `${invocation.agentName}${invocation.profileName ? ` (${invocation.profileName})` : ""}` : `${invocation.role.charAt(0).toUpperCase()}${invocation.role.slice(1)}`;
+}
+
 function invocationDate(timestamp: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp));
 }
@@ -52,7 +56,7 @@ export function TaskInvocations({ invocations }: { invocations: TaskInvocation[]
                 <TimelineSeparator className="bg-input! group-data-[orientation=vertical]/timeline:-left-7 group-data-[orientation=vertical]/timeline:h-[calc(100%-1.5rem-0.25rem)] group-data-[orientation=vertical]/timeline:translate-y-6.5" />
                 <div className="flex items-center gap-2">
                   {invocation.agentName && invocation.avatarSeed ? <ProfileAvatar name={invocation.agentName} seed={invocation.avatarSeed} /> : null}
-                  <TimelineTitle className="text-sm">{invocation.agentName ? `${invocation.agentName} · ` : ""}{invocation.role} · attempt {invocation.attempt}</TimelineTitle>
+                  <TimelineTitle className="text-sm">{invocationActorLabel(invocation)} · attempt {invocation.attempt}</TimelineTitle>
                   <Badge variant={statusBadgeVariant(invocation.status)} size="sm">{invocation.status}</Badge>
                 </div>
                 <TimelineIndicator className={cn(

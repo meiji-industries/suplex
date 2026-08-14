@@ -185,6 +185,13 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await page.locator("[data-app-header]").textContent()).toContain("TASK-1 · Browser task");
       expect(await taskDetail.locator("[data-task-properties]").getByText("TASK-1", { exact: true }).isVisible()).toBe(true);
       expect(await taskDetail.getByRole("heading", { name: "Browser task", exact: true, level: 2 }).isVisible()).toBe(true);
+      const analystAgent = taskDetail.locator("#task-agent-analyst");
+      await analystAgent.getByText("Analyst", { exact: true }).waitFor();
+      expect((await analystAgent.boundingBox())?.height).toBe(24);
+      expect(await taskDetail.getByRole("combobox", { name: "Analyst", exact: true }).count()).toBe(0);
+      await analystAgent.click();
+      await page.getByRole("menuitem", { name: /Analyst.*Selected/ }).waitFor();
+      await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Task options", exact: true }).click();
       await page.getByRole("menuitem", { name: "Cancel task", exact: true }).waitFor();
       expect(await taskDetail.getByRole("button", { name: "Cancel", exact: true }).count()).toBe(0);
@@ -310,7 +317,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await current.waitFor();
       await taskDetail.getByRole("tab", { name: /^Activity \d+$/ }).waitFor();
       expect(await taskDetail.locator("[data-task-activity-feed] [data-task-activity] [data-slot=\"timeline\"][data-orientation=\"vertical\"]").count()).toBe(1);
-      await taskDetail.locator("[data-task-activity-feed]").getByText("Browser task profile · Lead", { exact: true }).first().waitFor();
+      await taskDetail.locator("[data-task-activity-feed]").getByText("Analyst (Browser task profile)", { exact: true }).first().waitFor();
       const firstActivityTime = taskDetail.locator("[data-task-activity] time").first();
       expect(await firstActivityTime.innerText()).toMatch(/ago$/);
       expect(await firstActivityTime.getAttribute("title")).not.toBeNull();

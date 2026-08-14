@@ -7,7 +7,6 @@ import { Collapsible } from "../components/ui/collapsible.js";
 import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { Textarea } from "../components/ui/textarea.js";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.js";
@@ -16,6 +15,7 @@ import { getWorkerHealthFailure, useSystemHealth } from "../components/app/syste
 import { TaskActivity, TaskHistory } from "../components/app/task-history.js";
 import DeveloperDiff, { useAppThemeType } from "../components/app/developer-diff.js";
 import { TaskLeadPlan } from "../components/app/task-lead-plan.js";
+import { invocationActorLabel } from "../components/app/task-invocations.js";
 import { TaskProgress } from "../components/app/task-progress.js";
 import { taskIsProcessing, taskPresentationPhase, TaskStatus } from "../components/app/task-status.js";
 import { DeveloperRecoveryStatus } from "../components/app/developer-recovery-status.js";
@@ -402,7 +402,7 @@ function PlanningRunCard({ task }: { task: ApiTask }): ReactElement | null {
     <Card data-planning-run size="sm" aria-label="Planning run">
       <CardHeader>
         <CardTitle>Planning run</CardTitle>
-        <CardDescription><span className="flex items-center gap-2">{invocation?.avatarSeed ? <ProfileAvatar name={agentName} seed={invocation.avatarSeed} /> : task.capacity?.avatarSeed ? <ProfileAvatar name={agentName} seed={task.capacity.avatarSeed} /> : null}<span>{agentName} · Analyst · attempt {invocation?.attempt ?? 1}{invocation?.sessionPresent ? " · session connected" : ""}</span></span></CardDescription>
+        <CardDescription><span className="flex items-center gap-2">{invocation?.avatarSeed ? <ProfileAvatar name={agentName} seed={invocation.avatarSeed} /> : task.capacity?.avatarSeed ? <ProfileAvatar name={agentName} seed={task.capacity.avatarSeed} /> : null}<span>{invocation ? invocationActorLabel(invocation) : agentName} · attempt {invocation?.attempt ?? 1}{invocation?.sessionPresent ? " · session connected" : ""}</span></span></CardDescription>
         <CardAction><Badge variant="secondary">{status}</Badge></CardAction>
       </CardHeader>
       <CardContent>
@@ -438,7 +438,7 @@ function TaskAgentAssignments({ task, onRefresh }: { task: ApiTask; onRefresh: (
       setSavingRole(null);
     }
   };
-  return <section className="mb-6 space-y-3" aria-label="Task agents"><h3 className="text-xs font-semibold">Agents</h3>{(["analyst", "implementer", "reviewer"] as const).map((role) => { const selected = agents.find((agent) => agent.id === task.roleAgents[role]); const options = agents.filter((agent) => agent.role === role); return <Field key={role}><FieldLabel htmlFor={`task-agent-${role}`}>{role.slice(0, 1).toUpperCase() + role.slice(1)}</FieldLabel><Select value={task.roleAgents[role] ?? null} onValueChange={(value) => { if (value) void update(role, value); }}><SelectTrigger id={`task-agent-${role}`}><SelectValue placeholder="Select agent">{selected ? <span className="flex items-center gap-2"><ProfileAvatar name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "Unassigned"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select>{savingRole === role ? <span className="text-[11px] text-muted-foreground">Saving…</span> : null}</Field>; })}{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}</section>;
+  return <section className="mb-6 space-y-3" aria-label="Task agents"><h3 className="text-xs font-semibold">Agents</h3>{(["analyst", "implementer", "reviewer"] as const).map((role) => { const label = role.slice(0, 1).toUpperCase() + role.slice(1); const selected = agents.find((agent) => agent.id === task.roleAgents[role]); const options = agents.filter((agent) => agent.role === role); return <div className="space-y-1" key={role}><div className="text-xs text-muted-foreground">{label}</div><DropdownMenu><DropdownMenuTrigger render={<Button id={`task-agent-${role}`} type="button" variant="secondary" size="xs" disabled={savingRole === role} aria-busy={savingRole === role} aria-label={`${label} agent: ${selected?.name ?? "Unassigned"}`} />}>{selected ? <><ProfileAvatar name={selected.name} seed={selected.avatarSeed} size="xs" />{selected.name}</> : "Unassigned"}</DropdownMenuTrigger><DropdownMenuContent align="start">{options.map((agent) => <DropdownMenuItem key={agent.id} onClick={() => { if (agent.id !== selected?.id) void update(role, agent.id); }}><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><span className="min-w-0 flex-1 truncate">{agent.name}</span>{agent.id === selected?.id ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu></div>; })}{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}</section>;
 }
 
 export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onRefresh }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onRefresh: () => Promise<void> }): ReactElement {

@@ -8,6 +8,7 @@ import { Badge } from "../ui/badge.js";
 import { Button } from "../ui/button.js";
 import { Card, CardContent, CardFooter } from "../ui/card.js";
 import { Collapsible } from "../ui/collapsible.js";
+import { Timeline, TimelineContent, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator } from "../ui/timeline.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
 export type TaskLeadOutput = NonNullable<TaskResponse["leadOutput"]>;
@@ -64,13 +65,19 @@ export function TaskLeadPlan({
   const heading = <span className="font-semibold">Plan: {output.content.gitPresentation?.pullRequestTitle ?? "Analyst plan"}</span>;
   const details = <>
     <p className="whitespace-pre-wrap text-[13px] leading-5">{output.summary}</p>
-        <Accordion multiple value={openSteps} onValueChange={setOpenSteps}>
+        <Timeline value={currentStep ?? Math.max(0, ...terminal.keys())} orientation="vertical" data-plan-steps>
           {output.content.steps.map((step) => (
-            <AccordionItem key={step.number} value={`step-${step.number}`}>
-              <AccordionTrigger>
-                <span className="min-w-0 pr-3 text-[13px] leading-5">Step {step.number} · {terminal.get(step.number) ?? (currentStep === step.number ? "active" : "pending")} — {step.instruction}</span>
-              </AccordionTrigger>
-              <AccordionContent>
+            <Collapsible.Root key={step.number} open={openSteps.includes(`step-${step.number}`)} onOpenChange={(open) => setOpenSteps((steps) => open ? [...steps, `step-${step.number}`] : steps.filter((value) => value !== `step-${step.number}`))}>
+              <TimelineItem step={step.number} aria-current={currentStep === step.number ? "step" : undefined}>
+                <TimelineHeader>
+                  <TimelineSeparator />
+                  <TimelineIndicator />
+                  <Collapsible.Trigger className="group/plan-step flex w-full items-start justify-between gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                    <span className="min-w-0 text-[13px] leading-5">Step {step.number} · {terminal.get(step.number) ?? (currentStep === step.number ? "active" : "pending")} — {step.instruction}</span>
+                    <ChevronDown className="mt-0.5 size-4 shrink-0 transition-transform group-data-[panel-open]/plan-step:rotate-180" />
+                  </Collapsible.Trigger>
+                </TimelineHeader>
+                <Collapsible.Panel render={<TimelineContent />}>
                 {stepProgress && executionStep === step.number ? <div className="mb-3"><DeveloperEvidence taskId={stepProgress.taskId} execution={stepProgress.execution} repository={stepProgress.repository} /></div> : null}
                 <div className="grid gap-1 pl-1 text-[13px] sm:grid-cols-[76px_minmax(0,1fr)]">
                   {step.entryPoint ? <><span className="font-medium text-muted-foreground">Entry</span><p className="whitespace-pre-wrap">{step.entryPoint}</p></> : null}
@@ -79,10 +86,13 @@ export function TaskLeadPlan({
                   <p className="whitespace-pre-wrap">{step.verification}</p>
                 </div>
                 {(stepProgress?.events ?? []).some((event) => event.stepNumber === step.number && !["step_started", "step_completed"].includes(event.kind)) ? <div className="mt-2 grid gap-1" data-step-events={step.number}>{stepProgress!.events.filter((event) => event.stepNumber === step.number && !["step_started", "step_completed"].includes(event.kind)).map((event) => <div className="grid min-h-8 min-w-0 grid-cols-[3rem_minmax(0,1fr)_3.5rem] items-center gap-2 border-l-2 border-border pl-2 text-xs" key={event.eventId}><span>#{event.sequence}</span><code className="break-words whitespace-pre-wrap">{event.summary}</code><span className={event.exitCode !== null && event.exitCode !== 0 ? "font-medium text-destructive" : "text-muted-foreground"}>{event.kind === "step_blocked" ? "blocked" : event.kind === "file_change" ? "changed" : event.exitCode === null ? "—" : `exit ${event.exitCode}`}</span></div>)}</div> : null}
-              </AccordionContent>
-            </AccordionItem>
+                </Collapsible.Panel>
+              </TimelineItem>
+            </Collapsible.Root>
           ))}
+        </Timeline>
           {contextItems.length || output.content.unresolvedTechnicalQuestions.length ? (
+          <Accordion>
             <AccordionItem value="implementation-context">
               <AccordionTrigger>Implementation context</AccordionTrigger>
               <AccordionContent>
@@ -102,8 +112,8 @@ export function TaskLeadPlan({
                 </dl>
               </AccordionContent>
             </AccordionItem>
+          </Accordion>
           ) : null}
-        </Accordion>
   </>;
   return (
     <Card data-task-lead-plan size="sm">

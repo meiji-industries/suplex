@@ -19,6 +19,8 @@ test("Codex initial and resume turns carry the complete pinned configuration", (
   expect(resume).toContain("thread_opaque");
   expect(resume).not.toContain("-C");
   expect(resume).not.toContain("/var/forge/image.png");
+  const fast = buildCodexTurnArgs({ model: "gpt-5.6-luna", reasoningLevel: "xhigh", servicePriority: "fast", outputSchemaPath: "/var/forge/schema.json", repositoryPath: "/var/forge/repository", prompt: "Fast" });
+  expect(fast).toEqual(expect.arrayContaining(["-c", 'model_reasoning_effort="xhigh"', 'service_tier="fast"']));
 });
 
 test("Codex argv rejects injection-shaped values and noncanonical paths", () => {

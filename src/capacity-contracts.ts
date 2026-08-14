@@ -36,8 +36,8 @@ export const CapacitySettingsSchema = z.object({
   profileId: durableId,
   provider: z.literal("codex"),
   model: z.string().min(1).max(256),
-  reasoningLevel: z.enum(["low", "medium", "high"]),
-  servicePriority: z.enum(["standard", "priority"]),
+  reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]),
+  servicePriority: z.enum(["standard", "priority", "fast"]),
   requestedCapacity: z.number().int().min(1).max(32),
 });
 
@@ -79,8 +79,8 @@ export const CapacityRequestSnapshotSchema = z.object({
   profileId: durableId,
   provider: z.literal("codex"),
   model: z.string().min(1).max(256),
-  reasoningLevel: z.enum(["low", "medium", "high"]),
-  servicePriority: z.enum(["standard", "priority"]),
+  reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]),
+  servicePriority: z.enum(["standard", "priority", "fast"]),
   laneKey: z.string().regex(/^codex:[A-Za-z0-9][A-Za-z0-9._:-]*$/),
   requestedCapacity: z.number().int().min(1).max(32),
   status: CapacityRequestStatusSchema,

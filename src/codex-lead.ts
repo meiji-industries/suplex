@@ -531,7 +531,7 @@ export class AgentService {
       WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { disposition: "reuse" | "new"; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null; reasonPath: string; reasonSha: string } | undefined) : undefined;
     if (input.revisionRequestId && !revisionRequest) throw new AgentFailure("revision-request-missing", "The plan revision request is unavailable");
     const revisionContext = revisionRequest ? { ...revisionRequest, reason: (await this.artifacts.read({ companyId: input.companyId, storagePath: revisionRequest.reasonPath, sha256: revisionRequest.reasonSha })).toString("utf8") } : undefined;
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(leadProfile.model) || !["low", "medium", "high"].includes(leadProfile.reasoningLevel) || !["standard", "priority"].includes(leadProfile.servicePriority)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(leadProfile.model) || !["low", "medium", "high", "xhigh"].includes(leadProfile.reasoningLevel) || !["standard", "priority", "fast"].includes(leadProfile.servicePriority)) {
       throw new AgentFailure("scope_configuration", "The configured Lead profile has invalid turn settings", { nonRetryable: true });
     }
     await this.assertTurnCompatibility(leadProfile);
@@ -637,7 +637,7 @@ export class AgentService {
           ? `${revisionNoteText ? this.revisionPrompt(revisionNoteText) : memberResponseText ? this.revisionPrompt(`Human blocker answer:\n${memberResponseText}`) : this.initialPrompt(row.title, brief, row.normalized_json, profileSettings, repositoryEvidence, revisionContext)}${resumeInstruction ? `\n\nMember instruction for this ${input.resume?.reason ?? "revision"}:\n${resumeInstruction}` : ""}`
           : this.correctionPrompt();
         const imagePaths = images.map((image) => resolve(this.config.artifactRoot, image.storage_path));
-        const wrapper = await this.prepareTurnWrapper(executionId, { model: leadProfile.model, reasoningLevel: leadProfile.reasoningLevel as "low" | "medium" | "high", servicePriority: leadProfile.servicePriority as "standard" | "priority" }, repositoryPath, schemaPath, prompt, { ...(rawSessionId && sessionRef ? { resumeSessionRef: sessionRef } : {}), ...(sessionRef ? { sessionRef } : {}), ...(!rawSessionId && imagePaths.length ? { imagePaths } : {}) });
+        const wrapper = await this.prepareTurnWrapper(executionId, { model: leadProfile.model, reasoningLevel: leadProfile.reasoningLevel as "low" | "medium" | "high" | "xhigh", servicePriority: leadProfile.servicePriority as "standard" | "priority" | "fast" }, repositoryPath, schemaPath, prompt, { ...(rawSessionId && sessionRef ? { resumeSessionRef: sessionRef } : {}), ...(sessionRef ? { sessionRef } : {}), ...(!rawSessionId && imagePaths.length ? { imagePaths } : {}) });
         const lines: string[] = [];
         await this.databaseHeartbeat(executionId, "running");
         const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
@@ -1146,7 +1146,7 @@ export class AgentService {
         const manifest = JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: pinnedManifest.storagePath, sha256: pinnedManifest.sha256 })).toString("utf8")) as { profiles?: { reviewer?: ProfileSettings | null } };
         const pinnedReviewer = manifest.profiles?.reviewer;
         if (!pinnedReviewer || pinnedReviewer.id !== profile.id || pinnedReviewer.provider !== this.provider.id || !pinnedReviewer.model) throw new AgentFailure("reviewer-profile-unavailable", "The reviewer settings are not present in the pinned manifest");
-        reviewerProfile = { id: pinnedReviewer.id, model: pinnedReviewer.model, reasoningLevel: pinnedReviewer.reasoningLevel as "low" | "medium" | "high", servicePriority: pinnedReviewer.servicePriority as "standard" | "priority" };
+        reviewerProfile = { id: pinnedReviewer.id, model: pinnedReviewer.model, reasoningLevel: pinnedReviewer.reasoningLevel as "low" | "medium" | "high" | "xhigh", servicePriority: pinnedReviewer.servicePriority as "standard" | "priority" | "fast" };
       } catch (error) {
         if (error instanceof AgentFailure) throw error;
         throw new AgentFailure("scoped-input-missing", "The pinned supplemental review manifest is invalid");
@@ -1374,7 +1374,7 @@ export class AgentService {
     return () => signal.removeEventListener("abort", mark);
   }
 
-  private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string): Promise<{ id: string; model: string; reasoningLevel: "low" | "medium" | "high"; servicePriority: "standard" | "priority" }> {
+  private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string): Promise<{ id: string; model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }> {
     const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND role = 'analyst' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(sessionRef) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const profile = pinned ? undefined : this.database.authQuery((db) => (profileId
       ? db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId)
@@ -1383,10 +1383,10 @@ export class AgentService {
     const model = pinned?.model ?? profile!.model;
     const reasoningLevel = pinned?.reasoningLevel ?? profile!.reasoningLevel;
     const servicePriority = pinned?.servicePriority ?? profile!.servicePriority;
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(model) || !["low", "medium", "high"].includes(reasoningLevel) || !["standard", "priority"].includes(servicePriority)) {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(model) || !["low", "medium", "high", "xhigh"].includes(reasoningLevel) || !["standard", "priority", "fast"].includes(servicePriority)) {
       throw new AgentFailure("scope_configuration", `${label} profile has invalid pinned turn settings`, { nonRetryable: true });
     }
-    const settings = { id: pinned?.profileId ?? profile!.id, model, reasoningLevel: reasoningLevel as "low" | "medium" | "high", servicePriority: servicePriority as "standard" | "priority" };
+    const settings = { id: pinned?.profileId ?? profile!.id, model, reasoningLevel: reasoningLevel as "low" | "medium" | "high" | "xhigh", servicePriority: servicePriority as "standard" | "priority" | "fast" };
     await this.assertTurnCompatibility(settings);
     return settings;
   }
@@ -1396,7 +1396,7 @@ export class AgentService {
     await this.provider.assertTurnCompatibility(this.command, settings);
   }
 
-  private async prepareTurnWrapper(executionId: string, settings: { model: string; reasoningLevel: "low" | "medium" | "high"; servicePriority: "standard" | "priority" }, repositoryPath: string, outputSchemaPath: string, prompt: string, options: { imagePaths?: string[]; resumeSessionRef?: string; sessionRef?: string } = {}): Promise<PreparedAgentTurnWrapper> {
+  private async prepareTurnWrapper(executionId: string, settings: { model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }, repositoryPath: string, outputSchemaPath: string, prompt: string, options: { imagePaths?: string[]; resumeSessionRef?: string; sessionRef?: string } = {}): Promise<PreparedAgentTurnWrapper> {
     const executionRoot = join(this.config.runtimeRoot, "agent-turns", executionId);
     const promptPath = join(executionRoot, "prompt.txt");
     const spoolPath = join(executionRoot, "spool.ndjson");

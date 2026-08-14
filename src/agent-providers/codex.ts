@@ -256,7 +256,7 @@ function agentProcessFailure(result: LeadProcessResult, outputLines: string[] = 
 }
 
 function profileArgs(profile: AgentProfileSettings): string[] {
-  return ["--model", profile.model, "-c", `model_reasoning_effort=\"${profile.reasoningLevel}\"`, "-c", `service_tier=\"${profile.servicePriority === "priority" ? "priority" : "default"}\"`];
+  return ["--model", profile.model, "-c", `model_reasoning_effort=\"${profile.reasoningLevel}\"`, "-c", `service_tier=\"${profile.servicePriority === "fast" ? "fast" : profile.servicePriority === "priority" ? "priority" : "default"}\"`];
 }
 
 function buildTurnArgs(request: AgentTurnRequest): string[] {

@@ -16,8 +16,8 @@ const execFileAsync = promisify(execFile);
 export type ProjectStatus = "draft" | "active" | "paused" | "needs-reactivation" | "archived";
 export type ProjectRole = "analyst" | "implementer" | "reviewer";
 export type RoleAssignments = Partial<Record<ProjectRole, string | undefined>>;
-export type ReasoningLevel = "low" | "medium" | "high";
-export type ServicePriority = "standard" | "priority";
+export type ReasoningLevel = "low" | "medium" | "high" | "xhigh";
+export type ServicePriority = "standard" | "priority" | "fast";
 
 export interface ProjectFinding {
   code: string;
@@ -590,8 +590,8 @@ export class ProjectService {
     if (!namePattern.test(name)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-name", "name", "Profile name is invalid")]);
     const catalogModel = this.database.authQuery((db) => db.prepare("SELECT model_id FROM forge_models WHERE model_id = ? AND status = 'active'").get(model) as { model_id: string } | undefined);
     if (!modelIdPattern.test(model) || secretPattern.test(model) || !catalogModel) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-model", "model", "Select an active model from the catalog")]);
-    if (!["low", "medium", "high"].includes(input.reasoningLevel)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-reasoning", "reasoningLevel", "Reasoning level is invalid")]);
-    if (!["standard", "priority"].includes(input.servicePriority)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-priority", "servicePriority", "Service priority is invalid")]);
+    if (!["low", "medium", "high", "xhigh"].includes(input.reasoningLevel)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-reasoning", "reasoningLevel", "Reasoning level is invalid")]);
+    if (!["standard", "priority", "fast"].includes(input.servicePriority)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-priority", "servicePriority", "Service priority is invalid")]);
     if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 32)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-capacity", "capacity", "Capacity must be an integer from 1 to 32")]);
     return { name, model, reasoningLevel: input.reasoningLevel, servicePriority: input.servicePriority, capacity };
   }

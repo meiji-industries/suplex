@@ -31,7 +31,11 @@ test("development startup seeds identity without requiring a Git repository root
     const companies = await server.app.inject({ method: "GET", url: "/api/companies", headers: { cookie: cookie! } });
     expect(companies.json()).toEqual({ companies: [expect.objectContaining({ name: "Development" })] });
     const profiles = await server.app.inject({ method: "GET", url: "/api/profiles", headers: { cookie: cookie! } });
-    expect(profiles.json()).toEqual({ profiles: [expect.objectContaining({ name: "Default" })] });
+    expect(profiles.json()).toEqual({ profiles: expect.arrayContaining([
+      expect.objectContaining({ name: "Smart", model: "gpt-5.6-sol", reasoningLevel: "high", servicePriority: "standard" }),
+      expect.objectContaining({ name: "Balanced", model: "gpt-5.6-terra", reasoningLevel: "medium", servicePriority: "standard" }),
+      expect.objectContaining({ name: "Fast", model: "gpt-5.6-luna", reasoningLevel: "xhigh", servicePriority: "fast" }),
+    ]) });
     const projects = await server.app.inject({ method: "GET", url: "/api/projects", headers: { cookie: cookie! } });
     expect(projects.json()).toEqual({ projects: [] });
 

@@ -50,8 +50,8 @@ export interface AgentEvent {
 
 export interface AgentTurnWrapperSettings {
   model: string;
-  reasoningLevel: "low" | "medium" | "high";
-  servicePriority: "standard" | "priority";
+  reasoningLevel: "low" | "medium" | "high" | "xhigh";
+  servicePriority: "standard" | "priority" | "fast";
 }
 
 export interface AgentTurnWrapperRequest extends AgentTurnWrapperSettings {

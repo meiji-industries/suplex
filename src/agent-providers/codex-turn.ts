@@ -2,8 +2,8 @@ import { isAbsolute, resolve } from "node:path";
 
 export interface CodexTurnSettings {
   model: string;
-  reasoningLevel: "low" | "medium" | "high";
-  servicePriority: "standard" | "priority";
+  reasoningLevel: "low" | "medium" | "high" | "xhigh";
+  servicePriority: "standard" | "priority" | "fast";
 }
 
 export interface CodexTurnArgsInput extends CodexTurnSettings {
@@ -36,13 +36,13 @@ export function buildCodexTurnArgs(input: CodexTurnArgsInput): string[] {
   const outputSchemaPath = safeAbsolutePath(input.outputSchemaPath, "Codex output schema path");
   const repositoryPath = safeAbsolutePath(input.repositoryPath, "Codex repository path");
   if (!input.prompt || input.prompt.includes("\0") || input.prompt.length > 200_000) throw new Error("Codex prompt is invalid");
-  if (!["low", "medium", "high"].includes(input.reasoningLevel)) throw new Error("Codex reasoning level is invalid");
-  if (!["standard", "priority"].includes(input.servicePriority)) throw new Error("Codex service priority is invalid");
+  if (!["low", "medium", "high", "xhigh"].includes(input.reasoningLevel)) throw new Error("Codex reasoning level is invalid");
+  if (!["standard", "priority", "fast"].includes(input.servicePriority)) throw new Error("Codex service priority is invalid");
   const images = (input.imagePaths ?? []).map((path) => safeAbsolutePath(path, "Codex image path"));
   const args = input.resumeSessionId
     ? ["exec", "resume", safeIdentifier(input.resumeSessionId, "Codex session"), "--json", "--strict-config", "--ignore-user-config", "--output-schema", outputSchemaPath, "--model", model, "-c", configOverride("model_reasoning_effort", input.reasoningLevel)]
     : ["exec", "--json", "--strict-config", "--ignore-user-config", "--skip-git-repo-check", "--output-schema", outputSchemaPath, ...(input.finalOutputPath ? ["--output-last-message", safeAbsolutePath(input.finalOutputPath, "Codex final output path")] : []), "--model", model, "-c", configOverride("model_reasoning_effort", input.reasoningLevel), "-C", repositoryPath, "--sandbox", "read-only", ...images.flatMap((path) => ["--image", path])];
-  if (input.servicePriority === "priority") args.push("-c", configOverride("service_tier", "fast"));
+  if (input.servicePriority !== "standard") args.push("-c", configOverride("service_tier", "fast"));
   // Keep prompts out of argv (and avoid the variadic --image option consuming
   // the prompt); the detached wrapper supplies it over stdin.
   args.push("-");
@@ -60,5 +60,5 @@ export function catalogSupportsCodexTurn(catalog: unknown, settings: { model: st
   if (!catalog || typeof catalog !== "object" || !("models" in catalog) || !Array.isArray(catalog.models)) return false;
   const model = catalog.models.find((candidate) => candidate && typeof candidate === "object" && "slug" in candidate && candidate.slug === settings.model) as Record<string, unknown> | undefined;
   if (!model || !Array.isArray(model.supported_reasoning_levels) || !model.supported_reasoning_levels.some((level) => level && typeof level === "object" && "effort" in level && level.effort === settings.reasoningLevel)) return false;
-  return settings.servicePriority === "standard" || (Array.isArray(model.service_tiers) && model.service_tiers.some((tier) => tier && typeof tier === "object" && "id" in tier && tier.id === "priority"));
+  return settings.servicePriority === "standard" || (Array.isArray(model.service_tiers) && model.service_tiers.some((tier) => tier && typeof tier === "object" && "id" in tier && (tier.id === "priority" || tier.id === "fast")));
 }

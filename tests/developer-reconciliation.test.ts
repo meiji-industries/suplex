@@ -53,6 +53,12 @@ test("reconciliation allowlists only read-only staged-context bootstrap commands
   const loopStarted = { ...bootstrapStarted, summary: "/bin/zsh -lc 'for path in .forge-context/execution/a .forge-context/execution/b; do echo \"$path\"; cat \"$path\"; done'" };
   const loopFinished = { ...bootstrapFinished, summary: `${loopStarted.summary}\n` };
   expect(reconcileDeveloperDelivery(input({ receipts: [loopStarted, loopFinished, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).outcome).toBe("completed");
+  // Real linked-retry inspection: merge-base and friends are read-only.
+  const gitInspectionStarted = { ...bootstrapStarted, summary: "/bin/zsh -lc 'ls -la .forge-context/execution; git status --porcelain=v1; git rev-parse HEAD''^; git merge-base HEAD origin/main; git diff --stat HEAD''^ HEAD; git diff HEAD''^ HEAD -- README.md'" };
+  const gitInspectionFinished = { ...bootstrapFinished, summary: `${gitInspectionStarted.summary}\n` };
+  expect(reconcileDeveloperDelivery(input({ receipts: [gitInspectionStarted, gitInspectionFinished, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).outcome).toBe("completed");
+  const branchMutation = { ...bootstrapFinished, summary: "/bin/zsh -lc 'git branch escaped'\n" };
+  expect(reconcileDeveloperDelivery(input({ receipts: [bootstrapStarted, branchMutation, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).mismatches).toContain("receipt-outside-step");
 });
 
 test("reconciliation accepts only read-only Git verification after the final step", () => {

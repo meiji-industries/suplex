@@ -20,7 +20,7 @@ export function TaskLeadPlan({
 }: {
   output: TaskLeadOutput;
   decisionControls?: ReactNode;
-  stepProgress?: { taskId: string; execution: DeveloperExecutionView; events: DeveloperExecutionEventView[]; terminalSteps: Record<number, "completed" | "blocked"> };
+  stepProgress?: { taskId: string; execution: DeveloperExecutionView; events: DeveloperExecutionEventView[]; terminalSteps: Record<number, "completed" | "blocked">; repository?: string | undefined };
   collapsible?: boolean;
 }) {
   if (output.content.kind === "decision_blocker") {
@@ -71,7 +71,7 @@ export function TaskLeadPlan({
                 <span className="min-w-0 pr-3 text-[13px] leading-5">Step {step.number} · {terminal.get(step.number) ?? (currentStep === step.number ? "active" : "pending")} — {step.instruction}</span>
               </AccordionTrigger>
               <AccordionContent>
-                {stepProgress && executionStep === step.number ? <div className="mb-3"><DeveloperEvidence taskId={stepProgress.taskId} execution={stepProgress.execution} /></div> : null}
+                {stepProgress && executionStep === step.number ? <div className="mb-3"><DeveloperEvidence taskId={stepProgress.taskId} execution={stepProgress.execution} repository={stepProgress.repository} /></div> : null}
                 <div className="grid gap-1 pl-1 text-[13px] sm:grid-cols-[76px_minmax(0,1fr)]">
                   {step.entryPoint ? <><span className="font-medium text-muted-foreground">Entry</span><p className="whitespace-pre-wrap">{step.entryPoint}</p></> : null}
                   {step.completionCriterion ? <><span className="font-medium text-muted-foreground">Complete</span><p className="whitespace-pre-wrap">{step.completionCriterion}</p></> : null}

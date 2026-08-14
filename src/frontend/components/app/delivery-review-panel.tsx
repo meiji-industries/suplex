@@ -12,7 +12,7 @@ function artifactLink(taskId: string, artifactId: string, label: string): ReactE
   return <a className="break-all text-primary underline underline-offset-2" href={`/api/tasks/${taskId}/review-artifacts/${artifactId}`} target="_blank" rel="noreferrer">{label}</a>;
 }
 
-export function DeliveryReviewPanel({ task }: { task: Task }): ReactElement | null {
+export function DeliveryReviewPanel({ task, repository }: { task: Task; repository?: string | undefined }): ReactElement | null {
   const review = task.reviewLineage.currentReview;
   const blockerCode = task.deliveryReviewBlockerCode ?? task.deliveryRepairBlockerCode;
   if (!review && !blockerCode && !task.reviewLineage.reviewAttempts.length && !task.reviewLineage.repairAttempts.length && !task.reviewLineage.priorReviews.length) return null;
@@ -29,8 +29,8 @@ export function DeliveryReviewPanel({ task }: { task: Task }): ReactElement | nu
       <CardContent className="gap-3 py-3">
         <section className="min-w-0 space-y-3" aria-labelledby="delivery-review-heading">
           {blockerCode ? <div className="min-w-0 space-y-1 border-l-2 border-destructive pl-2 text-[12px]" role="alert"><div className="font-medium">{blockerCode}</div><p className="whitespace-pre-wrap break-words text-muted-foreground">{blockerSummary}</p>{blockerArtifactId ? artifactLink(task.id, blockerArtifactId, "blocker evidence") : null}<div className="text-[11px] text-muted-foreground">Owner: {task.owner} · Allowed: {task.allowedCommands.join(", ") || "none"}</div></div> : null}
-          {review ? <><p className="whitespace-pre-wrap break-words text-[13px]">{review.summary}</p><RevisionIdentity revision={review} /><div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[11px]">{artifactLink(task.id, review.opinionArtifactId, "opinion")}{artifactLink(task.id, review.evidenceArtifactId, "evidence")}</div><div className="min-w-0 divide-y border-y">{review.findings.map((finding) => <ReviewFindingRow finding={finding} key={finding.id} />)}</div></> : null}
-          <ReviewLineage taskId={task.id} lineage={task.reviewLineage} />
+          {review ? <><p className="whitespace-pre-wrap break-words text-[13px]">{review.summary}</p><RevisionIdentity revision={review} repository={repository} /><div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[11px]">{artifactLink(task.id, review.opinionArtifactId, "opinion")}{artifactLink(task.id, review.evidenceArtifactId, "evidence")}</div><div className="min-w-0 divide-y border-y">{review.findings.map((finding) => <ReviewFindingRow finding={finding} key={finding.id} />)}</div></> : null}
+          <ReviewLineage taskId={task.id} lineage={task.reviewLineage} repository={repository} />
         </section>
       </CardContent>
     </Card>

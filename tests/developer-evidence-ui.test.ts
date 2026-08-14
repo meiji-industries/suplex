@@ -52,9 +52,29 @@ test("labels planning capacity lifecycle entries", () => {
 test("shows the recorded reason when a task moves to Blocked", () => {
   const html = renderToStaticMarkup(createElement(TaskActivity, { timeline: [{ id: "blocked", revision: 1, eventType: "phase_delivery_blocked", metadata: { blockedReason: "The Developer process exited unexpectedly." }, createdAt: "2026-08-13T00:00:00.000Z", kind: "workflow" as const }], agentInvocations: [] }));
 
-  expect(html).toContain("Blocked reason");
+  expect(html).not.toContain("Blocked reason");
   expect(html).toContain("The Developer process exited unexpectedly.");
   expect(html).toContain('data-task-blocked-reason="true"');
+  expect(html).toContain('aria-expanded="false"');
+});
+
+test("collapses repeated development and CI updates without changing their audit source", () => {
+  const timeline = [
+    { id: "development-1", revision: 1, eventType: "phase_development", metadata: {}, createdAt: "2026-08-13T00:00:00.000Z", kind: "workflow" as const },
+    { id: "development-1-update", revision: 2, eventType: "phase_development", metadata: {}, createdAt: "2026-08-13T00:01:00.000Z", kind: "workflow" as const },
+    { id: "development-1-blocked", revision: 3, eventType: "phase_blocked", metadata: { blockedReason: "The Developer process stopped." }, createdAt: "2026-08-13T00:02:00.000Z", kind: "workflow" as const },
+    { id: "retry", revision: 4, eventType: "member_action", metadata: { actionLabel: "Retry development" }, createdAt: "2026-08-13T00:03:00.000Z", kind: "member" as const },
+    { id: "development-2", revision: 5, eventType: "phase_development", metadata: {}, createdAt: "2026-08-13T00:04:00.000Z", kind: "workflow" as const },
+    { id: "ci-1", revision: 6, eventType: "phase_ci_waiting", metadata: {}, createdAt: "2026-08-13T00:05:00.000Z", kind: "workflow" as const },
+    { id: "ci-2", revision: 7, eventType: "phase_ci_waiting", metadata: {}, createdAt: "2026-08-13T00:06:00.000Z", kind: "workflow" as const },
+  ];
+  const html = renderToStaticMarkup(createElement(TaskActivity, { timeline, agentInvocations: [], developerAttempts: [{ attempt: 1 }, { attempt: 2 }], ci: { outcome: "waiting", status: "waiting", attempts: [{ attemptNumber: 1, outcome: "waiting", checks: [{ status: "in_progress", selectedForEvaluation: true }] }] } }));
+
+  expect(html).toContain("Development · attempt 1 · blocked");
+  expect(html).toContain("Development · attempt 2");
+  expect(html).toContain("Waiting for CI · poll 1 · polling · 0/1 checks · 2 polls");
+  expect(html.match(/Development · attempt 1/g)?.length).toBe(1);
+  expect(html.match(/Waiting for CI ·/g)?.length).toBe(1);
 });
 
 test("shows relative activity times", () => {

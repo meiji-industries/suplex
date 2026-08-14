@@ -3,8 +3,8 @@ import { type ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 
 import type { TaskEvent } from "../../tasks.js";
-import type { TaskService } from "../../tasks.js";
-import type { RoleAssignments } from "../../projects.js";
+import { TaskFailure, type TaskService } from "../../tasks.js";
+import { GithubReleaseFailure, type ReleaseService } from "../../github-release.js";
 import type { PlanCommandInput } from "../../temporal/issue-contracts.js";
 import { routedIssueCommands, type IssueCommand } from "../../commands/registry.js";
 import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, HttpPlanDecisionBodySchema, ResolveDecisionBlockerBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
@@ -13,14 +13,7 @@ import developmentEvents from "./development-events.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;
-}
-
-function cleanRoleAgents(value: { analyst?: string | undefined; implementer?: string | undefined; reviewer?: string | undefined }): RoleAssignments {
-  const result: RoleAssignments = {};
-  if (value.analyst !== undefined) result.analyst = value.analyst;
-  if (value.implementer !== undefined) result.implementer = value.implementer;
-  if (value.reviewer !== undefined) result.reviewer = value.reviewer;
-  return result;
+  release?: ReleaseService;
 }
 
 const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
@@ -33,7 +26,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId) }));
   typed.post("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, body: TaskBodySchema, response: { 200: TaskResponseSchema, 201: TaskResponseSchema } } }, async (request, reply) => {
     const { roleAgents: rawRoleAgents, ...body } = request.body;
-    const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, { ...body, ...(rawRoleAgents ? { roleAgents: cleanRoleAgents(rawRoleAgents) } : {}) });
+    const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, { ...body, ...(rawRoleAgents ? { roleAgents: rawRoleAgents } : {}) });
     return reply.code(result.created ? 201 : 200).send(result.task);
   });
   typed.get("/api/tasks/:taskId", { schema: { params: TaskIdParamsSchema, ...taskResponse } }, async (request, reply) => reply.send(tasks.getTask(request.forgeUser.id, request.params.taskId)));
@@ -42,6 +35,21 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
     const release = tasks.getRelease(request.forgeUser.id, request.params.taskId);
     if (!release) return reply.code(404).send({ error: "Not found" });
     return reply.header("Cache-Control", "private, no-store").send(release);
+  });
+  if (options.release) typed.post("/api/tasks/:taskId/mark-ready", { schema: { params: TaskIdParamsSchema, body: ExpectedRevisionBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => {
+    const task = tasks.getTask(request.forgeUser.id, request.params.taskId);
+    if (request.body.expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [], 409, task);
+    const release = task.release;
+    if (!release?.pullRequestUrl || release.pullRequestNumber === null || !release.isDraft) return reply.send(task);
+    try {
+      await options.release!.markReadyForReview({ taskId: task.id, companyId: task.companyId, workflowId: task.workflowId, releaseId: release.id, repository: release.repository, pullRequestNumber: release.pullRequestNumber });
+    } catch (error) {
+      if (error instanceof GithubReleaseFailure) throw new TaskFailure(error.summary, [], error.code === "provider-unavailable" || error.code === "provider-rate-limited" ? 503 : 409, task);
+      throw error;
+    }
+    const updated = tasks.getTask(request.forgeUser.id, task.id);
+    if (updated.allowedCommands.includes("reconcile_ci")) return reply.send(await tasks.executeCommand(request.forgeUser.id, task.id, "reconcile_ci", { expectedRevision: updated.revision }));
+    return reply.send(updated);
   });
   typed.get("/api/tasks/:taskId/developer-diff", { schema: { params: TaskIdParamsSchema, response: { 200: TaskDeveloperDiffResponseSchema } } }, async (request, reply) => {
     return reply.header("Cache-Control", "private, no-store").send(await tasks.getDeveloperDiff(request.forgeUser.id, request.params.taskId));

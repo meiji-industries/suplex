@@ -21,7 +21,7 @@ const PHASE_LABELS: Partial<Record<IssuePhase, string>> = {
   ci_repair_required: "CI repair",
   final_review: "Final review",
   ready_reconciliation: "Ready reconciliation",
-  manual_merge: "Ready to merge",
+  manual_merge: "Ready to Merge",
 };
 
 export function phaseLabel(phase: IssuePhase): string {

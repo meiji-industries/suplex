@@ -67,13 +67,14 @@ function addReleaseFixtures(database: ForgeDatabase, status = "draft"): void {
 
 const pullRequest = (overrides: Partial<GithubPullRequest> = {}): GithubPullRequest => ({ number: 12, url: "https://github.com/acme/forge/pull/12", repository: "acme/forge", headBranch: "issue/task-a", baseBranch: "main", headSha, baseSha, isDraft: true, state: "open", mergedAt: null, ...overrides });
 
-function fakeGithub(checks: CheckObservation[] = []): GithubReleasePort & GithubAcceptancePort & { pushed: number; ready: number; updated: number; createdInput: { title: string; body: string } | null } {
+function fakeGithub(checks: CheckObservation[] = []): GithubReleasePort & GithubAcceptancePort & { authenticated: number; pushed: number; ready: number; updated: number; createdInput: { title: string; body: string } | null } {
   return {
+    authenticated: 0,
     pushed: 0,
     ready: 0,
     updated: 0,
     createdInput: null,
-    async checkAuthentication() {},
+    async checkAuthentication() { this.authenticated += 1; },
     async getRemoteRepository() { return "acme/forge"; },
     async getBranchHead(input) { return input.branch === "main" ? baseSha : this.pushed ? headSha : null; },
     async inspectLocalRevision() { return { branch: "issue/task-a", headSha, treeSha, clean: true }; },
@@ -84,7 +85,7 @@ function fakeGithub(checks: CheckObservation[] = []): GithubReleasePort & Github
     async markReadyForReview() { this.ready += 1; },
     async getPullRequest() { return this.ready ? pullRequest({ isDraft: false }) : pullRequest(); },
     async listChecks() { return checks; },
-  } as GithubReleasePort & GithubAcceptancePort & { pushed: number; ready: number; updated: number; createdInput: { title: string; body: string } | null };
+  } as GithubReleasePort & GithubAcceptancePort & { authenticated: number; pushed: number; ready: number; updated: number; createdInput: { title: string; body: string } | null };
 }
 
 test("capacity is durable, FIFO, bounded, and restart-reconcilable", async () => {
@@ -131,6 +132,21 @@ test("release publishes one exact reviewed draft and CI accepts only the exact h
     const checks: CheckObservation[] = [{ providerCheckId: "1", name: "Tests / unit", headSha, status: "completed", conclusion: "success", detailsUrl: null, startedAt: now, completedAt: now, summary: "passed" }];
     const ci = new CiService(value.database, { async getPullRequest() { return { repository: "acme/forge", number: 12, url: "https://github.com/acme/forge/pull/12", state: "open", draft: true, baseBranch: "main", baseSha, headBranch: "issue/task-a", headSha }; }, async listChecks() { return checks; } });
     expect((await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: release.releaseId, expectedHeadSha: headSha, attemptNumber: 1 })).outcome).toBe("passed");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("marking a draft pull request ready verifies the exact provider identity", async () => {
+  const value = await fixture();
+  try {
+    addReleaseFixtures(value.database);
+    const github = fakeGithub();
+    const service = new ReleaseService(value.database, new ArtifactStore(value.config.artifactRoot), github);
+    await service.markReadyForReview({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", releaseId: "release-a", repository: "acme/forge", pullRequestNumber: 12 });
+    expect(github.authenticated).toBe(1);
+    expect(github.ready).toBe(1);
+    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_releases WHERE id = 'release-a'").get())).toEqual({ status: "ready" });
+    await service.markReadyForReview({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", releaseId: "release-a", repository: "acme/forge", pullRequestNumber: 12 });
+    expect(github.ready).toBe(1);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

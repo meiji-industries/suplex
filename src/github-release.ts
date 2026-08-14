@@ -243,6 +243,7 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
         const parsed = restError(error.result.stdout);
         if (allowNotFound && parsed?.status === 404) return null;
         if (allowNotFound && !parsed) throw providerFailure("invalid-provider-response", "GitHub returned an unvalidated branch error");
+        if (parsed?.status === 404) throw providerFailure("provider-unavailable", "GitHub resource was not found or is inaccessible");
         if (parsed?.status === 403 || parsed?.status === 429) {
           const retryAt = await retryAtFromRateLimit();
           if (retryAt) throw providerFailure("provider-rate-limited", parsed.message, retryAt);
@@ -325,7 +326,7 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       return pull(value);
     },
     async markReadyForReview(input) {
-      await api(["api", "--method", "POST", `repos/${input.repository}/pulls/${input.number}/ready_for_review`], "mark ready for review");
+      try { await runGh(["pr", "ready", String(input.number), "--repo", input.repository]); } catch (error) { throw classifyCommandFailure(error, "mark ready for review"); }
     },
   } as GithubReleasePort & GithubAcceptancePort;
 }
@@ -440,6 +441,27 @@ function releaseKeyFor(input: PublishReleaseInput, coordinates: PinnedRepository
 
 export class ReleaseService {
   constructor(private readonly database: ForgeDatabase, private readonly artifacts: ArtifactStore, private readonly github: GithubReleasePort) {}
+
+  async markReadyForReview(input: { taskId: string; companyId: string; workflowId: string; releaseId: string; repository: string; pullRequestNumber: number }): Promise<void> {
+    const release = this.database.authQuery((db) => db.prepare(`SELECT id, status, repository, base_branch AS baseBranch, head_branch AS headBranch, base_sha AS baseSha, head_sha AS headSha, pr_number AS pullRequestNumber, pr_url AS pullRequestUrl
+      FROM forge_releases WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND superseded_at IS NULL`).get(input.releaseId, input.taskId, input.companyId, input.workflowId) as { id: string; status: string; repository: string; baseBranch: string; headBranch: string; baseSha: string; headSha: string; pullRequestNumber: number | null; pullRequestUrl: string | null } | undefined);
+    if (!release || release.repository.toLowerCase() !== input.repository.toLowerCase() || release.pullRequestNumber !== input.pullRequestNumber || !release.pullRequestUrl) throw providerFailure("stale-reviewed-revision", "The stored pull request no longer matches this task");
+    if (release.status === "ready") return;
+    if (release.status !== "draft") throw providerFailure("ambiguous-provider-state", "The pull request is not in a draft state");
+    await this.github.checkAuthentication();
+    const matchesRelease = (pullRequest: GithubPullRequest): boolean => pullRequest.number === release.pullRequestNumber && pullRequest.url === release.pullRequestUrl && pullRequest.repository.toLowerCase() === release.repository.toLowerCase() && pullRequest.headBranch === release.headBranch && pullRequest.baseBranch === release.baseBranch && pullRequest.baseSha.toLowerCase() === release.baseSha.toLowerCase() && pullRequest.headSha.toLowerCase() === release.headSha.toLowerCase() && pullRequest.state === "open";
+    const current = await this.github.getPullRequest({ repository: release.repository, number: release.pullRequestNumber });
+    if (!matchesRelease(current)) throw providerFailure("ambiguous-provider-state", "The stored pull request no longer matches the reviewed revision");
+    if (!current.isDraft) {
+      this.database.authTransaction((db) => db.prepare("UPDATE forge_releases SET status = 'ready', updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND status = 'draft'").run(new Date().toISOString(), release.id, input.taskId, input.companyId, input.workflowId));
+      return;
+    }
+    if (!("markReadyForReview" in this.github) || typeof this.github.markReadyForReview !== "function") throw providerFailure("provider-unavailable", "GitHub ready-for-review is unavailable");
+    await this.github.markReadyForReview({ repository: release.repository, number: release.pullRequestNumber });
+    const confirmed = await this.github.getPullRequest({ repository: release.repository, number: release.pullRequestNumber });
+    if (!matchesRelease(confirmed) || confirmed.isDraft) throw providerFailure("ambiguous-provider-state", "GitHub did not confirm the pull request is ready for review");
+    this.database.authTransaction((db) => db.prepare("UPDATE forge_releases SET status = 'ready', updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND status = 'draft'").run(new Date().toISOString(), release.id, input.taskId, input.companyId, input.workflowId));
+  }
 
   private fail(input: PublishReleaseInput, error: unknown): never {
     const failure = error instanceof GithubReleaseFailure ? error : providerFailure("provider-unavailable", "Release provider request failed");

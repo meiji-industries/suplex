@@ -13,18 +13,26 @@ function canonicalCommand(value: string): string {
   return command.replace(/\\(["'])/g, "$1").replace(/["']/g, "").replace(/\s+/g, " ").trim();
 }
 
+// Strictly read-only git subcommands the Developer may run outside an active
+// step (pre-step inspection and post-final-step verification). Mutating or
+// ambiguous subcommands (branch, remote, worktree, ...) stay excluded.
+const readOnlyGit = "(?:status|rev-parse|log|show|diff|diff-tree|merge-base|rev-list|ls-files|cat-file|describe)";
+const forbiddenBootstrapCommand = new RegExp(`\\b(?:rm|mv|cp|touch|mkdir|rmdir|chmod|chown|curl|wget)\\b|\\bgit\\s+(?!${readOnlyGit}\\b)`);
+const allowedBootstrapCommand = new RegExp(`^(?:for\\b|pwd|git ${readOnlyGit}\\b|(?:cat|head|tail|sed|ls|find|file|sha256sum|nl|wc|rg)\\s+)`);
+const allowedFinalGitCommand = new RegExp(`^git ${readOnlyGit}\\b`);
+
 function isAllowlistedBootstrapReceipt(receipt: ExecutionReceipt, firstStepSequence: number): boolean {
   if (receipt.sequence >= firstStepSequence || !["command_started", "command_finished"].includes(receipt.kind)) return false;
   const command = canonicalCommand(receipt.summary);
-  if (!command || /[<>`]|\$\(/.test(command) || /\b(?:rm|mv|cp|touch|mkdir|rmdir|chmod|chown|curl|wget)\b|\bgit\s+(?!(?:status|rev-parse|log|show|diff|diff-tree)\b)/.test(command)) return false;
-  return /^(?:for\b|pwd|git (?:status|rev-parse|log|show|diff|diff-tree)\b|(?:cat|head|tail|sed|ls|find|file|sha256sum|nl|wc|rg)\s+)/.test(command);
+  if (!command || /[<>`]|\$\(/.test(command) || forbiddenBootstrapCommand.test(command)) return false;
+  return allowedBootstrapCommand.test(command);
 }
 
 function isAllowlistedFinalGitReceipt(receipt: ExecutionReceipt, finalStepSequence: number | undefined): boolean {
   if (finalStepSequence === undefined || receipt.sequence <= finalStepSequence || !["command_started", "command_finished"].includes(receipt.kind) || (receipt.kind === "command_finished" && receipt.exitCode !== 0)) return false;
   const command = canonicalCommand(receipt.summary);
   if (!command || /[<>`|;]|\$\(|\|\|/.test(command)) return false;
-  return command.split(/\s*&&\s*/).every((part) => /^git (?:status|rev-parse|log|show|diff|diff-tree)\b/.test(part));
+  return command.split(/\s*&&\s*/).every((part) => allowedFinalGitCommand.test(part));
 }
 
 function matchesVerificationCommand(receipt: ExecutionReceipt, command: string): boolean {

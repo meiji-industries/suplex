@@ -14,7 +14,7 @@ type ParsedFile = ReturnType<typeof parsePatchFiles>[number]["files"][number];
 
 export type DeveloperDiffProps = { taskId: string; executionId: string; onFileCount?: (count: number) => void };
 
-function useAppThemeType(): "light" | "dark" {
+export function useAppThemeType(): "light" | "dark" {
   const readTheme = (): "light" | "dark" => document.documentElement.classList.contains("dark") ? "dark" : "light";
   const [themeType, setThemeType] = useState<"light" | "dark">(readTheme);
 
@@ -39,12 +39,20 @@ function DiffTree({ files, themeType }: { files: ParsedFile[]; themeType: "light
   const selectedFile = files.find((file) => file.name === selectedPaths.at(-1)) ?? files[0]!;
   const options = useMemo(() => ({ diffStyle: "unified" as const, overflow: "scroll" as const, stickyHeader: true, themeType }), [themeType]);
 
-  return <div className="grid overflow-hidden rounded-md border border-border bg-background lg:grid-cols-[14rem_minmax(0,1fr)]">
-    <FileTree model={model} aria-label="Changed files" className="h-48 border-b border-border lg:h-[36rem] lg:border-r lg:border-b-0" style={{ colorScheme: themeType }} />
-    <Virtualizer className="h-[36rem] overflow-auto" contentClassName="p-2">
-      <FileDiff fileDiff={selectedFile} options={options} disableWorkerPool />
-    </Virtualizer>
-  </div>;
+  return files.length === 1 ? (
+    <div className="overflow-hidden rounded-md border border-border bg-background">
+      <Virtualizer className="h-[36rem] overflow-auto" contentClassName="p-2">
+        <FileDiff fileDiff={selectedFile} options={options} disableWorkerPool />
+      </Virtualizer>
+    </div>
+  ) : (
+    <div className="grid overflow-hidden rounded-md border border-border bg-background lg:grid-cols-[14rem_minmax(0,1fr)]">
+      <FileTree model={model} aria-label="Changed files" className="h-48 border-b border-border lg:h-[36rem] lg:border-r lg:border-b-0" style={{ colorScheme: themeType }} />
+      <Virtualizer className="h-[36rem] overflow-auto" contentClassName="p-2">
+        <FileDiff fileDiff={selectedFile} options={options} disableWorkerPool />
+      </Virtualizer>
+    </div>
+  );
 }
 
 export default function DeveloperDiff({ taskId, executionId, onFileCount }: DeveloperDiffProps): ReactElement {
@@ -73,12 +81,6 @@ export default function DeveloperDiff({ taskId, executionId, onFileCount }: Deve
 
   return (
     <div data-task-developer-diff className="space-y-2">
-      <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-        <span>Showing changes</span>
-        {diff.repository ? <a className="text-foreground underline underline-offset-2" href={`https://github.com/${diff.repository}/commit/${diff.baseSha}`} target="_blank" rel="noreferrer">{diff.baseSha.slice(0, 8)}</a> : <code className="text-foreground">{diff.baseSha.slice(0, 8)}</code>}
-        <span>to</span>
-        {diff.repository ? <a className="text-foreground underline underline-offset-2" href={`https://github.com/${diff.repository}/commit/${diff.headSha}`} target="_blank" rel="noreferrer">{diff.headSha.slice(0, 8)}</a> : <code className="text-foreground">{diff.headSha.slice(0, 8)}</code>}
-      </div>
       <DiffTree files={files} themeType={themeType} />
     </div>
   );

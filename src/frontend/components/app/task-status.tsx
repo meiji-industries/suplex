@@ -3,6 +3,18 @@ import type { ReactElement } from "react";
 
 import { ACTIVE_PHASES, BLOCKED_PHASES, phaseLabel, type IssuePhase } from "../../../issue-phases.js";
 
+const ACTIVE_INVOCATION_STATUSES = new Set(["starting", "running", "cancelling"]);
+const BACKGROUND_PHASES = new Set<IssuePhase>(["releasing", "ci_waiting", "ready_reconciliation"]);
+
+export function taskPresentationPhase({ phase, releaseStatus, ciOutcome }: { phase: IssuePhase; releaseStatus?: string | null | undefined; ciOutcome?: string | null | undefined }): IssuePhase {
+  return phase === "delivery_blocked" && releaseStatus === "ready" && ciOutcome === "missing_required" ? "ci_waiting" : phase;
+}
+
+export function taskIsProcessing({ phase, agentInvocations = [], capacityStatus }: { phase: IssuePhase; agentInvocations?: ReadonlyArray<{ status: string }>; capacityStatus?: string | null | undefined }): boolean {
+  if (BLOCKED_PHASES.has(phase) || ["cancelled", "done"].includes(phase)) return false;
+  return BACKGROUND_PHASES.has(phase) || capacityStatus === "active" || agentInvocations.some((invocation) => ACTIVE_INVOCATION_STATUSES.has(invocation.status));
+}
+
 export function taskStatusAppearance(phase: IssuePhase): { icon: LucideIcon; iconClass: string; badge: "secondary" | "success-light" | "warning-light" | "destructive-light" | "primary-light" } {
   if (phase === "done") return { icon: CheckCircle2, iconClass: "text-emerald-500", badge: "success-light" };
   if (BLOCKED_PHASES.has(phase) || phase === "blocked" || phase === "cancelled") return { icon: CircleX, iconClass: "text-rose-500", badge: "destructive-light" };
@@ -11,12 +23,12 @@ export function taskStatusAppearance(phase: IssuePhase): { icon: LucideIcon; ico
   return { icon: ACTIVE_PHASES.has(phase) ? CircleDotDashed : CircleDashed, iconClass: "text-muted-foreground", badge: "secondary" };
 }
 
-export function TaskStatusIcon({ phase }: { phase: IssuePhase }): ReactElement {
+export function TaskStatusIcon({ phase, processing = false }: { phase: IssuePhase; processing?: boolean }): ReactElement {
   const appearance = taskStatusAppearance(phase);
   const Icon = appearance.icon;
-  return <Icon aria-hidden="true" className={`size-3.5 shrink-0 ${appearance.iconClass}`} />;
+  return <Icon aria-hidden="true" className={`size-3.5 shrink-0 ${appearance.iconClass}${processing ? " animate-spin" : ""}`} />;
 }
 
-export function TaskStatus({ phase }: { phase: IssuePhase }): ReactElement {
-  return <span data-task-status={phase} className="inline-flex items-center gap-1.5"><TaskStatusIcon phase={phase} /><span>{phaseLabel(phase)}</span></span>;
+export function TaskStatus({ phase, presentationPhase = phase, processing = false }: { phase: IssuePhase; presentationPhase?: IssuePhase; processing?: boolean }): ReactElement {
+  return <span data-task-status={phase} className="inline-flex items-center gap-1.5"><TaskStatusIcon phase={presentationPhase} processing={processing} /><span>{phaseLabel(presentationPhase)}</span></span>;
 }

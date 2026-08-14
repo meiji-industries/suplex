@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { promisify } from "node:util";
@@ -74,7 +75,11 @@ const processInspectionAttempts = 60;
 const processInspectionRetryDelayMs = 50;
 
 function normalizeArgv(command: string): string[] {
-  return command.split(/\s+/).filter(Boolean);
+  // Identity argv must always fit the supervisor protocol's processIdentity
+  // bounds (max 256 elements of max 4000 chars); ps-derived command lines can
+  // exceed either, so collapse oversized ones to a stable digest.
+  const argv = command.split(/\s+/).filter(Boolean);
+  return argv.length <= 256 && argv.every((argument) => argument.length <= 4_000) ? argv : [`sha256:${createHash("sha256").update(command).digest("hex")}`];
 }
 
 async function processField(pid: number, field: string): Promise<string | undefined> {

@@ -328,58 +328,75 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
     childProcess.once("error", reject);
     childProcess.once("exit", (code, signal) => resolvePromise({ code, signal }));
   });
-  const childInspection = await inspect(controller, childProcess.pid ?? -1);
-  const child = identity(childInspection);
-  let resolveFinished!: (result: DeveloperSupervisorResult | undefined) => void;
-  const finished = new Promise<DeveloperSupervisorResult | undefined>((resolvePromise) => { resolveFinished = resolvePromise; });
-  const gitGuardDirectory = invocation.env.FORGE_GIT_GUARD_DIR && resolve(invocation.env.FORGE_GIT_GUARD_DIR).startsWith(`${root}${sep}`) ? resolve(invocation.env.FORGE_GIT_GUARD_DIR) : null;
-  const state: SupervisorState = { executionRoot: root, executionId, token, tokenHash, controller, supervisor, child, childProcess, gitGuardDirectory, status: "starting", heartbeatAt, startedAt: heartbeatAt, sequence: 0, outputTruncated: false, eventsBytes: 0, termSentAt: null, killSentAt: null, confirmedExitAt: null, pendingControlRequests: new Set(), cancellationTask: null, finished, resolveFinished };
-  await unlink(invocationPath).catch(() => undefined);
-  state.status = "running";
-  await writeSnapshot(state);
-  await writeHeartbeat(state);
-  const server = await startSocket(state);
-  const heartbeat = setInterval(() => void writeHeartbeat(state), 2_000);
-  heartbeat.unref();
-  let eventWrite = Promise.resolve();
-  const writeEvent = (stream: "stdout" | "stderr", line: string): Promise<void> => {
-    const record = JSON.stringify({ sequence: state.sequence++, at: new Date().toISOString(), stream, line: redact(line) });
-    const write = eventWrite.then(async () => {
-      const bytes = Buffer.byteLength(`${record}\n`);
-      if (state.eventsBytes + bytes > maxEventsBytes) {
-        if (!state.outputTruncated) {
-          state.outputTruncated = true;
-          const marker = JSON.stringify({ sequence: state.sequence++, at: new Date().toISOString(), stream: "supervisor", line: "output_truncated" });
-          if (state.eventsBytes + Buffer.byteLength(`${marker}\n`) <= maxEventsBytes) { await appendLine(join(root, "events.jsonl"), marker); state.eventsBytes += Buffer.byteLength(`${marker}\n`); }
+  void childExitPromise.catch(() => undefined);
+  let server: Awaited<ReturnType<typeof startSocket>> | undefined;
+  try {
+    const childInspection = await inspect(controller, childProcess.pid ?? -1);
+    const child = identity(childInspection);
+    let resolveFinished!: (result: DeveloperSupervisorResult | undefined) => void;
+    const finished = new Promise<DeveloperSupervisorResult | undefined>((resolvePromise) => { resolveFinished = resolvePromise; });
+    const gitGuardDirectory = invocation.env.FORGE_GIT_GUARD_DIR && resolve(invocation.env.FORGE_GIT_GUARD_DIR).startsWith(`${root}${sep}`) ? resolve(invocation.env.FORGE_GIT_GUARD_DIR) : null;
+    const state: SupervisorState = { executionRoot: root, executionId, token, tokenHash, controller, supervisor, child, childProcess, gitGuardDirectory, status: "starting", heartbeatAt, startedAt: heartbeatAt, sequence: 0, outputTruncated: false, eventsBytes: 0, termSentAt: null, killSentAt: null, confirmedExitAt: null, pendingControlRequests: new Set(), cancellationTask: null, finished, resolveFinished };
+    await unlink(invocationPath).catch(() => undefined);
+    state.status = "running";
+    await writeSnapshot(state);
+    await writeHeartbeat(state);
+    server = await startSocket(state);
+    const heartbeat = setInterval(() => void writeHeartbeat(state), 2_000);
+    heartbeat.unref();
+    let eventWrite = Promise.resolve();
+    const writeEvent = (stream: "stdout" | "stderr", line: string): Promise<void> => {
+      const record = JSON.stringify({ sequence: state.sequence++, at: new Date().toISOString(), stream, line: redact(line) });
+      const write = eventWrite.then(async () => {
+        const bytes = Buffer.byteLength(`${record}\n`);
+        if (state.eventsBytes + bytes > maxEventsBytes) {
+          if (!state.outputTruncated) {
+            state.outputTruncated = true;
+            const marker = JSON.stringify({ sequence: state.sequence++, at: new Date().toISOString(), stream: "supervisor", line: "output_truncated" });
+            if (state.eventsBytes + Buffer.byteLength(`${marker}\n`) <= maxEventsBytes) { await appendLine(join(root, "events.jsonl"), marker); state.eventsBytes += Buffer.byteLength(`${marker}\n`); }
+          }
+          return;
         }
-        return;
-      }
-      await appendLine(join(root, "events.jsonl"), record);
-      state.eventsBytes += bytes;
-    });
-    eventWrite = write.catch(() => undefined);
-    return write;
-  };
-  const readers: Promise<void>[] = [];
-  const pendingWrites = new Set<Promise<void>>();
-  for (const [stream, name] of [[childProcess.stdout, "stdout" as const], [childProcess.stderr, "stderr" as const]] as const) readers.push(new Promise<void>((resolvePromise, reject) => {
-    if (!stream) { resolvePromise(); return; }
-    const reader = createInterface({ input: stream });
-    reader.on("line", (line) => {
-      const pending = writeEvent(name, line).catch(reject);
-      pendingWrites.add(pending);
-      void pending.finally(() => pendingWrites.delete(pending));
-    });
-    reader.on("close", () => resolvePromise());
-  }));
-  const childExit = await childExitPromise;
-  await Promise.race([Promise.all(readers), new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 2_000))]);
-  await Promise.allSettled([...pendingWrites]);
-  if (state.cancellationTask) await Promise.allSettled([state.cancellationTask]);
-  await Promise.allSettled([...state.pendingControlRequests]);
-  clearInterval(heartbeat);
-  server.close();
-  return finalize(state, childExit, eventsPath);
+        await appendLine(join(root, "events.jsonl"), record);
+        state.eventsBytes += bytes;
+      });
+      eventWrite = write.catch(() => undefined);
+      return write;
+    };
+    const readers: Promise<void>[] = [];
+    const pendingWrites = new Set<Promise<void>>();
+    for (const [stream, name] of [[childProcess.stdout, "stdout" as const], [childProcess.stderr, "stderr" as const]] as const) readers.push(new Promise<void>((resolvePromise, reject) => {
+      if (!stream) { resolvePromise(); return; }
+      const reader = createInterface({ input: stream });
+      reader.on("line", (line) => {
+        const pending = writeEvent(name, line).catch(reject);
+        pendingWrites.add(pending);
+        void pending.finally(() => pendingWrites.delete(pending));
+      });
+      reader.on("close", () => resolvePromise());
+    }));
+    const childExit = await childExitPromise;
+    await Promise.race([Promise.all(readers), new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 2_000))]);
+    await Promise.allSettled([...pendingWrites]);
+    if (state.cancellationTask) await Promise.allSettled([state.cancellationTask]);
+    await Promise.allSettled([...state.pendingControlRequests]);
+    clearInterval(heartbeat);
+    // Keep the control socket answering "result_ready" until the result file
+    // is durable; closing first opens a window where callers see neither a
+    // socket nor a result and misclassify the turn as interrupted.
+    const result = await finalize(state, childExit, eventsPath);
+    server.close();
+    return result;
+  } catch (error) {
+    // A supervisor failure must not orphan an unsupervised Developer process
+    // or leave callers polling a "starting" snapshot until they time out.
+    server?.close();
+    try { if (childProcess.pid) process.kill(-childProcess.pid, "SIGKILL"); } catch { /* already exited */ }
+    const failedAt = new Date().toISOString();
+    await atomicWriteJson(join(root, "supervisor.json"), DeveloperSupervisorSnapshotSchema.parse({ version: 1, executionId, status: "failed", supervisor, child: null, heartbeatAt: failedAt })).catch(() => undefined);
+    await atomicWriteJson(join(root, "heartbeat.json"), DeveloperSupervisorHeartbeatSchema.parse({ version: 1, executionId, status: "failed", heartbeatAt: failedAt })).catch(() => undefined);
+    throw error;
+  }
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {

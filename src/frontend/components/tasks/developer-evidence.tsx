@@ -1,21 +1,18 @@
 import { Badge } from "../ui/badge.js";
 import { Button } from "../ui/button.js";
 import { Collapsible } from "../ui/collapsible.js";
+import { CommitSha } from "../app/commit-sha.js";
 import type { ReactElement } from "react";
 import type { DeveloperExecutionEventResponse, TaskResponse } from "../../../http/contracts/tasks.js";
 
 export type DeveloperExecutionView = NonNullable<TaskResponse["developerExecution"]>;
 export type DeveloperExecutionEventView = DeveloperExecutionEventResponse;
 
-function shortHash(value: string | null | undefined): string {
-  return value ? `${value.slice(0, 8)}…` : "—";
-}
-
 function artifactHref(taskId: string, artifactId: string): string {
   return `/api/tasks/${encodeURIComponent(taskId)}/developer-artifacts/${encodeURIComponent(artifactId)}`;
 }
 
-export function DevelopmentStatus({ execution }: { execution: DeveloperExecutionView }): ReactElement {
+export function DevelopmentStatus({ execution, repository }: { execution: DeveloperExecutionView; repository?: string | undefined }): ReactElement {
   const reconciled = execution.status === "completed" && Boolean(execution.reconciliationArtifactId);
   return (
     <section className="space-y-3" data-developer-status>
@@ -26,8 +23,8 @@ export function DevelopmentStatus({ execution }: { execution: DeveloperExecution
         <Collapsible.Trigger render={<Button variant="ghost" size="sm" />}>Execution details</Collapsible.Trigger>
         <Collapsible.Panel><div className="grid gap-x-4 gap-y-2 pt-2 text-xs sm:grid-cols-2">
           <div><span className="text-muted-foreground">Boundary</span><div>{(execution.boundaryMode ?? "owner_controlled_observed") === "owner_controlled_observed" ? "Owner-controlled local execution; provider state observed" : execution.boundaryMode}</div></div>
-          <div><span className="text-muted-foreground">Starting commit/tree</span><code className="block break-all">{shortHash(execution.startingCommit ?? execution.targetBaseSha)} / {shortHash(execution.startingTree)}</code></div>
-          <div><span className="text-muted-foreground">Final commit/tree</span><code className="block break-all">{shortHash(execution.resultCommit)} / {shortHash(execution.resultTree)}</code></div>
+          <div><span className="text-muted-foreground">Starting commit/tree</span><div className="break-all"><CommitSha sha={execution.startingCommit ?? execution.targetBaseSha} repository={repository} /> / <code>{execution.startingTree ? `${execution.startingTree.slice(0, 8)}…` : "—"}</code></div></div>
+          <div><span className="text-muted-foreground">Final commit/tree</span><div className="break-all"><CommitSha sha={execution.resultCommit} repository={repository} /> / <code>{execution.resultTree ? `${execution.resultTree.slice(0, 8)}…` : "—"}</code></div></div>
           <div><span className="text-muted-foreground">Worktree</span><div>{execution.dirtyState ?? "not reconciled"}</div></div>
           <div><span className="text-muted-foreground">Provider observation</span><div>{execution.providerObservation ?? "unavailable"}</div></div>
         </div></Collapsible.Panel>
@@ -53,6 +50,6 @@ export function DeliveryReportPanel({ taskId, execution }: { taskId: string; exe
   );
 }
 
-export function DeveloperEvidence({ taskId, execution }: { taskId: string; execution: DeveloperExecutionView }): ReactElement {
-  return <div className="space-y-5"><DevelopmentStatus execution={execution} /><DeliveryReportPanel taskId={taskId} execution={execution} /></div>;
+export function DeveloperEvidence({ taskId, execution, repository }: { taskId: string; execution: DeveloperExecutionView; repository?: string | undefined }): ReactElement {
+  return <div className="space-y-5"><DevelopmentStatus execution={execution} repository={repository} /><DeliveryReportPanel taskId={taskId} execution={execution} /></div>;
 }

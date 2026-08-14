@@ -80,7 +80,7 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
 export function registerAppRoutes(app: FastifyInstance, dependencies: AppDependencies): void {
   const getHealth = dependencies.getHealth ?? (() => inspectHostHealth(dependencies.config, dependencies.health));
   const readHealth = async (): Promise<HealthSnapshot> => HealthSnapshotSchema.parse(await getHealth());
-  const { auth, projects: projectService, tasks: taskService, attention: attentionService, database, rebuild } = dependencies;
+  const { auth, projects: projectService, tasks: taskService, attention: attentionService, release: releaseService, database, rebuild } = dependencies;
 
   void app.register(pages, {
     readHealth,
@@ -91,7 +91,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
   void app.register(health, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config });
   if (auth) {
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
-    void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}), ...(rebuild ? { rebuild } : {}), ...(dependencies.capacity ? { capacity: dependencies.capacity } : {}) });
+    void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(releaseService ? { release: releaseService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}), ...(rebuild ? { rebuild } : {}), ...(dependencies.capacity ? { capacity: dependencies.capacity } : {}) });
   }
   if (!dependencies.frontendDevelopment) void app.register(assets, { prefix: "/assets" });
 }

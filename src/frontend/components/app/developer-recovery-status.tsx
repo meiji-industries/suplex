@@ -28,6 +28,7 @@ export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, bus
   const attention = ambiguous || interrupted || failed;
   const recoveryCommands = ambiguous ? allowedCommands.filter((command) => command === "verify_developer_ownership") : allowedCommands;
   const hasActions = recoveryCommands.includes("retry_development") || recoveryCommands.includes("cancel_development") || (isAdmin && recoveryCommands.includes("verify_developer_ownership"));
+  if (recovery.status === "active" && !hasActions) return null;
   return <Card data-developer-recovery role="alert" size="sm">
       <CardHeader>
         <CardTitle>Development <Badge variant={attention ? "destructive" : "secondary"}>{labels[recovery.status]}</Badge></CardTitle>

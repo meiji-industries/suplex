@@ -15,6 +15,7 @@ import type { AgentProvider, LeadProcessRunner, SessionStore } from "./agent-pro
 import { CapacityManager } from "./capacity.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
+import { toSafeSummary } from "./temporal/contracts/primitives.js";
 import type { GithubReleasePort } from "./github-release.js";
 import { createGitCommandGuard, withWorktreeMiseTrust, WorktreeManager } from "./worktrees.js";
 import { activateOwnedWorktree, reserveOwnedWorktree } from "./worktrees.js";
@@ -548,7 +549,7 @@ export class DeveloperService {
       return { developerExecutionId: executionId, developerSessionRef: sessionRef ?? `unavailable_${executionId}`, worktreePath: activeWorktree.worktreePath, branchName: activeWorktree.branchName, targetBaseSha: activeWorktree.startingSha, currentStep: reconciliation.report?.steps.at(-1)?.number ?? null, resultCommit: git.head, resultTree: git.tree, dirtyState: git.status ? "dirty" : "clean", deliveryArtifactId: reconciliationArtifact.id, evidenceArtifactId: evidence.artifact.id, deliverySummary, outcome: reconciliation.outcome, reconciliationArtifactId: reconciliationArtifact.id, providerObservationArtifactId: before.artifact.id };
     } catch (error) {
       if (isSupervisorTerminalError(error)) throw error;
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("developer-execution-failed", "Developer execution could not be reconciled");
+      const failure = error instanceof AgentFailure ? error : new AgentFailure("developer-execution-failed", toSafeSummary(`Developer execution could not be reconciled: ${String(redact(error instanceof Error ? error.message : String(error)))}`));
       this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = CASE WHEN status IN ('starting', 'running') THEN 'blocked' ELSE status END, failure_code = ?, failure_summary = ?, finished_at = ? WHERE id = ?").run(failure.code, failure.message, this.now().toISOString(), executionId));
       throw failure;
     } finally {

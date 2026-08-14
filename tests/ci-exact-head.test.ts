@@ -31,7 +31,7 @@ describe("exact-head CI evaluator", () => {
 
   it("distinguishes propagation, active checks, missing checks, stale heads, and exhausted windows", () => {
     expect(evaluate({ checks: [], now: now }).outcome).toBe("waiting");
-    expect(evaluate({ checks: [], now: propagation }).outcome).toBe("missing_required");
+    expect(evaluate({ checks: [], now: propagation }).outcome).toBe("waiting");
     expect(evaluate({ checks: [check({ headSha: otherHead })], now }).outcome).toBe("waiting");
     expect(evaluate({ checks: [check({ status: "in_progress", conclusion: null })] }).outcome).toBe("waiting");
     expect(evaluate({ checks: [check({ status: "queued", conclusion: null })] }).outcome).toBe("waiting");
@@ -44,10 +44,13 @@ describe("exact-head CI evaluator", () => {
     ["number", { number: 8 }, "pull_request_identity_changed"],
     ["base branch", { baseBranch: "develop" }, "pull_request_base_branch_changed"],
     ["head branch", { headBranch: "other/task" }, "pull_request_head_branch_changed"],
-    ["closed state", { state: "closed" }, "pull_request_not_open_draft"],
-    ["ready state", { draft: false }, "pull_request_not_open_draft"],
+    ["closed state", { state: "closed" }, "pull_request_not_open"],
   ])("rejects a changed PR %s", (_label, changed, reason) => {
     expect(evaluate({ observedPullRequest: pullRequest(changed) }).reason).toBe(reason);
+  });
+
+  it("continues evaluating an open PR after it becomes ready for review", () => {
+    expect(evaluate({ observedPullRequest: pullRequest({ draft: false }) }).outcome).toBe("passed");
   });
 
   it("selects the latest exact-head provider run and preserves all observations", () => {

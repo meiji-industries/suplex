@@ -182,7 +182,7 @@ export function evaluateExactHead(input: CiEvaluationInput): CiEvaluationResult 
   const selectedChecks = selectLatestCheckRuns(input.checks, input.requiredChecks, input.expectedHeadSha);
   const pr = input.observedPullRequest;
   if (pr.repository.toLowerCase() !== input.expectedRepository.toLowerCase() || pr.number !== input.expectedPullRequestNumber) return evaluation("pull_request_identity_changed", "stale_head", "human", false, selectedChecks, "Pull request identity changed");
-  if (pr.state !== "open" || !pr.draft) return evaluation("pull_request_not_open_draft", "stale_head", "human", false, selectedChecks, "Pull request is not open and draft");
+  if (pr.state !== "open") return evaluation("pull_request_not_open", "stale_head", "human", false, selectedChecks, "Pull request is not open");
   if (pr.baseBranch !== input.expectedBaseBranch) return evaluation("pull_request_base_branch_changed", "stale_head", "human", false, selectedChecks, "Pull request base branch changed");
   if (pr.headBranch !== input.expectedHeadBranch) return evaluation("pull_request_head_branch_changed", "stale_head", "human", false, selectedChecks, "Pull request head branch changed");
   if (pr.headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) return evaluation("pull_request_head_changed", "stale_head", "human", false, selectedChecks, "Pull request head changed");
@@ -190,7 +190,7 @@ export function evaluateExactHead(input: CiEvaluationInput): CiEvaluationResult 
   const exactSelected = selectedChecks.filter((check) => check.selectedForEvaluation && check.headSha.toLowerCase() === input.expectedHeadSha.toLowerCase());
   const missing = input.requiredChecks.filter((name) => !exactSelected.some((check) => check.name === name));
   if (missing.length && Date.parse(input.now) < Date.parse(input.propagationDeadline)) return evaluation("checks_propagating", "waiting", "system", false, selectedChecks, "Required checks are still propagating", new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
-  if (missing.length) return evaluation("required_check_missing", "missing_required", "human", false, selectedChecks, `Required checks are missing: ${missing.join(", ")}`);
+  if (missing.length) return evaluation("required_check_missing", "waiting", "system", false, selectedChecks, `Required checks are still missing: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
   const active = exactSelected.filter((check) => check.status !== "completed");
   if (active.length) return evaluation("checks_queued", "waiting", "system", false, selectedChecks, "Required checks are queued or running", new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
   const failed = exactSelected.filter((check) => check.conclusion === "failure");
@@ -360,7 +360,7 @@ export class CiService {
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.project_id AS projectId, t.project_revision_id AS projectRevisionId, r.repository, r.head_sha AS expectedHeadSha, r.head_tree AS expectedHeadTree, r.base_branch AS baseBranch, r.head_branch AS headBranch, r.pr_number AS pullRequestNumber, r.status AS releaseStatus, r.superseded_at AS releaseSupersededAt, pr.normalized_json AS normalizedJson, pr.state AS revisionState
       FROM forge_tasks t JOIN forge_releases r ON r.id = ? AND r.task_id = t.id AND r.company_id = ? JOIN forge_project_revisions pr ON pr.id = t.project_revision_id
       WHERE t.id = ? AND t.company_id = ?`).get(input.releaseId, input.companyId, input.taskId, input.companyId) as { projectId: string; projectRevisionId: string; repository: string; expectedHeadSha: string; expectedHeadTree: string; baseBranch: string; headBranch: string; pullRequestNumber: number | null; releaseStatus: string; releaseSupersededAt: string | null; normalizedJson: string; revisionState: string } | undefined);
-    if (!context || context.releaseSupersededAt || !["draft", "releasing", "ci_waiting"].includes(context.releaseStatus) || context.pullRequestNumber === null || context.revisionState !== "accepted" || context.expectedHeadSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) throw new CiFailure("stale-input");
+    if (!context || context.releaseSupersededAt || !["draft", "ready", "releasing", "ci_waiting"].includes(context.releaseStatus) || context.pullRequestNumber === null || context.revisionState !== "accepted" || context.expectedHeadSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) throw new CiFailure("stale-input");
     const revision = revisionConfig(context.normalizedJson);
     if (context.repository.toLowerCase() !== revision.repository.toLowerCase()) throw new CiFailure("stale-input");
     const { policy, policyJson, policyHash } = buildCiPolicy(context.projectRevisionId, revision.requiredChecks);

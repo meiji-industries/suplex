@@ -87,6 +87,9 @@ test("treats only validated 404 as an absent branch and validates rate limits", 
   const absent = runnerFor([{ stdout: JSON.stringify({ message: "Not Found", documentation_url: "https://docs.github.com/rest/branches", status: 404 }), stderr: "", error: true }]);
   expect(await createGithubReleasePort({ runner: absent.runner }).getBranchHead({ repository: "acme/forge", branch: "missing" })).toBeNull();
 
+  const missingPullRequest = runnerFor([{ stdout: JSON.stringify({ message: "Not Found", documentation_url: "https://docs.github.com/rest", status: 404 }), stderr: "", error: true }]);
+  await expect(createGithubReleasePort({ runner: missingPullRequest.runner }).getPullRequest({ repository: "acme/forge", number: 7 })).rejects.toMatchObject({ code: "provider-unavailable", summary: "GitHub resource was not found or is inaccessible" });
+
   const malformed = runnerFor([{ stdout: "", stderr: "Not Found", error: true }]);
   await expect(createGithubReleasePort({ runner: malformed.runner }).getBranchHead({ repository: "acme/forge", branch: "missing" })).rejects.toMatchObject({ code: "invalid-provider-response" });
 
@@ -96,6 +99,12 @@ test("treats only validated 404 as an absent branch and validates rate limits", 
     { stdout: JSON.stringify({ resources: { core: { reset } } }), stderr: "" },
   ]);
   await expect(createGithubReleasePort({ runner: limited.runner }).getBranchHead({ repository: "acme/forge", branch: "main" })).rejects.toMatchObject({ code: "provider-rate-limited", retryAt: new Date(reset * 1_000).toISOString() });
+});
+
+test("uses the supported gh command to mark a draft pull request ready", async () => {
+  const value = runnerFor([{ stdout: "✓ Pull request acme/forge#7 is now ready for review\n", stderr: "" }]);
+  await createGithubReleasePort({ runner: value.runner }).markReadyForReview({ repository: "acme/forge", number: 7 });
+  expect(value.calls.map(({ command, args }) => [command, ...args])).toEqual([["gh", "pr", "ready", "7", "--repo", "acme/forge"]]);
 });
 
 test("rejects malformed provider identities and redacts provider failure summaries", async () => {

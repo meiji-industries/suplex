@@ -142,7 +142,10 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
       throw error;
     }
   };
-  const noSupervisorSince = Date.now();
+  // Measures how long the supervisor has been unreachable, not turn runtime:
+  // reset on every successful status response so the startup and finalization
+  // grace windows below stay bounded relative to the last confirmed contact.
+  let noSupervisorSince = Date.now();
   try {
     for (;;) {
       await streamEvents();
@@ -156,6 +159,7 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
       const token = await repo.readLeaseToken(lease.executionId);
       let response: DeveloperSupervisorResponse | null = null;
       try { response = await requestDeveloperSupervisor(root, { version: 1, command: "status", executionId: lease.executionId, leaseToken: token }); } catch { response = null; }
+      if (response) noSupervisorSince = Date.now();
       if (response && "child" in response && response.child) {
         repo.setChildIdentity(lease.executionId, identityForLease(response.child));
         if (startedChildPid !== response.child.pid) { startedChildPid = response.child.pid; await input.onStart?.(response.child.pid, response.child.startTime); }
@@ -170,6 +174,13 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
         const result = await completedResult();
         if (result) return result;
         const latest = repo.get(lease.executionId);
+        // A "failed" snapshot is the supervisor's own declaration that it
+        // could not finish. Release the lease immediately so the worktree's
+        // active-lease slot frees up for a retry.
+        if (snapshot?.status === "failed") {
+          repo.setStatus(lease.executionId, "interrupted", ["reserved", "supervisor_starting", "running", "result_ready", "cancel_requested", "cancelling"]);
+          return { executionId: lease.executionId, resultHash: "", exitCode: null, exitSignal: null, lines: input.onLine ? [] : await readEvents(root), outputTruncated: false, terminal: "interrupted", lastHeartbeatAt: latest?.heartbeatAt ?? lastHeartbeat };
+        }
         // The supervisor persists its own identity before it creates the
         // control socket and launches/persists the child. Treat that whole
         // bounded interval as startup; otherwise a busy host can make a
@@ -190,6 +201,9 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
             continue;
           }
         }
+        // An interrupted turn's process is confirmed gone; release the lease
+        // so the worktree's active-lease slot frees up for a retry.
+        repo.setStatus(lease.executionId, "interrupted", ["reserved", "supervisor_starting", "running", "result_ready", "cancel_requested", "cancelling"]);
         return { executionId: lease.executionId, resultHash: "", exitCode: null, exitSignal: null, lines: input.onLine ? [] : await readEvents(root), outputTruncated: false, terminal: "interrupted", lastHeartbeatAt: latest?.heartbeatAt ?? lastHeartbeat };
       }
       if (response.status === "running" && lastStatus !== "active") { lastStatus = "active"; await input.onMilestone?.("active"); }

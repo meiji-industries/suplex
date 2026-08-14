@@ -20,7 +20,8 @@ test("INV-06 real supervisor writes one bounded, hashed result envelope", async 
   const executionRoot = join(root, "runtime".repeat(9), "developer-executions", `developer_${"a".repeat(24)}`);
   const token = "supervisor-test-token";
   try {
-    const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId: `developer_${"a".repeat(24)}`, command: process.execPath, args: ["--input-type=module", "-e", "for (let i = 0; i < 20; i += 1) { process.stdout.write('out-' + i + '\\n'); process.stderr.write('err-' + i + '\\n'); }"], cwd: process.cwd(), env: {} });
+    const longPrompt = Array.from({ length: 302 }, (_, index) => `word${index}`).join(" ");
+    const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId: `developer_${"a".repeat(24)}`, command: process.execPath, args: ["--input-type=module", "-e", "for (let i = 0; i < 20; i += 1) { process.stdout.write('out-' + i + '\\n'); process.stderr.write('err-' + i + '\\n'); } setTimeout(() => undefined, 1_000);", longPrompt], cwd: process.cwd(), env: {} });
     await mkdir(executionRoot, { recursive: true, mode: 0o700 });
     await writeFile(join(executionRoot, "invocation.json"), JSON.stringify(invocation));
     const source = fileURLToPath(new URL("../src/developer-supervisor.ts", import.meta.url));
@@ -42,6 +43,7 @@ test("INV-06 real supervisor writes one bounded, hashed result envelope", async 
     expect(result, `${stderr} ${snapshot} (exit=${exitCode})`).toBeDefined();
     expect(result?.exitCode).toBe(0);
     expect(result?.outputPath).toBe("events.jsonl");
+    expect(result?.child.argv).toEqual([expect.stringMatching(/^sha256:[a-f0-9]{64}$/)]);
     const events = (await readFile(join(executionRoot, "events.jsonl"), "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line) as { sequence: number; line: string });
     expect(events).toHaveLength(40);
     expect(events.map((event) => event.sequence)).toEqual([...events].sort((left, right) => left.sequence - right.sequence).map((event) => event.sequence));
@@ -51,6 +53,31 @@ test("INV-06 real supervisor writes one bounded, hashed result envelope", async 
     for (let attempt = 0; attempt < 100 && exitCode === null; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 3 }); }
 });
+
+test("supervisor failure after spawn writes a failed snapshot instead of dying silently", async () => {
+  const root = await mkdtemp(join("/tmp", "fg-sup-fail-"));
+  const executionRoot = join(root, "developer-executions", `developer_${"b".repeat(24)}`);
+  try {
+    const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId: `developer_${"b".repeat(24)}`, command: join(root, "missing-binary"), args: ["run"], cwd: root, env: {} });
+    await mkdir(executionRoot, { recursive: true, mode: 0o700 });
+    await writeFile(join(executionRoot, "invocation.json"), JSON.stringify(invocation));
+    const source = fileURLToPath(new URL("../src/developer-supervisor.ts", import.meta.url));
+    const child = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "pipe", "pipe", "pipe"] });
+    let exitCode: number | null = null;
+    child.on("exit", (code) => { exitCode = code; });
+    const tokenPipe = child.stdio[3];
+    if (!tokenPipe || typeof tokenPipe === "string" || !("end" in tokenPipe)) throw new Error("supervisor token pipe unavailable");
+    tokenPipe.end("supervisor-test-token");
+    let snapshot: { status?: string } = {};
+    for (let attempt = 0; attempt < 200 && snapshot.status !== "failed"; attempt += 1) {
+      try { snapshot = JSON.parse(await readFile(join(executionRoot, "supervisor.json"), "utf8")) as { status?: string }; } catch { /* not yet written */ }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(snapshot.status).toBe("failed");
+    for (let attempt = 0; attempt < 100 && exitCode === null; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(exitCode).toBe(1);
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 3 }); }
+}, 20_000);
 
 test("INV-11/INV-12 PID reuse during cancellation is ambiguous, never exited", async () => {
   const child = { pid: 42, processGroup: 42, startTime: "original", executable: "/usr/bin/codex", argv: ["codex", "exec"], ownerUid: 501 };

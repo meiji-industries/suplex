@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import { cn } from "../../lib/utils.js";
 import { ProfileAvatar } from "./profile-avatar.js";
 import { Timeline, TimelineContent, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "../ui/timeline.js";
+import { taskIsProcessing } from "./task-status.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
+import type { IssuePhase } from "../../../issue-phases.js";
 
 const stages = [
   { step: 1, title: "Plan" },
@@ -30,7 +32,7 @@ function elapsedLabel(prefix: "Done in" | "In progress ·", startedAt: string, f
 }
 
 function stageStart(timeline: ProgressEvent[], minimumStep: number): string | undefined {
-  return timeline.find((event) => typeof event.metadata.phase === "string" && taskProgressStep(event.metadata.phase, false) >= minimumStep)?.createdAt;
+  return timeline.find((event) => typeof event.metadata.phase === "string" && (minimumStep < 3 || event.metadata.phase !== "delivery_blocked") && taskProgressStep(event.metadata.phase, false) >= minimumStep)?.createdAt;
 }
 
 function activeDuration(startedAt: string, now: number): string {
@@ -43,13 +45,15 @@ function activeAgent(phase: string, invocations: AgentInvocation[]): AgentInvoca
   return [...invocations].reverse().find((invocation) => invocation.role === role && ["starting", "running", "cancelling"].includes(invocation.status));
 }
 
-export function TaskProgress({ phase, allowedCommands, createdAt, updatedAt, timeline, agentInvocations, activeCapacity, developerLiveness }: { phase: string; allowedCommands: string[]; createdAt: string; updatedAt: string; timeline: ProgressEvent[]; agentInvocations: AgentInvocation[]; activeCapacity?: ActiveCapacity | undefined; developerLiveness?: DeveloperLiveness | undefined }) {
+export function TaskProgress({ phase, allowedCommands, createdAt, updatedAt, timeline, agentInvocations, activeCapacity, developerLiveness }: { phase: IssuePhase; allowedCommands: string[]; createdAt: string; updatedAt: string; timeline: ProgressEvent[]; agentInvocations: AgentInvocation[]; activeCapacity?: ActiveCapacity | undefined; developerLiveness?: DeveloperLiveness | undefined }) {
   const currentStep = taskProgressStep(phase, allowedCommands.includes("retry_development"));
   const terminal = ["accepted", "manual_merge", "done", "cancelled"].includes(phase);
   const stageStarts: Array<string | undefined> = [createdAt, stageStart(timeline, 2), stageStart(timeline, 3)];
   const [now, setNow] = useState(() => Date.now());
   const buildLive = phase === "development" && Boolean(developerLiveness?.lastHeartbeatAt) && ["starting", "running", "active", "reconnecting", "cancellation_requested", "cancelling"].includes(developerLiveness?.status ?? "") && now - Date.parse(developerLiveness!.lastHeartbeatAt!) <= 15_000;
-  const ticking = !terminal && (currentStep !== 2 || buildLive);
+  const processing = taskIsProcessing({ phase, agentInvocations, capacityStatus: activeCapacity?.status });
+  const spinning = phase === "development" ? buildLive : processing;
+  const ticking = !terminal && !["delivery_blocked", "blocked", "failed"].includes(phase) && (currentStep !== 2 || buildLive);
   useEffect(() => {
     if (!ticking) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
@@ -80,7 +84,7 @@ export function TaskProgress({ phase, allowedCommands, createdAt, updatedAt, tim
                   status === "current" && "bg-primary text-primary-foreground",
                   status === "upcoming" && "bg-muted text-muted-foreground",
                 )}>
-                  {status === "completed" ? <CheckIcon className="size-3.5" /> : status === "current" && ticking ? <LoaderCircle className="size-3 animate-spin" /> : <CircleIcon className="size-3" />}
+                  {status === "completed" ? <CheckIcon className="size-3.5" /> : status === "current" && spinning ? <LoaderCircle className="size-3 animate-spin" /> : <CircleIcon className="size-3" />}
                 </TimelineIndicator>
               </TimelineHeader>
               <TimelineContent className="text-xs">

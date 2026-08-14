@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,7 +8,7 @@ import { expect, test } from "vitest";
 
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { deriveDeveloperExecutionId } from "../src/developer-execution-leases.js";
+import { DeveloperExecutionLeaseRepository, deriveDeveloperExecutionId } from "../src/developer-execution-leases.js";
 import { DeveloperSupervisorInvocationSchema, DeveloperSupervisorResultSchema } from "../src/developer-supervisor-protocol.js";
 import { runDeveloperTurn } from "../src/developer-turn-runner.js";
 
@@ -99,5 +100,43 @@ test("INV-01/INV-02 retry starts the same turn after worker loss before supervis
     const spooled = (await readFile(join(config.runtimeRoot, "developer-executions", executionId, "events.jsonl"), "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line) as { stream: string; line: string }).filter((event) => event.stream === "stdout").map((event) => event.line);
     expect(streamed).toEqual(spooled);
     expect((await readFile(launchCountPath, "utf8")).trim().split(/\r?\n/)).toHaveLength(1);
+  } finally { database.close(); await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); }
+});
+
+test("a failed supervisor snapshot ends the turn interrupted and releases the worktree lease for retry", async () => {
+  const root = await mkdtemp(join("/tmp", "fg-fail-snap-"));
+  const config = createTestConfig(root);
+  const database = new ForgeDatabase(config.databasePath);
+  const workflowId = "workflow_failed_snapshot";
+  const executionId = deriveDeveloperExecutionId(workflowId, 1, 1, "implementation");
+  const retryExecutionId = deriveDeveloperExecutionId(workflowId, 1, 2, "implementation");
+  const worktreePath = join(root, "worktree");
+  try {
+    await mkdir(worktreePath, { recursive: true });
+    const now = new Date().toISOString();
+    database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company_failed_snapshot', 'Company', 'active', ?)").run(now);
+      db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, allowed_profiles_json, role_defaults_json, status, created_at, updated_at) VALUES ('project_failed_snapshot', 'company_failed_snapshot', 'Project', ?, ?, 'acme/forge', 'main', 'main', '', '', '[]', '[]', '{}', 'active', ?, ?)").run(root, root, now, now);
+      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief_failed_snapshot', 'company_failed_snapshot', 'task-brief', 'brief.md', 'text/markdown', 0, ?, 'company_failed_snapshot/brief.bin', ?)").run("0".repeat(64), now);
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_profiles_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task_failed_snapshot', 'company_failed_snapshot', 'project_failed_snapshot', 'Task', 'brief_failed_snapshot', '[]', '{}', 0, ?, 'revision_failed_snapshot', 'failed-snapshot-key', ?, ?)").run(workflowId, now, now);
+      // Only one execution may be active per task; the retry row mirrors the
+      // real aftermath where the first attempt already ended blocked.
+      for (const [id, attempt, status] of [[executionId, 1, "blocked"], [retryExecutionId, 2, "starting"]] as const) {
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, 'task_failed_snapshot', 'company_failed_snapshot', ?, 1, ?, ?, 'forge/issue/task_failed_snapshot', ?, ?, ?, ?)").run(id, workflowId, attempt, status, worktreePath, "a".repeat(40), now, now);
+      }
+    });
+    const supervisorIdentity = { pid: 1, processGroup: 1, startTime: "start", executable: "/bin/false", argv: ["/bin/false"], ownerUid: null };
+    const result = await runDeveloperTurn({
+      database, config, executionId, developerAttempt: 1, planRevision: 1, turnKind: "implementation", companyId: "company_failed_snapshot", taskId: "task_failed_snapshot", workflowId, canonicalWorktreePath: worktreePath, worktreeIdentityHash: "f".repeat(64), command: process.execPath, args: ["-e", "setTimeout(() => undefined, 50)"], cwd: root, env: {},
+      spawnSupervisor: () => {
+        writeFileSync(join(config.runtimeRoot, "developer-executions", executionId, "supervisor.json"), `${JSON.stringify({ version: 1, executionId, status: "failed", supervisor: supervisorIdentity, child: null, heartbeatAt: new Date().toISOString() })}\n`);
+        return undefined as unknown as ReturnType<NonNullable<Parameters<typeof runDeveloperTurn>[0]["spawnSupervisor"]>>;
+      },
+    });
+    expect(result.terminal).toBe("interrupted");
+    const repo = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot);
+    expect(repo.get(executionId)?.status).toBe("interrupted");
+    const retry = repo.reserve({ executionId: retryExecutionId, companyId: "company_failed_snapshot", taskId: "task_failed_snapshot", workflowId, attempt: 2, turnKind: "implementation", canonicalWorktreePath: worktreePath, worktreeIdentityHash: "f".repeat(64) });
+    expect(retry.created).toBe(true);
   } finally { database.close(); await rm(root, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }); }
 });

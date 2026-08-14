@@ -6,6 +6,7 @@ import type { ForgeConfig } from "../../config.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { ProjectService } from "../../projects.js";
 import type { TaskService } from "../../tasks.js";
+import type { ReleaseService } from "../../github-release.js";
 import type { CapacityManager } from "../../capacity.js";
 import { sessionUser } from "../session.js";
 import administration from "./administration.js";
@@ -20,6 +21,7 @@ export interface AuthenticatedRoutesOptions {
   config?: ForgeConfig;
   projects?: ProjectService;
   tasks?: TaskService;
+  release?: ReleaseService;
   attention?: AttentionService;
   database?: ForgeDatabase;
   capacity?: CapacityManager;
@@ -40,7 +42,7 @@ const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app
   await app.register(companies, { auth: options.auth });
   await app.register(administration, { auth: options.auth, ...(options.config ? { config: options.config } : {}), ...(options.projects ? { projects: options.projects } : {}), ...(options.attention ? { attention: options.attention } : {}), ...(options.database ? { database: options.database } : {}), ...(options.capacity ? { capacity: options.capacity } : {}) });
   if (options.projects) await app.register(projects, { projects: options.projects });
-  if (options.tasks) await app.register(tasks, { tasks: options.tasks });
+  if (options.tasks) await app.register(tasks, { tasks: options.tasks, ...(options.release ? { release: options.release } : {}) });
   if (options.attention) await app.register(attention, { attention: options.attention });
 };
 

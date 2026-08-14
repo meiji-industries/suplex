@@ -1,5 +1,6 @@
 import { Badge } from "../ui/badge.js";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion.js";
+import { CommitSha } from "./commit-sha.js";
 import { RevisionIdentity } from "./revision-identity.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
 import type { ReactElement } from "react";
@@ -13,11 +14,11 @@ function artifactLink(taskId: string, artifactId: string, label: string): ReactE
   return <a className="break-all text-primary underline underline-offset-2" href={`/api/tasks/${taskId}/review-artifacts/${artifactId}`} target="_blank" rel="noreferrer">{label}</a>;
 }
 
-function revisionValue(label: string, value: string | null, abbreviated: string | null): ReactElement | null {
-  return value && abbreviated ? <span className="text-muted-foreground">{label}: <code title={value}>{abbreviated}</code></span> : null;
+function revisionValue(label: string, value: string | null, abbreviated: string | null, repository?: string | undefined): ReactElement | null {
+  return value && abbreviated ? <span className="text-muted-foreground">{label}: <CommitSha sha={value} abbreviated={abbreviated} repository={repository} /></span> : null;
 }
 
-function reviewRow(taskId: string, review: Review, current: boolean): ReactElement {
+function reviewRow(taskId: string, review: Review, current: boolean, repository?: string | undefined): ReactElement {
   return (
     <li className="min-w-0 space-y-2 py-2" key={`review:${review.id}`}>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -28,7 +29,7 @@ function reviewRow(taskId: string, review: Review, current: boolean): ReactEleme
         {review.successorReviewId ? <span className="text-[11px] text-muted-foreground">superseded by {review.successorReviewId.slice(0, 12)}</span> : null}
       </div>
       <p className="whitespace-pre-wrap break-words text-[12px]">{review.summary}</p>
-      <RevisionIdentity revision={review} />
+      <RevisionIdentity revision={review} repository={repository} />
       <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[11px]">
         {artifactLink(taskId, review.opinionArtifactId, "opinion")}
         {artifactLink(taskId, review.evidenceArtifactId, "evidence")}
@@ -55,7 +56,7 @@ function reviewAttemptRow(taskId: string, attempt: ReviewAttempt): ReactElement 
   );
 }
 
-function repairRow(taskId: string, repair: RepairAttempt): ReactElement {
+function repairRow(taskId: string, repair: RepairAttempt, repository?: string | undefined): ReactElement {
   return (
     <li className="min-w-0 space-y-1 border-l pl-2 py-2 text-[11px]" key={`repair:${repair.id}`}>
       <div className="flex flex-wrap items-center gap-2">
@@ -65,9 +66,9 @@ function repairRow(taskId: string, repair: RepairAttempt): ReactElement {
       </div>
       <p className="whitespace-pre-wrap break-words text-muted-foreground">{repair.summary ?? "Repair completed."}</p>
       <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
-        {revisionValue("prior head", repair.priorCommit, repair.priorCommitAbbrev)}
+        {revisionValue("prior head", repair.priorCommit, repair.priorCommitAbbrev, repository)}
         {revisionValue("prior tree", repair.priorTree, repair.priorTreeAbbrev)}
-        {revisionValue("result head", repair.resultCommit, repair.resultCommitAbbrev)}
+        {revisionValue("result head", repair.resultCommit, repair.resultCommitAbbrev, repository)}
         {revisionValue("result tree", repair.resultTree, repair.resultTreeAbbrev)}
       </div>
       <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
@@ -89,7 +90,7 @@ function eventRank(event: LineageEvent): number {
   return event.value.supersedesReviewId ? 3 : 1;
 }
 
-export function ReviewLineage({ taskId, lineage }: { taskId: string; lineage: Lineage }): ReactElement {
+export function ReviewLineage({ taskId, lineage, repository }: { taskId: string; lineage: Lineage; repository?: string | undefined }): ReactElement {
   const reviews = [lineage.currentReview, ...lineage.priorReviews].filter((review): review is Review => Boolean(review));
   const events: LineageEvent[] = [
     ...reviews.map((review) => ({ kind: "review" as const, createdAt: review.createdAt, value: review })),
@@ -103,7 +104,7 @@ export function ReviewLineage({ taskId, lineage }: { taskId: string; lineage: Li
         <AccordionItem value="review-lineage">
           <AccordionTrigger><span><span id="review-lineage-heading">Review lineage</span> · {lineage.reviewAttempts.length} attempts · {lineage.repairAttempts.length} repairs</span></AccordionTrigger>
           <AccordionContent>
-            {events.length ? <ol className="min-w-0 divide-y">{events.map((event) => event.kind === "review" ? reviewRow(taskId, event.value, event.value.id === lineage.currentReview?.id) : event.kind === "attempt" ? reviewAttemptRow(taskId, event.value) : repairRow(taskId, event.value))}</ol> : <p className="text-[12px] text-muted-foreground">No completed review yet.</p>}
+            {events.length ? <ol className="min-w-0 divide-y">{events.map((event) => event.kind === "review" ? reviewRow(taskId, event.value, event.value.id === lineage.currentReview?.id, repository) : event.kind === "attempt" ? reviewAttemptRow(taskId, event.value) : repairRow(taskId, event.value, repository))}</ol> : <p className="text-[12px] text-muted-foreground">No completed review yet.</p>}
           </AccordionContent>
         </AccordionItem>
       </Accordion>

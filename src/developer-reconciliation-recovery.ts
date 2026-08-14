@@ -18,15 +18,26 @@ function deploymentVersion(config: ForgeConfig, buildId: string) {
   return { deploymentName: runtimeIdentifiers(config.installationId).ownerLabel, buildId };
 }
 
-export async function activateLocalWorkerDeployment(connection: NativeConnection, config: ForgeConfig, buildId: string, identity: string): Promise<void> {
+export async function activateLocalWorkerDeployment(connection: NativeConnection, config: ForgeConfig, buildId: string, identity: string, retryDelayMs = 500, timeoutMs = 30_000): Promise<void> {
   if (config.temporalTarget !== "local") return;
   const version = deploymentVersion(config, buildId);
-  await connection.withDeadline(Date.now() + 10_000, () => connection.workflowService.setWorkerDeploymentCurrentVersion({
-    namespace: config.temporalNamespace,
-    deploymentName: version.deploymentName,
-    buildId: version.buildId,
-    identity,
-  }));
+  // The Temporal server registers a deployment version asynchronously after the
+  // worker's first poll, so activation right after startup can race it; retry.
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    try {
+      await connection.withDeadline(Date.now() + 10_000, () => connection.workflowService.setWorkerDeploymentCurrentVersion({
+        namespace: config.temporalNamespace,
+        deploymentName: version.deploymentName,
+        buildId: version.buildId,
+        identity,
+      }));
+      return;
+    } catch (error) {
+      if (Date.now() >= deadline) throw error;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
 }
 
 export async function routeWorkflowToCurrentDeployment(connection: NativeConnection, config: ForgeConfig, workflowId: string, identity: string): Promise<void> {

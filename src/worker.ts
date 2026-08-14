@@ -46,6 +46,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   let connection: NativeConnection | undefined;
   let worker: Worker | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
+  let workerRun: Promise<void> | undefined;
   let creationRecovery: Promise<void> | undefined;
   let deliveryRecovery: Promise<number> | undefined;
   let shutdown: (() => void) | undefined;
@@ -72,7 +73,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       shutdownForceTime: "20 seconds",
     });
     const failure: { error?: unknown } = {};
-    const workerRun = worker.run().catch((error: unknown) => {
+    workerRun = worker.run().catch((error: unknown) => {
       failure.error = error;
       throw error;
     });
@@ -129,13 +130,16 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
     }
     await creationRecovery;
     await deliveryRecovery;
-    worker?.shutdown();
+    // Cleanup must never mask the original startup error: drain the worker
+    // before closing the connection, and swallow secondary failures.
+    try { worker?.shutdown(); } catch { /* worker already stopped */ }
+    await workerRun?.catch(() => undefined);
     database.unregisterWorker(workerId);
     if (shutdown) {
       process.removeListener("SIGTERM", shutdown);
       process.removeListener("SIGINT", shutdown);
     }
-    await connection?.close();
+    await connection?.close().catch(() => undefined);
     database.close();
     throw error;
   }

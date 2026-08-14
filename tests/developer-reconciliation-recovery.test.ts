@@ -47,3 +47,21 @@ test("local deployment activation and legacy workflow routing use Worker Deploym
     } },
   ]);
 });
+
+test("local deployment activation retries until the server registers the version", async () => {
+  let attempts = 0;
+  const connection = {
+    withDeadline: async (_deadline: number, operation: () => Promise<unknown>) => operation(),
+    workflowService: {
+      setWorkerDeploymentCurrentVersion: async () => {
+        attempts += 1;
+        if (attempts < 3) throw new Error("deployment version not found");
+      },
+    },
+  } as unknown as NativeConnection;
+  const config = { temporalTarget: "local", temporalNamespace: "forge-dev", installationId: "test-installation" } as ForgeConfig;
+
+  await activateLocalWorkerDeployment(connection, config, "build-1", "worker-1", 1);
+
+  expect(attempts).toBe(3);
+});

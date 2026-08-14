@@ -197,23 +197,25 @@ export function applyMigrations(db: Database.Database, folder: string): void {
     hash text NOT NULL,
     created_at numeric
   )`);
-  const applied = db.prepare("SELECT hash, created_at FROM __drizzle_migrations").all() as Array<{ hash: string; created_at: number }>;
-  const appliedByTimestamp = new Map(applied.map((migration) => [migration.created_at, migration.hash]));
-  const appliedByHash = new Map(applied.map((migration) => [migration.hash, migration.created_at]));
-
-  for (const migration of migrations) {
-    const hashAtTimestamp = appliedByTimestamp.get(migration.createdAt);
-    const timestampForHash = appliedByHash.get(migration.hash);
-    if (hashAtTimestamp !== undefined && hashAtTimestamp !== migration.hash) {
-      throw new Error(`Applied migration timestamp has different SQL: ${migration.tag}`);
-    }
-    if (timestampForHash !== undefined && timestampForHash !== migration.createdAt) {
-      throw new Error(`Applied migration hash has a different timestamp: ${migration.tag}`);
-    }
-  }
-
   const insert = db.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
+  // The applied set must be read inside the immediate (write-locked) transaction:
+  // the server and worker start concurrently and open the same database file.
   db.transaction(() => {
+    const applied = db.prepare("SELECT hash, created_at FROM __drizzle_migrations").all() as Array<{ hash: string; created_at: number }>;
+    const appliedByTimestamp = new Map(applied.map((migration) => [migration.created_at, migration.hash]));
+    const appliedByHash = new Map(applied.map((migration) => [migration.hash, migration.created_at]));
+
+    for (const migration of migrations) {
+      const hashAtTimestamp = appliedByTimestamp.get(migration.createdAt);
+      const timestampForHash = appliedByHash.get(migration.hash);
+      if (hashAtTimestamp !== undefined && hashAtTimestamp !== migration.hash) {
+        throw new Error(`Applied migration timestamp has different SQL: ${migration.tag}`);
+      }
+      if (timestampForHash !== undefined && timestampForHash !== migration.createdAt) {
+        throw new Error(`Applied migration hash has a different timestamp: ${migration.tag}`);
+      }
+    }
+
     for (const migration of migrations) {
       if (appliedByTimestamp.get(migration.createdAt) === migration.hash) continue;
       const sql = readFileSync(`${folder}/${migration.tag}.sql`, "utf8");
@@ -222,7 +224,7 @@ export function applyMigrations(db: Database.Database, folder: string): void {
       }
       insert.run(migration.hash, migration.createdAt);
     }
-  })();
+  }).immediate();
 }
 
 function isCleanPrefix(expected: ExpectedMigration[], applied: AppliedMigration[]): boolean {

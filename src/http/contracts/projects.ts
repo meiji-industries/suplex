@@ -29,7 +29,7 @@ export const ProjectBodySchema = z.object({
 }).strict();
 
 export const AgentBodySchema = z.object({ name: z.string().min(1), role: z.enum(["analyst", "implementer", "reviewer"]), avatarSeed: z.string().regex(/^[a-f0-9]{32}$/).optional(), profileId: z.string().min(1) }).strict();
-export const AgentResponseSchema = z.object({ id: z.string(), name: z.string(), role: z.enum(["analyst", "implementer", "reviewer"]), avatarSeed: z.string(), profileId: z.string(), activeCount: z.number().int().nonnegative(), createdAt: z.string(), updatedAt: z.string() });
+export const AgentResponseSchema = z.object({ id: z.string(), name: z.string(), role: z.enum(["analyst", "implementer", "reviewer"]), avatarSeed: z.string(), profileId: z.string(), activeCount: z.number().int().nonnegative(), lastSeenAt: z.string(), createdAt: z.string(), updatedAt: z.string() });
 export const AgentListResponseSchema = z.object({ agents: z.array(AgentResponseSchema) });
 export const AgentListQuerySchema = z.object({ companyId: z.string().min(1).optional() });
 export type AgentResponse = z.infer<typeof AgentResponseSchema>;

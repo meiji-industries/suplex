@@ -129,7 +129,7 @@ test("updates every editable profile setting", async () => {
   }
 });
 
-test("creates a minimal draft from a GitHub URL under the configured Forge roots", async () => {
+test("clones and activates a GitHub repository under the configured Forge roots", async () => {
   const value = await fixture();
   const provisioned: Array<{ cloneUrl: string; repository: string; repositoryPath: string; worktreeRoot: string }> = [];
   const projects = new ProjectService(value.database, value.auth, createTestConfig(value.root, {
@@ -137,7 +137,7 @@ test("creates a minimal draft from a GitHub URL under the configured Forge roots
     repositoryRoot: join(value.root, "repositories"),
     worktreeRoot: value.worktreeRoot,
   }), {
-    localRepository,
+    localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "meiji-industries/sampler", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } },
     github,
     repositoryProvisioner: { async ensure(coordinate) { provisioned.push(coordinate); await mkdir(coordinate.repositoryPath, { recursive: true }); await mkdir(coordinate.worktreeRoot, { recursive: true }); await writeFile(join(coordinate.repositoryPath, "mise.toml"), "[tasks.setup]\nrun = \"cargo fetch --locked\"\n[tasks.test]\nrun = \"cargo test\"\n"); } },
   });
@@ -152,7 +152,8 @@ test("creates a minimal draft from a GitHub URL under the configured Forge roots
       targetBranch: "main",
       setupCommand: "mise run setup",
       verificationCommand: "mise run test",
-      status: "draft",
+      status: "active",
+      configurationRevision: 1,
       requiredChecks: ["Tests / unit"],
       allowedProfileIds: [value.profileId],
       roleDefaults: { lead: value.profileId, developer: value.profileId },

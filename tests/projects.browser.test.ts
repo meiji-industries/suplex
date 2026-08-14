@@ -42,7 +42,7 @@ function responseCookie(response: { headers: OutgoingHttpHeaders }, name: string
   return { name: cookieName ?? name, value: cookieValue ?? "" };
 }
 
-test("projects desktop flow activates valid configuration and shows actionable validation findings", async () => {
+test("projects desktop flow auto-activates valid clones and shows actionable validation findings", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-project-browser-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
@@ -105,7 +105,7 @@ test("projects desktop flow activates valid configuration and shows actionable v
       await page.getByRole("button", { name: "Create project" }).click();
       await page.getByText("forge", { exact: true }).waitFor();
       const forgeProject = page.locator("article").filter({ hasText: "forge" });
-      await forgeProject.locator('[data-slot="badge"][data-status="draft"]', { hasText: "Draft" }).waitFor();
+      await forgeProject.locator('[data-slot="badge"][data-status="active"]', { hasText: "active" }).waitFor();
       await page.getByRole("button", { name: "Configure" }).click();
       await page.getByText("Ready", { exact: true }).waitFor();
       expect(await page.getByLabel("Base branch").inputValue()).toBe("main");
@@ -119,7 +119,7 @@ test("projects desktop flow activates valid configuration and shows actionable v
       await page.getByRole("button", { name: "Save settings" }).click();
       await page.getByRole("button", { name: "Activate" }).click();
       await forgeProject.getByText("active", { exact: true }).waitFor();
-      await forgeProject.getByText("revision 1", { exact: true }).waitFor();
+      await forgeProject.getByText("revision 2", { exact: true }).waitFor();
       await page.getByRole("button", { name: "New Project", exact: true }).click();
       await page.getByLabel("GitHub repository URL", { exact: true }).fill("https://token@github.com/acme/unsafe.git");
       await page.getByRole("button", { name: "Create project" }).click();

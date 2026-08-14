@@ -710,7 +710,7 @@ export class ProjectService {
     } catch {}
     const profiles = this.listProfiles(actorUserId).slice(0, 16);
     const defaultProfileId = profiles[0]?.id;
-    return this.mutateProject(actorUserId, companyId, {
+    const draft = await this.mutateProject(actorUserId, companyId, {
       name: coordinate.name,
       repositoryPath,
       worktreeRoot,
@@ -723,6 +723,12 @@ export class ProjectService {
       allowedProfileIds: profiles.map((profile) => profile.id),
       roleDefaults: defaultProfileId ? { lead: defaultProfileId, developer: defaultProfileId } : {},
     }, false, undefined, true);
+    try {
+      return await this.activateProject(actorUserId, draft.id);
+    } catch (error) {
+      if (error instanceof ProjectFailure) return draft;
+      throw error;
+    }
   }
 
   async updateProject(actorUserId: string, projectId: string, input: ProjectInput): Promise<Project> {

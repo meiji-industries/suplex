@@ -20,7 +20,7 @@ const labels: Record<DeveloperRecoveryView["status"], string> = {
   failed: "Failed",
 };
 
-export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, busy, isAdmin, onAction, children }: { taskId: string; recovery: DeveloperRecoveryView | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction) => Promise<void>; children?: ReactNode }): ReactElement | null {
+export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, busy, isAdmin, onAction, developmentStatus, children }: { taskId: string; recovery: DeveloperRecoveryView | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction) => Promise<void>; developmentStatus?: ReactNode; children?: ReactNode }): ReactElement | null {
   if (!recovery) return null;
   const ambiguous = recovery.status === "ownership_ambiguous";
   const interrupted = recovery.status === "interrupted";
@@ -29,10 +29,11 @@ export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, bus
   const recoveryCommands = ambiguous ? allowedCommands.filter((command) => command === "verify_developer_ownership") : allowedCommands;
   const hasActions = recoveryCommands.includes("retry_development") || recoveryCommands.includes("cancel_development") || (isAdmin && recoveryCommands.includes("verify_developer_ownership"));
   if (recovery.status === "active" && !hasActions) return null;
+  const summary = ambiguous ? "Forge cannot prove ownership of the previous Implementer process. Inspect the host process and worktree, stop it outside Forge if necessary, then recheck ownership." : recovery.status === "starting" ? null : recovery.summary;
   return <Card data-developer-recovery role="alert" size="sm">
       <CardHeader>
-        <CardTitle>Development <Badge variant={attention ? "destructive" : "secondary"}>{labels[recovery.status]}</Badge></CardTitle>
-        <CardDescription>{ambiguous ? "Forge cannot prove ownership of the previous Implementer process. Inspect the host process and worktree, stop it outside Forge if necessary, then recheck ownership." : recovery.summary ?? "Forge is tracking the Implementer turn."}</CardDescription>
+        <CardTitle className="flex flex-wrap items-center gap-2">Development <Badge variant={attention ? "destructive" : "secondary"}>{labels[recovery.status]}</Badge>{developmentStatus}</CardTitle>
+        {summary ? <CardDescription>{summary}</CardDescription> : null}
       </CardHeader>
       <CardContent>
         {children}

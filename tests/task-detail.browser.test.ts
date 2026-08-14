@@ -233,8 +233,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await developmentRun.locator("svg.animate-spin").count()).toBe(1);
       database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('receipt-browser-development', ?, 1, 1, 'command_finished', 1, 'browser-command', ?, 'pnpm test browser\ndiff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n Forge\n+Browser proof', 0, NULL, NULL, 'browser-command')").run(developerExecutionId, new Date().toISOString()));
       await developmentRun.getByText("Ran (exit 0): pnpm test browser", { exact: true }).waitFor();
-      expect(await developmentRun.locator("details:not([open])").count()).toBe(1);
-      await developmentRun.getByText("Output", { exact: true }).click();
+      expect(await developmentRun.locator("details[open]").count()).toBe(1);
       const shellOutput = developmentRun.locator("[data-shell-output]");
       await shellOutput.locator("diffs-container").waitFor();
       await expect.poll(async () => new Set(await shellOutput.locator("span").evaluateAll((elements) => elements.map((element) => getComputedStyle(element).color))).size).toBeGreaterThan(1);
@@ -243,7 +242,12 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await page.evaluate(() => document.documentElement.classList.add("dark"));
       await expect.poll(() => addedLine.evaluate((element) => getComputedStyle(element).color)).not.toBe(lightTokenColor);
       await page.evaluate(() => document.documentElement.classList.remove("dark"));
-      database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('receipt-browser-update', ?, 1, 2, 'agent_update', 1, 'browser-update', ?, 'Updated the browser proof.', NULL, NULL, NULL, 'browser-update')").run(developerExecutionId, new Date().toISOString()));
+      database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('receipt-browser-follow-up', ?, 1, 2, 'command_finished', 1, 'browser-follow-up', ?, 'pnpm test browser follow-up\nfollow-up output', 0, NULL, NULL, 'browser-follow-up')").run(developerExecutionId, new Date().toISOString()));
+      await developmentRun.getByText("Ran (exit 0): pnpm test browser follow-up", { exact: true }).waitFor();
+      expect(await developmentRun.locator("details[open]").count()).toBe(1);
+      expect(await developmentRun.locator("details:not([open])").count()).toBe(1);
+      await developmentRun.locator("details[open]").getByText("follow-up output", { exact: true }).waitFor();
+      database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('receipt-browser-update', ?, 1, 3, 'agent_update', 1, 'browser-update', ?, 'Updated the browser proof.', NULL, NULL, NULL, 'browser-update')").run(developerExecutionId, new Date().toISOString()));
       await developmentRun.getByText("Developer activity", { exact: true }).waitFor();
       await developmentRun.getByText("Agent update: Updated the browser proof.", { exact: true }).waitFor();
       const elapsedBefore = await developmentRun.locator(".tabular-nums").textContent();

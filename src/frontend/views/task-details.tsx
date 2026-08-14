@@ -35,6 +35,7 @@ import { Check, Copy, Ellipsis, ExternalLink, GitPullRequest, LoaderCircle } fro
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
 type DevelopmentExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; currentStep: number | null };
+type DevelopmentState = { status: string; execution: DevelopmentExecution | null };
 type DeveloperEventState = { executionId: string | null; events: DeveloperExecutionEventView[]; terminalSteps: Record<number, "completed" | "blocked"> };
 
 function NextAction({ value }: { value: string | null }): ReactElement {
@@ -48,10 +49,10 @@ export function formatDuration(milliseconds: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function DeveloperActivityLine({ event }: { event: DeveloperExecutionEventView }): ReactElement {
+function DeveloperActivityLine({ event, open }: { event: DeveloperExecutionEventView; open: boolean }): ReactElement {
   const [headline, ...detail] = event.summary.split("\n");
   const label = event.kind === "agent_update" ? "Agent update: " : event.kind === "tool_call" ? "Tool call: " : "";
-  return <li className="break-words"><span className={label ? "font-medium text-foreground" : undefined}>{label}</span>{headline}{detail.length ? <details className="mt-1"><summary className="cursor-pointer">{event.kind === "command_finished" || event.kind === "test_result" ? "Output" : "Details"}</summary><ShellOutput value={detail.join("\n")} /></details> : null}</li>;
+  return <li className="break-words"><span className={label ? "font-medium text-foreground" : undefined}>{label}</span>{headline}{detail.length ? <details className="mt-1" open={open}><summary className="cursor-pointer">{event.kind === "command_finished" || event.kind === "test_result" ? "Output" : "Details"}</summary><ShellOutput value={detail.join("\n")} /></details> : null}</li>;
 }
 
 function ShellOutput({ value }: { value: string }): ReactElement {
@@ -62,8 +63,19 @@ function ShellOutput({ value }: { value: string }): ReactElement {
   return <div className="mt-1 max-h-48 overflow-auto" data-shell-output><File file={file} options={options} disableWorkerPool /></div>;
 }
 
-function DevelopmentRun({ taskId, onStatus, onEvents, onRefresh }: { taskId: string; onStatus: (status: string, execution: DevelopmentExecution | null) => void; onEvents: (executionId: string, events: DeveloperExecutionEventView[]) => void; onRefresh: () => Promise<void> }): ReactElement | null {
-  const [state, setState] = useState<{ status: string; execution: DevelopmentExecution | null }>({ status: "idle", execution: null });
+function DevelopmentStatus({ state, now, inline = false }: { state: DevelopmentState; now: number; inline?: boolean }): ReactElement {
+  const execution = state.execution;
+  const active = ["starting", "running", "cancelling"].includes(state.status);
+  const freshnessAt = execution?.lastHeartbeatAt ?? execution?.startedAt;
+  const stale = active && Boolean(freshnessAt && now - Date.parse(freshnessAt) > 15_000);
+  const label = stale ? "No recent heartbeat" : state.status === "starting" ? "In Progress" : state.status === "result_pending_claim" ? "Finishing development" : state.status === "running" ? "Running" : state.status === "cancelling" ? "Cancelling" : state.status === "queued" ? "Queued" : state.status === "rate_limited" ? "Rate limited" : state.status === "completed" ? "Completed" : state.status === "blocked" ? "Blocked" : state.status === "failed" ? "Failed" : state.status;
+  const elapsed = execution ? formatDuration((execution.finishedAt ? Date.parse(execution.finishedAt) : now) - Date.parse(execution.startedAt)) : "—";
+  const content = <><span className="flex items-center gap-1.5" role="status" aria-live="polite">{active && Boolean(execution?.lastHeartbeatAt) && !stale ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : null}<span>{label}</span>{execution?.currentStep ? <span className="text-muted-foreground">Step {execution.currentStep}</span> : null}</span><span className="tabular-nums text-muted-foreground">{elapsed}</span></>;
+  return inline ? <span className="inline-flex items-center gap-x-3 text-xs font-normal">{content}</span> : <div className="flex flex-wrap items-center gap-x-3 gap-y-1">{content}</div>;
+}
+
+function DevelopmentRun({ taskId, onStatus, onEvents, onRefresh, compact = false }: { taskId: string; onStatus: (status: string, execution: DevelopmentExecution | null) => void; onEvents: (executionId: string, events: DeveloperExecutionEventView[]) => void; onRefresh: () => Promise<void>; compact?: boolean }): ReactElement | null {
+  const [state, setState] = useState<DevelopmentState>({ status: "idle", execution: null });
   const [activity, setActivity] = useState<DeveloperExecutionEventView[]>([]);
   const [now, setNow] = useState(Date.now());
   const refreshed = useRef("");
@@ -80,10 +92,10 @@ function DevelopmentRun({ taskId, onStatus, onEvents, onRefresh }: { taskId: str
   }, [taskId, onEvents, onStatus]);
   useEffect(() => {
     setNow(Date.now());
-    if (state.execution?.finishedAt || !["starting", "running", "cancelling"].includes(state.status)) return;
+    if (compact || state.execution?.finishedAt || !["starting", "running", "cancelling"].includes(state.status)) return;
     const timer = setInterval(() => setNow(Date.now()), 1_000);
     return () => clearInterval(timer);
-  }, [state.execution?.id, state.execution?.finishedAt, state.status]);
+  }, [compact, state.execution?.id, state.execution?.finishedAt, state.status]);
   useEffect(() => {
     const key = state.execution?.id ? `${state.execution.id}:${["completed", "blocked", "failed", "result_pending_claim"].includes(state.status) ? state.status : "started"}` : "";
     if (!key || refreshed.current === key) return;
@@ -91,14 +103,9 @@ function DevelopmentRun({ taskId, onStatus, onEvents, onRefresh }: { taskId: str
     void onRefresh();
   }, [onRefresh, state.execution?.id, state.status]);
   if (!state.execution && state.status === "idle") return null;
-  const execution = state.execution;
-  const active = ["starting", "running", "cancelling"].includes(state.status);
-  const freshnessAt = execution?.lastHeartbeatAt ?? execution?.startedAt;
-  const stale = active && Boolean(freshnessAt && now - Date.parse(freshnessAt) > 15_000);
-  const label = stale ? "No recent heartbeat" : state.status === "starting" ? "In Progress" : state.status === "result_pending_claim" ? "Finishing development" : state.status === "running" ? "Running" : state.status === "cancelling" ? "Cancelling" : state.status === "queued" ? "Queued" : state.status === "rate_limited" ? "Rate limited" : state.status === "completed" ? "Completed" : state.status === "blocked" ? "Blocked" : state.status === "failed" ? "Failed" : state.status;
-  const elapsed = execution ? formatDuration((execution.finishedAt ? Date.parse(execution.finishedAt) : now) - Date.parse(execution.startedAt)) : "—";
   const visibleActivity = activity.filter((event) => !(event.kind === "command_started" || event.kind === "command_finished") || !event.summary.includes("forge-step"));
-  return <section className="space-y-2 text-xs" data-development-run><div className="flex flex-wrap items-center gap-x-3 gap-y-1"><span className="flex items-center gap-1.5" role="status" aria-live="polite">{active && Boolean(execution?.lastHeartbeatAt) && !stale ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : null}<span>{label}</span>{execution?.currentStep ? <span className="text-muted-foreground">Step {execution.currentStep}</span> : null}</span><span className="tabular-nums text-muted-foreground">{elapsed}</span></div>{visibleActivity.length ? <div className="space-y-1" data-developer-activity><h3 className="font-medium">Implementer activity</h3><ol className="space-y-1 text-[11px] text-muted-foreground">{visibleActivity.map((event) => <DeveloperActivityLine event={event} key={event.eventId} />)}</ol></div> : null}</section>;
+  const lastOutputIndex = visibleActivity.reduce((last, event, index) => event.summary.includes("\n") ? index : last, -1);
+  return <section className="space-y-2 text-xs" data-development-run>{!compact ? <DevelopmentStatus state={state} now={now} /> : null}{visibleActivity.length ? <div className="space-y-1" data-developer-activity><h3 className="font-medium">Implementer activity</h3><ol className="space-y-1 text-[11px] text-muted-foreground">{visibleActivity.map((event, index) => <DeveloperActivityLine event={event} open={index === lastOutputIndex} key={event.eventId} />)}</ol></div> : null}</section>;
 }
 
 export type TaskPlanAction = Exclude<IssueCommandSlug, "revise-plan" | "continue-work" | "record-progress" | "resolve-decision-blocker"> | "reject-plan";
@@ -443,7 +450,8 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
   const exactRevisionCommand = revisionCommand?.subject?.kind === "plan_decision" ? { endpoint: revisionCommand.endpoint, expectedRevision: revisionCommand.expectedRevision, subject: revisionCommand.subject.value } : undefined;
   const decisionControls = task.phase === "approval" && (exactApproveCommand || exactRevisionCommand) ? <PlanDecisionForm key={task.revision} {...(exactApproveCommand ? { approveCommand: exactApproveCommand } : {})} {...(exactRevisionCommand ? { revisionCommand: exactRevisionCommand } : {})} busy={busy} onSubmit={(payload) => onPlanAction(payload.command.endpoint as TaskPlanAction, payload.note, { subject: payload.command.subject, idempotencyKey: payload.idempotencyKey })} error={error} /> : null;
   const [developerEventState, setDeveloperEventState] = useState<DeveloperEventState>({ executionId: null, events: [], terminalSteps: {} });
-  const [developerLiveness, setDeveloperLiveness] = useState<{ status: string; lastHeartbeatAt: string | null } | undefined>();
+  const [developerLiveness, setDeveloperLiveness] = useState<(DevelopmentState & { lastHeartbeatAt: string | null }) | undefined>();
+  const [developmentNow, setDevelopmentNow] = useState(Date.now());
   useEffect(() => {
     setDeveloperEventState({ executionId: null, events: [], terminalSteps: {} });
     setDeveloperLiveness(undefined);
@@ -451,8 +459,15 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
   const handleDevelopmentStatus = useCallback((status: string, execution: DevelopmentExecution | null): void => {
     const executionId = execution?.id ?? null;
     setDeveloperEventState((current) => current.executionId === executionId ? current : { executionId, events: [], terminalSteps: {} });
-    setDeveloperLiveness(execution ? { status, lastHeartbeatAt: execution.lastHeartbeatAt } : undefined);
+    setDeveloperLiveness(execution ? { status, execution, lastHeartbeatAt: execution.lastHeartbeatAt } : undefined);
   }, []);
+  useEffect(() => {
+    setDevelopmentNow(Date.now());
+    const execution = developerLiveness?.execution;
+    if (!execution || execution.finishedAt || !["starting", "running", "cancelling"].includes(developerLiveness?.status ?? "")) return;
+    const timer = window.setInterval(() => setDevelopmentNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [developerLiveness?.execution?.id, developerLiveness?.execution?.finishedAt, developerLiveness?.status]);
   const appendDeveloperEvents = useCallback((executionId: string, events: DeveloperExecutionEventView[]): void => setDeveloperEventState((current) => {
     const selected = current.executionId === executionId ? current : { executionId, events: [], terminalSteps: {} };
     const terminalSteps = { ...selected.terminalSteps };
@@ -520,7 +535,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                   <div className="mx-auto max-w-4xl space-y-4">
                     <PlanningRunCard task={task} />
                     {pullRequestInFlight ? <div data-active-pull-request><PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} {...(task.allowedCommands.includes("reconcile_ci") ? { onCheckCi: () => onPlanAction("reconcile-ci") } : {})} /></div> : <TaskActions task={task} project={project} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
-                    {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><DevelopmentRun taskId={task.id} onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} /></DeveloperRecoveryStatus> : <DevelopmentRun taskId={task.id} onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
+                    {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} developmentStatus={developerLiveness ? <DevelopmentStatus state={developerLiveness} now={developmentNow} inline /> : undefined} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><DevelopmentRun taskId={task.id} onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} compact /></DeveloperRecoveryStatus> : <DevelopmentRun taskId={task.id} onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
                     {currentPlan ?? decisionControls}
                     {task.governance.blocker && blockerCommand?.subject?.kind === "plan_blocker" ? <PlanBlockerResponseForm blocker={task.governance.blocker} expectedRevision={blockerCommand.expectedRevision} busy={busy} onSubmit={(payload) => onPlanAction(blockerCommand.endpoint as TaskPlanAction, undefined, { subject: payload.subject, answer: payload.answer, idempotencyKey: payload.idempotencyKey, expectedWorkflowRevision: payload.expectedWorkflowRevision })} error={error} /> : task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">{task.governance.blocker.header}</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}

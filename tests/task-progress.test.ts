@@ -3,11 +3,21 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, expect, test, vi } from "vitest";
 
 import { TaskProgress } from "../src/frontend/components/app/task-progress.js";
+import { ProfileAvatar } from "../src/frontend/components/app/profile-avatar.js";
 import { taskIsProcessing, TaskStatusIcon } from "../src/frontend/components/app/task-status.js";
 
 const base = { allowedCommands: ["cancel_development"], createdAt: "2026-08-13T00:00:00.000Z", updatedAt: "2026-08-13T00:01:00.000Z", timeline: [], agentInvocations: [] };
 
 afterEach(() => vi.useRealTimers());
+
+test("agent avatars are square robots and human avatars are circular", () => {
+  const agent = renderToStaticMarkup(createElement(ProfileAvatar, { name: "Analyst", seed: "agent-seed" }));
+  const human = renderToStaticMarkup(createElement(ProfileAvatar, { name: "Adam", seed: "human-seed", collection: "pixel-art-neutral" }));
+  expect(agent).toContain("/bottts-neutral/svg?seed=agent-seed");
+  expect(agent).toContain('data-shape="square"');
+  expect(human).toContain("/pixel-art-neutral/svg?seed=human-seed");
+  expect(human).toContain('data-shape="circle"');
+});
 
 test("Build animation requires a fresh Developer heartbeat", () => {
   const fresh = renderToStaticMarkup(createElement(TaskProgress, { ...base, phase: "development", developerLiveness: { status: "running", lastHeartbeatAt: new Date().toISOString() } }));

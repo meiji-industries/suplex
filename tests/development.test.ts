@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -8,13 +8,12 @@ import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 import { createTestConfig } from "../src/config.js";
 import { createForgeServer } from "../src/server.js";
 
-test("development startup seeds a workspace and signs localhost in automatically", async () => {
+test("development startup seeds identity without requiring a Git repository root", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-development-test-"));
   const config = createTestConfig(root, {
     bindAddress: "127.0.0.1",
     reachableAddress: "https://forge.tailnet.ts.net:55180",
     port: 55180,
-    repositoryRoot: await realpath(process.cwd()),
     developmentAutoLogin: true,
   });
   const server = await createForgeServer(config);
@@ -31,8 +30,10 @@ test("development startup seeds a workspace and signs localhost in automatically
 
     const companies = await server.app.inject({ method: "GET", url: "/api/companies", headers: { cookie: cookie! } });
     expect(companies.json()).toEqual({ companies: [expect.objectContaining({ name: "Development" })] });
+    const profiles = await server.app.inject({ method: "GET", url: "/api/profiles", headers: { cookie: cookie! } });
+    expect(profiles.json()).toEqual({ profiles: [expect.objectContaining({ name: "Default" })] });
     const projects = await server.app.inject({ method: "GET", url: "/api/projects", headers: { cookie: cookie! } });
-    expect(projects.json()).toEqual({ projects: [expect.objectContaining({ name: "forge", status: "draft", repository: "meiji-industries/forge" })] });
+    expect(projects.json()).toEqual({ projects: [] });
 
     const created = await server.app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: cookie!, origin: "http://localhost:55180" }, payload: { name: "Local mutation" } });
     expect(created.statusCode).toBe(201);

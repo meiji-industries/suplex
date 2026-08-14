@@ -1,11 +1,10 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { CheckIcon, ChevronDown, LoaderCircle } from "lucide-react";
+import { CircleX, LoaderCircle } from "lucide-react";
 
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion.js";
+import { Alert, AlertDescription, AlertTitle } from "../ui/alert.js";
 import { Badge } from "../ui/badge.js";
-import { Button } from "../ui/button.js";
-import { Card, CardContent, CardHeader, CardTitle } from "../ui/card.js";
-import { Collapsible } from "../ui/collapsible.js";
+import { Card, CardContent } from "../ui/card.js";
 import { Separator } from "../ui/separator.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
 import { Timeline, TimelineContent, TimelineDate, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "../ui/timeline.js";
@@ -27,10 +26,27 @@ function activityDate(timestamp: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp));
 }
 
+export function activityRelativeDate(timestamp: string, now = Date.now()): string {
+  const seconds = Math.max(0, Math.floor((now - Date.parse(timestamp)) / 1_000));
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m${seconds % 60 ? ` ${seconds % 60}s` : ""} ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ""} ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d${hours % 24 ? ` ${hours % 24}h` : ""} ago`;
+}
+
 function activityCopy(entry: TaskActivityEntry): string {
   if (entry.eventType === "member_action") return `chose ${String(entry.metadata?.actionLabel ?? entry.metadata?.command ?? "an action")}`;
   if (entry.eventType === "task_created") return "created the task";
-  if (entry.eventType === "planning_started") return "started planning";
+  if (entry.eventType === "planning_started") {
+    if (entry.metadata.planningStage === "active") return "planning began";
+    if (entry.metadata.planningStage === "completed") return "planning completed";
+    if (entry.metadata.planningStage === "queued") return "waiting for planning capacity";
+    if (entry.metadata.planningStage === "rate_limited") return "waiting for provider reset";
+    return "started planning";
+  }
   if (entry.eventType.startsWith("phase_")) {
     const phase = entry.eventType.slice("phase_".length);
     return `moved the task to ${phaseLabel(phase as IssuePhase)}`;
@@ -38,15 +54,16 @@ function activityCopy(entry: TaskActivityEntry): string {
   return entry.eventType.replaceAll("_", " ");
 }
 
-function activityActor(entry: TaskActivityEntry, actionIndex: number, invocations: TaskInvocation[]): { label: string; initials: string; avatarSeed?: string; avatarCollection?: DiceBearCollection } {
+function activityActor(entry: TaskActivityEntry, actionIndex: number, invocations: TaskInvocation[], processing?: ProcessingActivity): { label: string; initials: string; avatarSeed?: string; avatarCollection?: DiceBearCollection } {
   if (entry.actor) return { label: entry.actor.displayName, initials: entry.actor.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?", avatarSeed: entry.actor.avatarSeed ?? entry.actor.username ?? entry.actor.displayName, avatarCollection: "pixel-art-neutral" };
   if (entry.eventType === "task_created") return { label: "Forge", initials: "F" };
   const profileInvocations = invocations.filter((invocation) => invocation.profileName);
   const invocation = profileInvocations[Math.min(actionIndex, profileInvocations.length - 1)];
-  const profileName = invocation?.profileName;
-  const role = invocation?.role ? `${invocation.role.charAt(0).toUpperCase()}${invocation.role.slice(1)}` : "";
+  const profileName = invocation?.profileName ?? (entry.eventType === "planning_started" ? processing?.profileName : undefined);
+  const role = invocation?.role ? `${invocation.role.charAt(0).toUpperCase()}${invocation.role.slice(1)}` : profileName ? "Lead" : "";
   const label = profileName ? `${profileName} · ${role}` : "Forge";
-  return { label, initials: profileName?.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "F", ...(invocation?.avatarSeed ? { avatarSeed: invocation.avatarSeed } : {}) };
+  const avatarSeed = invocation?.avatarSeed ?? (entry.eventType === "planning_started" ? processing?.avatarSeed : undefined);
+  return { label, initials: profileName?.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "F", ...(avatarSeed ? { avatarSeed } : {}) };
 }
 
 export function extractAgentTranscript(evidence: string): string {
@@ -79,12 +96,6 @@ function parseHarnessMessage(output: string): HarnessMessage | undefined {
   }
 }
 
-function harnessOutcomeVariant(outcome: string | undefined): "secondary" | "destructive" | "outline" {
-  if (outcome === "blocking") return "destructive";
-  if (outcome === "approved") return "secondary";
-  return "outline";
-}
-
 function AgentHarnessOutput({ taskId, invocation }: { taskId: string; invocation: TaskInvocation }) {
   const [output, setOutput] = useState<string | null>(null);
   useEffect(() => {
@@ -100,12 +111,6 @@ function AgentHarnessOutput({ taskId, invocation }: { taskId: string; invocation
   const message = output ? parseHarnessMessage(output) : undefined;
   const findings = message?.findings?.filter((finding) => finding.rationale || finding.severity) ?? [];
   return <Card data-agent-harness-output data-agent-execution-id={invocation.id} size="sm" className="mt-2 gap-0">
-    <CardHeader className="border-b py-2">
-      <CardTitle className="flex items-center justify-between gap-2 text-xs">
-        <span>{invocation.profileName ? `${invocation.profileName} · ` : ""}{invocation.role} output</span>
-        {message?.outcome ? <Badge variant={harnessOutcomeVariant(message.outcome)}>{message.outcome}</Badge> : null}
-      </CardTitle>
-    </CardHeader>
     <CardContent className="gap-2 py-2 text-[12px]">
       {message?.summary ? <p className="whitespace-pre-wrap break-words">{message.summary}</p> : null}
       {findings.length ? <div className="divide-y border-y text-[11px]">{findings.map((finding, index) => <div className="py-1.5" key={`${finding.severity ?? "finding"}-${index}`}><span className="font-medium">{finding.severity ?? "Finding"}</span>{finding.rationale ? <span className="text-muted-foreground"> · {finding.rationale}</span> : null}</div>)}</div> : null}
@@ -122,20 +127,21 @@ function ActivityTimeline({ taskId, timeline, invocations = [], revisionContent,
     <Timeline orientation="vertical" value={0}>
       {timeline.map((entry, index) => {
         const actionIndex = timeline.slice(0, index).filter((candidate) => candidate.kind !== "member" && candidate.eventType !== "task_created").length;
-        const actor = activityActor(entry, actionIndex, invocations);
+        const actor = activityActor(entry, actionIndex, invocations, processing);
         const phaseInvocations = invocations.filter((invocation) => [...timeline].reverse().find((candidate) => Date.parse(candidate.createdAt) <= Date.parse(invocation.startedAt))?.id === entry.id);
+        const blockedReason = typeof entry.metadata.blockedReason === "string" ? entry.metadata.blockedReason : undefined;
         return <TimelineItem key={entry.id} step={index + 1} data-task-activity-kind={entry.kind ?? "workflow"} data-task-activity-revision={entry.revision}>
           <TimelineHeader className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
             <TimelineSeparator />
             <TimelineTitle className="text-xs">{actor.label}</TimelineTitle>
             <span className="text-xs text-muted-foreground">{activityCopy(entry)}</span>
             <span className="text-xs text-muted-foreground">·</span>
-            <TimelineDate dateTime={entry.createdAt} title={activityDate(entry.createdAt)} className="mb-0 font-normal">{activityDate(entry.createdAt)}</TimelineDate>
+            <TimelineDate dateTime={entry.createdAt} title={activityDate(entry.createdAt)} className="mb-0 font-normal">{activityRelativeDate(entry.createdAt)}</TimelineDate>
             <TimelineIndicator className="flex size-6 items-center justify-center border bg-muted text-[10px] font-semibold text-muted-foreground">{actor.avatarSeed ? <ProfileAvatar name={actor.label} seed={actor.avatarSeed} {...(actor.avatarCollection ? { collection: actor.avatarCollection } : {})} /> : actor.initials}</TimelineIndicator>
           </TimelineHeader>
           <TimelineContent className="text-[12px]">
-            <div>Revision {entry.revision}</div>
-            {entry.id === contentEntryId ? collapsePlan ? <Collapsible.Root><Collapsible.Trigger render={<Button variant="ghost" size="sm" />}><CheckIcon /> Plan <ChevronDown /></Collapsible.Trigger><Collapsible.Panel><div data-task-activity-plan className="mt-2 text-foreground">{revisionContent?.content}</div></Collapsible.Panel></Collapsible.Root> : <div data-task-activity-plan className="mt-4 text-foreground">{revisionContent?.content}</div> : null}
+            {blockedReason ? <div className="mt-2"><Alert variant="destructive" data-task-blocked-reason><CircleX /><AlertTitle>Blocked reason</AlertTitle><AlertDescription>{blockedReason}</AlertDescription></Alert></div> : null}
+            {entry.id === contentEntryId ? <div data-task-activity-plan className={collapsePlan ? "mt-2 text-foreground" : "mt-4 text-foreground"}>{revisionContent?.content}</div> : null}
             {entry.id === deliveryReviewEntryId ? <div data-task-activity-delivery-review className="mt-3"><DeliveryReviewPanel task={deliveryReviewTask!} /></div> : null}
             {phaseInvocations.map((invocation) => <AgentHarnessOutput key={invocation.id} taskId={taskId} invocation={invocation} />)}
           </TimelineContent>

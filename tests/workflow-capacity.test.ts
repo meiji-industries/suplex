@@ -237,6 +237,35 @@ test("Activity retry preserves the capacity request for wrapper reattachment", a
   }
 }, 30_000);
 
+test.each(["ownership_ambiguous", "released"] as const)("a failed turn does not finalize a %s slot it no longer owns", async (capacityStatus) => {
+  const environment = await TestWorkflowEnvironment.createTimeSkipping();
+  const taskQueue = `capacity-ownership-race-${randomUUID()}`;
+  let finalizeCalls = 0;
+  const activities: Partial<IssueActivities> = {
+    async projectIssueState(event) { return event.state; },
+    async requestCapacity() { return capacity("queued"); },
+    async tryAcquireCapacity() { const result = capacity("active", "agent-lost"); return { status: "active", publicState: publicState(result) }; },
+    async runLeadPlanning() { throw ApplicationFailure.nonRetryable("Lead ownership is ambiguous", "ownership_ambiguous"); },
+    async inspectCapacity() { return capacity(capacityStatus, "agent-lost", capacityStatus === "ownership_ambiguous" ? { terminalReason: "ownership_ambiguous", skipReason: "Worker restart could not prove ownership" } : {}); },
+    async finalizeCapacity() {
+      finalizeCalls += 1;
+      throw ApplicationFailure.nonRetryable("Capacity request not-owner", "not-owner");
+    },
+  };
+  const worker = await Worker.create({ connection: environment.nativeConnection, namespace: environment.namespace ?? "default", taskQueue, workflowsPath: fileURLToPath(new URL("../src/temporal/workflows.ts", import.meta.url)), activities: activities as IssueActivities });
+  try {
+    const state = await worker.runUntil(async () => {
+      const workflowId = "workflow-capacity-ownership-race";
+      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId, args: [{ workflowId, companyId: "company-test", projectId: "project-test", issueId: "issue-ownership-race", projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { lead: "profile-test" }, supplementalReview: false }] });
+      return handle.executeUpdate(startPlanningUpdate, { args: [{ expectedRevision: 0, actorUserId: "user-test" }] });
+    });
+    expect(finalizeCalls).toBe(0);
+    expect(state).toMatchObject({ phase: "failed", owner: "human" });
+  } finally {
+    await environment.teardown();
+  }
+}, 30_000);
+
 test.each([
   ["ownership_ambiguous", "ownership-ambiguity-blocker.json"],
   ["exhausted", "bounded-capacity-exhaustion.json"],

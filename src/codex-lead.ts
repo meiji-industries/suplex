@@ -595,7 +595,11 @@ export class AgentService {
         leadProfile.reasoningLevel = active.resolved_reasoning_level;
         leadProfile.servicePriority = active.resolved_service_priority;
         const claim = this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'starting', attempt = ?, heartbeat_at = ?, finished_at = NULL, failure_code = NULL, failure_summary = NULL, cancellation_requested_at = NULL, cancelled_at = NULL WHERE id = ? AND status = ?").run(active.attempt + 1, startedAt, executionId, active.status));
-        if (claim.changes !== 1) throw new AgentFailure("active-lease", "A Lead execution is already active for this issue");
+        if (claim.changes !== 1) {
+          const latest = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_agent_executions WHERE id = ?").get(executionId) as { status: string } | undefined);
+          if (latest?.status === "ownership_ambiguous") throw new AgentFailure("ownership_ambiguous", "Restart reconciliation could not prove ownership of the Lead execution");
+          throw new AgentFailure("active-lease", "A Lead execution is already active for this issue");
+        }
       } else {
         this.database.authTransaction((db) => {
           db.prepare(`INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'lead', 'starting', 1, ?, ?, 'planning', ?, ?, ?, ?, ?, ?, 0)`).run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`, input.revision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, sessionRef ?? null, startedAt);

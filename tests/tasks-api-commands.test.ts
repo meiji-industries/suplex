@@ -133,7 +133,7 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     const approvalPayload = { expectedRevision: 2, subject: { plan: planSubject, materiality, expectedWorkflowRevision: 2 }, note: "Self-approved", idempotencyKey: "approve-api-0001" };
     const approved = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: approvalPayload });
     expect(approved.statusCode).toBe(200);
-    expect(approved.json()).toMatchObject({ phase: "ready_for_development", owner: "lead", revision: 3 });
+    expect(approved.json()).toMatchObject({ phase: "ready_for_development", owner: "lead", revision: 4 });
     const artifactStore = new ArtifactStore(config.artifactRoot);
     const reviewEvidence = await artifactStore.put(company.id, "agent-evidence", { filename: "review.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("review evidence\n") });
     const reviewOpinion = await artifactStore.put(company.id, "delivery-review", { filename: "review.json", mimeType: "application/json", bytes: Buffer.from("{\"outcome\":\"approved\"}") });
@@ -152,7 +152,7 @@ test("task API command dispatch preserves revision and evidence lineage", async 
       db.prepare("INSERT INTO forge_delivery_repairs (id, task_id, company_id, workflow_id, review_id, developer_execution_id, cycle, status, subject_commit, subject_tree, result_commit, result_tree, delivery_artifact_id, evidence_artifact_id, created_at, finished_at) VALUES ('repair_api', ?, ?, ?, 'review_api', 'developer_api', 1, 'completed', ?, ?, ?, ?, ?, ?, ?, ?)").run(task.id, company.id, task.workflowId, "b".repeat(40), "c".repeat(40), "d".repeat(40), "e".repeat(40), repairReport.id, repairEvidence.id, now, now);
     });
     const stored = database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision DESC LIMIT 1").get(task.id) as { state_json: string });
-    const reviewState = IssueWorkflowStateSchema.parse({ ...JSON.parse(stored.state_json), phase: "delivery_reviewed", revision: 4, owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish draft pull request", lastEventId: `${task.workflowId}:4`, deliveryReviewId: "review_api", deliveryRepairBlockerEvidenceArtifactId: blockerEvidence.id });
+    const reviewState = IssueWorkflowStateSchema.parse({ ...JSON.parse(stored.state_json), phase: "delivery_reviewed", revision: 5, owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish draft pull request", lastEventId: `${task.workflowId}:5`, deliveryReviewId: "review_api", deliveryRepairBlockerEvidenceArtifactId: blockerEvidence.id });
     database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: reviewState.lastEventId, state: reviewState }));
     const lineage = await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } });
     expect(lineage.statusCode).toBe(200);

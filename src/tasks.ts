@@ -47,13 +47,23 @@ export class TaskFailure extends Error {
 
 function publicDeveloperSummary(kind: string, stepNumber: number | null, summary: string, exitCode: number | null): string {
   const step = stepNumber ? `Step ${stepNumber}` : "Step";
+  const redacted = String(redact(summary)).trim().slice(0, 4_000);
+  const detail = /\b(?:hidden|private|internal)\s+(?:reasoning|chain[- ]of[- ]thought)\b/i.test(redacted) ? "" : redacted;
   switch (kind) {
+    case "agent_update": {
+      try {
+        const result = JSON.parse(detail) as { summary?: unknown };
+        if (typeof result.summary === "string") return String(redact(result.summary)).slice(0, 2_000);
+      } catch { /* Ordinary progress updates are plain text. */ }
+      return detail || "Agent posted an update";
+    }
+    case "tool_call": return detail || "Agent used a tool";
     case "step_started": return `${step} started`;
     case "step_completed": return `${step} completed`;
     case "step_blocked": return `${step} blocked`;
-    case "command_started": return "Command started";
-    case "command_finished": return `Command finished${exitCode === null ? "" : ` (exit ${exitCode})`}`;
-    case "test_result": return `Test finished${exitCode === null ? "" : ` (exit ${exitCode})`}`;
+    case "command_started": return detail ? `Running: ${detail}` : "Command started";
+    case "command_finished": return detail ? `${exitCode === 0 ? "Ran" : "Command finished"}${exitCode === null ? "" : ` (exit ${exitCode})`}: ${detail}` : `Command finished${exitCode === null ? "" : ` (exit ${exitCode})`}`;
+    case "test_result": return detail ? `Test ${exitCode === 0 ? "passed" : "finished"}${exitCode === null ? "" : ` (exit ${exitCode})`}: ${detail}` : `Test finished${exitCode === null ? "" : ` (exit ${exitCode})`}`;
     case "file_change": {
       const path = String(redact(summary)).trim();
       if (path.startsWith("/")) return "File changed: [path]";
@@ -63,7 +73,7 @@ function publicDeveloperSummary(kind: string, stepNumber: number | null, summary
     case "provider_observation": return "Provider observation recorded";
     case "process_started": return "Developer process started";
     case "process_finished": return "Developer process finished";
-    case "reconciliation": return "Developer reconciliation event";
+    case "reconciliation": return detail || "Developer reconciliation event";
     default: return "Developer activity";
   }
 }
@@ -696,6 +706,7 @@ interface TimelineRow {
   event_type: string;
   metadata_json: string;
   created_at: string;
+  state_json: string | null;
 }
 
 interface CreationIntentRow {
@@ -1357,8 +1368,19 @@ export class TaskService {
     const staged = await this.artifacts.stage(task.companyId, isBlocker ? "plan-blocker-response" : "plan-decision", { filename: `${boundInput.idempotencyKey}.md`, mimeType: "text/markdown", bytes: Buffer.from(note.trim(), "utf8") });
     const workflowInput: PlanCommandInput = { expectedRevision: boundInput.expectedRevision, actorUserId, ...(boundInput.subject ? { subject: boundInput.subject } : {}), idempotencyKey: boundInput.idempotencyKey, ...(isBlocker ? { answerStagingRef: staged.ref, answerSha256: staged.sha256, expectedWorkflowRevision: boundInput.expectedWorkflowRevision ?? boundInput.expectedRevision, blockerSubject: boundInput.blockerSubject } : { noteStagingRef: staged.ref, noteSha256: staged.sha256 }) };
     try {
-      const state = await this.workflow.execute(commandName, task.workflowId, workflowInput);
+      let state = await this.workflow.execute(commandName, task.workflowId, workflowInput);
       this.recordTaskCommand(task, actorUserId, commandName, state.revision);
+      if (commandName === "approve_plan" && state.phase === "ready_for_development") {
+        const startInput: StartPlanningInput = { expectedRevision: state.revision, actorUserId, ...(state.planAuthorizationId ? { planAuthorizationId: state.planAuthorizationId } : {}), ...(state.planArtifactSha256 ? { planArtifactSha256: state.planArtifactSha256 } : {}) };
+        try {
+          state = this.workflow.acceptDevelopment
+            ? await this.workflow.acceptDevelopment(task.workflowId, startInput)
+            : await this.workflow.execute("start_development", task.workflowId, startInput);
+          this.recordTaskCommand(task, actorUserId, "start_development", state.revision);
+        } catch {
+          // Approval is durable; retain its existing manual retry action if Developer admission is temporarily unavailable.
+        }
+      }
       this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state });
       return this.getTask(actorUserId, taskId);
     } catch (error) {
@@ -1439,10 +1461,10 @@ export class TaskService {
   getDeveloperProgress(actorUserId: string, taskId: string, after?: { executionId: string; sequence: number }): { status: string; execution: { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; currentStep: number | null } | null; events: DeveloperExecutionEvent[] } {
     const task = this.getTask(actorUserId, taskId);
     const execution = this.database.authQuery((db) => db.prepare(`SELECT e.id, e.status, e.started_at AS startedAt, e.finished_at AS finishedAt,
-      COALESCE(l.heartbeat_at, e.heartbeat_at) AS lastHeartbeatAt, e.current_step AS currentStep
+      l.status AS leaseStatus, COALESCE(l.heartbeat_at, e.heartbeat_at) AS lastHeartbeatAt, e.current_step AS currentStep
       FROM forge_developer_executions e LEFT JOIN forge_developer_execution_leases l
         ON l.execution_id = e.id AND l.task_id = e.task_id AND l.company_id = e.company_id AND l.workflow_id = e.workflow_id
-      WHERE e.task_id = ? AND e.company_id = ? ORDER BY e.attempt DESC, e.started_at DESC LIMIT 1`).get(task.id, task.companyId) as { id: string; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; currentStep: number | null } | undefined);
+      WHERE e.task_id = ? AND e.company_id = ? ORDER BY e.attempt DESC, e.started_at DESC LIMIT 1`).get(task.id, task.companyId) as { id: string; status: string; leaseStatus: string | null; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; currentStep: number | null } | undefined);
     if (!execution) {
       const snapshot = this.database.authQuery((db) => db.prepare("SELECT state_json AS stateJson FROM forge_workflow_snapshots WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY revision DESC LIMIT 1").get(task.id, task.companyId, task.workflowId) as { stateJson: string } | undefined);
       const state = snapshot ? IssueWorkflowStateSchema.safeParse(json<unknown>(snapshot.stateJson, null)).data : undefined;
@@ -1453,7 +1475,8 @@ export class TaskService {
     }
     const rows = this.database.authQuery((db) => db.prepare(`SELECT event_id, sequence, kind, step_number, occurred_at, summary, exit_code, artifact_id
       FROM forge_developer_execution_events WHERE execution_id = ? AND (? IS NULL OR ? <> ? OR sequence > ?) ORDER BY sequence LIMIT 50`).all(execution.id, after?.executionId ?? null, after?.executionId ?? null, execution.id, after?.sequence ?? 0) as Array<{ event_id: string; sequence: number; kind: string; step_number: number | null; occurred_at: string; summary: string; exit_code: number | null; artifact_id: string | null }>);
-    return { status: execution.status, execution, events: rows.map((row) => ({ eventId: row.event_id, sequence: row.sequence, kind: row.kind, stepNumber: row.step_number, occurredAt: row.occurred_at, summary: publicDeveloperSummary(row.kind, row.step_number, row.summary, row.exit_code), exitCode: row.exit_code, artifactId: row.artifact_id })) };
+    const status = execution.leaseStatus === "result_ready" ? "result_pending_claim" : execution.status;
+    return { status, execution: { ...execution, status }, events: rows.map((row) => ({ eventId: row.event_id, sequence: row.sequence, kind: row.kind, stepNumber: row.step_number, occurredAt: row.occurred_at, summary: publicDeveloperSummary(row.kind, row.step_number, row.summary, row.exit_code), exitCode: row.exit_code, artifactId: row.artifact_id })) };
   }
 
   async getTaskReviewArtifact(actorUserId: string, taskId: string, artifactId: string): Promise<{ artifact: { artifactId: string; filename: string; mimeType: string; byteSize: number }; bytes: Buffer }> {
@@ -1787,7 +1810,20 @@ export class TaskService {
     const description = this.artifacts.readSync({ companyId: row.company_id, storagePath: brief.storage_path, sha256: brief.sha256 }).toString("utf8");
     const workflowState = this.workflowStateForTask(row);
     const reviewLineage = this.reviewLineage(row, workflowState);
-    const timeline = this.database.authQuery((db) => db.prepare("SELECT id, revision, event_type, metadata_json, created_at FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision, id").all(row.id) as TimelineRow[]).map((entry) => ({ id: entry.id, revision: entry.revision, eventType: entry.event_type, metadata: parseMetadata(entry.metadata_json), createdAt: entry.created_at }));
+    let priorTimelineEntryWasPlanning = false;
+    const timeline = this.database.authQuery((db) => db.prepare("SELECT t.id, t.revision, t.event_type, t.metadata_json, t.created_at, s.state_json FROM forge_issue_timeline t LEFT JOIN forge_workflow_snapshots s ON s.task_id = t.task_id AND s.workflow_id = t.workflow_id AND s.revision = t.revision WHERE t.task_id = ? ORDER BY t.revision, t.id").all(row.id) as TimelineRow[]).map((entry) => {
+      const metadata = parseMetadata(entry.metadata_json);
+      if (entry.event_type !== "planning_started") {
+        priorTimelineEntryWasPlanning = false;
+        const state = entry.event_type === "phase_blocked" || entry.event_type === "phase_delivery_blocked" ? json<{ pendingAction?: unknown; developerRecoverySummary?: unknown; blocker?: { summary?: unknown } | null }>(entry.state_json ?? "{}", {}) : undefined;
+        const reason = state?.blocker?.summary ?? state?.developerRecoverySummary ?? state?.pendingAction;
+        return { id: entry.id, revision: entry.revision, eventType: entry.event_type, metadata: typeof reason === "string" && reason.trim() ? { ...metadata, blockedReason: redact(reason) as string } : metadata, createdAt: entry.created_at };
+      }
+      const capacityStatus = json<{ capacity?: { status?: unknown } }>(entry.state_json ?? "{}", {}).capacity?.status;
+      const planningStage = capacityStatus === "active" ? "active" : capacityStatus === "queued" ? "queued" : capacityStatus === "rate_limited" ? "rate_limited" : priorTimelineEntryWasPlanning ? "completed" : "started";
+      priorTimelineEntryWasPlanning = true;
+      return { id: entry.id, revision: entry.revision, eventType: entry.event_type, metadata: { ...metadata, planningStage }, createdAt: entry.created_at };
+    });
     const memberRows = this.database.authQuery((db) => db.prepare(`SELECT a.id, a.action, a.metadata_json, a.created_at, u.id AS actor_id, u.display_name AS actor_name, u.username AS actor_username, u.avatar_seed AS actor_avatar_seed
       FROM forge_audit_events a JOIN forge_users u ON u.id = a.actor_user_id
       WHERE a.company_id = ? AND json_extract(a.metadata_json, '$.taskId') = ? AND a.action IN ('task_created', 'task_command')
@@ -1837,19 +1873,19 @@ export class TaskService {
         servicePriority: invocation.resolved_service_priority,
       }));
     const leadOutput = this.leadOutput(row.id, row.company_id);
-    const developerExecution = this.database.authQuery((db) => db.prepare("SELECT e.id, e.status, e.attempt, e.branch_name, e.target_base_sha AS targetBaseSha, e.current_step AS currentStep, e.result_commit AS resultCommit, e.result_tree AS resultTree, e.dirty_state AS dirtyState, e.delivery_artifact_id AS deliveryArtifactId, e.evidence_artifact_id AS evidenceArtifactId, e.failure_code AS failureCode, e.failure_summary AS failureSummary, truth.reconciliation_artifact_id AS reconciliationArtifactId, truth.manifest_artifact_id AS manifestArtifactId, truth.raw_report_artifact_id AS rawReportArtifactId, truth.before_provider_artifact_id AS beforeProviderArtifactId, truth.after_provider_artifact_id AS afterProviderArtifactId, truth.boundary_mode AS boundaryMode, truth.before_provider_sha256 AS beforeProviderSha256, truth.after_provider_sha256 AS afterProviderSha256, truth.starting_commit AS startingCommit, truth.starting_tree AS startingTree FROM forge_developer_executions e LEFT JOIN forge_developer_execution_truth truth ON truth.execution_id = e.id WHERE e.task_id = ? AND e.company_id = ? ORDER BY e.attempt DESC, e.started_at DESC LIMIT 1").get(row.id, row.company_id) as { id: string; status: string; attempt: number; branch_name: string; targetBaseSha: string; currentStep: number | null; resultCommit: string | null; resultTree: string | null; dirtyState: string | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null; failureCode: string | null; failureSummary: string | null; reconciliationArtifactId: string | null; manifestArtifactId: string | null; rawReportArtifactId: string | null; beforeProviderArtifactId: string | null; afterProviderArtifactId: string | null; boundaryMode: "owner_controlled_observed" | null; beforeProviderSha256: string | null; afterProviderSha256: string | null; startingCommit: string | null; startingTree: string | null } | undefined);
+    const developerExecution = this.database.authQuery((db) => db.prepare("SELECT e.id, e.status, e.attempt, e.branch_name, e.target_base_sha AS targetBaseSha, e.current_step AS currentStep, e.result_commit AS resultCommit, e.result_tree AS resultTree, e.dirty_state AS dirtyState, e.delivery_artifact_id AS deliveryArtifactId, e.evidence_artifact_id AS evidenceArtifactId, e.failure_code AS failureCode, e.failure_summary AS failureSummary, l.status AS leaseStatus, truth.reconciliation_artifact_id AS reconciliationArtifactId, truth.manifest_artifact_id AS manifestArtifactId, truth.raw_report_artifact_id AS rawReportArtifactId, truth.before_provider_artifact_id AS beforeProviderArtifactId, truth.after_provider_artifact_id AS afterProviderArtifactId, truth.boundary_mode AS boundaryMode, truth.before_provider_sha256 AS beforeProviderSha256, truth.after_provider_sha256 AS afterProviderSha256, truth.starting_commit AS startingCommit, truth.starting_tree AS startingTree FROM forge_developer_executions e LEFT JOIN forge_developer_execution_leases l ON l.execution_id = e.id LEFT JOIN forge_developer_execution_truth truth ON truth.execution_id = e.id WHERE e.task_id = ? AND e.company_id = ? ORDER BY e.attempt DESC, e.started_at DESC LIMIT 1").get(row.id, row.company_id) as { id: string; status: string; attempt: number; branch_name: string; targetBaseSha: string; currentStep: number | null; resultCommit: string | null; resultTree: string | null; dirtyState: string | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null; failureCode: string | null; failureSummary: string | null; leaseStatus: string | null; reconciliationArtifactId: string | null; manifestArtifactId: string | null; rawReportArtifactId: string | null; beforeProviderArtifactId: string | null; afterProviderArtifactId: string | null; boundaryMode: "owner_controlled_observed" | null; beforeProviderSha256: string | null; afterProviderSha256: string | null; startingCommit: string | null; startingTree: string | null } | undefined);
     const developerManifest = developerExecution?.manifestArtifactId ? this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'developer-evidence-manifest'").get(developerExecution.manifestArtifactId, row.company_id) as { storage_path: string; sha256: string } | undefined) : undefined;
     const verificationCommands = developerManifest ? (() => { try { const manifest = JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: developerManifest.storage_path, sha256: developerManifest.sha256 }).toString("utf8")) as { verificationCommands?: Array<{ stepNumber?: unknown; commands?: unknown }> }; return Array.isArray(manifest.verificationCommands) ? manifest.verificationCommands.flatMap((step) => typeof step.stepNumber === "number" && Array.isArray(step.commands) ? [{ stepNumber: step.stepNumber, commands: step.commands.filter((command): command is string => typeof command === "string") }] : []) : []; } catch { return []; } })() : [];
     const workflowSnapshot = this.database.authQuery((db) => db.prepare("SELECT state_json AS stateJson FROM forge_workflow_snapshots WHERE task_id = ? AND revision = ?").get(row.id, row.projection_revision) as { stateJson: string } | undefined);
     const snapshotState = workflowSnapshot ? IssueWorkflowStateSchema.safeParse(json<unknown>(workflowSnapshot.stateJson, null)) : undefined;
     const rawAllowedCommands = json<unknown[]>(row.allowed_commands_json, []);
     const allowedCommands = IssueCommandSchema.array().safeParse(rawAllowedCommands).success ? IssueCommandSchema.array().parse(rawAllowedCommands) : [];
-    const recoveryStatus = snapshotState?.success ? snapshotState.data.developerRecoveryStatus : undefined;
+    const recoveryStatus = developerExecution?.leaseStatus === "result_ready" ? "result_pending_claim" : snapshotState?.success ? snapshotState.data.developerRecoveryStatus : undefined;
     const nextRecoveryCommand = recoveryStatus ? (["verify_developer_ownership", "retry_development", "cancel_development", "cancel_issue"] as const).find((command) => allowedCommands.includes(command)) : undefined;
     const developerRecovery = recoveryStatus && snapshotState?.success ? {
       status: recoveryStatus,
       reasonCode: snapshotState.data.developerRecoveryReasonCode ?? null,
-      summary: snapshotState.data.developerRecoverySummary ?? null,
+      summary: developerExecution?.leaseStatus === "result_ready" ? "Developer finished. Forge is recording the result." : snapshotState.data.developerRecoverySummary ?? null,
       lastHeartbeatAt: snapshotState.data.developerLastHeartbeatAt ?? null,
       currentOwner: recoveryStatus === "ownership_ambiguous" ? "operator" as const : "forge" as const,
       evidenceArtifactId: snapshotState.data.developerEvidenceArtifactId ?? developerExecution?.evidenceArtifactId ?? null,

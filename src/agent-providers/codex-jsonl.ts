@@ -51,6 +51,22 @@ function summary(value: unknown): string {
   return text.slice(0, MAX_SUMMARY);
 }
 
+function namedTool(item: Record<string, unknown>): string {
+  return [item.server_name, item.server, item.tool_name, item.tool, item.name]
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .join(".");
+}
+
+function todoSummary(items: unknown): string {
+  if (!Array.isArray(items)) return summary(items);
+  return items.map((item) => {
+    if (!item || typeof item !== "object") return summary(item);
+    const value = item as Record<string, unknown>;
+    const text = [value.text, value.title, value.description].find((part): part is string => typeof part === "string");
+    return [text ?? summary(value), typeof value.status === "string" ? value.status : undefined].filter(Boolean).join(" — ");
+  }).join("\n");
+}
+
 function itemValue(event: Record<string, unknown>): Record<string, unknown> {
   return (event.item && typeof event.item === "object" ? event.item : event) as Record<string, unknown>;
 }
@@ -193,10 +209,35 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
       continue;
     }
     if (type === "item.completed" && itemType === "agent_message" && typeof item.text === "string") {
+      push({ kind: "agent_update", stepNumber: activeStep, sourceItemId, summary: item.text, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `agent-update:${sourceItemId ?? createHash("sha256").update(item.text).digest("hex")}` });
       try { finalReport = JSON.parse(item.text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { /* The schema validator reports a missing/invalid report later. */ }
       continue;
     }
-    if (type === "error" || itemType === "error") push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: "Codex reported an error", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `error:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
+    if (type === "item.completed" && itemType === "reasoning" && typeof item.text === "string") {
+      push({ kind: "agent_update", stepNumber: activeStep, sourceItemId, summary: `Reasoning summary: ${item.text}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `reasoning:${sourceItemId ?? createHash("sha256").update(item.text).digest("hex")}` });
+      continue;
+    }
+    if ((type === "item.started" || type === "item.completed") && (itemType.includes("mcp") || itemType.includes("tool"))) {
+      const name = namedTool(item);
+      const detail = type === "item.started" ? item.arguments : item.error ?? item.result;
+      const verb = type === "item.started" ? "Using" : item.error ? "Tool failed" : "Used";
+      push({ kind: "tool_call", stepNumber: activeStep, sourceItemId, summary: `${verb} ${name || "a tool"}${detail === undefined || detail === null ? "" : `\n${summary(detail)}`}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `tool-call:${type}:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
+      continue;
+    }
+    if ((type === "item.started" || type === "item.completed") && itemType === "web_search") {
+      push({ kind: "tool_call", stepNumber: activeStep, sourceItemId, summary: `${type === "item.started" ? "Searching" : "Searched"}: ${summary(item.query ?? item.action ?? "the web")}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `web-search:${type}:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
+      continue;
+    }
+    if ((type === "item.updated" || type === "item.completed") && itemType === "todo_list") {
+      const detail = todoSummary(item.items);
+      push({ kind: "agent_update", stepNumber: activeStep, sourceItemId, summary: `Plan update:${detail ? `\n${detail}` : " updated"}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `plan-update:${sourceItemId ?? "unknown"}:${createHash("sha256").update(detail).digest("hex")}` });
+      continue;
+    }
+    if (type === "turn.failed") {
+      const error = event.error && typeof event.error === "object" ? event.error as Record<string, unknown> : event;
+      push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: `Codex turn failed: ${summary(error.message ?? "Unknown error")}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `turn-failed:${createHash("sha256").update(line).digest("hex")}` });
+    }
+    else if (type === "error" || itemType === "error") push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: `Codex reported an error: ${summary(item.message ?? event.message ?? "Unknown error")}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `error:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
     else if (!(["thread.started", "turn.started", "turn.completed", "turn.failed", "item.started", "item.updated", "item.completed"].includes(type))) {
       push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: "Codex event could not be classified", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `unknown:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
     }

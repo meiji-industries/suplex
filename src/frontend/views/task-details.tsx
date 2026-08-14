@@ -39,6 +39,12 @@ export function formatDuration(milliseconds: number): string {
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+function DeveloperActivityLine({ event }: { event: DeveloperExecutionEventView }): ReactElement {
+  const [headline, ...detail] = event.summary.split("\n");
+  const label = event.kind === "agent_update" ? "Agent update: " : event.kind === "tool_call" ? "Tool call: " : "";
+  return <li className="break-words"><span className={label ? "font-medium text-foreground" : undefined}>{label}</span>{headline}{detail.length ? <details className="mt-1"><summary className="cursor-pointer">{event.kind === "command_finished" || event.kind === "test_result" ? "Output" : "Details"}</summary><pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-words text-[11px]">{detail.join("\n")}</pre></details> : null}</li>;
+}
+
 function DevelopmentRun({ taskId, onStatus, onEvents, onRefresh }: { taskId: string; onStatus: (status: string, execution: DevelopmentExecution | null) => void; onEvents: (executionId: string, events: DeveloperExecutionEventView[]) => void; onRefresh: () => Promise<void> }): ReactElement | null {
   const [state, setState] = useState<{ status: string; execution: DevelopmentExecution | null }>({ status: "idle", execution: null });
   const [activity, setActivity] = useState<DeveloperExecutionEventView[]>([]);
@@ -52,7 +58,7 @@ function DevelopmentRun({ taskId, onStatus, onEvents, onRefresh }: { taskId: str
     onStatus("idle", null);
     const stream = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/development-events`);
     stream.addEventListener("status", (message) => { try { const next = JSON.parse((message as MessageEvent<string>).data) as { status: string; execution: DevelopmentExecution | null }; const nextId = next.execution?.id ?? null; if (nextId !== executionId.current) setActivity([]); executionId.current = nextId; onStatus(next.status, next.execution); setState(next); } catch { /* Keep the last safe status. */ } });
-    stream.addEventListener("progress", (message) => { try { const event = JSON.parse((message as MessageEvent<string>).data) as DeveloperExecutionEventView; setActivity((current) => [...current, event].slice(-5)); if (executionId.current) onEvents(executionId.current, [event]); } catch { /* Ignore malformed server events. */ } });
+    stream.addEventListener("progress", (message) => { try { const event = JSON.parse((message as MessageEvent<string>).data) as DeveloperExecutionEventView; setActivity((current) => [...current, event].slice(-20)); if (executionId.current) onEvents(executionId.current, [event]); } catch { /* Ignore malformed server events. */ } });
     return () => stream.close();
   }, [taskId, onEvents, onStatus]);
   useEffect(() => {
@@ -62,7 +68,7 @@ function DevelopmentRun({ taskId, onStatus, onEvents, onRefresh }: { taskId: str
     return () => clearInterval(timer);
   }, [state.execution?.id, state.execution?.finishedAt, state.status]);
   useEffect(() => {
-    const key = state.execution?.id ? `${state.execution.id}:${["completed", "blocked", "failed"].includes(state.status) ? state.status : "started"}` : "";
+    const key = state.execution?.id ? `${state.execution.id}:${["completed", "blocked", "failed", "result_pending_claim"].includes(state.status) ? state.status : "started"}` : "";
     if (!key || refreshed.current === key) return;
     refreshed.current = key;
     void onRefresh();
@@ -72,9 +78,10 @@ function DevelopmentRun({ taskId, onStatus, onEvents, onRefresh }: { taskId: str
   const active = ["starting", "running", "cancelling"].includes(state.status);
   const freshnessAt = execution?.lastHeartbeatAt ?? execution?.startedAt;
   const stale = active && Boolean(freshnessAt && now - Date.parse(freshnessAt) > 15_000);
-  const label = stale ? "No recent heartbeat" : state.status === "starting" ? "Starting" : state.status === "running" ? "Running" : state.status === "cancelling" ? "Cancelling" : state.status === "queued" ? "Queued" : state.status === "rate_limited" ? "Rate limited" : state.status === "completed" ? "Completed" : state.status === "blocked" ? "Blocked" : state.status === "failed" ? "Failed" : state.status;
+  const label = stale ? "No recent heartbeat" : state.status === "starting" ? "In Progress" : state.status === "result_pending_claim" ? "Finishing development" : state.status === "running" ? "Running" : state.status === "cancelling" ? "Cancelling" : state.status === "queued" ? "Queued" : state.status === "rate_limited" ? "Rate limited" : state.status === "completed" ? "Completed" : state.status === "blocked" ? "Blocked" : state.status === "failed" ? "Failed" : state.status;
   const elapsed = execution ? formatDuration((execution.finishedAt ? Date.parse(execution.finishedAt) : now) - Date.parse(execution.startedAt)) : "—";
-  return <section className="space-y-1 text-xs" data-development-run><div className="flex flex-wrap items-center gap-x-3 gap-y-1"><span className="flex items-center gap-1.5" role="status" aria-live="polite">{active && Boolean(execution?.lastHeartbeatAt) && !stale ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : null}<span>{label}</span>{execution?.currentStep ? <span className="text-muted-foreground">Step {execution.currentStep}</span> : null}</span><span className="tabular-nums text-muted-foreground">{elapsed}</span></div>{activity.length ? <div className="grid gap-0.5 text-[11px] text-muted-foreground">{activity.map((event) => <div className="truncate" key={event.eventId}><span>{event.kind.replaceAll("_", " ")} · </span><span>{event.summary}</span></div>)}</div> : null}</section>;
+  const visibleActivity = activity.filter((event) => !(event.kind === "command_started" || event.kind === "command_finished") || !event.summary.includes("forge-step"));
+  return <section className="space-y-2 text-xs" data-development-run><div className="flex flex-wrap items-center gap-x-3 gap-y-1"><span className="flex items-center gap-1.5" role="status" aria-live="polite">{active && Boolean(execution?.lastHeartbeatAt) && !stale ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : null}<span>{label}</span>{execution?.currentStep ? <span className="text-muted-foreground">Step {execution.currentStep}</span> : null}</span><span className="tabular-nums text-muted-foreground">{elapsed}</span></div>{visibleActivity.length ? <div className="space-y-1" data-developer-activity><h3 className="font-medium">Developer activity</h3><ol className="space-y-1 text-[11px] text-muted-foreground">{visibleActivity.map((event) => <DeveloperActivityLine event={event} key={event.eventId} />)}</ol></div> : null}</section>;
 }
 
 export type TaskPlanAction = Exclude<IssueCommandSlug, "revise-plan" | "continue-work" | "record-progress" | "resolve-decision-blocker"> | "reject-plan";
@@ -99,7 +106,7 @@ function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, 
   const supplementalCommand = task.commands.find((command) => command.name === "request_supplemental_review" && command.subject?.kind === "supplemental_review");
   const supplementalSubject = supplementalCommand?.subject?.kind === "supplemental_review" ? supplementalCommand.subject.value : undefined;
   const hasVisibleActions = Boolean(supplementalCommand) || canRevise || canContinue || task.allowedCommands.some((command) => !["cancel_issue", "approve_plan", "reject_plan", "request_plan_revision", "respond_plan_blocker", "resolve_decision_blocker"].includes(command));
-  if (!hasVisibleActions) return <div data-task-actions />;
+  if (!hasVisibleActions || task.phase === "development" || task.developerRecovery) return <div data-task-actions />;
   return (
     <Card data-task-actions size="sm">
       <CardHeader>
@@ -298,11 +305,11 @@ function FinalGatePanel({ task }: { task: ApiTask }): ReactElement | null {
   );
 }
 
-function TaskOptions(): ReactElement {
+function TaskOptions({ canCancel, busy, onCancel }: { canCancel: boolean; busy: boolean; onCancel: () => void }): ReactElement {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger render={<Button variant="ghost" size="icon-sm" aria-label="Task options" title="Task options" />}><Ellipsis /></DropdownMenuTrigger>
-      <DropdownMenuContent align="start"><DropdownMenuItem disabled>Coming soon</DropdownMenuItem></DropdownMenuContent>
+      <DropdownMenuContent align="start">{canCancel ? <DropdownMenuItem variant="destructive" disabled={busy} onClick={onCancel}>Cancel task</DropdownMenuItem> : null}</DropdownMenuContent>
     </DropdownMenu>
   );
 }
@@ -348,6 +355,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
   const blockerCommand = task.commands.find((command) => command.name === "respond_plan_blocker" && command.subject?.kind === "plan_blocker");
   const visibleLeadPlan = task.leadOutput && (task.leadOutput.content.kind !== "decision_blocker" || !task.governance.blocker) ? task.leadOutput : undefined;
   const visibleLeadPlanRevision = visibleLeadPlan ? task.planHistory.find((plan) => plan.outputArtifactId === visibleLeadPlan.outputArtifactId)?.revision : undefined;
+  const completedPlanningRevision = [...task.activity].reverse().find((entry) => entry.eventType === "planning_started" && entry.metadata.planningStage === "completed")?.revision;
   const exactApproveCommand = approveCommand?.subject?.kind === "plan_decision" ? { endpoint: approveCommand.endpoint, expectedRevision: approveCommand.expectedRevision, subject: approveCommand.subject.value } : undefined;
   const exactRevisionCommand = revisionCommand?.subject?.kind === "plan_decision" ? { endpoint: revisionCommand.endpoint, expectedRevision: revisionCommand.expectedRevision, subject: revisionCommand.subject.value } : undefined;
   const decisionControls = task.phase === "approval" && (exactApproveCommand || exactRevisionCommand) ? <PlanDecisionForm key={task.revision} {...(exactApproveCommand ? { approveCommand: exactApproveCommand } : {})} {...(exactRevisionCommand ? { revisionCommand: exactRevisionCommand } : {})} busy={busy} onSubmit={(payload) => onPlanAction(payload.command.endpoint as TaskPlanAction, payload.note, { subject: payload.command.subject, idempotencyKey: payload.idempotencyKey })} error={error} /> : null;
@@ -372,9 +380,14 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
   useEffect(() => { setAnswer(""); }, [task.id, task.revision]);
   const [changesFileCount, setChangesFileCount] = useState<number | undefined>(undefined);
   useEffect(() => { setChangesFileCount(undefined); }, [task.id, task.developerExecution?.id]);
-  const activityCount = task.activity.length + (visibleLeadPlan && visibleLeadPlanRevision != null && task.activity.some((entry) => entry.revision === visibleLeadPlanRevision) ? 1 : 0);
+  const leadPlanProps = visibleLeadPlan ? { output: visibleLeadPlan, ...(decisionControls ? { decisionControls } : {}), ...(task.developerExecution ? { stepProgress: { taskId: task.id, execution: task.developerExecution, events: developerEventState.executionId === task.developerExecution.id ? developerEventState.events : [], terminalSteps: developerEventState.executionId === task.developerExecution.id ? developerEventState.terminalSteps : {} } } : {}) } : undefined;
+  const leadPlan = leadPlanProps ? <TaskLeadPlan {...leadPlanProps} /> : undefined;
+  const currentPlan = decisionControls && leadPlan ? leadPlan : undefined;
+  const activityPlanRevision = completedPlanningRevision ?? visibleLeadPlanRevision;
+  const activityPlan = !currentPlan && leadPlanProps && activityPlanRevision != null ? { revision: activityPlanRevision, content: <TaskLeadPlan {...leadPlanProps} collapsible /> } : undefined;
+  const activityCount = task.activity.length + (activityPlan && task.activity.some((entry) => entry.revision === activityPlan.revision) ? 1 : 0);
   const activityContent = <>
-    <TaskActivity taskId={task.id} timeline={task.activity} agentInvocations={task.agentInvocations} processing={task.capacity?.status === "active" ? task.capacity : undefined} collapsePlan={!['backlog', 'planning', 'approval'].includes(task.phase)} deliveryReviewTask={task} revisionContent={visibleLeadPlan && visibleLeadPlanRevision != null ? { revision: visibleLeadPlanRevision, content: <TaskLeadPlan output={visibleLeadPlan} planRevision={task.planRevision} planMaterial={task.planMaterial} materialCategories={task.materialCategories ?? []} {...(task.developerExecution ? { stepProgress: { taskId: task.id, execution: task.developerExecution, events: developerEventState.executionId === task.developerExecution.id ? developerEventState.events : [], terminalSteps: developerEventState.executionId === task.developerExecution.id ? developerEventState.terminalSteps : {} } } : {})} /> } : undefined} />
+    <TaskActivity taskId={task.id} timeline={task.activity} agentInvocations={task.agentInvocations} processing={task.capacity?.status === "active" ? task.capacity : undefined} collapsePlan={!['backlog', 'planning', 'approval'].includes(task.phase)} deliveryReviewTask={task} {...(activityPlan ? { revisionContent: activityPlan } : {})} />
     {task.images.length ? <section className="space-y-2"><h3 className="text-xs font-semibold">Attachments</h3><div className="flex flex-wrap gap-3">{task.images.map((image) => <a className="text-xs underline underline-offset-2" href={`/api/tasks/${task.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer" key={image.artifactId}>{image.filename}</a>)}</div></section> : null}
     {task.governance.supplementalReview ? <SupplementalReviewPanel value={{ reviewerProfileId: task.governance.supplementalReview.reviewerProfile.name, opinion: task.governance.supplementalReview.opinion, concerns: task.governance.supplementalReview.concerns, requiredChanges: task.governance.supplementalReview.requiredChanges, leadResponse: task.governance.supplementalReview.leadResponse.text }} /> : null}
   </>;
@@ -395,13 +408,13 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
     {hasChecks ? <TabsContent value="checks"><CiPanel task={task} ci={task.ci!} /></TabsContent> : null}
   </>;
   return (
-    <ApplicationFrame title={task.issueKey ? `${task.issueKey} · ${task.title}` : task.title} headerActions={<TaskOptions />}>
+    <ApplicationFrame title={task.issueKey ? `${task.issueKey} · ${task.title}` : task.title} headerActions={<TaskOptions canCancel={task.allowedCommands.includes("cancel_issue")} busy={busy || task.projection.status === "lagging"} onCancel={() => void onPlanAction("cancel")} />}>
       <article data-task-detail className="min-w-0">
         <div data-task-body className="grid min-w-0 lg:grid-cols-[minmax(0,1fr)_260px]">
           <div className="min-w-0">
             <header className="px-4 pt-4 pb-3 sm:px-6 lg:px-10">
               <div data-task-header-content className="mx-auto max-w-4xl space-y-4">
-                <div className="flex min-w-0 items-center justify-between gap-2"><h2 className="min-w-0 text-xl font-semibold tracking-tight">{task.title}</h2>{task.allowedCommands.includes("cancel_issue") ? <div className="shrink-0"><Button size="sm" variant="outline" onClick={() => void onPlanAction("cancel")} disabled={busy || task.projection.status === "lagging"}>Cancel</Button></div> : null}</div>
+                <h2 className="min-w-0 text-xl font-semibold tracking-tight">{task.title}</h2>
               </div>
             </header>
             <div data-task-content className="min-w-0 px-4 pt-4 pb-6 sm:px-6 lg:px-10">
@@ -413,7 +426,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                     <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} />
                     {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><DevelopmentRun taskId={task.id} onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} /></DeveloperRecoveryStatus> : <DevelopmentRun taskId={task.id} onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-                    {decisionControls}
+                    {currentPlan ?? decisionControls}
                     {task.governance.blocker && blockerCommand?.subject?.kind === "plan_blocker" ? <PlanBlockerResponseForm blocker={task.governance.blocker} expectedRevision={blockerCommand.expectedRevision} busy={busy} onSubmit={(payload) => onPlanAction(blockerCommand.endpoint as TaskPlanAction, undefined, { subject: payload.subject, answer: payload.answer, idempotencyKey: payload.idempotencyKey, expectedWorkflowRevision: payload.expectedWorkflowRevision })} error={error} /> : task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">{task.governance.blocker.header}</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}
                     {task.leadOutput?.content.kind === "decision_blocker" && task.allowedCommands.includes("resolve_decision_blocker") ? <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); void onResolveDecisionBlocker(answer); }}><FieldLabel htmlFor="decision-answer">Decision</FieldLabel><Textarea id="decision-answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Answer the Lead's question" maxLength={8000} /><Button size="sm" type="submit" disabled={busy || !answer.trim()}>{busy ? "Saving…" : "Resolve decision"}</Button></form> : null}
                   </div>

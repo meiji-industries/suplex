@@ -96,6 +96,7 @@ const planApprovalBlockerPatch = "forge-plan-approval-blocker-v1";
 const durableCapacityPatch = "durable-capacity-v1";
 const decisionResolutionProjectionPatch = "forge-decision-resolution-projection-v1";
 const exhaustedActivityRecoveryPatch = "forge-exhausted-activity-recovery-v1";
+const capacityFinalizationOwnershipPatch = "forge-capacity-finalization-ownership-v1";
 
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
@@ -243,7 +244,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await projectIssueState(state);
     return projectedRevision;
   };
-  const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: projectIssueState, projectCapacityState, patched, durableCapacityPatch });
+  const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: projectIssueState, projectCapacityState, patched, durableCapacityPatch, capacityFinalizationOwnershipPatch });
   const workflowContext = createIssueWorkflowContext(validatedInput, state, {
     project: () => projectIssueState(state),
     projectState: (value) => projectIssueState(value),

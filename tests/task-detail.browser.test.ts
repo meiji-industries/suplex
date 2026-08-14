@@ -50,23 +50,19 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
     workerDatabase.projectIssueEvent(event);
     workerDatabase.observeIssueProjection(event);
   };
-  const workflow = { async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) {
-    plannedState = buildInitialIssueWorkflowState({ ...input, workflowId: input.workflowId! });
-    projectState(plannedState);
-    return { workflowId: input.workflowId!, runId: "run" };
-  }, async execute(command: keyof typeof issueCommands, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
-    const handler = (workflow as unknown as Record<string, (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>>)[issueCommands[command].updateName];
-    if (!handler) throw new Error(`Unsupported browser fixture command: ${command}`);
-    return handler(workflowId, input);
-  }, async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+  const beginPlanning = (workflowId: string, expectedRevision: number): IssueWorkflowState => {
     const taskId = workflowId.split("-issue-")[1]!;
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${input.expectedRevision + 1}` };
+    plannedState = { ...plannedState!, revision: expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${expectedRevision + 1}` };
     projectState(plannedState);
     database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, started_at) VALUES ('agent_browser', ?, ?, ?, 'lead', 'running', 1, 'planning', ?, ?, ?, ?, ?)").run(taskId, company.id, workflowId, profile.id, profile.model, profile.reasoningLevel, profile.servicePriority, new Date().toISOString()));
+    return plannedState;
+  };
+  const completePlanning = async (workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> => {
+    const taskId = workflowId.split("-issue-")[1]!;
     await planningGate;
     const artifactStore = new ArtifactStore(config.artifactRoot);
     const evidence = await artifactStore.put(company.id, "agent-evidence", { filename: "agent.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"{\\\"summary\\\":\\\"On it\\\"}\"}}\n") });
-    const output = await artifactStore.put(company.id, "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "A focused browser plan", reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The issue is understood", verification: "Review the repository evidence" }, { number: 2, instruction: "Run focused tests", entryPoint: null, completionCriterion: "The focused suite passes", verification: "Confirm the focused suite result" }], compatibilityAnalysis: "The change is local.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["src/browser-fixture.ts"], materiality: [{ category: "user_visible_behavior", rationale: "The fixture changes a user-visible task detail.", evidenceRefs: ["step:1"] }] })) });
+    const output = await artifactStore.put(company.id, "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "A focused browser plan", gitPresentation: { branchSlug: "improve-browser-task", pullRequestTitle: "Improve browser task", pullRequestDescription: "Make the browser task easier to review." }, reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The issue is understood", verification: "Review the repository evidence" }, { number: 2, instruction: "Run focused tests", entryPoint: null, completionCriterion: "The focused suite passes", verification: "Confirm the focused suite result" }], compatibilityAnalysis: "The change is local.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["src/browser-fixture.ts"], materiality: [{ category: "user_visible_behavior", rationale: "The fixture changes a user-visible task detail.", evidenceRefs: ["step:1"] }] })) });
     database.authQuery((db) => {
       const now = new Date().toISOString();
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, output.id, output.companyId, output.kind, output.filename, output.mimeType, output.byteSize, output.sha256, output.storagePath, output.createdAt);
@@ -78,6 +74,22 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
     plannedState = { workflowId, companyId: company.id, projectId: project.id, issueId: taskId, projectRevisionId: plannedState!.projectRevisionId, phase: "approval", revision: input.expectedRevision + 2, owner: "human", allowedCommands: ["request_supplemental_review", "approve_plan", "request_plan_revision"], pendingAction: "Approve final plan", lastEventId: `${workflowId}:${input.expectedRevision + 2}`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_browser", leadExecutionId: "agent_browser", leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: output.id, leadOutputKind: "plan", leadSummary: "A focused browser plan", planRevision: 1, planMaterial: true, materialCategories: ["user_visible_behavior"], supplementalReviewUsed: false, originalPlanSubject: planSubject, finalPlanSubject: planSubject, materialityEvidence };
     projectState(plannedState);
     return plannedState;
+  };
+  const workflow = { async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) {
+    plannedState = buildInitialIssueWorkflowState({ ...input, workflowId: input.workflowId! });
+    projectState(plannedState);
+    return { workflowId: input.workflowId!, runId: "run" };
+  }, async execute(command: keyof typeof issueCommands, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    const handler = (workflow as unknown as Record<string, (workflowId: string, input: StartPlanningInput) => Promise<IssueWorkflowState>>)[issueCommands[command].updateName];
+    if (!handler) throw new Error(`Unsupported browser fixture command: ${command}`);
+    return handler(workflowId, input);
+  }, async startPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    beginPlanning(workflowId, input.expectedRevision);
+    return completePlanning(workflowId, input);
+  }, async acceptPlanning(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    const state = beginPlanning(workflowId, input.expectedRevision);
+    void completePlanning(workflowId, input);
+    return state;
   }, async requestSupplementalReview(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     plannedState = { ...plannedState!, revision: input.expectedRevision + 1, allowedCommands: ["approve_plan", "request_plan_revision"], pendingAction: "Approve final plan", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}`, supplementalReviewUsed: true };
     projectState(plannedState);
@@ -86,6 +98,8 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
     plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development"], pendingAction: "Start development", lastEventId: `${plannedState!.workflowId}:${input.expectedRevision + 1}` };
     projectState(plannedState);
     return plannedState;
+  }, async acceptDevelopment(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    return (workflow as unknown as { startDevelopment(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> }).startDevelopment(workflowId, input);
   }, async publishDraft(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
     const releaseBody = await new ArtifactStore(config.artifactRoot).put(company.id, "release-public-body", { filename: "release.md", mimeType: "text/markdown", bytes: Buffer.from("## Summary\n\nBrowser task") });
     database.authTransaction((db) => {
@@ -168,11 +182,17 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await page.locator("[data-app-header]").textContent()).toContain("TASK-1 · Browser task");
       expect(await taskDetail.locator("[data-task-properties]").getByText("TASK-1", { exact: true }).isVisible()).toBe(true);
       expect(await taskDetail.getByRole("heading", { name: "Browser task", exact: true, level: 2 }).isVisible()).toBe(true);
+      await page.getByRole("button", { name: "Task options", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Cancel task", exact: true }).waitFor();
+      expect(await taskDetail.getByRole("button", { name: "Cancel", exact: true }).count()).toBe(0);
+      await page.keyboard.press("Escape");
       expect(await taskDetail.locator("[data-task-work-tabs]").getByRole("tab", { name: "Other", exact: true }).isVisible()).toBe(true);
       const workflowId = (database.authQuery((db) => db.prepare("SELECT workflow_id AS workflowId FROM forge_tasks WHERE id = ?").get(taskId)) as { workflowId: string }).workflowId;
       const queued = new CapacityManager(database, config).request({ companyId: company.id, taskId, workflowId, turnKind: "lead" });
       await page.reload();
-      expect(await taskDetail.locator("[data-planning-run]").count()).toBe(0);
+      await taskDetail.locator('[data-status="planning"]').waitFor();
+      expect(await taskDetail.locator("[data-planning-run]").count()).toBe(1);
+      expect(await taskDetail.getByRole("button", { name: "Start planning", exact: true }).count()).toBe(0);
       expect(await taskDetail.getByText(/Action required/).count()).toBe(0);
       database.authQuery((db) => db.prepare("UPDATE forge_capacity_requests SET status = 'cancelled', cancelled_at = ?, released_at = ?, terminal_reason = 'cancelled' WHERE id = ?").run(new Date().toISOString(), new Date().toISOString(), queued.id));
       await page.reload();
@@ -181,19 +201,20 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       const contentBox = await taskDetail.locator("[data-task-content]").boundingBox();
       const headerContentBox = await taskDetail.locator("[data-task-header-content]").boundingBox();
       const taskActionsBox = await taskDetail.locator("[data-task-actions]").boundingBox();
-      const taskActionButtonBox = await taskDetail.locator("[data-task-actions]").getByRole("button").first().boundingBox();
-      expect(await taskDetail.locator("[data-task-actions] [data-slot=\"card-footer\"]").count()).toBe(1);
+      const taskActionButton = taskDetail.locator("[data-task-actions]").getByRole("button").first();
+      const taskActionButtonBox = (await taskActionButton.count()) > 0 ? await taskActionButton.boundingBox() : null;
+      expect(await taskDetail.locator("[data-task-actions] [data-slot=\"card-footer\"]").count()).toBe(taskActionButtonBox ? 1 : 0);
       const currentBox = await taskDetail.locator("[data-task-current]").boundingBox();
       const detailContentBox = await taskDetail.locator("[data-task-content-inner]").boundingBox();
       const propertiesBox = await taskDetail.locator("[data-task-properties]").boundingBox();
       const initialProgressBox = await taskDetail.locator("[data-task-progress]").boundingBox();
-      expect(contentBox).not.toBeNull(); expect(headerContentBox).not.toBeNull(); expect(taskActionsBox).not.toBeNull(); expect(taskActionButtonBox).not.toBeNull(); expect(currentBox).not.toBeNull(); expect(detailContentBox).not.toBeNull(); expect(propertiesBox).not.toBeNull(); expect(initialProgressBox).not.toBeNull();
+      expect(contentBox).not.toBeNull(); expect(headerContentBox).not.toBeNull(); expect(taskActionsBox).not.toBeNull(); expect(currentBox).not.toBeNull(); expect(detailContentBox).not.toBeNull(); expect(propertiesBox).not.toBeNull(); expect(initialProgressBox).not.toBeNull();
       expect(propertiesBox!.x).toBeGreaterThan(contentBox!.x);
       expect(initialProgressBox!.x).toBeGreaterThan(contentBox!.x);
       expect(Math.abs(headerContentBox!.x - detailContentBox!.x)).toBeLessThan(1);
       expect(Math.abs(headerContentBox!.x - taskActionsBox!.x)).toBeLessThan(1);
       expect(currentBox!.x).toBeLessThanOrEqual(detailContentBox!.x);
-      expect(taskActionButtonBox!.x).toBeGreaterThanOrEqual(currentBox!.x);
+      if (taskActionButtonBox) expect(taskActionButtonBox.x).toBeGreaterThanOrEqual(currentBox!.x);
       const observer = await context.newPage();
       await observer.goto(page.url());
       const observerDetail = observer.locator("[data-task-detail]");
@@ -207,8 +228,12 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       const developmentRun = taskDetail.locator("[data-development-run]");
       await developmentRun.getByText("Running", { exact: true }).waitFor();
       expect(await developmentRun.locator("svg.animate-spin").count()).toBe(1);
-      database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('receipt-browser-development', ?, 1, 1, 'command_finished', 1, 'browser-command', ?, 'pnpm test browser', 0, NULL, NULL, 'browser-command')").run(developerExecutionId, new Date().toISOString()));
-      await developmentRun.getByText("Command finished (exit 0)", { exact: true }).waitFor();
+      database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('receipt-browser-development', ?, 1, 1, 'command_finished', 1, 'browser-command', ?, 'pnpm test browser\nall passed', 0, NULL, NULL, 'browser-command')").run(developerExecutionId, new Date().toISOString()));
+      await developmentRun.getByText("Ran (exit 0): pnpm test browser", { exact: true }).waitFor();
+      expect(await developmentRun.locator("details:not([open])").count()).toBe(1);
+      database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('receipt-browser-update', ?, 1, 2, 'agent_update', 1, 'browser-update', ?, 'Updated the browser proof.', NULL, NULL, NULL, 'browser-update')").run(developerExecutionId, new Date().toISOString()));
+      await developmentRun.getByText("Developer activity", { exact: true }).waitFor();
+      await developmentRun.getByText("Agent update: Updated the browser proof.", { exact: true }).waitFor();
       const elapsedBefore = await developmentRun.locator(".tabular-nums").textContent();
       await page.waitForTimeout(1_100);
       expect(await developmentRun.locator(".tabular-nums").textContent()).not.toBe(elapsedBefore);
@@ -228,7 +253,6 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await developmentNarrow.locator("[data-development-run]").getByText("Completed", { exact: true }).waitFor();
       expect(await developmentNarrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       await developmentNarrow.close();
-      await taskDetail.getByRole("button", { name: "Start planning", exact: true }).click();
       await taskDetail.locator('[data-status="planning"]').waitFor();
       await observer.waitForTimeout(1000);
       await observerDetail.locator('[data-status="planning"]').waitFor();
@@ -271,10 +295,16 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await taskDetail.getByRole("tab", { name: /^Activity \d+$/ }).waitFor();
       expect(await taskDetail.locator("[data-task-activity-feed] [data-task-activity] [data-slot=\"timeline\"][data-orientation=\"vertical\"]").count()).toBe(1);
       await taskDetail.locator("[data-task-activity-feed]").getByText("Browser task profile · Lead", { exact: true }).first().waitFor();
-      await taskDetail.getByText("Lead plan", { exact: true }).waitFor();
+      const firstActivityTime = taskDetail.locator("[data-task-activity] time").first();
+      expect(await firstActivityTime.innerText()).toMatch(/ago$/);
+      expect(await firstActivityTime.getAttribute("title")).not.toBeNull();
+      await taskDetail.getByText("Plan: Improve browser task", { exact: true }).waitFor();
       await taskDetail.getByRole("button", { name: "Step 1 · pending — Inspect repository", exact: true }).waitFor();
       const activityPlan = taskDetail.locator('[data-task-activity-revision="1"] [data-task-activity-plan]');
-      expect(await activityPlan.getByText("Lead plan", { exact: true }).isVisible()).toBe(true);
+      const currentPlan = current.locator('[data-task-lead-plan]');
+      expect(await activityPlan.count()).toBe(0);
+      expect(await currentPlan.locator('[data-slot="card-content"]').count()).toBe(1);
+      expect(await currentPlan.locator('[data-slot="card-footer"] [data-plan-decision-form]').count()).toBe(1);
       expect(await taskDetail.getByText("Plan step progress", { exact: true }).count()).toBe(0);
       expect(await taskDetail.locator("[data-plan-step-progress]").count()).toBe(0);
       expect(await taskDetail.locator("[data-task-work-tabs]").getByRole("tab", { name: /^Activity \d+$/ }).isVisible()).toBe(true);
@@ -301,12 +331,12 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await prLink.evaluate((element) => element === document.activeElement)).toBe(true);
       expect(await taskDetail.locator('[data-task-lead-plan] [data-slot="accordion"]').count()).toBe(1);
       expect(await current.locator('[data-plan-decision-form]').count()).toBe(1);
-      expect(await taskDetail.locator('[data-task-lead-plan] [data-plan-decision-controls]').count()).toBe(0);
+      expect(await currentPlan.locator('[data-plan-decision-controls]').count()).toBe(1);
       expect(await taskDetail.locator('[data-task-header-content] [data-plan-decision-form]').count()).toBe(0);
       await taskDetail.getByRole("button", { name: "Step 1 · pending — Inspect repository", exact: true }).click();
       await taskDetail.getByText("The issue is understood", { exact: true }).waitFor();
       await taskDetail.getByText("Review the repository evidence", { exact: true }).waitFor();
-      expect(await activityPlan.locator("[data-developer-status]").isVisible()).toBe(true);
+      expect(await currentPlan.locator("[data-developer-status]").isVisible()).toBe(true);
       expect(await taskDetail.locator("[data-developer-status]").count()).toBe(1);
       await taskDetail.getByRole("button", { name: "Request review", exact: true }).click();
       await taskDetail.getByRole("button", { name: "Approve Plan", exact: true }).waitFor();
@@ -317,15 +347,14 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await taskDetail.getByRole("button", { name: "Request Changes", exact: true }).click();
       expect(await taskDetail.getByLabel("Requested changes", { exact: true }).count()).toBe(0);
       await taskDetail.getByRole("button", { name: "Approve Plan", exact: true }).click();
-      await taskDetail.locator('[data-status="ready_for_development"]').waitFor();
-      const rolledUpPlan = taskDetail.locator("[data-task-activity-feed]").getByRole("button", { name: "Plan", exact: true });
-      expect(await rolledUpPlan.getAttribute("aria-expanded")).toBe("false");
-      expect(await taskDetail.getByText("Lead plan", { exact: true }).count()).toBe(0);
-      await rolledUpPlan.click();
-      await taskDetail.getByText("Lead plan", { exact: true }).waitFor();
-      await rolledUpPlan.click();
-      await taskDetail.getByRole("button", { name: "Start development", exact: true }).click();
       await taskDetail.locator('[data-status="delivery_blocked"]').waitFor();
+      const historicalPlan = taskDetail.locator("[data-task-activity-plan] [data-task-lead-plan]");
+      await historicalPlan.waitFor();
+      const historicalPlanTrigger = historicalPlan.getByRole("button", { name: /Plan: Improve browser task/ });
+      expect(await historicalPlanTrigger.getAttribute("aria-expanded")).toBe("false");
+      await historicalPlanTrigger.click();
+      await historicalPlan.getByText("A focused browser plan", { exact: true }).waitFor();
+      expect(await taskDetail.getByRole("button", { name: "Start development", exact: true }).count()).toBe(0);
       await taskDetail.getByText("Target-base reconciliation", { exact: true }).waitFor();
       await taskDetail.getByText("Provider unavailable", { exact: true }).first().waitFor();
       await taskDetail.getByRole("button", { name: "Retry reconciliation", exact: true }).click();

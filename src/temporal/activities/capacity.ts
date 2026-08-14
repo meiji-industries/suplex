@@ -36,7 +36,13 @@ export function createCapacityActivities(ctx: ActivityContext): CapacityActiviti
       return CapacityRequestSnapshotSchema.parse(capacity.cancelQueued(input.requestId, input.reason));
     },
     async finalizeCapacity(input) {
-      return CapacityRequestSnapshotSchema.parse(capacity.finalize(input.requestId, input.expectedExecutionId, input.terminalReason));
+      try {
+        return CapacityRequestSnapshotSchema.parse(capacity.finalize(input.requestId, input.expectedExecutionId, input.terminalReason));
+      } catch (error) {
+        const failure = asNonRetryableCapacityFailure(error);
+        if (failure) throw failure;
+        throw error;
+      }
     },
     async rateLimitCapacity(input) {
       return CapacityRequestSnapshotSchema.parse(capacity.recordRateLimit(input.requestId, input.executionId, input.retryAt));

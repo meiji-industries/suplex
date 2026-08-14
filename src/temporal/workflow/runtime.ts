@@ -140,6 +140,7 @@ export function createAcquireExternalTurn(
     projectCapacityState: (capacity: IssueWorkflowState["capacity"], pendingAction?: string) => Promise<number>;
     patched: (patchId: string) => boolean;
     durableCapacityPatch: string;
+    capacityFinalizationOwnershipPatch: string;
   },
 ): IssueWorkflowContext["acquireExternalTurn"] {
   return async <T>(spec: { operation: CapacityOperation; role: CapacityRole; profileId?: string | undefined; sessionRef?: string | null | undefined; worktreePath?: string | null | undefined }, run: (capacityRequestId?: string) => Promise<T>, executionId: (result: T) => string | undefined, durableCapacityEnabled = options.patched(options.durableCapacityPatch)): Promise<T> => {
@@ -198,6 +199,7 @@ export function createAcquireExternalTurn(
         } catch (error) {
           if (!isCurrent()) throw error;
           const current = await inspectCapacity({ requestId: request.id });
+          if (current.status !== "active" && options.patched(options.capacityFinalizationOwnershipPatch)) throw error;
           const rateLimit = rateLimitFailure(error);
           if (rateLimit && current.executionId) {
             const limited = await rateLimitCapacity({ requestId: request.id, executionId: current.executionId, ...(rateLimit.retryAt ? { retryAt: rateLimit.retryAt } : {}) });

@@ -60,11 +60,37 @@ test("redacts credentials before command and test receipts are persisted", () =>
   expect(visible).toContain("[REDACTED]");
 });
 
-test("uses fixed reconciliation summaries for unknown and error JSONL events", () => {
+test("keeps agent updates and named tool calls in the public activity stream", () => {
+  const parsed = parseCodexJsonl([
+    JSON.stringify({ type: "item.completed", item: { id: "message_1", type: "agent_message", text: "I found the failing test and am updating it." } }),
+    JSON.stringify({ type: "item.completed", item: { id: "reasoning_1", type: "reasoning", text: "The shared parser is dropping useful fields." } }),
+    JSON.stringify({ type: "item.started", item: { id: "tool_1", type: "mcp_tool_call", server: "linear", tool: "get_issue", arguments: { issue: "FOR-123" } } }),
+    JSON.stringify({ type: "item.completed", item: { id: "tool_1", type: "mcp_tool_call", server: "linear", tool: "get_issue", result: { ok: true } } }),
+    JSON.stringify({ type: "item.started", item: { id: "search_1", type: "web_search", query: "Codex JSONL events" } }),
+    JSON.stringify({ type: "item.updated", item: { id: "plan_1", type: "todo_list", items: [{ text: "Inspect the parser", status: "completed" }, { text: "Fix the projection", status: "in_progress" }] } }),
+  ], options);
+
+  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "agent_update", summary: "I found the failing test and am updating it." }));
+  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "agent_update", summary: "Reasoning summary: The shared parser is dropping useful fields." }));
+  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "tool_call", summary: expect.stringContaining("Using linear.get_issue") }));
+  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "tool_call", summary: expect.stringContaining("Used linear.get_issue") }));
+  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "tool_call", summary: "Searching: Codex JSONL events" }));
+  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "agent_update", summary: "Plan update:\nInspect the parser — completed\nFix the projection — in_progress" }));
+});
+
+test("uses a fixed summary for unknown events and redacts Codex errors", () => {
   const parsed = parseCodexJsonl([
     JSON.stringify({ type: "unknown.event", prompt: "private reasoning", aws: "AKIAIOSFODNN7EXAMPLE" }),
     JSON.stringify({ type: "error", message: "-----BEGIN PRIVATE KEY-----" }),
   ], options);
 
-  expect(parsed.receipts.map((receipt) => receipt.summary)).toEqual(["Codex event could not be classified", "Codex reported an error"]);
+  expect(parsed.receipts.map((receipt) => receipt.summary)).toEqual(["Codex event could not be classified", "Codex reported an error: [REDACTED]"]);
+});
+
+test("captures an unexpected turn failure as visible redacted evidence", () => {
+  const parsed = parseCodexJsonl([
+    JSON.stringify({ type: "turn.failed", error: { message: "Request failed with Bearer secret-token" } }),
+  ], options);
+
+  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "reconciliation", summary: "Codex turn failed: Request failed with [REDACTED]" }));
 });

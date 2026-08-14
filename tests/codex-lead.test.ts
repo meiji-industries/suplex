@@ -330,6 +330,27 @@ test("Lead stale-child reconciliation signals through the injected process contr
   }
 });
 
+test("Lead retry reports ownership ambiguity when restart reconciliation wins the lease race", async () => {
+  const value = await fixture();
+  const now = new Date().toISOString();
+  value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES ('agent_reconciled', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'lead', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:wrapper-start', 'agent-turns/agent_reconciled/spool.ndjson', 'agent-turns/agent_reconciled/status.json', ?, 0)").run(now));
+  const controller = {
+    async inspect() {
+      value.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'ownership_ambiguous' WHERE id = 'agent_reconciled'").run());
+      return undefined;
+    },
+    async signal() {},
+    async isProcessGroupAlive() { return false; },
+  };
+  try {
+    const service = new AgentService(value.database, value.config, { processController: controller, processRunner: async () => { throw new Error("reconciled turns must not spawn"); }, sessionStore: { async create() { return "session_opaque"; }, async read() { return "raw-session"; } } });
+    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { lead: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "ownership_ambiguous" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("Lead live-wrapper attachment honors Activity cancellation", async () => {
   const value = await fixture();
   const executionId = "agent_cancel_attach";
@@ -680,6 +701,74 @@ test("Developer execution safely resumes an owned worktree after its result was 
     const result = await service.run(input);
     expect(result).toMatchObject({ outcome: "completed", developerSessionRef: "session_retry", branchName: expect.stringMatching(/^work\/fixture-task-[a-f0-9]{8}$/) });
     expect(value.database.authQuery((db) => db.prepare("SELECT attempt, supersedes_execution_id FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toEqual({ attempt: 2, supersedes_execution_id: failed.id });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("authorized Developer retry resumes a dirty preserved worktree", async () => {
+  const value = await fixture();
+  const artifactStore = new ArtifactStore(value.config.artifactRoot);
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "authorized-retry.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Resume partial Developer work", reproduction: null, rootCauseAnalysis: "The first turn may stop after editing.", steps: [{ number: 1, instruction: "Finish the retry marker", verification: "The marker is committed", verificationCommands: ["git status --porcelain"] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the preserved worktree.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["RETRY.md"], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: {} } })) });
+  const now = new Date().toISOString();
+  value.database.authTransaction((db) => {
+    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(plan.id, plan.companyId, plan.kind, plan.filename, plan.mimeType, plan.byteSize, plan.sha256, plan.storagePath, plan.createdAt);
+    db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES ('authorization_retry', 'task_1', 'company_1', 'project_1', 'workflow-test-issue-task_1', 1, ?, ?, 'routine_auto', NULL, ?)").run(plan.id, plan.sha256, now);
+  });
+  const authorization = { authorizationId: "authorization_retry", taskId: "task_1", companyId: "company_1", projectId: "project_1", workflowId: "workflow-test-issue-task_1", planRevision: 1, planArtifactId: plan.id, planSha256: plan.sha256, authorizationKind: "routine_auto" as const, approvalDecisionId: null, authorizedAt: now };
+  let calls = 0;
+  const prompts: string[] = [];
+  const service = new DeveloperService(value.database, value.config, {
+    processRunner: async (invocation) => {
+      calls += 1;
+      prompts.push(invocation.args.join(" "));
+      await invocation.onStart(4700 + calls, `2026-08-11T00:00:0${calls}.000Z`);
+      if (calls === 1) {
+        await writeFile(join(invocation.cwd, "RETRY.md"), "partial delivery\n");
+        const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
+        const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
+        await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-authorized-retry" }));
+        for (const [id, command] of [["start_1", "forge-step start 1"], ["verify_1", "git status --porcelain"], ["complete_1", "forge-step complete 1"]]) {
+          await invocation.onLine(JSON.stringify({ type: "item.started", item: { id, type: "command_execution", command } }));
+          await invocation.onLine(JSON.stringify({ type: "item.completed", item: { id, type: "command_execution", command, exit_code: 0, aggregated_output: "" } }));
+        }
+        await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery", summary: "Partial work looks successful", steps: [{ number: 1, status: "completed", filesChanged: [], commandsRun: ["git status --porcelain"], testResults: ["Worktree inspected"], notes: "The process stopped after reporting success." }], authorizedStepsNotCompleted: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
+        return { exitCode: 2, stderr: "provider transport closed" };
+      }
+      expect(await readFile(join(invocation.cwd, "RETRY.md"), "utf8")).toBe("partial delivery\n");
+      await writeFile(join(invocation.cwd, "RETRY.md"), "recovered delivery\n");
+      await execFileAsync("git", ["add", "RETRY.md"], { cwd: invocation.cwd });
+      await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Recover retry marker"], { cwd: invocation.cwd });
+      const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
+      const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
+      await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-authorized-retry" }));
+      for (const [id, command] of [["start_1", "forge-step start 1"], ["verify_1", "git status --porcelain"], ["complete_1", "forge-step complete 1"]]) {
+        await invocation.onLine(JSON.stringify({ type: "item.started", item: { id, type: "command_execution", command } }));
+        await invocation.onLine(JSON.stringify({ type: "item.completed", item: { id, type: "command_execution", command, exit_code: 0, aggregated_output: "" } }));
+      }
+      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery", summary: "Recovered partial delivery", steps: [{ number: 1, status: "completed", filesChanged: ["RETRY.md"], commandsRun: ["git status --porcelain"], testResults: ["Worktree clean"], notes: "Committed the preserved partial change." }], authorizedStepsNotCompleted: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
+      return { exitCode: 0, stderr: "" };
+    },
+    githubObservation: {
+      async checkAuthentication() {},
+      async getRepository() { return { nameWithOwner: "acme/forge", url: "https://github.com/acme/forge" }; },
+      async observeMutationSurface() { return { repository: "acme/forge", observedAt: now, branches: [], pullRequests: [], sha256: "f".repeat(64) }; },
+    },
+    sessionStore: { async create() { return "session_authorized_retry"; }, async read(ref) { return ref === "session_lead" ? "raw-lead" : "raw-authorized-retry"; } },
+  });
+  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { developer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, authorization };
+  try {
+    const blocked = await service.run({ ...input, developerTurnExecutionId: "developer_retry_1", developerAttempt: 1 });
+    expect(blocked).toMatchObject({ outcome: "blocked", dirtyState: "dirty" });
+    expect.soft(blocked.deliverySummary).toContain("dirty-final-tree");
+    expect.soft(blocked.deliverySummary).not.toContain("Partial work looks successful");
+    await expect(service.run({ ...input, developerTurnExecutionId: "developer_retry_2", developerAttempt: 2, supersedesExecutionId: "developer_retry_1", reuseWorktree: true })).resolves.toMatchObject({ outcome: "completed", dirtyState: "clean", developerSessionRef: "session_authorized_retry" });
+    expect(calls).toBe(2);
+    for (const prompt of prompts) {
+      expect.soft(prompt).toContain("On a new delivery, keep the final authorized step active through staging, creating exactly one ordinary local commit, and final read-only Git verification.");
+      expect.soft(prompt).toContain("forge-step complete <final step number> must be the final shell command before the delivery JSON");
+    }
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

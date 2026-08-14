@@ -143,8 +143,11 @@ test("Developer progress is scoped, exposes pre-execution startup, prefers super
     expect(first.events).toHaveLength(50);
     expect(first.events[0]?.sequence).toBe(1);
     expect(first.events[0]?.summary).toBe("Command finished (exit 0)");
+    expect(first.events[1]?.summary).toBe("Ran (exit 0): command 2");
     expect(JSON.stringify(first.events)).not.toMatch(/AKIAIOSFODNN7EXAMPLE|PRIVATE KEY|postgres:|hidden reasoning|legacy-secret/);
     expect(value.tasks.getDeveloperExecutionEvents(value.adminId, created.task.id, executionId).events[0]?.summary).toBe("Command finished (exit 0)");
+    value.database.authQuery((db) => db.prepare("UPDATE forge_developer_execution_leases SET status = 'result_ready' WHERE execution_id = ?").run(executionId));
+    expect(value.tasks.getDeveloperProgress(value.adminId, created.task.id)).toMatchObject({ status: "result_pending_claim", execution: { status: "result_pending_claim" } });
     const resumed = value.tasks.getDeveloperProgress(value.adminId, created.task.id, { executionId, sequence: 50 });
     expect(resumed.events.map((event) => event.sequence)).toEqual([51, 52, 53, 54, 55]);
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('outsider', 'Outsider', 'outsider@forge.local', 'member', 'active', ?, ?)").run(executionHeartbeat, executionHeartbeat));
@@ -300,6 +303,7 @@ test("retries draft publication from a typed provider-failure state", async () =
     const blocked: IssueWorkflowState = { ...initial, revision: 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "GitHub provider request failed", releaseStatus: "blocked", releaseFailureCode: "provider-unavailable", releaseFailureSummary: "GitHub provider request failed", lastEventId: `${initial.workflowId}:1` };
     value.stateByTask.set(created.task.id, blocked);
     projectState(value.database, blocked);
+    expect(value.tasks.getTask(value.adminId, created.task.id).activity).toContainEqual(expect.objectContaining({ eventType: "phase_delivery_blocked", metadata: expect.objectContaining({ blockedReason: "GitHub provider request failed" }) }));
 
     const retried = await value.tasks.executeCommand(value.adminId, created.task.id, "publish_draft", { expectedRevision: 1 });
     expect(retried).toMatchObject({ phase: "releasing", revision: 2, pendingAction: "Publishing one exact draft pull request" });

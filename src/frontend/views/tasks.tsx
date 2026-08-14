@@ -186,10 +186,20 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   };
   const create = async (): Promise<void> => {
     if (!companyId || currentCompany?.status !== "active") return;
-    setBusy(true); setCreateError("");
+    setBusy(true); setCreateError(""); setError("");
     try {
       const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, idempotencyKey: crypto.randomUUID() }) });
-      navigate(withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId));
+      const taskPath = withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId);
+      if (result.allowedCommands.includes("start_planning")) {
+        try {
+          await readJson<ApiTask>(`/api/tasks/${encodeURIComponent(result.id)}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: result.revision }) });
+        } catch (reason) {
+          navigate(taskPath);
+          setError(reason instanceof Error ? reason.message : "Unable to start planning");
+          return;
+        }
+      }
+      navigate(taskPath);
     } catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setCreateError(reason instanceof Error ? reason.message : "Unable to create task"); }
     finally { setBusy(false); }
   };

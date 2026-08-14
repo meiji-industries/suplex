@@ -55,6 +55,16 @@ test("reconciliation allowlists only read-only staged-context bootstrap commands
   expect(reconcileDeveloperDelivery(input({ receipts: [loopStarted, loopFinished, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).outcome).toBe("completed");
 });
 
+test("reconciliation accepts only read-only Git verification after the final step", () => {
+  const command = "/bin/zsh -lc 'git status --porcelain=v1 && git rev-parse HEAD^{commit} && git rev-parse HEAD^{tree}'";
+  const finalStarted = { ...receipt("command_started", 4, null, "final-git"), stepNumber: null, summary: command };
+  const finalFinished = { ...receipt("command_finished", 5, 0, "final-git"), stepNumber: null, summary: `${command}\n${git.head}\n${git.tree}` };
+  expect(reconcileDeveloperDelivery(input({ receipts: [receipt("step_started", 1), receipt("command_finished", 2, 0), receipt("step_completed", 3), finalStarted, finalFinished] })).outcome).toBe("completed");
+
+  const mutation = { ...finalFinished, summary: "/bin/zsh -lc 'git commit --allow-empty -m escaped'" };
+  expect(reconcileDeveloperDelivery(input({ receipts: [receipt("step_started", 1), receipt("command_finished", 2, 0), receipt("step_completed", 3), finalStarted, mutation] })).mismatches).toContain("receipt-outside-step");
+});
+
 test("reconciliation accepts successful combined verification commands", () => {
   const verificationCommands = [{ stepNumber: 1, commands: ["pnpm test", "git diff --check"] }];
   const combined = { ...receipt("command_finished", 2, 0), summary: "/bin/zsh -lc 'pnpm test && git diff --check'\npassed" };

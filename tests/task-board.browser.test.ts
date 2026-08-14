@@ -70,13 +70,13 @@ test("the task board shows its workflow lanes on desktop and narrow viewports", 
       });
       database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'planning' WHERE task_id = ?").run(taskId));
       database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'blocked' WHERE task_id = ?").run(successor.task.id));
-      const iconPage = await context.newPage(); await iconPage.goto(`${baseUrl}/tasks?company=${encodeURIComponent(company.id)}`); await iconPage.getByRole("link", { name: /Browser board task/ }).waitFor();
+      const iconPage = await context.newPage(); await iconPage.goto(`${baseUrl}/tasks?company=${encodeURIComponent(company.id)}`); await iconPage.locator('[data-task-row]').filter({ hasText: "Browser board task" }).waitFor();
       expect(await iconPage.getByRole("tab", { name: /All tasks\s+2/ }).isVisible()).toBe(true);
       expect(await iconPage.locator("[data-task-row]").count()).toBe(2);
       expect(await iconPage.getByRole("link", { name: /BRD-1 Browser board task/ }).isVisible()).toBe(true);
-      expect(await iconPage.getByRole("link", { name: /Browser board task/ }).locator("svg.lucide-circle-dot-dashed").count()).toBe(1);
+      expect(await iconPage.locator('[data-task-row]').filter({ hasText: "Browser board task" }).locator("svg.lucide-circle-dot-dashed").count()).toBe(1);
       await iconPage.setViewportSize({ width: 390, height: 844 }); await iconPage.reload();
-      await iconPage.getByRole("link", { name: /Browser board task/ }).waitFor();
+      await iconPage.locator('[data-task-row]').filter({ hasText: "Browser board task" }).waitFor();
       expect(await iconPage.locator("[data-task-row]").count()).toBe(2);
       expect(await iconPage.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true); await iconPage.close();
       database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'backlog' WHERE task_id = ?").run(taskId));

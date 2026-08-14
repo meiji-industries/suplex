@@ -8,10 +8,10 @@ import type { TaskResponse } from "../../../http/contracts/tasks.js";
 export type DeveloperRecoveryView = NonNullable<TaskResponse["developerRecovery"]>;
 
 const labels: Record<DeveloperRecoveryView["status"], string> = {
-  starting: "Starting",
+  starting: "In Progress",
   active: "Active",
   reconnecting: "Reconnecting",
-  result_pending_claim: "Result ready",
+  result_pending_claim: "Finishing",
   interrupted: "Interrupted",
   ownership_ambiguous: "Ownership ambiguous",
   cancellation_requested: "Cancellation requested",
@@ -30,7 +30,7 @@ export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, bus
   const hasActions = recoveryCommands.includes("retry_development") || recoveryCommands.includes("cancel_development") || (isAdmin && recoveryCommands.includes("verify_developer_ownership"));
   return <Card data-developer-recovery role="alert" size="sm">
       <CardHeader>
-        <CardTitle>Developer recovery <Badge variant={attention ? "destructive" : "secondary"}>{labels[recovery.status]}</Badge></CardTitle>
+        <CardTitle>Development <Badge variant={attention ? "destructive" : "secondary"}>{labels[recovery.status]}</Badge></CardTitle>
         <CardDescription>{ambiguous ? "Forge cannot prove ownership of the previous Developer process. Inspect the host process and worktree, stop it outside Forge if necessary, then recheck ownership." : recovery.summary ?? "Forge is tracking the Developer turn."}</CardDescription>
       </CardHeader>
       <CardContent>

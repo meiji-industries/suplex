@@ -161,7 +161,6 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
       const attachmentResponse = await page.request.get(new URL((await attachment.getAttribute("href"))!, page.url()).toString());
       expect(attachmentResponse.status()).toBe(200);
       expect(Buffer.from(await attachmentResponse.body())).toEqual(await readFile(imagePath));
-      await pane.getByRole("button", { name: "Start planning" }).click();
       await pane.locator('[data-status="planning"]').first().waitFor();
       // Capacity admission (#25) records a second planning revision after start_planning.
       await expect.poll(() => apiDatabase!.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE workflow_id = ? ORDER BY revision").all(workflowId))).toEqual([{ revision: 0 }, { revision: 1 }, { revision: 2 }]);

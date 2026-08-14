@@ -128,7 +128,7 @@ export const ExecutionReceiptSchema = z.object({
   executionId: id,
   attempt: z.number().int().positive(),
   sequence: z.number().int().positive(),
-  kind: z.enum(["step_started", "step_completed", "step_blocked", "command_started", "command_finished", "file_change", "test_result", "git_snapshot", "provider_observation", "process_started", "process_finished", "reconciliation"]),
+  kind: z.enum(["step_started", "step_completed", "step_blocked", "agent_update", "tool_call", "command_started", "command_finished", "file_change", "test_result", "git_snapshot", "provider_observation", "process_started", "process_finished", "reconciliation"]),
   stepNumber: z.number().int().positive().nullable(),
   sourceItemId: z.string().max(256).nullable(),
   occurredAt: z.string().datetime(),

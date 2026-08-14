@@ -20,6 +20,13 @@ function isAllowlistedBootstrapReceipt(receipt: ExecutionReceipt, firstStepSeque
   return /^(?:for\b|pwd|git (?:status|rev-parse|log|show|diff|diff-tree)\b|(?:cat|head|tail|sed|ls|find|file|sha256sum|nl|wc|rg)\s+)/.test(command);
 }
 
+function isAllowlistedFinalGitReceipt(receipt: ExecutionReceipt, finalStepSequence: number | undefined): boolean {
+  if (finalStepSequence === undefined || receipt.sequence <= finalStepSequence || !["command_started", "command_finished"].includes(receipt.kind) || (receipt.kind === "command_finished" && receipt.exitCode !== 0)) return false;
+  const command = canonicalCommand(receipt.summary);
+  if (!command || /[<>`|;]|\$\(|\|\|/.test(command)) return false;
+  return command.split(/\s*&&\s*/).every((part) => /^git (?:status|rev-parse|log|show|diff|diff-tree)\b/.test(part));
+}
+
 function matchesVerificationCommand(receipt: ExecutionReceipt, command: string): boolean {
   const actual = canonicalCommand(receipt.summary);
   const expected = canonicalCommand(command);
@@ -124,6 +131,7 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
     const startedByStep = new Map<number, number>();
     const terminalByStep = new Map<number, number>();
     const firstStepSequence = Math.min(Number.MAX_SAFE_INTEGER, ...input.receipts.filter((receipt) => receipt.kind === "step_started").map((receipt) => receipt.sequence));
+    const finalStepSequence = input.receipts.filter((receipt) => receipt.kind === "step_completed" && receipt.stepNumber === reportedSteps.at(-1)).at(-1)?.sequence;
     for (const receipt of input.receipts) {
       if (receipt.kind === "reconciliation" && /Invalid forge-step marker|escaped the owned worktree/i.test(receipt.summary)) mismatches.push("developer-receipt-invalid");
       if (receipt.kind === "step_started") {
@@ -136,7 +144,7 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
         if ((startedByStep.get(receipt.stepNumber!) ?? Number.MAX_SAFE_INTEGER) >= receipt.sequence) mismatches.push(`step-terminal-order:${receipt.stepNumber}`);
         terminalByStep.set(receipt.stepNumber!, receipt.sequence);
       }
-      if (["command_started", "command_finished", "file_change", "test_result"].includes(receipt.kind) && receipt.stepNumber === null && !isAllowlistedBootstrapReceipt(receipt, firstStepSequence)) mismatches.push("receipt-outside-step");
+      if (["command_started", "command_finished", "file_change", "test_result"].includes(receipt.kind) && receipt.stepNumber === null && !isAllowlistedBootstrapReceipt(receipt, firstStepSequence) && !isAllowlistedFinalGitReceipt(receipt, finalStepSequence)) mismatches.push("receipt-outside-step");
       if (receipt.kind === "file_change" && !changedByGit.has(receipt.summary)) mismatches.push("file-change-not-in-final-tree");
     }
     for (const step of reportedSteps) if (!startedByStep.has(step) || !terminalByStep.has(step)) mismatches.push(`missing-step-receipt:${step}`);

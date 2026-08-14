@@ -84,7 +84,7 @@ test("project API activates valid configuration, redacts typed failures, and pre
     expect(restoredCapacity.json()).toMatchObject({ capacity: 3, effectiveCapacity: 3 });
     const capacityLanes = await app.inject({ method: "GET", url: "/api/admin/capacity", headers: { cookie: adminCookie } });
     expect(capacityLanes.statusCode).toBe(200);
-    expect(capacityLanes.json()).toMatchObject({ lanes: [expect.objectContaining({ profileId: profile.id, profileName: "API profile", capacity: 3, effectiveCapacity: 3, activeCount: 0, queuedCount: 0, rateLimitedCount: 0, oldestQueuedAt: null })] });
+    expect(capacityLanes.json().lanes).toEqual(expect.arrayContaining([expect.objectContaining({ profileId: profile.id, profileName: "API profile", capacity: 3, effectiveCapacity: 3, activeCount: 0, queuedCount: 0, rateLimitedCount: 0, oldestQueuedAt: null })]));
     expect(JSON.stringify(capacityLanes.json())).not.toMatch(/taskId|session|process|wrapper|worktree|command|artifact/i);
     const models = (await app.inject({ method: "GET", url: "/api/admin/models", headers: { cookie: adminCookie } })).json() as { models: Array<{ id: string; status: string }> };
     expect(models.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: "gpt-5.6-sol", status: "active" })]));

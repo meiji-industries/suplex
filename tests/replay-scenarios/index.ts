@@ -21,6 +21,8 @@ import { scenario as developerCancellation } from "./developer-cancellation.js";
 import { scenario as developerLinkedRetry } from "./developer-linked-retry.js";
 import { scenario as developerOwnershipAmbiguous } from "./developer-ownership-ambiguous.js";
 import { scenario as developerResultClaim } from "./developer-result-claim.js";
+import { scenario as developerReconciliationRecovery } from "./developer-reconciliation-recovery.js";
+import { scenario as developerBlockedCancellation } from "./developer-blocked-cancellation.js";
 
 export const replayScenarios = [
   normalSuccess,
@@ -45,4 +47,6 @@ export const replayScenarios = [
   developerLinkedRetry,
   developerOwnershipAmbiguous,
   developerResultClaim,
+  developerReconciliationRecovery,
+  developerBlockedCancellation,
 ] as const satisfies readonly ReplayScenarioDefinition[];

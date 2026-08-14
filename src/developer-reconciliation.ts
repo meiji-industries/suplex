@@ -2,7 +2,9 @@ import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 
-import { DeveloperDeliverySchema, ExecutionReceiptSchema, type AuthorizedPlanSubject, type DeveloperDelivery, type EvidenceManifest, type ExecutionReceipt } from "./developer-contracts.js";
+import { z } from "zod";
+
+import { AuthorizedPlanSubjectSchema, DeveloperDeliverySchema, EvidenceManifestSchema, ExecutionReceiptSchema, type AuthorizedPlanSubject, type DeveloperDelivery, type EvidenceManifest, type ExecutionReceipt } from "./developer-contracts.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,10 +17,10 @@ function canonicalCommand(value: string): string {
 
 // Strictly read-only git subcommands the Developer may run outside an active
 // step (pre-step inspection and post-final-step verification). Mutating or
-// ambiguous subcommands (branch, remote, worktree, ...) stay excluded.
-const readOnlyGit = "(?:status|rev-parse|log|show|diff|diff-tree|merge-base|rev-list|ls-files|cat-file|describe)";
+// ambiguous subcommands (remote, worktree, mutating branch forms, ...) stay excluded.
+const readOnlyGit = "(?:status|rev-parse|log|show|diff|diff-tree|merge-base|rev-list|ls-files|cat-file|describe|branch\\s+--show-current)";
 const forbiddenBootstrapCommand = new RegExp(`\\b(?:rm|mv|cp|touch|mkdir|rmdir|chmod|chown|curl|wget)\\b|\\bgit\\s+(?!${readOnlyGit}\\b)`);
-const allowedBootstrapCommand = new RegExp(`^(?:for\\b|pwd|git ${readOnlyGit}\\b|(?:cat|head|tail|sed|ls|find|file|sha256sum|nl|wc|rg)\\s+)`);
+const allowedBootstrapCommand = new RegExp(`^(?:for\\b|pwd|git ${readOnlyGit}\\b|(?:cat|head|tail|sed|ls|find|file|sha256sum|xxd|nl|wc|rg)\\s+)`);
 const allowedFinalGitCommand = new RegExp(`^git ${readOnlyGit}\\b`);
 
 function isAllowlistedBootstrapReceipt(receipt: ExecutionReceipt, firstStepSequence: number): boolean {
@@ -32,7 +34,9 @@ function isAllowlistedFinalGitReceipt(receipt: ExecutionReceipt, finalStepSequen
   if (finalStepSequence === undefined || receipt.sequence <= finalStepSequence || !["command_started", "command_finished"].includes(receipt.kind) || (receipt.kind === "command_finished" && receipt.exitCode !== 0)) return false;
   const command = canonicalCommand(receipt.summary);
   if (!command || /[<>`|;]|\$\(|\|\|/.test(command)) return false;
-  return command.split(/\s*&&\s*/).every((part) => allowedFinalGitCommand.test(part));
+  const parts = command.split(/\s*&&\s*/);
+  if (parts.length === 2 && /^git add\s+\S/.test(parts[0]!) && /^git commit\s+/.test(parts[1]!)) return true;
+  return parts.every((part) => allowedFinalGitCommand.test(part) || (allowedBootstrapCommand.test(part) && !forbiddenBootstrapCommand.test(part)));
 }
 
 function matchesVerificationCommand(receipt: ExecutionReceipt, command: string): boolean {
@@ -85,8 +89,33 @@ export interface DeveloperReconciliation {
   git: DeveloperGitObservation;
   provider: { beforeSha256: string; afterSha256: string | null; matching: boolean };
   receiptCount: number;
+  observations?: {
+    startingSha: string;
+    neutralBranch: string;
+    processExitCode: number | null;
+    malformedLines: number;
+    developerSessionId: string | null;
+    leadSessionId: string | null;
+    verificationCommands: Array<{ stepNumber: number; commands: string[] }>;
+  };
   sha256: string;
 }
+
+const StoredReconciliationSchema = z.object({
+  kind: z.literal("developer-reconciliation"),
+  executionId: z.string().min(1),
+  companyId: z.string().min(1),
+  outcome: z.enum(["completed", "blocked"]),
+  failureCode: z.string().nullable(),
+  mismatches: z.array(z.string()),
+  report: z.unknown().nullable(),
+  authorization: AuthorizedPlanSubjectSchema,
+  manifest: EvidenceManifestSchema,
+  receipts: z.array(ExecutionReceiptSchema),
+  git: z.object({ branch: z.string(), head: z.string(), tree: z.string(), status: z.string(), parents: z.array(z.string()), commitCount: z.number(), isDescendant: z.boolean(), changedPaths: z.array(z.string()) }),
+  provider: z.object({ beforeSha256: z.string(), afterSha256: z.string().nullable(), matching: z.boolean() }),
+  observations: z.object({ startingSha: z.string(), neutralBranch: z.string(), processExitCode: z.number().nullable(), malformedLines: z.number().int().nonnegative(), developerSessionId: z.string().nullable(), leadSessionId: z.string().nullable(), verificationCommands: z.array(z.object({ stepNumber: z.number().int().positive(), commands: z.array(z.string()) })) }).optional(),
+}).passthrough();
 
 export async function collectDeveloperGitObservation(repositoryPath: string, startingSha: string): Promise<DeveloperGitObservation> {
   const run = async (args: string[]) => (await execFileAsync("git", args, { cwd: repositoryPath, timeout: 30_000, maxBuffer: 256 * 1024 })).stdout.trim();
@@ -172,6 +201,19 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
     for (const itemId of commandFinished) if (!commandStarted.has(itemId)) mismatches.push(`command-terminal-without-start:${itemId}`);
     if (report.resultCommit.toLowerCase() !== input.git.head.toLowerCase() || report.resultTree.toLowerCase() !== input.git.tree.toLowerCase() || report.dirtyState !== "clean") mismatches.push("reported-git-state-mismatch");
   }
-  const result: Omit<DeveloperReconciliation, "sha256"> = { kind: "developer-reconciliation", executionId: input.executionId, companyId: input.companyId, outcome: mismatches.length ? "blocked" : "completed", failureCode: mismatches.length ? (mismatches.includes("provider-state-changed") ? "provider-state-changed" : "delivery-reconciliation-failed") : null, mismatches, report, authorization: input.authorization, manifest: input.manifest, receipts: input.receipts, git: input.git, provider: { beforeSha256: input.providerBeforeSha256, afterSha256: input.providerAfterSha256, matching: input.providerBeforeSha256 === input.providerAfterSha256 }, receiptCount: input.receipts.length };
+  const uniqueMismatches = [...new Set(mismatches)];
+  const result: Omit<DeveloperReconciliation, "sha256"> = { kind: "developer-reconciliation", executionId: input.executionId, companyId: input.companyId, outcome: uniqueMismatches.length ? "blocked" : "completed", failureCode: uniqueMismatches.length ? (uniqueMismatches.includes("provider-state-changed") ? "provider-state-changed" : "delivery-reconciliation-failed") : null, mismatches: uniqueMismatches, report, authorization: input.authorization, manifest: input.manifest, receipts: input.receipts, git: input.git, provider: { beforeSha256: input.providerBeforeSha256, afterSha256: input.providerAfterSha256, matching: input.providerBeforeSha256 === input.providerAfterSha256 }, receiptCount: input.receipts.length, observations: { startingSha: input.startingSha, neutralBranch: input.neutralBranch, processExitCode: input.processExitCode, malformedLines: input.malformedLines, developerSessionId: input.developerSessionId, leadSessionId: input.leadSessionId, verificationCommands: input.verificationCommands } };
   return { ...result, sha256: createHash("sha256").update(JSON.stringify(result)).digest("hex") };
+}
+
+/** Re-run only the pure acceptance policy against immutable stored evidence. */
+export function rereconcileDeveloperDelivery(raw: unknown): DeveloperReconciliation | null {
+  const parsed = StoredReconciliationSchema.safeParse(raw);
+  if (!parsed.success || parsed.data.outcome !== "blocked" || parsed.data.failureCode !== "delivery-reconciliation-failed") return null;
+  const prior = parsed.data;
+  const observations = prior.observations ?? (prior.mismatches.length > 0 && prior.mismatches.every((code) => code === "receipt-outside-step")
+    ? { startingSha: prior.git.parents[0] ?? "", neutralBranch: prior.git.branch, processExitCode: 0, malformedLines: 0, developerSessionId: "legacy-developer-session", leadSessionId: "legacy-lead-session", verificationCommands: prior.manifest.verificationCommands }
+    : null);
+  if (!observations) return null;
+  return reconcileDeveloperDelivery({ executionId: prior.executionId, companyId: prior.companyId, report: prior.report, receipts: prior.receipts, git: prior.git, startingSha: observations.startingSha, neutralBranch: observations.neutralBranch, providerBeforeSha256: prior.provider.beforeSha256, providerAfterSha256: prior.provider.afterSha256, processExitCode: observations.processExitCode, malformedLines: observations.malformedLines, developerSessionId: observations.developerSessionId, leadSessionId: observations.leadSessionId, authorization: prior.authorization, manifest: prior.manifest, verificationCommands: observations.verificationCommands });
 }

@@ -21,6 +21,7 @@ const EXTERNAL_AGENT_RETRY_POLICY = {
 
 export const { runLeadPlanning } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
+  scheduleToCloseTimeout: "25 minutes",
   heartbeatTimeout: "15 seconds",
   cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: EXTERNAL_AGENT_RETRY_POLICY,
@@ -28,6 +29,7 @@ export const { runLeadPlanning } = proxyActivities<IssueActivities>({
 
 export const { runSupplementalReview, consolidateLeadPlan } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
+  scheduleToCloseTimeout: "25 minutes",
   heartbeatTimeout: "15 seconds",
   cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: EXTERNAL_AGENT_RETRY_POLICY,
@@ -35,12 +37,14 @@ export const { runSupplementalReview, consolidateLeadPlan } = proxyActivities<Is
 
 export const { runDeveloperExecution } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
+  scheduleToCloseTimeout: "65 minutes",
   heartbeatTimeout: "15 seconds",
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 
 export const { runDeveloperExecutionSupervised, runDeveloperRepairSupervised, resolveMergeConflictSupervised } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
+  scheduleToCloseTimeout: "65 minutes",
   heartbeatTimeout: "15 seconds",
   cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: { maximumAttempts: 100, initialInterval: "1 second", maximumInterval: "30 seconds", nonRetryableErrorTypes: ["developer-ownership-ambiguous", "developer-result-claim-conflict"] },
@@ -56,6 +60,12 @@ export const { findActiveDeveloperExecution } = proxyActivities<IssueActivities>
 export const { observeDeveloperExecution } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
   retry: { maximumAttempts: 1 },
+});
+
+export const { reconcileDeveloperDeliveryEvidence } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "1 minute",
+  scheduleToCloseTimeout: "2 minutes",
+  retry: { maximumAttempts: 3, initialInterval: "1 second", maximumInterval: "10 seconds" },
 });
 
 export const { cancelCapacityExecution } = proxyActivities<IssueActivities>({
@@ -88,6 +98,7 @@ export const { recordDecisionBlockerResolution } = proxyActivities<IssueActiviti
 
 export const { reviewDelivery } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
+  scheduleToCloseTimeout: "25 minutes",
   heartbeatTimeout: "15 seconds",
   cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: EXTERNAL_AGENT_RETRY_POLICY,
@@ -100,6 +111,7 @@ export const { recordDeliveryBlocker } = proxyActivities<DeliveryBlockerActiviti
 
 export const { runDeveloperRepair } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
+  scheduleToCloseTimeout: "65 minutes",
   heartbeatTimeout: "15 seconds",
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
@@ -121,6 +133,7 @@ export const { reconcileTargetBase } = proxyActivities<IssueActivities>({
 
 export const { planMergeConflict } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
+  scheduleToCloseTimeout: "25 minutes",
   heartbeatTimeout: "15 seconds",
   cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: EXTERNAL_AGENT_RETRY_POLICY,
@@ -128,6 +141,7 @@ export const { planMergeConflict } = proxyActivities<IssueActivities>({
 
 export const { resolveMergeConflict } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
+  scheduleToCloseTimeout: "65 minutes",
   heartbeatTimeout: "15 seconds",
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
@@ -139,16 +153,19 @@ export const { reconcileCi } = proxyActivities<IssueActivities>({
 
 export const { planCiRepair } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
+  scheduleToCloseTimeout: "25 minutes",
   retry: { maximumAttempts: 1 },
 });
 
 export const { runCiRepair } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
+  scheduleToCloseTimeout: "65 minutes",
   retry: { maximumAttempts: 1 },
 });
 
 export const { finalReview } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
+  scheduleToCloseTimeout: "25 minutes",
   heartbeatTimeout: "15 seconds",
   cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: EXTERNAL_AGENT_RETRY_POLICY,
@@ -156,6 +173,7 @@ export const { finalReview } = proxyActivities<IssueActivities>({
 
 export const { planDeliveryRepair } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
+  scheduleToCloseTimeout: "25 minutes",
   retry: { maximumAttempts: 1 },
 });
 

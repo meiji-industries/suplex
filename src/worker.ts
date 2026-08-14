@@ -7,10 +7,11 @@ import { createActivities } from "./temporal/activities.js";
 import { StructuredLogger } from "./logging.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { reconcileDeveloperExecutions } from "./developer-recovery.js";
+import { activateLocalWorkerDeployment, reconcileBlockedDeveloperDeliveries, routeWorkflowToCurrentDeployment } from "./developer-reconciliation-recovery.js";
 import { reconcileSuccessorIntents } from "./successor-recovery.js";
 import { reconcileTaskCreationIntents } from "./task-creation-recovery.js";
 import { activityPayloadInterceptors } from "./temporal/payload-boundary-interceptors.js";
-import { buildProductionWorkflowBundle, temporalDataConverter } from "./temporal/workflow-bundle.js";
+import { buildProductionWorkflowBundle, temporalDataConverter, workflowBundleBuildId } from "./temporal/workflow-bundle.js";
 import { reconcileAgentExecutions } from "./agent-recovery.js";
 import { CapacityManager } from "./capacity.js";
 
@@ -18,6 +19,10 @@ export function workerHasLivePollers(status: Pick<WorkerStatus, "runState" | "wo
   return status.runState === "RUNNING"
     && status.workflowPollerState === "POLLING"
     && status.activityPollerState === "POLLING";
+}
+
+export function deploymentVersionOptions(installationId: string, buildId: string) {
+  return { useWorkerVersioning: true as const, version: { deploymentName: runtimeIdentifiers(installationId).ownerLabel, buildId }, defaultVersioningBehavior: "AUTO_UPGRADE" as const };
 }
 
 async function waitForWorkerPolling(worker: Worker, failure: { error?: unknown }, timeoutMs = 30_000): Promise<void> {
@@ -38,11 +43,11 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   const database = new ForgeDatabase(config.databasePath);
   const identifiers = runtimeIdentifiers(config.installationId);
   const workerId = `${identifiers.workerPrefix}-${process.pid}`;
-  const buildId = identifiers.buildId;
   let connection: NativeConnection | undefined;
   let worker: Worker | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
   let creationRecovery: Promise<void> | undefined;
+  let deliveryRecovery: Promise<number> | undefined;
   let shutdown: (() => void) | undefined;
   try {
     await reconcileAgentExecutions(database);
@@ -51,13 +56,15 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
     await reconcileTaskCreationIntents(database, config);
     new CapacityManager(database, config).reconcileFromLedgers();
     connection = await NativeConnection.connect(temporalConnectionOptions(config));
+    const workflowBundle = await buildProductionWorkflowBundle();
+    const buildId = workflowBundleBuildId(config.installationId, workflowBundle);
     worker = await Worker.create({
       connection,
       namespace: config.temporalNamespace,
       taskQueue: config.taskQueue,
       identity: workerId,
-      buildId,
-      workflowBundle: await buildProductionWorkflowBundle(),
+      workerDeploymentOptions: deploymentVersionOptions(config.installationId, buildId),
+      workflowBundle,
       dataConverter: temporalDataConverter,
       interceptors: { activity: activityPayloadInterceptors },
       activities: createActivities(database, config),
@@ -70,6 +77,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       throw error;
     });
     await waitForWorkerPolling(worker, failure);
+    await activateLocalWorkerDeployment(connection, config, buildId, workerId);
     const refreshRegistration = (): void => {
       if (worker && workerHasLivePollers(worker.getStatus())) {
         database.registerWorker({ workerId, taskQueue: config.taskQueue, buildId });
@@ -80,6 +88,11 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
         creationRecovery = reconcileTaskCreationIntents(database, config)
           .catch((error: unknown) => new StructuredLogger().error("Task creation reconciliation failed", {}, { error: error instanceof Error ? error.message : "unknown error" }))
           .finally(() => { creationRecovery = undefined; });
+      }
+      if (!deliveryRecovery) {
+        deliveryRecovery = reconcileBlockedDeveloperDeliveries(database, config, undefined, (workflowId) => routeWorkflowToCurrentDeployment(connection!, config, workflowId, workerId))
+          .catch((error: unknown) => { new StructuredLogger().error("Developer delivery reconciliation failed", {}, { error: error instanceof Error ? error.message : "unknown error" }); return 0; })
+          .finally(() => { deliveryRecovery = undefined; });
       }
     };
     refreshRegistration();
@@ -102,6 +115,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       clearInterval(heartbeat);
     }
     await creationRecovery;
+    await deliveryRecovery;
     database.unregisterWorker(workerId);
     if (shutdown) {
       process.removeListener("SIGTERM", shutdown);
@@ -114,6 +128,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       clearInterval(heartbeat);
     }
     await creationRecovery;
+    await deliveryRecovery;
     worker?.shutdown();
     database.unregisterWorker(workerId);
     if (shutdown) {

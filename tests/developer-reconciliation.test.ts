@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { reconcileDeveloperDelivery } from "../src/developer-reconciliation.js";
+import { reconcileDeveloperDelivery, rereconcileDeveloperDelivery } from "../src/developer-reconciliation.js";
 
 const git = { branch: "work/issue/task_1", head: "b".repeat(40), tree: "c".repeat(40), status: "", parents: ["a".repeat(40)], commitCount: 1, isDescendant: true, changedPaths: ["README.md"] };
 const receipt = (kind: "step_started" | "step_completed" | "command_started" | "command_finished", sequence: number, exitCode: number | null = null, sourceItemId: string | null = null) => ({ eventId: `event_${sequence}`, executionId: "developer_1", attempt: 1, sequence, kind, stepNumber: 1, sourceItemId, occurredAt: "2026-08-11T00:00:00.000Z", summary: kind === "command_finished" ? "pnpm test" : kind, exitCode, artifactId: null, artifactSha256: null, idempotencyKey: `key_${sequence}` });
@@ -57,8 +57,32 @@ test("reconciliation allowlists only read-only staged-context bootstrap commands
   const gitInspectionStarted = { ...bootstrapStarted, summary: "/bin/zsh -lc 'ls -la .forge-context/execution; git status --porcelain=v1; git rev-parse HEAD''^; git merge-base HEAD origin/main; git diff --stat HEAD''^ HEAD; git diff HEAD''^ HEAD -- README.md'" };
   const gitInspectionFinished = { ...bootstrapFinished, summary: `${gitInspectionStarted.summary}\n` };
   expect(reconcileDeveloperDelivery(input({ receipts: [gitInspectionStarted, gitInspectionFinished, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).outcome).toBe("completed");
+  const currentBranchStarted = { ...bootstrapStarted, summary: "/bin/zsh -lc 'sed -n 1,20p README.md && git branch --show-current && git log -1 --oneline'" };
+  const currentBranchFinished = { ...bootstrapFinished, summary: `${currentBranchStarted.summary}\nwork/issue/task_1` };
+  expect(reconcileDeveloperDelivery(input({ receipts: [currentBranchStarted, currentBranchFinished, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).outcome).toBe("completed");
   const branchMutation = { ...bootstrapFinished, summary: "/bin/zsh -lc 'git branch escaped'\n" };
   expect(reconcileDeveloperDelivery(input({ receipts: [bootstrapStarted, branchMutation, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).mismatches).toContain("receipt-outside-step");
+});
+
+test("reconciliation accepts a read-only hex inspection before the first step and reports one finding per command", () => {
+  const started = { ...receipt("command_started", 1, null, "inspect-brief"), stepNumber: null, summary: "/bin/zsh -lc 'xxd -g 1 .forge-context/execution/task_brief-artifact_1.md'" };
+  const finished = { ...receipt("command_finished", 2, 0, "inspect-brief"), stepNumber: null, summary: `${started.summary}\n00000000: 23 20 42 72 69 65 66` };
+  const receipts = [started, finished, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)];
+
+  expect(reconcileDeveloperDelivery(input({ receipts })).outcome).toBe("completed");
+
+  const unsafe = receipts.map((item) => item.sourceItemId === "inspect-brief" ? { ...item, summary: "/bin/zsh -lc 'touch escaped.txt'" } : item);
+  expect(reconcileDeveloperDelivery(input({ receipts: unsafe })).mismatches.filter((code) => code === "receipt-outside-step")).toHaveLength(1);
+});
+
+test("stored policy-only failures can be reconciled without another Developer turn", () => {
+  const started = { ...receipt("command_started", 1, null, "inspect-brief"), stepNumber: null, summary: "/bin/zsh -lc 'xxd -g 1 .forge-context/execution/task_brief-artifact_1.md'" };
+  const finished = { ...receipt("command_finished", 2, 0, "inspect-brief"), stepNumber: null, summary: `${started.summary}\n00000000: 23 20 42 72 69 65 66` };
+  const current = reconcileDeveloperDelivery(input({ receipts: [started, finished, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] }));
+  const { observations: _observations, ...legacy } = current;
+  const prior = { ...legacy, outcome: "blocked", failureCode: "delivery-reconciliation-failed", mismatches: ["receipt-outside-step", "receipt-outside-step"] };
+
+  expect(rereconcileDeveloperDelivery(prior)).toMatchObject({ outcome: "completed", mismatches: [] });
 });
 
 test("reconciliation accepts only read-only Git verification after the final step", () => {
@@ -69,6 +93,12 @@ test("reconciliation accepts only read-only Git verification after the final ste
 
   const mutation = { ...finalFinished, summary: "/bin/zsh -lc 'git commit --allow-empty -m escaped'" };
   expect(reconcileDeveloperDelivery(input({ receipts: [receipt("step_started", 1), receipt("command_finished", 2, 0), receipt("step_completed", 3), finalStarted, mutation] })).mismatches).toContain("receipt-outside-step");
+
+  const commitStarted = { ...receipt("command_started", 4, null, "final-commit"), stepNumber: null, summary: "/bin/zsh -lc 'git add README.md && git commit -m \"Finish delivery\"'" };
+  const commitFinished = { ...receipt("command_finished", 5, 0, "final-commit"), stepNumber: null, summary: `${commitStarted.summary}\ncommitted` };
+  const inspectStarted = { ...receipt("command_started", 6, null, "final-inspect"), stepNumber: null, summary: "/bin/zsh -lc 'git rev-parse HEAD && git status --short && rg -n Delivered README.md'" };
+  const inspectFinished = { ...receipt("command_finished", 7, 0, "final-inspect"), stepNumber: null, summary: `${inspectStarted.summary}\nclean` };
+  expect(reconcileDeveloperDelivery(input({ receipts: [receipt("step_started", 1), receipt("command_finished", 2, 0), receipt("step_completed", 3), commitStarted, commitFinished, inspectStarted, inspectFinished] })).outcome).toBe("completed");
 });
 
 test("reconciliation accepts successful combined verification commands", () => {

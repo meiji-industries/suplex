@@ -112,7 +112,7 @@ export class DeveloperEvidenceBuilder {
     const entries: EvidenceManifest["entries"] = [{ kind: "final_plan", artifactId: row.id, repositoryPath: null, sha256: row.sha256, byteSize: planBytes.length, stagedFilename: "final-plan.json", planStepNumbers: allStepNumbers }];
     const addArtifact = async (artifact: ArtifactRow, kind: "task_brief" | "evidence" | "image", stepsForEntry: number[]) => {
       const bytes = await this.artifacts.read({ companyId: subject.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 });
-      entries.push({ kind, artifactId: artifact.id, repositoryPath: null, sha256: artifact.sha256, byteSize: bytes.length, stagedFilename: `${kind}-${artifact.id}.bin`, planStepNumbers: stepsForEntry });
+      entries.push({ kind, artifactId: artifact.id, repositoryPath: null, sha256: artifact.sha256, byteSize: bytes.length, stagedFilename: `${kind}-${artifact.id}${kind === "task_brief" ? ".md" : ".bin"}`, planStepNumbers: stepsForEntry });
     };
     if (contextResult.data.includeTaskBrief) {
       const brief = this.database.authQuery((db) => db.prepare("SELECT id, company_id, kind, filename, storage_path, sha256, byte_size FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-brief'").get(row.brief_artifact_id, subject.companyId) as ArtifactRow | undefined);

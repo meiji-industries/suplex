@@ -78,6 +78,9 @@ export interface IssueWorkflowContext {
   readonly decisionResolutionProjectionPatch: string;
   readonly exhaustedActivityRecoveryPatch: string;
   readonly developerFailureRecoveryPatch: string;
+  readonly developerReconciliationRecoveryPatch: string;
+  readonly developerBlockedRecoveryStatePatch: string;
+  readonly cancelBlockedDeveloperResultPatch: string;
   readonly artifactBackedReviewPatch: string;
   readonly exactDeliveryReviewPatch: string;
   readonly typedReleaseResultPatch: string;

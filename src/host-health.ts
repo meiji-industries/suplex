@@ -10,6 +10,7 @@ import { checkGithubAuthentication } from "./provider-readiness.js";
 import { checkBackupHealth } from "./backup.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { TemporalHealthProbe } from "./temporal/service.js";
+import { buildProductionWorkflowBundle, workflowBundleBuildId } from "./temporal/workflow-bundle.js";
 
 const minimumFreeBytes = 100 * 1024 * 1024;
 const workerHeartbeatMaxAgeMs = 30_000;
@@ -73,7 +74,7 @@ export async function checkArtifactRoot(root: string): Promise<HealthCheck> {
   }
 }
 
-export async function checkWorker(database: ForgeDatabase, taskQueue: string, installationId: string): Promise<HealthCheck> {
+export async function checkWorker(database: ForgeDatabase, taskQueue: string, installationId: string, expectedBuildId = runtimeIdentifiers(installationId).buildId): Promise<HealthCheck> {
   const worker = database.workerHealth(taskQueue);
   const identifiers = runtimeIdentifiers(installationId);
   if (!worker) {
@@ -87,7 +88,7 @@ export async function checkWorker(database: ForgeDatabase, taskQueue: string, in
   }
   const expectedWorkerPrefix = `${identifiers.workerPrefix}-`;
   const identityMatches = worker.workerId.startsWith(expectedWorkerPrefix);
-  const buildMatches = worker.buildId === identifiers.buildId;
+  const buildMatches = worker.buildId === expectedBuildId;
   const heartbeatIsRecent = worker.heartbeatAgeMs >= 0 && worker.heartbeatAgeMs <= workerHeartbeatMaxAgeMs;
   const healthy = identityMatches && buildMatches && heartbeatIsRecent;
   const summary = healthy
@@ -117,7 +118,7 @@ export function createHostHealthDependencies(config: ForgeConfig, database: Forg
     temporal: () => temporal.check(),
     database: () => checkDatabase(database),
     artifactRoot: () => checkArtifactRoot(config.artifactRoot),
-    worker: () => checkWorker(database, config.taskQueue, config.installationId),
+    worker: async () => checkWorker(database, config.taskQueue, config.installationId, workflowBundleBuildId(config.installationId, await buildProductionWorkflowBundle())),
     codexAuth: () => agent.check(),
     ghAuth: checkGithubAuthentication(process.env.FORGE_GH_COMMAND ?? "gh"),
     backup: () => checkBackupHealth(config),

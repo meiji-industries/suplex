@@ -11,12 +11,14 @@ const base = { allowedCommands: ["cancel_development"], createdAt: "2026-08-13T0
 afterEach(() => vi.useRealTimers());
 
 test("agent avatars are square robots and human avatars are circular", () => {
-  const agent = renderToStaticMarkup(createElement(ProfileAvatar, { name: "Analyst", seed: "agent-seed" }));
-  const human = renderToStaticMarkup(createElement(ProfileAvatar, { name: "Adam", seed: "human-seed", collection: "pixel-art-neutral" }));
-  expect(agent).toContain("/bottts-neutral/svg?seed=agent-seed");
-  expect(agent).toContain('data-shape="square"');
-  expect(human).toContain("/pixel-art-neutral/svg?seed=human-seed");
-  expect(human).toContain('data-shape="circle"');
+  const agentElement = ProfileAvatar({ name: "Analyst", seed: "agent-seed" });
+  const humanElement = ProfileAvatar({ name: "Adam", seed: "human-seed", collection: "pixel-art-neutral" });
+  const agentImage = (agentElement.props as { children: Array<{ props: { src: string } }> }).children[0]!;
+  const humanImage = (humanElement.props as { children: Array<{ props: { src: string } }> }).children[0]!;
+  expect(agentImage.props.src).toContain("/bottts-neutral/svg?seed=agent-seed");
+  expect(renderToStaticMarkup(agentElement)).toContain('data-shape="square"');
+  expect(humanImage.props.src).toContain("/pixel-art-neutral/svg?seed=human-seed");
+  expect(renderToStaticMarkup(humanElement)).toContain('data-shape="circle"');
 });
 
 test("Build animation requires a fresh Developer heartbeat", () => {

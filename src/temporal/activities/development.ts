@@ -8,6 +8,12 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
     async findActiveDeveloperExecution(input) {
       return database.authQuery((db) => db.prepare("SELECT id AS executionId, session_ref AS sessionRef FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status IN ('starting', 'running', 'cancelling') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId) as { executionId: string; sessionRef: string } | undefined) ?? null;
     },
+    async reconcileDeveloperDeliveryEvidence(input) {
+      const result = await defaultDeveloper.reconcileStoredDelivery(input);
+      if (!result) return null;
+      const { worktreePath: _worktreePath, ...safeResult } = result;
+      return safeResult;
+    },
     async runDeveloperExecution(input) {
       const operation = developer.run ? developer.run.bind(developer) : defaultDeveloper.run.bind(defaultDeveloper);
       const result = await invokeAgent(input, () => operation(input));
@@ -17,7 +23,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
       const { worktreePath: _worktreePath, ...safeResult } = result;
       const deliveryArtifactSha256 = artifactSha256(input.companyId, safeResult.deliveryArtifactId);
       const evidenceArtifactSha256 = artifactSha256(input.companyId, safeResult.evidenceArtifactId);
-      const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, "agent_contradiction", "developer_delivery_blocked", safeResult.deliverySummary) : undefined;
+      const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, safeResult.failureCode === "delivery-reconciliation-failed" ? "unsafe_recovery" : "agent_contradiction", safeResult.failureCode ?? "developer_delivery_blocked", safeResult.deliverySummary) : undefined;
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, ...(deliveryArtifactSha256 ? { deliveryArtifactSha256 } : {}), ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) });
     },
     async runDeveloperExecutionSupervised(input) {
@@ -28,7 +34,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
         const { worktreePath: _worktreePath, ...safeResult } = result;
         const deliveryArtifactSha256 = artifactSha256(input.companyId, safeResult.deliveryArtifactId);
         const evidenceArtifactSha256 = artifactSha256(input.companyId, safeResult.evidenceArtifactId);
-        const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, "agent_contradiction", "developer_delivery_blocked", safeResult.deliverySummary) : undefined;
+        const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, safeResult.failureCode === "delivery-reconciliation-failed" ? "unsafe_recovery" : "agent_contradiction", safeResult.failureCode ?? "developer_delivery_blocked", safeResult.deliverySummary) : undefined;
         return { ...safeResult, ...(deliveryArtifactSha256 ? { deliveryArtifactSha256 } : {}), ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) };
       });
     },

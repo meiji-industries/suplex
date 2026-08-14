@@ -119,6 +119,7 @@ export interface DeveloperExecutionResult {
   attentionEvidenceSha256?: string;
   deliverySummary: string;
   outcome: "completed" | "blocked";
+  failureCode?: string | null;
   reconciliationArtifactId?: string;
   providerObservationArtifactId?: string;
 }
@@ -224,6 +225,7 @@ export interface DevelopmentActivities {
   findActiveDeveloperExecution(input: { taskId: string; companyId: string; workflowId: string }): Promise<{ executionId: string; sessionRef: string } | null>;
   cancelDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<DeveloperCancellationResult>;
   observeDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<DeveloperOwnershipObservation>;
+  reconcileDeveloperDeliveryEvidence(input: { taskId: string; companyId: string; workflowId: string; developerExecutionId: string }): Promise<WorkflowDeveloperExecutionResult | null>;
   runDeveloperExecution(input: DeveloperExecutionActivityInput): Promise<WorkflowDeveloperExecutionResult>;
   runDeveloperExecutionSupervised(input: SupervisedDeveloperExecutionActivityInput): Promise<DeveloperTurnActivityOutcome<WorkflowDeveloperExecutionResult>>;
   runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput): Promise<WorkflowDeveloperRepairResult>;

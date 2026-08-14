@@ -79,6 +79,9 @@ const planGovernancePatch = "forge-plan-governance-v1";
 const planningProjectionIntegrityPatch = "forge-planning-projection-integrity-v1";
 const distinctPlanningStatesPatch = "forge-distinct-planning-states-v1";
 const developerFailureRecoveryPatch = "forge-developer-failure-recovery-v1";
+const developerReconciliationRecoveryPatch = "forge-developer-reconciliation-recovery-v1";
+const developerBlockedRecoveryStatePatch = "forge-developer-blocked-recovery-state-v1";
+const cancelBlockedDeveloperResultPatch = "forge-cancel-blocked-developer-result-v1";
 const captureInitialProjectionStatePatch = "forge-capture-initial-projection-state-v1";
 const artifactBackedConflictPatch = "forge-artifact-backed-conflict-evidence-v1";
 const artifactBackedReviewPatch = "forge-artifact-backed-review-evidence-v1";
@@ -314,6 +317,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     decisionResolutionProjectionPatch,
     exhaustedActivityRecoveryPatch,
     developerFailureRecoveryPatch,
+    developerReconciliationRecoveryPatch,
+    developerBlockedRecoveryStatePatch,
+    cancelBlockedDeveloperResultPatch,
     artifactBackedReviewPatch,
     exactDeliveryReviewPatch,
     typedReleaseResultPatch,

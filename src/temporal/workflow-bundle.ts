@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { createHash } from "node:crypto";
 
 import { bundleWorkflowCode, type WorkflowBundleWithSourceMap } from "@temporalio/worker";
 
@@ -27,6 +28,10 @@ export function productionWorkflowBundleOptions(): {
 export function buildProductionWorkflowBundle(): Promise<WorkflowBundleWithSourceMap> {
   productionBundle ??= bundleWorkflowCode(productionWorkflowBundleOptions());
   return productionBundle;
+}
+
+export function workflowBundleBuildId(installationId: string, bundle: Pick<WorkflowBundleWithSourceMap, "code">): string {
+  return `build-${installationId}-${createHash("sha256").update(bundle.code).digest("hex").slice(0, 16)}`;
 }
 
 export function resetProductionWorkflowBundleForTests(): void {

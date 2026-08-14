@@ -31,7 +31,7 @@ test("Developer evidence admits only the exact supplemental review that was avai
     const artifacts = new ArtifactStore(config.artifactRoot);
     const brief = await artifacts.put("company_1", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from("Task brief") });
     const supplemental = await artifacts.put("company_1", "supplemental-review", { filename: "review.json", mimeType: "application/json", bytes: Buffer.from('{"summary":"Exact review used by Lead"}') });
-    const planValue = { steps: [{ number: 1, verificationCommands: ["pnpm test"] }], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [supplemental.id], imageArtifactIds: [], repositoryInstructionPaths: ["AGENTS.md"], artifactStepNumbers: { [supplemental.id]: [1] } } };
+    const planValue = { steps: [{ number: 1, verificationCommands: ["pnpm test"] }], developerContext: { includeTaskBrief: true, evidenceArtifactIds: [supplemental.id], imageArtifactIds: [], repositoryInstructionPaths: ["AGENTS.md"], artifactStepNumbers: { [supplemental.id]: [1] } } };
     const plan = await artifacts.put("company_1", "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify(planValue)) });
     const now = "2026-08-12T00:00:00.000Z";
     const commitSha = (await run("git", ["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
@@ -51,6 +51,7 @@ test("Developer evidence admits only the exact supplemental review that was avai
     const retry = await builder.build({ subject, executionId: "execution_1" });
     expect(retry.manifest).toEqual(result.manifest);
     expect(result.manifest.entries).toContainEqual(expect.objectContaining({ kind: "evidence", artifactId: supplemental.id, planStepNumbers: [1] }));
+    expect(result.manifest.entries).toContainEqual(expect.objectContaining({ kind: "task_brief", artifactId: brief.id, stagedFilename: `task_brief-${brief.id}.md` }));
     expect(result.manifest.entries).toContainEqual(expect.objectContaining({ kind: "repository_instruction", repositoryPath: "AGENTS.md", planStepNumbers: [1] }));
     expect(result.gitPresentation).toEqual({ branchSlug: "task", pullRequestTitle: "Task", pullRequestDescription: "Task." });
   } finally {

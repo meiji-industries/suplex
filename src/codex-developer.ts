@@ -20,7 +20,7 @@ import type { GithubReleasePort } from "./github-release.js";
 import { createGitCommandGuard, withWorktreeMiseTrust, WorktreeManager } from "./worktrees.js";
 import { activateOwnedWorktree, reserveOwnedWorktree } from "./worktrees.js";
 import { DeveloperEvidenceBuilder } from "./developer-evidence.js";
-import { collectDeveloperGitObservation, reconcileDeveloperDelivery } from "./developer-reconciliation.js";
+import { collectDeveloperGitObservation, reconcileDeveloperDelivery, rereconcileDeveloperDelivery } from "./developer-reconciliation.js";
 import { AuthorizedPlanSubjectSchema, ExecutionReceiptSchema, type ExecutionReceipt } from "./developer-contracts.js";
 import { createGithubAdapter, type GithubAdapter, type GithubMutationSurface } from "./github.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
@@ -440,11 +440,32 @@ export class DeveloperService {
     });
   }
 
+  async reconcileStoredDelivery(input: { taskId: string; companyId: string; workflowId: string; developerExecutionId: string }): Promise<DeveloperExecutionResult | null> {
+    const row = this.database.authQuery((db) => db.prepare(`SELECT a.storage_path AS storagePath, a.sha256
+      FROM forge_developer_executions e
+      JOIN forge_developer_execution_truth t ON t.execution_id = e.id
+      JOIN forge_artifacts a ON a.id = t.reconciliation_artifact_id AND a.company_id = e.company_id AND a.kind = 'developer-reconciliation'
+      WHERE e.id = ? AND e.task_id = ? AND e.company_id = ? AND e.workflow_id = ? AND e.status = 'blocked' AND e.failure_code = 'delivery-reconciliation-failed'`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { storagePath: string; sha256: string } | undefined);
+    if (!row) return null;
+    let reconciliation;
+    try {
+      reconciliation = rereconcileDeveloperDelivery(JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: row.storagePath, sha256: row.sha256 })).toString("utf8")));
+    } catch { return null; }
+    if (!reconciliation || reconciliation.outcome !== "completed") return null;
+    const artifact = await this.artifacts.putIdempotent(input.companyId, "developer-reconciliation", `${input.developerExecutionId}:reconciliation:v2`, { filename: `${input.developerExecutionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(reconciliation), "utf8") });
+    this.database.authTransaction((db) => {
+      registerArtifact(db, artifact);
+      db.prepare("UPDATE forge_developer_execution_truth SET reconciliation_artifact_id = ?, reconciliation_sha256 = ? WHERE execution_id = ?").run(artifact.id, artifact.sha256, input.developerExecutionId);
+      db.prepare("UPDATE forge_developer_executions SET status = 'completed', delivery_artifact_id = ?, failure_code = NULL, failure_summary = NULL WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND status = 'blocked' AND failure_code = 'delivery-reconciliation-failed'").run(artifact.id, input.developerExecutionId, input.taskId, input.companyId, input.workflowId);
+    });
+    return this.storedAuthorizedResult(input.developerExecutionId) ?? null;
+  }
+
   private storedAuthorizedResult(executionId: string): DeveloperExecutionResult | undefined {
-    const row = this.database.authQuery((db) => db.prepare(`SELECT e.status, e.session_ref AS sessionRef, e.worktree_path AS worktreePath, e.branch_name AS branchName, e.target_base_sha AS targetBaseSha, e.current_step AS currentStep, e.result_commit AS resultCommit, e.result_tree AS resultTree, e.dirty_state AS dirtyState, e.delivery_artifact_id AS deliveryArtifactId, e.evidence_artifact_id AS evidenceArtifactId, e.failure_summary AS failureSummary, t.reconciliation_artifact_id AS reconciliationArtifactId, t.before_provider_artifact_id AS providerObservationArtifactId
-      FROM forge_developer_executions e JOIN forge_developer_execution_truth t ON t.execution_id = e.id WHERE e.id = ?`).get(executionId) as { status: string; sessionRef: string | null; worktreePath: string; branchName: string; targetBaseSha: string; currentStep: number | null; resultCommit: string | null; resultTree: string | null; dirtyState: "clean" | "dirty" | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null; failureSummary: string | null; reconciliationArtifactId: string | null; providerObservationArtifactId: string | null } | undefined);
+    const row = this.database.authQuery((db) => db.prepare(`SELECT e.status, e.session_ref AS sessionRef, e.worktree_path AS worktreePath, e.branch_name AS branchName, e.target_base_sha AS targetBaseSha, e.current_step AS currentStep, e.result_commit AS resultCommit, e.result_tree AS resultTree, e.dirty_state AS dirtyState, e.delivery_artifact_id AS deliveryArtifactId, e.evidence_artifact_id AS evidenceArtifactId, e.failure_code AS failureCode, e.failure_summary AS failureSummary, t.reconciliation_artifact_id AS reconciliationArtifactId, t.before_provider_artifact_id AS providerObservationArtifactId
+      FROM forge_developer_executions e JOIN forge_developer_execution_truth t ON t.execution_id = e.id WHERE e.id = ?`).get(executionId) as { status: string; sessionRef: string | null; worktreePath: string; branchName: string; targetBaseSha: string; currentStep: number | null; resultCommit: string | null; resultTree: string | null; dirtyState: "clean" | "dirty" | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null; failureCode: string | null; failureSummary: string | null; reconciliationArtifactId: string | null; providerObservationArtifactId: string | null } | undefined);
     if (!row || !["completed", "blocked"].includes(row.status) || !row.sessionRef || !row.resultCommit || !row.resultTree || !row.dirtyState || !row.deliveryArtifactId || !row.evidenceArtifactId || !row.reconciliationArtifactId) return undefined;
-    return { developerExecutionId: executionId, developerSessionRef: row.sessionRef, worktreePath: row.worktreePath, branchName: row.branchName, targetBaseSha: row.targetBaseSha, currentStep: row.currentStep, resultCommit: row.resultCommit, resultTree: row.resultTree, dirtyState: row.dirtyState, deliveryArtifactId: row.deliveryArtifactId, evidenceArtifactId: row.evidenceArtifactId, deliverySummary: row.failureSummary ?? (row.status === "completed" ? "Developer delivery reconciled" : "Developer delivery was blocked by reconciliation"), outcome: row.status as "completed" | "blocked", reconciliationArtifactId: row.reconciliationArtifactId, ...(row.providerObservationArtifactId ? { providerObservationArtifactId: row.providerObservationArtifactId } : {}) };
+    return { developerExecutionId: executionId, developerSessionRef: row.sessionRef, worktreePath: row.worktreePath, branchName: row.branchName, targetBaseSha: row.targetBaseSha, currentStep: row.currentStep, resultCommit: row.resultCommit, resultTree: row.resultTree, dirtyState: row.dirtyState, deliveryArtifactId: row.deliveryArtifactId, evidenceArtifactId: row.evidenceArtifactId, deliverySummary: row.failureSummary ?? (row.status === "completed" ? "Developer delivery reconciled" : "Developer delivery was blocked by reconciliation"), outcome: row.status as "completed" | "blocked", failureCode: row.failureCode, reconciliationArtifactId: row.reconciliationArtifactId, ...(row.providerObservationArtifactId ? { providerObservationArtifactId: row.providerObservationArtifactId } : {}) };
   }
 
   private async observeProvider(input: { companyId: string; executionId: string; phase: "before" | "after"; cwd: string; repository: string }): Promise<{ observation: GithubMutationSurface | null; artifact: StoredArtifact }> {
@@ -546,7 +567,7 @@ export class DeveloperService {
         db.prepare("UPDATE forge_developer_executions SET status = ?, session_ref = ?, finished_at = ?, heartbeat_at = ?, current_step = ?, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ?, failure_code = ?, failure_summary = ? WHERE id = ? AND status IN ('starting', 'running')").run(reconciliation.outcome, sessionRef ?? `unavailable_${executionId}`, this.now().toISOString(), this.now().toISOString(), reconciliation.report?.steps.at(-1)?.number ?? null, git.head, git.tree, git.status ? "dirty" : "clean", reconciliationArtifact.id, evidence.artifact.id, reconciliation.failureCode, reconciliation.outcome === "blocked" ? deliverySummary : null, executionId);
       });
       this.persistDeveloperReceipts(executionId, receipts);
-      return { developerExecutionId: executionId, developerSessionRef: sessionRef ?? `unavailable_${executionId}`, worktreePath: activeWorktree.worktreePath, branchName: activeWorktree.branchName, targetBaseSha: activeWorktree.startingSha, currentStep: reconciliation.report?.steps.at(-1)?.number ?? null, resultCommit: git.head, resultTree: git.tree, dirtyState: git.status ? "dirty" : "clean", deliveryArtifactId: reconciliationArtifact.id, evidenceArtifactId: evidence.artifact.id, deliverySummary, outcome: reconciliation.outcome, reconciliationArtifactId: reconciliationArtifact.id, providerObservationArtifactId: before.artifact.id };
+      return { developerExecutionId: executionId, developerSessionRef: sessionRef ?? `unavailable_${executionId}`, worktreePath: activeWorktree.worktreePath, branchName: activeWorktree.branchName, targetBaseSha: activeWorktree.startingSha, currentStep: reconciliation.report?.steps.at(-1)?.number ?? null, resultCommit: git.head, resultTree: git.tree, dirtyState: git.status ? "dirty" : "clean", deliveryArtifactId: reconciliationArtifact.id, evidenceArtifactId: evidence.artifact.id, deliverySummary, outcome: reconciliation.outcome, failureCode: reconciliation.failureCode, reconciliationArtifactId: reconciliationArtifact.id, providerObservationArtifactId: before.artifact.id };
     } catch (error) {
       if (isSupervisorTerminalError(error)) throw error;
       const failure = error instanceof AgentFailure ? error : new AgentFailure("developer-execution-failed", toSafeSummary(`Developer execution could not be reconciled: ${String(redact(error instanceof Error ? error.message : String(error)))}`));

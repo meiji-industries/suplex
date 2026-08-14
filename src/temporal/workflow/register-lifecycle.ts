@@ -65,11 +65,14 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     if (ctx.state.developerExecutionId && ["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling", "ownership_ambiguous"].includes(ctx.state.developerRecoveryStatus ?? "")) {
       const cancellation = await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId: ctx.state.developerExecutionId });
       if (cancellation.status === "completed_before_cancellation") {
-        if (!ctx.applyCompletedDeveloperResult(cancellation.result, "Developer result claimed before issue cancellation.")) throw new Error("Completed Developer result is invalid");
-        await ctx.project();
-        return ctx.state;
+        if (ctx.applyCompletedDeveloperResult(cancellation.result, "Developer result claimed before issue cancellation.")) {
+          await ctx.project();
+          return ctx.state;
+        }
+        const result = cancellation.result as { developerExecutionId?: unknown; outcome?: unknown } | undefined;
+        if (result?.outcome !== "blocked" || result.developerExecutionId !== ctx.state.developerExecutionId || !ctx.patched(ctx.cancelBlockedDeveloperResultPatch)) throw new Error("Completed Developer result is invalid");
       }
-      if (!["cancelled", "cancelled_confirmed", "interrupted"].includes(cancellation.status)) {
+      if (cancellation.status !== "completed_before_cancellation" && !["cancelled", "cancelled_confirmed", "interrupted"].includes(cancellation.status)) {
         const summary = "summary" in cancellation ? cancellation.summary : "Forge could not confirm Developer termination.";
         ownershipAmbiguous = true;
         ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["verify_developer_ownership", "cancel_issue"]), pendingAction: summary, ...ctx.recoveryFields("ownership_ambiguous", "reasonCode" in cancellation ? cancellation.reasonCode : "developer-termination-unconfirmed", summary, ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });

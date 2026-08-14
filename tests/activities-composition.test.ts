@@ -45,6 +45,7 @@ const expectedActivityKeys = [
   "reconcileAcceptance",
   "reconcileCapacityOwnership",
   "reconcileCi",
+  "reconcileDeveloperDeliveryEvidence",
   "reconcileMerge",
   "reconcileTargetBase",
   "recordDecisionBlockerResolution",

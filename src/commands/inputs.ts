@@ -11,6 +11,7 @@ export const StartPlanningInputSchema = z.object({
   commandId: durableId.optional().default("legacy-command"),
   planAuthorizationId: durableId.optional(),
   planArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
+  reconcileOnly: z.literal(true).optional(),
 });
 
 export const ResolveDecisionBlockerInputSchema = z.object({

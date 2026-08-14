@@ -34,7 +34,9 @@ export type ReplayScenario =
   | "developer_cancellation"
   | "developer_linked_retry"
   | "developer_ownership_ambiguous"
-  | "developer_result_claim";
+  | "developer_result_claim"
+  | "developer_reconciliation_recovery"
+  | "developer_blocked_cancellation";
 
 export interface Deferred<T = void> {
   promise: Promise<T>;
@@ -162,6 +164,7 @@ function createSharedActivities(context: ReplayScenarioActivityContext): Partial
     },
     async recordDeliveryDecision() { return { artifactId: "delivery-decision" }; },
     async findActiveDeveloperExecution() { return null; },
+    async reconcileDeveloperDeliveryEvidence() { return null; },
     async preparePlanRevision(input) { return { status: "accepted" as const, revisionRequestId: `revision-${input.workflowId}-${input.requestRevision}`, coordinates: { disposition: "new" as const, revisionRequestId: `revision-${input.workflowId}-${input.requestRevision}`, exactBaseSha: input.exactBaseSha! } }; },
     async authorizePlanRevision() {},
     async createSuccessor(input) { return { successorTaskId: input.successorTaskId, successorWorkflowId: input.successorWorkflowId, predecessorTaskId: input.predecessorTaskId, projectRevisionId: "project-revision", creationRevision: input.acceptedRevision }; },

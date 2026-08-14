@@ -24,7 +24,7 @@ test("only Developer cancellation remains available while another task command i
 test("recovery actions render in the shared card footer", () => {
   const html = renderToStaticMarkup(createElement(DeveloperRecoveryStatus, {
     taskId: "task-1",
-    recovery: { status: "active", reasonCode: null, summary: "Developer is working.", lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: null, nextAction: null },
+    recovery: { status: "active", reasonCode: null, summary: "Developer result claimed.", lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: null, nextAction: null },
     allowedCommands: ["cancel_development"],
     busy: false,
     isAdmin: true,
@@ -34,7 +34,25 @@ test("recovery actions render in the shared card footer", () => {
   expect(html).toContain('data-slot="card"');
   expect(html).toContain('data-slot="card-footer"');
   expect(html).toContain('role="alert"');
+  expect(html).toContain('role="button"');
+  expect(html).toContain('tabindex="0"');
+  expect(html).toContain('aria-expanded="true"');
+  expect(html).toContain('data-panel-open=""');
   expect(html).toContain("Cancel development");
+  expect(html).not.toContain("Developer result claimed.");
+});
+
+test("keeps actionable Developer recovery summaries", () => {
+  const html = renderToStaticMarkup(createElement(DeveloperRecoveryStatus, {
+    taskId: "task-1",
+    recovery: { status: "failed", reasonCode: "developer-failed", summary: "The Implementer process exited before returning a result.", lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: null, nextAction: null },
+    allowedCommands: ["retry_development"],
+    busy: false,
+    isAdmin: true,
+    onAction: async () => undefined,
+  }));
+
+  expect(html).toContain("The Implementer process exited before returning a result.");
 });
 
 test("claimed Developer recovery does not hide delivery review actions", () => {

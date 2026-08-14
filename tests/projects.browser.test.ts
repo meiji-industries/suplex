@@ -201,6 +201,10 @@ test("projects desktop flow auto-activates valid clones and shows actionable val
       await page.goto(`${baseUrl}/admin/agents`);
       await page.getByRole("heading", { name: "Agents", exact: true }).waitFor();
       await page.getByText("No agents configured.", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "New agent", exact: true }).click();
+      const newAgentDialog = page.getByRole("dialog", { name: "New agent", exact: true });
+      expect(await newAgentDialog.getByRole("combobox", { name: "Execution profile", exact: true }).innerText()).toBe("Edited profile");
+      await newAgentDialog.getByRole("button", { name: "Cancel", exact: true }).click();
       await page.goto(`${baseUrl}/admin/models`);
       await page.getByRole("heading", { name: "Models", exact: true }).waitFor();
       await page.getByText("Model catalog", { exact: true }).waitFor();

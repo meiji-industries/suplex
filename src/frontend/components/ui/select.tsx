@@ -6,7 +6,34 @@ import { Select as SelectPrimitive } from "@base-ui/react/select"
 import { cn } from "../../lib/utils.js"
 import { ChevronDownIcon, CheckIcon, ChevronUpIcon } from "lucide-react"
 
-const Select = SelectPrimitive.Root
+type DerivedSelectItem = { value: any; label: React.ReactNode };
+
+function collectSelectItems(children: React.ReactNode, items: DerivedSelectItem[]): void {
+  React.Children.forEach(children, (child) => {
+    if (!React.isValidElement(child)) return;
+    const element = child as React.ReactElement<{ children?: React.ReactNode; value?: any }>;
+    if (element.type === SelectItem) {
+      items.push({ value: element.props.value ?? null, label: element.props.children });
+      return;
+    }
+    collectSelectItems(element.props.children, items);
+  });
+}
+
+function deriveSelectItems(children: React.ReactNode): DerivedSelectItem[] {
+  const items: DerivedSelectItem[] = [];
+  collectSelectItems(children, items);
+  return items;
+}
+
+function Select<Value, Multiple extends boolean | undefined = false>({
+  children,
+  items,
+  ...props
+}: SelectPrimitive.Root.Props<Value, Multiple>) {
+  const resolvedItems = React.useMemo(() => items ?? deriveSelectItems(children), [children, items]);
+  return <SelectPrimitive.Root {...props} items={resolvedItems}>{children}</SelectPrimitive.Root>;
+}
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (

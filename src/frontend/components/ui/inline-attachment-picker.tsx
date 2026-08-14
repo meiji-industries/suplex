@@ -15,12 +15,14 @@ function InlineAttachmentPicker({
   onRemove,
   disabled = false,
   maxFiles = 8,
+  compact = false,
 }: {
   attachments: InlineAttachmentItem[];
   onSelect: (files: File[]) => void | Promise<void>;
   onRemove: (index: number) => void;
   disabled?: boolean;
   maxFiles?: number;
+  compact?: boolean;
 }): React.ReactElement {
   const inputRef = React.useRef<HTMLInputElement>(null);
 
@@ -43,11 +45,11 @@ function InlineAttachmentPicker({
         onChange={selectFiles}
       />
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="outline" size="sm" disabled={disabled || attachments.length >= maxFiles} onClick={() => inputRef.current?.click()}>
+        <Button type="button" variant="outline" size={compact ? "icon-sm" : "sm"} aria-label={compact ? "Add images" : undefined} title={compact ? "Add images" : undefined} disabled={disabled || attachments.length >= maxFiles} onClick={() => inputRef.current?.click()}>
           <Paperclip className="size-3.5" />
-          Add images
+          {compact ? null : "Add images"}
         </Button>
-        <span className="text-[11px] text-muted-foreground">PNG, JPEG, WebP, or GIF · {attachments.length}/{maxFiles}</span>
+        {compact ? null : <span className="text-[11px] text-muted-foreground">PNG, JPEG, WebP, or GIF · {attachments.length}/{maxFiles}</span>}
       </div>
       {attachments.length ? (
         <ul className="flex flex-wrap gap-1.5" aria-label="Selected attachments" aria-live="polite">

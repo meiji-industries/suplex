@@ -1,13 +1,14 @@
 import { Collapsible } from ".././components/ui/collapsible.js";
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
 import { Button } from ".././components/ui/button.js";
-import { Field, FieldGroup, FieldLabel } from ".././components/ui/field.js";
+import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbSeparator } from ".././components/ui/breadcrumb.js";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from ".././components/ui/dropdown-menu.js";
 import { Input } from ".././components/ui/input.js";
 import { InlineAttachmentPicker } from ".././components/ui/inline-attachment-picker.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".././components/ui/select.js";
 import { Textarea } from ".././components/ui/textarea.js";
 import { Skeleton } from ".././components/ui/skeleton.js";
-import { Dialog, DialogClose, DialogContent, DialogFooter, DialogHeader, DialogTitle } from ".././components/ui/dialog.js";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from ".././components/ui/dialog.js";
 import { Kanban, KanbanBoard, KanbanColumn, KanbanColumnContent } from ".././components/reui/kanban.js";
 import { Badge as ReuiBadge } from ".././components/reui/badge.js";
 import { Tabs, TabsList, TabsTrigger } from ".././components/ui/tabs.js";
@@ -18,7 +19,7 @@ import { TaskStatus, TaskStatusIcon, taskStatusAppearance } from ".././component
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { navigate } from ".././lib/navigation.js";
 import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES as blockedTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
-import { CheckCircle2, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, Filter, Layers3, ListFilter, Plus } from "lucide-react";
+import { CheckCircle2, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, Filter, FolderKanban, Layers3, ListFilter, Plus, Tags, UserRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiProject, type ApiTask, type TaskPhase } from "../lib/view-shared.js";
 import { TaskDetailsPage, TaskDetailsNotFound, TaskDetailsSkeleton, type PlanRevisionInput, type TaskPlanAction } from "./task-details.js";
@@ -41,9 +42,10 @@ function taskListDate(timestamp: string): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
-function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId, onProjectChange, agents, roleAgents, onRoleAgentChange, title, onTitleChange, description, onDescriptionChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
+function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, projects, projectId, onProjectChange, agents, roleAgents, onRoleAgentChange, title, onTitleChange, description, onDescriptionChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  companyName: string | undefined;
   companyStatus: CompanyStatus | undefined;
   projects: ApiProject[];
   projectId: string;
@@ -63,26 +65,50 @@ function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId,
   onSubmit: () => Promise<void>;
 }): ReactElement {
   const active = companyStatus === "active";
+  const agentRoles = ["analyst", "implementer", "reviewer"] as const;
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!busy) onOpenChange(nextOpen); }}>
-      <DialogContent className="max-h-[85vh] w-[min(92vw,520px)] overflow-y-auto" showCloseButton>
-        <DialogHeader>
-          <DialogTitle>New task</DialogTitle>
+      <DialogContent className="max-h-[min(85vh,420px)] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto rounded-xl p-0 shadow-2xl sm:max-w-[936px]" showCloseButton>
+        <DialogHeader className="px-4 py-3 sm:px-5">
+          <Breadcrumb>
+            <BreadcrumbList className="gap-2 text-sm">
+              <BreadcrumbItem>
+                <ReuiBadge variant="outline" size="xl" radius="full" className="gap-1.5 bg-background text-foreground">
+                  <span className="size-2 rounded-[2px] bg-destructive" aria-hidden="true" />
+                  {companyName?.slice(0, 2).toUpperCase() || "FG"}
+                </ReuiBadge>
+              </BreadcrumbItem>
+              <BreadcrumbSeparator />
+              <BreadcrumbItem><DialogTitle className="font-normal">New task</DialogTitle></BreadcrumbItem>
+            </BreadcrumbList>
+          </Breadcrumb>
         </DialogHeader>
         {active ? (
-          <form className="grid gap-3" onSubmit={(event) => { event.preventDefault(); void onSubmit(); }}>
-            <FieldGroup>
-              <Field><FieldLabel htmlFor="task-project">Project</FieldLabel><Select value={projectId || null} onValueChange={(value) => onProjectChange(value ?? "")}><SelectTrigger id="task-project"><SelectValue placeholder="Select a project">{(value) => projects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Select a project")}</SelectValue></SelectTrigger><SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select></Field>
-              {(["analyst", "implementer", "reviewer"] as const).map((role) => { const selected = agents.find((agent) => agent.id === roleAgents[role]); const options = agents.filter((agent) => agent.role === role); return <Field key={role}><FieldLabel htmlFor={`task-agent-${role}`}>{role.slice(0, 1).toUpperCase() + role.slice(1)}</FieldLabel><Select value={roleAgents[role] ?? null} onValueChange={(value) => { if (value) onRoleAgentChange(role, value); }}><SelectTrigger id={`task-agent-${role}`}><SelectValue placeholder="Select agent">{selected ? <span className="flex items-center gap-2"><ProfileAvatar name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "Select agent"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select></Field>; })}
-              <Field><FieldLabel htmlFor="task-title">Task title</FieldLabel><Input id="task-title" autoFocus value={title} onChange={(event) => onTitleChange(event.target.value)} /></Field>
-              <Field><FieldLabel htmlFor="task-description">Task description</FieldLabel><Textarea id="task-description" placeholder="Markdown description" value={description} onChange={(event) => onDescriptionChange(event.target.value)} /></Field>
-              <InlineAttachmentPicker attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={onAddImages} onRemove={onRemoveImage} disabled={busy} />
-            </FieldGroup>
-            {error ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
-            <DialogFooter>
-              <DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} />
-              <Button type="submit" size="sm" disabled={busy || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button>
-            </DialogFooter>
+          <form className="flex min-h-[310px] flex-col" onSubmit={(event) => { event.preventDefault(); void onSubmit(); }}>
+            <div className="px-5 pt-1">
+              <Input id="task-title" aria-label="Task title" autoFocus placeholder="Task title" value={title} onChange={(event) => onTitleChange(event.target.value)} className="h-10 border-0 bg-transparent px-0 text-xl font-medium placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-xl" />
+              <Textarea id="task-description" aria-label="Task description" placeholder="Add description…" value={description} onChange={(event) => onDescriptionChange(event.target.value)} className="min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-sm shadow-none focus-visible:ring-0" />
+            </div>
+            <div className="flex flex-wrap items-center gap-2 px-5 py-4">
+              <Button type="button" variant="outline" size="sm" className="rounded-full px-2.5"><CircleDashed className="size-3.5 text-muted-foreground" />Backlog</Button>
+              <Button type="button" variant="outline" size="sm" className="rounded-full px-2.5 text-muted-foreground"><span aria-hidden="true">—</span>Priority</Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger render={<Button type="button" variant="outline" size="sm" className="rounded-full px-2.5" aria-label="Assignee"><UserRound className="size-3.5 text-muted-foreground" />Assignee</Button>} />
+                <DropdownMenuContent align="start" className="w-64">
+                  {agentRoles.flatMap((role) => agents.filter((agent) => agent.role === role).map((agent) => <DropdownMenuItem key={`${role}-${agent.id}`} onClick={() => onRoleAgentChange(role, agent.id)}><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><span className="min-w-0 flex-1 truncate">{agent.name}</span><span className="text-[11px] text-muted-foreground">{role}</span>{roleAgents[role] === agent.id ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+              <Select value={projectId || null} onValueChange={(value) => onProjectChange(value ?? "")}><SelectTrigger id="task-project" aria-label="Project" size="sm" className="w-auto min-w-0 rounded-full border-border bg-background px-2.5 shadow-none"><FolderKanban className="size-3.5 text-muted-foreground" /><SelectValue placeholder="Project">{(value) => projects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Project")}</SelectValue></SelectTrigger><SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select>
+              <Button type="button" variant="outline" size="sm" className="rounded-full px-2.5 text-muted-foreground"><Tags className="size-3.5" />Labels</Button>
+              <Button type="button" variant="outline" size="icon-sm" className="rounded-full" aria-label="More task properties"><Ellipsis className="size-3.5" /></Button>
+            </div>
+            {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
+            <div className="mt-auto flex flex-wrap items-end gap-3 px-5 pb-4">
+              <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={onAddImages} onRemove={onRemoveImage} disabled={busy} />
+              <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">
+                <Button type="submit" size="sm" variant="outline" disabled={busy || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button>
+              </DialogFooter>
+            </div>
           </form>
         ) : <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New tasks are unavailable." : companyStatus === "archived" ? "Company archived. New tasks are unavailable." : "No active company is available."}</p>}
       </DialogContent>
@@ -379,7 +405,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
           })}
         </div> : null}
         {!currentCompany && scopeLoaded ? <div className="px-4 py-8 text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</div> : null}
-        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); }} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setRoleAgentOverrides({}); }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => ({ ...current, [role]: agentId }))} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} />
+        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); }} companyName={currentCompany?.name} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setRoleAgentOverrides({}); }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => ({ ...current, [role]: agentId }))} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} />
       </div>
     </ApplicationFrame>
   );

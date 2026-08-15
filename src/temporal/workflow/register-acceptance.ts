@@ -18,7 +18,7 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
       );
     } catch (error) {
       const failure = ctx.permanentActivityFailure(error);
-      const summary = failure?.summary ?? "Final review is temporarily unavailable; retry the exact review or request changes";
+      const summary = failure?.summary ?? "Final review did not finish. Try again, or request changes to send the work back.";
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["final_review", "request_delivery_changes", "cancel_issue"], pendingAction: summary, finalReviewFailureCode: "final_review_unavailable", blocker: failure?.category ? stateTransitions.humanBlocker(failure.category, summary, [{ command: "final_review", label: "Retry final review", requiresNote: false, destructive: false }, { command: "request_delivery_changes", label: "Request delivery changes", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.state;

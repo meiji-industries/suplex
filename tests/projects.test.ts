@@ -1,6 +1,8 @@
 import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 
 import { expect, test } from "vitest";
 
@@ -9,6 +11,12 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { ProjectService, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
+
+const execFileAsync = promisify(execFile);
+
+async function git(args: string[], cwd: string): Promise<string> {
+  return (await execFileAsync("git", args, { cwd })).stdout.trim();
+}
 
 interface Fixture {
   root: string;
@@ -88,6 +96,44 @@ test("normalizes supported GitHub repository URLs", () => {
   expect(parseGithubRepositoryUrl("git@github.com:meiji-industries/sampler.git").cloneUrl).toBe("git@github.com:meiji-industries/sampler.git");
   expect(() => parseGithubRepositoryUrl("https://token@github.com/meiji-industries/sampler.git")).toThrowError("GitHub repository URL is invalid");
   expect(() => parseGithubRepositoryUrl("https://gitlab.com/meiji-industries/sampler.git")).toThrowError("GitHub repository URL is invalid");
+});
+
+test("activates from the current origin branch instead of a stale local branch", async () => {
+  const value = await fixture();
+  try {
+    const remotePath = join(value.root, "origin.git");
+    const publisherPath = join(value.root, "publisher");
+    await git(["init", "-b", "main"], value.repositoryPath);
+    await git(["config", "user.name", "Forge test"], value.repositoryPath);
+    await git(["config", "user.email", "forge-test@example.invalid"], value.repositoryPath);
+    await git(["commit", "--allow-empty", "-m", "Initial"], value.repositoryPath);
+    await git(["init", "--bare", remotePath], value.root);
+    const remoteUrl = "https://github.com/acme/forge.git";
+    await git(["remote", "add", "origin", remoteUrl], value.repositoryPath);
+    await git(["config", `url.${remotePath}.insteadOf`, remoteUrl], value.repositoryPath);
+    await git(["push", "origin", "main"], value.repositoryPath);
+    await git(["clone", remotePath, publisherPath], value.root);
+    await git(["config", "user.name", "Forge publisher"], publisherPath);
+    await git(["config", "user.email", "forge-publisher@example.invalid"], publisherPath);
+    await writeFile(join(publisherPath, "remote-only.txt"), "latest origin commit\n");
+    await git(["add", "remote-only.txt"], publisherPath);
+    await git(["commit", "-m", "Remote update"], publisherPath);
+    await git(["push", "origin", "main"], publisherPath);
+    const remoteSha = await git(["rev-parse", "HEAD"], publisherPath);
+
+    const projects = new ProjectService(value.database, value.auth, createTestConfig(value.root, {
+      reachableAddress: "https://forge.tailnet.ts.net:4111",
+      repositoryRoot: join(value.root, "repositories"),
+      worktreeRoot: value.worktreeRoot,
+    }), { github });
+    const project = await projects.createProject(value.adminId, value.companyId, input(value));
+    const activated = await projects.activateProject(value.adminId, project.id);
+
+    expect(activated.baseSha).toBe(remoteSha);
+    expect(activated.targetSha).toBe(remoteSha);
+  } finally {
+    await close(value);
+  }
 });
 
 test("maintains the model catalog and only creates profiles from active models", async () => {

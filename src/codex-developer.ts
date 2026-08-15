@@ -20,8 +20,8 @@ import type { GithubReleasePort } from "./github-release.js";
 import { createGitCommandGuard, withWorktreeMiseTrust, WorktreeManager } from "./worktrees.js";
 import { activateOwnedWorktree, reserveOwnedWorktree } from "./worktrees.js";
 import { DeveloperEvidenceBuilder } from "./developer-evidence.js";
-import { collectDeveloperGitObservation, reconcileDeveloperDelivery, rereconcileDeveloperDelivery } from "./developer-reconciliation.js";
-import { AuthorizedPlanSubjectSchema, ExecutionReceiptSchema, type ExecutionReceipt } from "./developer-contracts.js";
+import { collectDeveloperGitObservation, reconcileDeveloperDelivery, DeveloperReconciliationArtifactSchema } from "./developer-reconciliation.js";
+import { AuthorizedPlanSubjectSchema, ExecutionReceiptSchema, type ExecutionReceipt, type EvidenceManifest } from "./developer-contracts.js";
 import { createGithubAdapter, type GithubAdapter, type GithubMutationSurface } from "./github.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { runPinnedVerification } from "./verification.js";
@@ -201,6 +201,10 @@ export interface DeveloperServiceOptions {
 
 function safeJsonLine(line: string): string {
   try { return JSON.stringify(redact(JSON.parse(line))) ?? JSON.stringify({ type: "empty" }); } catch { return JSON.stringify({ type: "text", text: redact(line) }); }
+}
+
+function verificationPolicyHash(revision: { setupCommand: string; verificationCommand: string; requiredChecks: string[] }): string {
+  return createHash("sha256").update(JSON.stringify({ setupCommand: revision.setupCommand, verificationCommand: revision.verificationCommand, requiredChecks: revision.requiredChecks }, ["requiredChecks", "setupCommand", "verificationCommand"])).digest("hex");
 }
 
 function parseDeliveryReport(lines: string[], provider: AgentProvider): DeveloperDeliveryReport {
@@ -477,6 +481,21 @@ export class DeveloperService {
     return { observation, artifact };
   }
 
+  private loadAcceptedVerificationRevision(input: { taskId: string; companyId: string; workflowId: string }, manifest: EvidenceManifest) {
+    const row = this.database.authQuery((db) => db.prepare(`SELECT r.normalized_json AS normalizedJson
+      FROM forge_tasks t
+      JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
+      WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND r.id = ? AND r.project_id = ?`).get(input.taskId, input.companyId, input.workflowId, manifest.projectRevision.projectRevisionId, manifest.projectRevision.projectId) as { normalizedJson: string } | undefined);
+    if (!row) throw new AgentFailure("pinned-revision-missing", "The accepted project revision is unavailable for deterministic verification");
+    let revision;
+    try { revision = parseAcceptedProjectRevision(row.normalizedJson); } catch { throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain valid pinned verification commands"); }
+    const expected = manifest.projectRevision;
+    if (revision.repository !== expected.repositoryIdentity || revision.repositoryPath !== expected.repositoryPath || revision.worktreeRoot !== expected.worktreeRoot || revision.baseBranch !== expected.baseBranch || revision.targetBranch !== expected.targetBranch || revision.baseSha.toLowerCase() !== expected.baseSha.toLowerCase() || revision.targetSha.toLowerCase() !== expected.targetSha.toLowerCase() || verificationPolicyHash(revision) !== expected.setupVerificationPolicySha256) {
+      throw new AgentFailure("pinned-revision-mismatch", "The accepted project revision changed after the Developer evidence manifest was created");
+    }
+    return revision;
+  }
+
   private async runAuthorized(input: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity> & { authorization: NonNullable<DeveloperExecutionActivityInput["authorization"]> }): Promise<DeveloperExecutionResult> {
     const authorization = AuthorizedPlanSubjectSchema.parse(input.authorization);
     if (authorization.taskId !== input.taskId || authorization.companyId !== input.companyId || authorization.projectId !== input.projectId || authorization.workflowId !== input.workflowId || authorization.planRevision !== input.planRevision || authorization.planArtifactId !== input.leadOutputArtifactId) throw new AgentFailure("plan-authorization-mismatch", "Developer authorization coordinates do not match the requested issue plan");
@@ -507,7 +526,7 @@ export class DeveloperService {
     const registeredExecution = this.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_developer_executions WHERE id = ?").get(executionId));
     if (!registeredExecution) await evidenceBuilder.cleanup(activeWorktree.worktreePath, executionId);
     const staged = await evidenceBuilder.stage(evidence.manifest, activeWorktree.worktreePath, executionId);
-    const guard = await createGitCommandGuard(this.config.runtimeRoot, { authorizedStepNumbers: evidence.manifest.verificationCommands.map((step) => step.stepNumber) });
+    const guard = await createGitCommandGuard(this.config.runtimeRoot);
     const startedAt = this.now().toISOString();
     this.database.authTransaction((db) => {
       registerArtifact(db, before.artifact);
@@ -516,7 +535,7 @@ export class DeveloperService {
       db.prepare("INSERT OR IGNORE INTO forge_developer_execution_truth (execution_id, authorization_id, worktree_lease_id, manifest_artifact_id, manifest_sha256, boundary_mode, before_provider_artifact_id, before_provider_sha256, starting_commit, starting_tree) VALUES (?, ?, ?, ?, ?, 'owner_controlled_observed', ?, ?, ?, ?)").run(executionId, authorization.authorizationId, activeWorktree.leaseId, evidence.artifact.id, evidence.artifact.sha256, before.artifact.id, beforeObservation.sha256, inspection.head ?? activeWorktree.startingSha, startingTree);
     });
     const steps = evidence.manifest.verificationCommands.map((step) => `${step.stepNumber}: ${step.commands.join(" && ") || "(file/Git state verification)"}`).join("\n");
-    const prompt = `You are Forge's Developer. Execute only the authorized final plan in this isolated worktree. The final plan is staged at .forge-context/${executionId}/final-plan.json. Read only the other files under that exact execution directory. Stop before editing if repository facts contradict the plan.${input.reuseWorktree ? " This is a linked retry: inspect and continue the preserved partial changes; do not discard them." : ""} If this retry finds a clean commit directly on the accepted starting SHA that already implements the plan, verify that existing commit instead of creating a duplicate. During execution, post concise public progress updates before each substantive action and after notable results: say what you are inspecting, changing, or verifying and why, without exposing private chain-of-thought. Run each forge-step marker as its own standalone shell command. Run forge-step start <number> exactly once at the beginning of each numbered step, then forge-step complete <number> or forge-step block <number> after verification. On a new delivery, keep the final authorized step active through staging, creating exactly one ordinary local commit, and final read-only Git verification. On a retry with an eligible existing commit, keep that final step active through the same verification without creating a duplicate. All file and Git mutations must occur while an authorized step is active. forge-step complete <final step number> must be the final shell command before the delivery JSON; run no shell command after it. Required verification commands:\n${steps}\nDo not push, create PRs, merge, rebase, amend, reset, clean, force, or use provider mutation. Leave the worktree clean and return exactly one JSON object with no markdown fences or commentary matching: {"kind":"delivery","summary":"...","steps":[{"number":1,"status":"completed","filesChanged":[],"commandsRun":[],"testResults":[],"notes":"..."}],"authorizedStepsNotCompleted":[],"resultCommit":"40+ hex","resultTree":"40+ hex","dirtyState":"clean","blocker":null}. Include every approved step number exactly once, concrete files, commands, test outcomes, and the exact resulting commit/tree.`;
+    const prompt = `You are Forge's Developer. Execute only the authorized final plan in this isolated worktree. The final plan is staged at .forge-context/${executionId}/final-plan.json. Read only the other files under that exact execution directory. Stop before editing if repository facts contradict the plan.${input.reuseWorktree ? " This is a linked retry: inspect and continue the preserved partial changes; do not discard them." : ""} If this retry finds a clean commit directly on the accepted starting SHA that already implements the plan, verify that existing commit instead of creating a duplicate. During execution, post concise public progress updates before each substantive action and after notable results: say what you are inspecting, changing, or verifying and why, without exposing private chain-of-thought. Create exactly one ordinary local commit for the authorized work when a new commit is required, leave the worktree clean, and return exactly one JSON object with no markdown fences or commentary matching: {"kind":"delivery","summary":"...","steps":[{"number":1,"status":"completed","filesChanged":[],"notes":"..."}],"authorizedStepsNotCompleted":[],"resultCommit":"40+ hex","resultTree":"40+ hex","dirtyState":"clean","blocker":null}. Include every approved step number exactly once and keep filesChanged to the exact changed paths. Forge will run the accepted pinned setup and final verification independently after the Developer process exits. Expected plan verification commands for context:\n${steps}\nDo not push, create PRs, merge, rebase, amend, reset, clean, force, or use provider mutation.`;
     const outputLines: string[] = [];
     let sessionRef: string | undefined;
     let rawSessionId: string | undefined;
@@ -531,7 +550,7 @@ export class DeveloperService {
         onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); },
         onLine: async (line) => {
           outputLines.push(line);
-          const incremental = this.provider.parseExecutionTranscript([line], { executionId, attempt, worktreePath: activeWorktree.worktreePath, authorizedStepNumbers: evidence.manifest.verificationCommands.map((step) => step.stepNumber), ...(parserState ? { state: parserState } : {}) });
+          const incremental = this.provider.parseExecutionTranscript([line], { executionId, attempt, worktreePath: activeWorktree.worktreePath, ...(parserState ? { state: parserState } : {}) });
           parserState = incremental.parserState;
           this.persistDeveloperReceipts(executionId, incremental.receipts);
           const event = this.provider.parseEvent(line);
@@ -540,7 +559,7 @@ export class DeveloperService {
           await this.heartbeat(executionId);
         },
       });
-      const parsed = this.provider.parseExecutionTranscript(outputLines, { executionId, attempt, worktreePath: activeWorktree.worktreePath, authorizedStepNumbers: evidence.manifest.verificationCommands.map((step) => step.stepNumber) });
+      const parsed = this.provider.parseExecutionTranscript(outputLines, { executionId, attempt, worktreePath: activeWorktree.worktreePath });
       if (parsed.threadId && rawSessionId && parsed.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer returned conflicting session identities");
       rawSessionId ??= parsed.threadId;
       sessionRef ??= rawSessionId ? await this.sessionStore.create(rawSessionId) : undefined;

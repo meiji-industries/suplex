@@ -166,9 +166,11 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
   const hasVisibleActions = Boolean(supplementalCommand) || canRevise || canContinue || task.allowedCommands.some((command) => !["cancel_issue", "approve_plan", "reject_plan", "request_plan_revision", "respond_plan_blocker", "resolve_decision_blocker"].includes(command));
   const recoveryOwnsActions = Boolean(task.developerRecovery && task.allowedCommands.some((command) => ["retry_development", "cancel_development", "verify_developer_ownership"].includes(command)));
   const isBlocked = BLOCKED_PHASES.has(task.phase);
+  const presentationPhase = taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands });
+  const awaitingDeliveryReview = canReviewDelivery && presentationPhase === "reviewing_delivery";
+  const canRetryFinalReview = task.phase === "delivery_blocked" && task.allowedCommands.includes("final_review");
   if (!hasVisibleActions && task.phase === "planning") return <div data-task-actions />;
   if (!hasVisibleActions) {
-    const presentationPhase = taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome });
     return <Card data-task-actions data-task-status-card size="sm" aria-label={`${phaseLabel(presentationPhase)} status`}>
       <CardHeader>
         <CardTitle><h3><TaskStatus phase={task.phase} presentationPhase={presentationPhase} processing={taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status })} /></h3></CardTitle>
@@ -178,11 +180,11 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
   }
   if (task.phase === "development" || recoveryOwnsActions) return <div data-task-actions />;
   return (
-    <Card data-task-actions data-task-blocked-card={isBlocked || undefined} size="sm">
+    <Card data-task-actions data-task-blocked-card={isBlocked && !awaitingDeliveryReview || undefined} size="sm">
       <CardHeader>
-        <CardTitle><h3>{canReviewDelivery ? deliveryAgent?.agentName && deliveryAgent.avatarSeed ? <span className="inline-flex items-center gap-1.5"><ProfileAvatar name={deliveryAgent.agentName} seed={deliveryAgent.avatarSeed} size="xs" />{deliveryAgent.agentName} completed the approved work.</span> : "Completed the approved work" : canRepairDelivery ? "More proof is needed" : canPublishDraft ? "Ready to Create Pull Request" : canAcceptDelivery ? "Ready to publish" : task.pendingAction ?? "Next action"}</h3></CardTitle>
-        {canReviewDelivery ? <CardDescription>Forge confirmed the recorded delivery is clean and consistent.</CardDescription> : canRepairDelivery ? <CardDescription>{repairInstruction ? <>Missing verification: {repairInstruction}</> : "A required verification result is missing."}</CardDescription> : canAcceptDelivery ? <CardDescription>The work is ready. Publish makes the pull request available for review. Request Changes sends it back to the Developer.</CardDescription> : null}
-        {isBlocked ? <CardAction><Badge variant="destructive">{phaseLabel(task.phase)}</Badge></CardAction> : null}
+        <CardTitle><h3>{canReviewDelivery ? deliveryAgent?.agentName && deliveryAgent.avatarSeed ? <span className="inline-flex items-center gap-1.5"><ProfileAvatar name={deliveryAgent.agentName} seed={deliveryAgent.avatarSeed} size="xs" />{deliveryAgent.agentName} completed the approved work.</span> : "Completed the approved work" : canRetryFinalReview ? "Final review did not finish" : canRepairDelivery ? "More proof is needed" : canPublishDraft ? "Ready to Create Pull Request" : canAcceptDelivery ? "Ready to publish" : task.pendingAction ?? "Next action"}</h3></CardTitle>
+        {canReviewDelivery ? <CardDescription>Forge confirmed the recorded delivery is clean and consistent.</CardDescription> : canRetryFinalReview ? <CardDescription>Forge could not finish its last review. Try again, or choose Request Changes to send the work back.</CardDescription> : canRepairDelivery ? <CardDescription>{repairInstruction ? <>Missing verification: {repairInstruction}</> : "A required verification result is missing."}</CardDescription> : canAcceptDelivery ? <CardDescription>The work is ready. Publish makes the pull request available for review. Request Changes sends it back to the Developer.</CardDescription> : null}
+        {isBlocked ? <CardAction>{awaitingDeliveryReview ? <TaskStatus phase={task.phase} presentationPhase={presentationPhase} /> : <Badge variant="destructive">{phaseLabel(task.phase)}</Badge>}</CardAction> : null}
       </CardHeader>
       {canReviewDelivery ? <CardContent className="space-y-3" data-delivery-handoff>
         <div className="text-[12px]">
@@ -227,8 +229,8 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
       {task.allowedCommands.includes("retry_forward_merge_verification") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("retry-forward-merge-verification")} disabled={disabled}>{busy ? "Verifying…" : "Retry verification"}</Button> : null}
       {task.allowedCommands.includes("reconcile_ci") ? <Button size="sm" onClick={() => void onPlanAction("reconcile-ci")} disabled={disabled}>{busy ? "Checking…" : "Check CI"}</Button> : null}
       {task.allowedCommands.includes("repair_ci") ? <Button size="sm" onClick={() => void onPlanAction("repair-ci")} disabled={disabled}>{busy ? "Repairing…" : "Repair CI"}</Button> : null}
-      {task.allowedCommands.includes("final_review") ? <Button size="sm" onClick={() => void onPlanAction("final-review")} disabled={disabled}>{busy ? "Reviewing…" : "Final review"}</Button> : null}
       {task.allowedCommands.includes("request_delivery_changes") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("request-delivery-changes", "Member requested delivery changes")} disabled={disabled}>Request Changes</Button> : null}
+      {task.allowedCommands.includes("final_review") ? <Button size="sm" onClick={() => void onPlanAction("final-review")} disabled={disabled}>{busy ? "Reviewing…" : "Final review"}</Button> : null}
       {task.allowedCommands.includes("reconcile_acceptance") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reconcile-acceptance")} disabled={disabled}>{busy ? "Checking…" : "Reconcile ready state"}</Button> : null}
       {task.allowedCommands.includes("reconcile_merge") ? <Button size="sm" onClick={() => void onPlanAction("reconcile-merge")} disabled={disabled}>{busy ? "Checking…" : "Check merge"}</Button> : null}
       {!task.developerRecovery && canRevise ? <Button size="sm" variant="outline" onClick={() => setRevisionOpen((open) => !open)} disabled={disabled}>{revisionOpen ? "Close revision" : "Revise plan"}</Button> : null}
@@ -262,7 +264,7 @@ function ReleasePanel({ task }: { task: ApiTask }): ReactElement | null {
   </Card>;
 }
 
-function PullRequestCard({ task, busy, onMarkReady, onCheckCi }: { task: ApiTask; busy: boolean; onMarkReady: () => Promise<void>; onCheckCi?: () => Promise<void> }): ReactElement | null {
+function PullRequestCard({ task, busy, onMarkReady, onCheckCi, onCheckMerge }: { task: ApiTask; busy: boolean; onMarkReady: () => Promise<void>; onCheckCi?: () => Promise<void>; onCheckMerge?: () => Promise<void> }): ReactElement | null {
   const release = task.release;
   if (!release?.pullRequestUrl || release.pullRequestNumber === null) return null;
   const providerState = task.deliveryGate?.release.state;
@@ -276,7 +278,8 @@ function PullRequestCard({ task, busy, onMarkReady, onCheckCi }: { task: ApiTask
     </CardHeader>
     {checks ? <CardContent><div className="text-xs"><span className="text-muted-foreground">Checks</span> · {checks.replaceAll("_", " ")}</div></CardContent> : null}
   </Card>;
-  return <Card data-pull-request-card size="sm" aria-label={`Pull request #${release.pullRequestNumber}`}>
+  const waitingForMerge = task.phase === "manual_merge";
+  return <Card data-pull-request-card data-waiting-for-merge={waitingForMerge || undefined} className={waitingForMerge ? "bg-emerald-50/60 ring-emerald-600/20 dark:bg-emerald-950/20" : undefined} size="sm" aria-label={`Pull request #${release.pullRequestNumber}`}>
     <CardHeader>
       <CardTitle><span className="min-w-0 break-words">{release.title}</span></CardTitle>
       <CardDescription><span className="flex items-center gap-1.5"><a className="inline-flex items-center gap-1.5 underline underline-offset-2" href={release.pullRequestUrl} target="_blank" rel="noreferrer"><GitPullRequest aria-hidden="true" className="size-4 shrink-0" />#{release.pullRequestNumber}</a><Badge variant={status === "Open" ? "outline" : "secondary"}>{status}</Badge></span></CardDescription>
@@ -287,9 +290,10 @@ function PullRequestCard({ task, busy, onMarkReady, onCheckCi }: { task: ApiTask
     </CardContent>
     <CardFooter>
       <div className="flex w-full items-center justify-end gap-2">
-        {release.isDraft ? <Button size="sm" onClick={() => void onMarkReady()} disabled={busy}>{busy ? "Ready…" : "Ready"}</Button> : null}
         {onCheckCi ? <Button size="sm" variant="outline" onClick={() => void onCheckCi()} disabled={busy}>{busy ? "Checking…" : "Check CI"}</Button> : null}
         <Button render={<a href={release.pullRequestUrl} target="_blank" rel="noreferrer" />} variant="outline" size="sm">Open PR<ExternalLink aria-hidden="true" /></Button>
+        {release.isDraft ? <Button size="sm" onClick={() => void onMarkReady()} disabled={busy}>{busy ? "Marking ready…" : "Mark As Ready"}</Button> : null}
+        {onCheckMerge ? <Button size="sm" onClick={() => void onCheckMerge()} disabled={busy}>{busy ? "Checking…" : "Check merge"}</Button> : null}
       </div>
     </CardFooter>
   </Card>;
@@ -536,9 +540,10 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
     {task.images.length ? <section className="space-y-2"><h3 className="text-xs font-semibold">Attachments</h3><div className="flex flex-wrap gap-3">{task.images.map((image) => <a className="text-xs underline underline-offset-2" href={`/api/tasks/${task.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer" key={image.artifactId}>{image.filename}</a>)}</div></section> : null}
     {task.governance.supplementalReview ? <SupplementalReviewPanel value={{ reviewerProfileId: task.governance.supplementalReview.reviewerProfile.name, opinion: task.governance.supplementalReview.opinion, concerns: task.governance.supplementalReview.concerns, requiredChanges: task.governance.supplementalReview.requiredChanges, leadResponse: task.governance.supplementalReview.leadResponse.text }} /> : null}
   </>;
-  const hasChanges = task.developerExecution?.status === "completed";
+  const developerExecution = task.developerExecution;
+  const hasChanges = developerExecution !== undefined && Boolean(developerExecution.resultCommit) && ["completed", "unverified"].includes(developerExecution.status);
   const hasChecks = Boolean(task.ci);
-  const pullRequestInMain = Boolean(task.release?.pullRequestUrl && task.release.pullRequestNumber !== null) && (["releasing", "ci_waiting", "final_review", "ready_reconciliation", "done"].includes(task.phase) || task.phase === "delivery_blocked" && task.allowedCommands.includes("reconcile_ci"));
+  const pullRequestInMain = Boolean(task.release?.pullRequestUrl && task.release.pullRequestNumber !== null) && (["releasing", "ci_waiting", "final_review", "ready_reconciliation", "manual_merge", "done"].includes(task.phase) || task.phase === "delivery_blocked" && task.allowedCommands.includes("reconcile_ci"));
   const workContent = <>
     <TabsList variant="line" className="mb-4 w-full justify-start rounded-none border-b border-border p-0">
       <TabsTrigger value="activity">Activity <Badge variant="secondary" className="size-5 rounded-full px-0 text-[10px]">{activityCount}</Badge></TabsTrigger>
@@ -569,7 +574,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                 <div data-task-current className="sticky top-0 z-10 -mx-4 border-y border-border/70 bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10">
                   <div className="mx-auto max-w-4xl space-y-4">
                     <PlanningRunCard task={task} />
-                    {pullRequestInMain ? <div data-active-pull-request><PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} {...(task.allowedCommands.includes("reconcile_ci") ? { onCheckCi: () => onPlanAction("reconcile-ci") } : {})} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
+                    {pullRequestInMain ? <div data-active-pull-request><PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} {...(task.allowedCommands.includes("reconcile_ci") ? { onCheckCi: () => onPlanAction("reconcile-ci") } : {})} {...(task.allowedCommands.includes("reconcile_merge") ? { onCheckMerge: () => onPlanAction("reconcile-merge") } : {})} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
                     {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} developmentStatus={developerLiveness ? <DevelopmentStatus state={developerLiveness} now={developmentNow} inline /> : undefined} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><DevelopmentRun taskId={task.id} onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} compact /></DeveloperRecoveryStatus> : <DevelopmentRun taskId={task.id} onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
                     {currentPlan ?? decisionControls}
@@ -610,7 +615,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
             <TaskAgentAssignments task={task} onRefresh={onRefresh} />
             <h3 className="mb-5 text-xs font-semibold">Properties</h3>
             <dl className="space-y-4 text-xs">
-              <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary" data-status={task.phase}><TaskStatus phase={task.phase} presentationPhase={taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome })} processing={taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status })} /></Badge></dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary" data-status={task.phase}><TaskStatus phase={task.phase} presentationPhase={taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands })} processing={taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status })} /></Badge></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Owner</dt><dd>{task.owner}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd><NextAction value={task.pendingAction} /></dd></div>

@@ -59,7 +59,7 @@ test("keeps actionable Developer recovery summaries", () => {
 
 test("claimed Developer recovery does not hide delivery review actions", () => {
   const task = {
-    phase: "delivery_ready",
+    phase: "delivery_blocked",
     allowedCommands: ["review_delivery"],
     commands: [],
     pendingAction: "Lead delivery review",
@@ -78,6 +78,8 @@ test("claimed Developer recovery does not hide delivery review actions", () => {
     onOpenDiff: () => undefined,
   }) }));
   expect(html).toContain("Marin completed the approved work.");
+  expect(html).toContain("In Review");
+  expect(html).not.toContain('data-task-blocked-card="true"');
   expect(html).toContain('data-size="xs"');
   expect(html).toContain("What you need to do");
   expect(html).toContain("/tmp/forge/worktrees/task-1");
@@ -141,6 +143,28 @@ test("explains the member publication decision", () => {
   expect(html).toContain("The work is ready. Publish makes the pull request available for review. Request Changes sends it back to the Developer.");
   expect(html).toContain(">Publish<");
   expect(html).toContain(">Request Changes<");
+});
+
+test("explains a final review retry and keeps it as the rightmost action", () => {
+  const task = {
+    phase: "delivery_blocked",
+    allowedCommands: ["final_review", "request_delivery_changes"],
+    commands: [],
+    pendingAction: "Final review is temporarily unavailable; retry the exact review or request changes",
+    projection: { status: "current" },
+  } as unknown as ApiTask;
+  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
+    task,
+    busy: false,
+    onStartPlanning: async () => undefined,
+    onPlanAction: async () => undefined,
+    onRevisePlan: async () => undefined,
+    onContinueWork: async () => undefined,
+  }) }));
+
+  expect(html).toContain("Final review did not finish");
+  expect(html).toContain("Forge could not finish its last review. Try again, or choose Request Changes to send the work back.");
+  expect(html.indexOf(">Request Changes<")).toBeLessThan(html.indexOf(">Final review<"));
 });
 
 test("shows the exact draft publication preview and diff action", () => {

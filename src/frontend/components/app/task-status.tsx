@@ -6,7 +6,8 @@ import { ACTIVE_PHASES, BLOCKED_PHASES, phaseLabel, type IssuePhase } from "../.
 const ACTIVE_INVOCATION_STATUSES = new Set(["starting", "running", "cancelling"]);
 const BACKGROUND_PHASES = new Set<IssuePhase>(["releasing", "ci_waiting", "ready_reconciliation"]);
 
-export function taskPresentationPhase({ phase, releaseStatus, ciOutcome }: { phase: IssuePhase; releaseStatus?: string | null | undefined; ciOutcome?: string | null | undefined }): IssuePhase {
+export function taskPresentationPhase({ phase, releaseStatus, ciOutcome, allowedCommands = [] }: { phase: IssuePhase; releaseStatus?: string | null | undefined; ciOutcome?: string | null | undefined; allowedCommands?: readonly string[] }): IssuePhase {
+  if (phase === "delivery_blocked" && allowedCommands.includes("review_delivery")) return "reviewing_delivery";
   return phase === "delivery_blocked" && releaseStatus === "ready" && ciOutcome === "missing_required" ? "ci_waiting" : phase;
 }
 

@@ -1034,7 +1034,7 @@ export class TaskService {
   async getDeveloperDiff(actorUserId: string, taskId: string): Promise<TaskDeveloperDiff> {
     const task = this.getTask(actorUserId, taskId);
     const execution = task.developerExecution;
-    if (!execution || execution.status !== "completed") throw new TaskFailure("Developer diff is not available until development completes", [], 409);
+    if (!execution || !["completed", "unverified"].includes(execution.status) || !execution.resultCommit) throw new TaskFailure("Developer diff is not available until development completes", [], 409);
     const worktree = this.database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ?").get(execution.id, task.id, task.companyId) as { worktreePath: string } | undefined);
     if (!worktree) throw new TaskFailure("Developer diff is unavailable", [], 409);
     const project = this.projects.getProject(actorUserId, task.projectId);

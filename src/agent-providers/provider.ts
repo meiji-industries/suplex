@@ -86,7 +86,6 @@ export interface AgentTranscriptOptions {
   executionId: string;
   attempt: number;
   worktreePath?: string;
-  authorizedStepNumbers?: number[];
   state?: unknown;
 }
 

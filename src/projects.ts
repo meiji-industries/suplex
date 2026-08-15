@@ -542,9 +542,9 @@ async function canonicalDirectory(raw: string, rootRaw: string, field: string): 
 }
 
 async function defaultLocalRepositoryAdapter(): Promise<LocalRepositoryAdapter> {
-  const run = async (args: string[], cwd: string): Promise<string> => {
+  const run = async (args: string[], cwd: string, timeout = 8_000): Promise<string> => {
     try {
-      const result = await execFileAsync("git", args, { cwd, timeout: 8_000, maxBuffer: 16 * 1024 });
+      const result = await execFileAsync("git", args, { cwd, timeout, maxBuffer: 16 * 1024 });
       return result.stdout.trim();
     } catch {
       throw new ProjectFailure("Repository validation failed", [finding("repository-unavailable", "repositoryPath", "Git could not inspect the configured repository")], 422);
@@ -554,16 +554,20 @@ async function defaultLocalRepositoryAdapter(): Promise<LocalRepositoryAdapter> 
     async inspect(input) {
       const canonicalPath = await run(["rev-parse", "--show-toplevel"], input.repositoryPath);
       const status = await run(["status", "--porcelain", "--untracked-files=all"], input.repositoryPath);
-      const remoteUrl = await run(["remote", "get-url", "origin"], input.repositoryPath);
+      const remoteUrl = await run(["config", "--get", "remote.origin.url"], input.repositoryPath);
       if (/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]+@/i.test(remoteUrl) || /(?:token|password|secret)=/i.test(remoteUrl)) {
         throw new ProjectFailure("Repository validation failed", [finding("credential-url", "repository", "Credential-bearing repository URLs are not accepted")], 422);
       }
-      const baseSha = await run(["rev-parse", "--verify", `refs/heads/${input.baseBranch}`], input.repositoryPath);
-      const targetSha = await run(["rev-parse", "--verify", `refs/heads/${input.targetBranch}`], input.repositoryPath);
       const remote = githubRepositoryFromRemote(remoteUrl);
       if (!remote || remote.credentialBearing) {
         throw new ProjectFailure("Repository validation failed", [finding("repository-identity", "repository", "Origin must identify a canonical GitHub repository")], 422);
       }
+      await run(["fetch", "--no-tags", "origin", `refs/heads/${input.baseBranch}:refs/remotes/origin/${input.baseBranch}`], input.repositoryPath, 30_000);
+      if (input.targetBranch !== input.baseBranch) {
+        await run(["fetch", "--no-tags", "origin", `refs/heads/${input.targetBranch}:refs/remotes/origin/${input.targetBranch}`], input.repositoryPath, 30_000);
+      }
+      const baseSha = await run(["rev-parse", "--verify", `refs/remotes/origin/${input.baseBranch}`], input.repositoryPath);
+      const targetSha = await run(["rev-parse", "--verify", `refs/remotes/origin/${input.targetBranch}`], input.repositoryPath);
       return { canonicalPath, remoteRepository: remote.identity, clean: status.length === 0, baseSha, targetSha };
     },
   };

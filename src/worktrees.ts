@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { access, chmod, constants, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, constants, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { delimiter, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
@@ -385,10 +385,8 @@ export function withWorktreeMiseTrust(env: NodeJS.ProcessEnv, worktreePath: stri
   return { ...env, MISE_TRUSTED_CONFIG_PATHS: [env.MISE_TRUSTED_CONFIG_PATHS, worktreePath].filter(Boolean).join(delimiter) };
 }
 
-export async function createGitCommandGuard(runtimeRoot: string, optionsOrParent: { authorizedStepNumbers?: number[] } | string = {}): Promise<GitCommandGuard> {
-  const options = typeof optionsOrParent === "string" ? {} : optionsOrParent;
-  const guardParent = typeof optionsOrParent === "string" ? optionsOrParent : runtimeRoot;
-  const directory = join(resolve(guardParent), `developer-guard-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+export async function createGitCommandGuard(runtimeRoot: string): Promise<GitCommandGuard> {
+  const directory = join(resolve(runtimeRoot), `developer-guard-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const gitBin = process.env.FORGE_GIT_BIN?.trim() || execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   if (!gitBin) throw new WorktreeFailure("git-unavailable", "Git is unavailable for guarded Developer execution");
@@ -404,25 +402,9 @@ exec "$FORGE_GIT_REAL_BIN" "$@"
   const ghGuard = `#!/bin/sh
 echo "Forge Developer policy blocks provider-side GitHub mutation" >&2
 exit 125
-`;
+  `;
   await writeFile(join(directory, "git"), gitGuard, { encoding: "utf8", mode: 0o700 });
   await writeFile(join(directory, "gh"), ghGuard, { encoding: "utf8", mode: 0o700 });
-  const allowedSteps = options.authorizedStepNumbers?.length ? options.authorizedStepNumbers.join("|") : "*[!0-9]*";
-  const forgeStep = `#!/bin/sh
-case "$1" in
-  start|complete|block) ;;
-  *) echo "Forge Developer policy rejected forge-step marker" >&2; exit 125 ;;
-esac
-case "$2" in
-  ${allowedSteps}) ;;
-  *) echo "Forge Developer policy rejected unauthorized forge-step number" >&2; exit 125 ;;
-esac
-echo "{\"type\":\"forge.step\",\"kind\":\"$1\",\"step\":$2}"
-`;
-  await writeFile(join(directory, "forge-step"), forgeStep, { encoding: "utf8", mode: 0o700 });
-  await chmod(join(directory, "git"), 0o700);
-  await chmod(join(directory, "gh"), 0o700);
-  await chmod(join(directory, "forge-step"), 0o700);
   return {
     directory,
     gitRealBin: gitBin,
@@ -430,5 +412,3 @@ echo "{\"type\":\"forge.step\",\"kind\":\"$1\",\"step\":$2}"
     async cleanup() { await rm(directory, { recursive: true, force: true }); },
   };
 }
-
-export const createCommandGuard = createGitCommandGuard;

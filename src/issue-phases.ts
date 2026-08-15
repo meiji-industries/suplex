@@ -7,9 +7,10 @@ export type IssuePhase = (typeof ISSUE_PHASES)[number];
 export const IssuePhaseSchema = z.enum(ISSUE_PHASES);
 
 const PHASE_LABELS: Partial<Record<IssuePhase, string>> = {
+  development: "In Development",
   ready_for_development: "Ready",
   delivery_ready: "Delivered",
-  reviewing_delivery: "Reviewing",
+  reviewing_delivery: "In Review",
   repair_required: "Repair",
   delivery_reviewed: "Reviewed",
   delivery_blocked: "Blocked",

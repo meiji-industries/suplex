@@ -21,8 +21,6 @@ export interface CodexJsonlParseOptions {
   executionId: string;
   attempt: number;
   startSequence?: number;
-  activeStep?: number | null;
-  authorizedStepNumbers?: number[];
   worktreePath?: string;
   now?: () => Date;
   state?: CodexJsonlParserState;
@@ -30,10 +28,6 @@ export interface CodexJsonlParseOptions {
 
 export interface CodexJsonlParserState {
   sequence: number;
-  activeStep: number | null;
-  startedSteps: number[];
-  terminalSteps: number[];
-  expectedStepIndex: number;
   terminalItemIds: string[];
   threadId?: string;
 }
@@ -75,12 +69,6 @@ function itemId(event: Record<string, unknown>): string | null {
   return typeof event.item_id === "string" ? event.item_id : typeof event.itemId === "string" ? event.itemId : typeof itemValue(event).id === "string" ? String(itemValue(event).id) : null;
 }
 
-function marker(command: string): { kind: "step_started" | "step_completed" | "step_blocked"; stepNumber: number } | undefined {
-  const match = /\bforge-step\s+(start|complete|block)\s+(\d+)\b/.exec(command.trim());
-  if (!match) return undefined;
-  return { kind: match[1] === "start" ? "step_started" : match[1] === "complete" ? "step_completed" : "step_blocked", stepNumber: Number(match[2]) };
-}
-
 function isTestCommand(command: string): boolean {
   return /(?:^|[\s'";&|])(?:test\s+|(?:pnpm|npm|yarn|bun)\s+(?:exec\s+)?(?:test|vitest)\b|vitest\b|pytest\b|cargo\s+test\b|go\s+test\b|dotnet\s+test\b|mise\s+run\s+test\b)/i.test(command);
 }
@@ -104,6 +92,7 @@ function createReceipt(options: CodexJsonlParseOptions, sequence: number, input:
     // Receipts are browser-visible evidence. Keep the parser boundary safe even
     // when a future receipt type bypasses summary().
     summary: String(redact(input.summary)).slice(0, MAX_SUMMARY),
+    stepNumber: null,
   });
 }
 
@@ -111,19 +100,10 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
   const receipts: ExecutionReceipt[] = [];
   const state = options.state ?? {
     sequence: options.startSequence ?? 0,
-    activeStep: options.activeStep ?? null,
-    startedSteps: [],
-    terminalSteps: [],
-    expectedStepIndex: 0,
     terminalItemIds: [],
   };
   const terminalItems = new Set(state.terminalItemIds);
   let sequence = state.sequence;
-  let activeStep = state.activeStep;
-  const authorizedSteps = new Set(options.authorizedStepNumbers ?? []);
-  const startedSteps = new Set(state.startedSteps);
-  const terminalSteps = new Set(state.terminalSteps);
-  let expectedStepIndex = state.expectedStepIndex;
   let threadId: string | undefined = state.threadId;
   let finalReport: unknown;
   let malformedLines = 0;
@@ -141,7 +121,7 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
       event = parsed as Record<string, unknown>;
     } catch {
       malformedLines += 1;
-      push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId: null, summary: "Malformed Codex JSONL line preserved as evidence", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `malformed:${createHash("sha256").update(line).digest("hex")}` });
+      push({ kind: "reconciliation", stepNumber: null, sourceItemId: null, summary: "Malformed Codex JSONL line preserved as evidence", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `malformed:${createHash("sha256").update(line).digest("hex")}` });
       continue;
     }
     if (typeof event.thread_id === "string") threadId = event.thread_id;
@@ -156,41 +136,16 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
 
     if (itemType === "command_execution" || type === "command_execution") {
       const command = typeof item.command === "string" ? item.command : typeof item.cmd === "string" ? item.cmd : "";
-      const stepMarker = marker(command);
       const exitCode = typeof item.exit_code === "number" ? item.exit_code : typeof item.exitCode === "number" ? item.exitCode : null;
-      const successfulTerminalMarker = Boolean(stepMarker && terminal && (exitCode === null || exitCode === 0));
       const completedSummary = `${command}\n${summary(item.aggregated_output ?? item.output ?? item.status ?? "")}`;
-      const pushTestResult = (stepNumber: number | null) => {
-        if (isTestCommand(command)) push({ kind: "test_result", stepNumber, sourceItemId, summary: completedSummary, exitCode, artifactId: null, artifactSha256: null, idempotencyKey: `test-result:${sourceItemId ?? createHash("sha256").update(command).digest("hex")}` });
+      const pushTestResult = () => {
+        if (isTestCommand(command)) push({ kind: "test_result", stepNumber: null, sourceItemId, summary: completedSummary, exitCode, artifactId: null, artifactSha256: null, idempotencyKey: `test-result:${sourceItemId ?? createHash("sha256").update(command).digest("hex")}` });
       };
-      if (successfulTerminalMarker && stepMarker) {
-        const validRange = authorizedSteps.size === 0 || authorizedSteps.has(stepMarker.stepNumber);
-        const expectedStep = [...authorizedSteps][expectedStepIndex];
-        const validTransition = stepMarker.kind === "step_started"
-          ? validRange && activeStep === null && !startedSteps.has(stepMarker.stepNumber) && (expectedStep === undefined || expectedStep === stepMarker.stepNumber)
-          : validRange && activeStep === stepMarker.stepNumber && !terminalSteps.has(stepMarker.stepNumber);
-        if (!validTransition) {
-          push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: "Invalid Developer step marker", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `invalid-marker:${sourceItemId ?? command}:${stepMarker.kind}` });
-        } else if (stepMarker.kind === "step_started") {
-          activeStep = stepMarker.stepNumber;
-          startedSteps.add(stepMarker.stepNumber);
-          expectedStepIndex += 1;
-          push({ kind: stepMarker.kind, stepNumber: stepMarker.stepNumber, sourceItemId, summary: command, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `marker:${sourceItemId ?? command}:${stepMarker.kind}` });
-        } else {
-          terminalSteps.add(stepMarker.stepNumber);
-          activeStep = null;
-          push({ kind: stepMarker.kind, stepNumber: stepMarker.stepNumber, sourceItemId, summary: command, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `marker:${sourceItemId ?? command}:${stepMarker.kind}` });
-        }
-        if (type === "item.completed") {
-          push({ kind: "command_finished", stepNumber: stepMarker.stepNumber, sourceItemId, summary: completedSummary, exitCode, artifactId: null, artifactSha256: null, idempotencyKey: `command-finished:${sourceItemId ?? createHash("sha256").update(command).digest("hex")}` });
-          pushTestResult(stepMarker.stepNumber);
-        }
-      } else if (type === "item.started") {
-        push({ kind: "command_started", stepNumber: stepMarker?.kind === "step_started" ? stepMarker.stepNumber : activeStep, sourceItemId, summary: command, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `command-start:${sourceItemId ?? createHash("sha256").update(command).digest("hex")}` });
+      if (type === "item.started") {
+        push({ kind: "command_started", stepNumber: null, sourceItemId, summary: command, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `command-start:${sourceItemId ?? createHash("sha256").update(command).digest("hex")}` });
       } else if (type === "item.completed" || typeof item.exit_code === "number" || typeof item.exitCode === "number") {
-        const stepNumber = stepMarker?.kind === "step_started" ? stepMarker.stepNumber : activeStep;
-        push({ kind: "command_finished", stepNumber, sourceItemId, summary: completedSummary, exitCode, artifactId: null, artifactSha256: null, idempotencyKey: `command-finished:${sourceItemId ?? createHash("sha256").update(command).digest("hex")}` });
-        pushTestResult(stepNumber);
+        push({ kind: "command_finished", stepNumber: null, sourceItemId, summary: completedSummary, exitCode, artifactId: null, artifactSha256: null, idempotencyKey: `command-finished:${sourceItemId ?? createHash("sha256").update(command).digest("hex")}` });
+        pushTestResult();
       }
       continue;
     }
@@ -201,45 +156,45 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
       for (const path of paths) if (typeof path === "string" && path) {
         const normalized = safeRepositoryPath(path, options.worktreePath);
         if (!normalized) {
-          push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: "Developer file-change path escaped the owned worktree", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `file-escape:${sourceItemId ?? path}:${path}` });
+          push({ kind: "reconciliation", stepNumber: null, sourceItemId, summary: "Developer file-change path escaped the owned worktree", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `file-escape:${sourceItemId ?? path}:${path}` });
           continue;
         }
-        push({ kind: "file_change", stepNumber: activeStep, sourceItemId, summary: normalized, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `file:${sourceItemId ?? normalized}:${normalized}` });
+        push({ kind: "file_change", stepNumber: null, sourceItemId, summary: normalized, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `file:${sourceItemId ?? normalized}:${normalized}` });
       }
       continue;
     }
     if (type === "item.completed" && itemType === "agent_message" && typeof item.text === "string") {
-      push({ kind: "agent_update", stepNumber: activeStep, sourceItemId, summary: item.text, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `agent-update:${sourceItemId ?? createHash("sha256").update(item.text).digest("hex")}` });
+      push({ kind: "agent_update", stepNumber: null, sourceItemId, summary: item.text, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `agent-update:${sourceItemId ?? createHash("sha256").update(item.text).digest("hex")}` });
       try { finalReport = JSON.parse(item.text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { /* The schema validator reports a missing/invalid report later. */ }
       continue;
     }
     if (type === "item.completed" && itemType === "reasoning" && typeof item.text === "string") {
-      push({ kind: "agent_update", stepNumber: activeStep, sourceItemId, summary: `Reasoning summary: ${item.text}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `reasoning:${sourceItemId ?? createHash("sha256").update(item.text).digest("hex")}` });
+      push({ kind: "agent_update", stepNumber: null, sourceItemId, summary: `Reasoning summary: ${item.text}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `reasoning:${sourceItemId ?? createHash("sha256").update(item.text).digest("hex")}` });
       continue;
     }
     if ((type === "item.started" || type === "item.completed") && (itemType.includes("mcp") || itemType.includes("tool"))) {
       const name = namedTool(item);
       const detail = type === "item.started" ? item.arguments : item.error ?? item.result;
       const verb = type === "item.started" ? "Using" : item.error ? "Tool failed" : "Used";
-      push({ kind: "tool_call", stepNumber: activeStep, sourceItemId, summary: `${verb} ${name || "a tool"}${detail === undefined || detail === null ? "" : `\n${summary(detail)}`}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `tool-call:${type}:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
+      push({ kind: "tool_call", stepNumber: null, sourceItemId, summary: `${verb} ${name || "a tool"}${detail === undefined || detail === null ? "" : `\n${summary(detail)}`}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `tool-call:${type}:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
       continue;
     }
     if ((type === "item.started" || type === "item.completed") && itemType === "web_search") {
-      push({ kind: "tool_call", stepNumber: activeStep, sourceItemId, summary: `${type === "item.started" ? "Searching" : "Searched"}: ${summary(item.query ?? item.action ?? "the web")}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `web-search:${type}:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
+      push({ kind: "tool_call", stepNumber: null, sourceItemId, summary: `${type === "item.started" ? "Searching" : "Searched"}: ${summary(item.query ?? item.action ?? "the web")}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `web-search:${type}:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
       continue;
     }
     if ((type === "item.updated" || type === "item.completed") && itemType === "todo_list") {
       const detail = todoSummary(item.items);
-      push({ kind: "agent_update", stepNumber: activeStep, sourceItemId, summary: `Plan update:${detail ? `\n${detail}` : " updated"}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `plan-update:${sourceItemId ?? "unknown"}:${createHash("sha256").update(detail).digest("hex")}` });
+      push({ kind: "agent_update", stepNumber: null, sourceItemId, summary: `Plan update:${detail ? `\n${detail}` : " updated"}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `plan-update:${sourceItemId ?? "unknown"}:${createHash("sha256").update(detail).digest("hex")}` });
       continue;
     }
     if (type === "turn.failed") {
       const error = event.error && typeof event.error === "object" ? event.error as Record<string, unknown> : event;
-      push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: `Codex turn failed: ${summary(error.message ?? "Unknown error")}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `turn-failed:${createHash("sha256").update(line).digest("hex")}` });
+      push({ kind: "reconciliation", stepNumber: null, sourceItemId, summary: `Codex turn failed: ${summary(error.message ?? "Unknown error")}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `turn-failed:${createHash("sha256").update(line).digest("hex")}` });
     }
-    else if (type === "error" || itemType === "error") push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: `Codex reported an error: ${summary(item.message ?? event.message ?? "Unknown error")}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `error:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
+    else if (type === "error" || itemType === "error") push({ kind: "reconciliation", stepNumber: null, sourceItemId, summary: `Codex reported an error: ${summary(item.message ?? event.message ?? "Unknown error")}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `error:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
     else if (!(["thread.started", "turn.started", "turn.completed", "turn.failed", "item.started", "item.updated", "item.completed"].includes(type))) {
-      push({ kind: "reconciliation", stepNumber: activeStep, sourceItemId, summary: "Codex event could not be classified", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `unknown:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
+      push({ kind: "reconciliation", stepNumber: null, sourceItemId, summary: "Codex event could not be classified", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `unknown:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
     }
   }
   return {
@@ -249,10 +204,6 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
     malformedLines,
     parserState: {
       sequence,
-      activeStep,
-      startedSteps: [...startedSteps].sort((a, b) => a - b),
-      terminalSteps: [...terminalSteps].sort((a, b) => a - b),
-      expectedStepIndex,
       terminalItemIds: [...terminalItems],
       ...(threadId ? { threadId } : {}),
     },

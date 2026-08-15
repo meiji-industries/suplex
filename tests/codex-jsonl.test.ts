@@ -1,8 +1,16 @@
 import { expect, test } from "vitest";
 
+import { codexProvider } from "../src/agent-providers/codex.js";
 import { parseCodexJsonl } from "../src/codex-jsonl.js";
 
 const options = { executionId: "developer_jsonl", attempt: 1, worktreePath: "/tmp/worktree" };
+
+test("disables the inner sandbox for new and resumed Codex turns", () => {
+  const initial = codexProvider.buildTurnArgs({ prompt: "Implement" });
+  const resumed = codexProvider.buildTurnArgs({ prompt: "Continue", resumeSessionId: "thread_opaque" });
+  expect(initial).toContain("--dangerously-bypass-approvals-and-sandbox");
+  expect(resumed).toEqual(expect.arrayContaining(["exec", "resume", "--dangerously-bypass-approvals-and-sandbox", "thread_opaque"]));
+});
 
 test("parses Codex file-change changes and preserves malformed output as a blocker receipt", () => {
   const parsed = parseCodexJsonl([

@@ -36,8 +36,6 @@ export interface AgentTurnRequest {
   prompt: string;
   resumeSessionId?: string | undefined;
   profile?: AgentProfileSettings | undefined;
-  networkAccess?: boolean | undefined;
-  addDirectories?: string[] | undefined;
   imagePaths?: string[] | undefined;
 }
 

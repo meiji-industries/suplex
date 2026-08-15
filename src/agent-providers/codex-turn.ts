@@ -40,8 +40,8 @@ export function buildCodexTurnArgs(input: CodexTurnArgsInput): string[] {
   if (!["standard", "priority", "fast"].includes(input.servicePriority)) throw new Error("Codex service priority is invalid");
   const images = (input.imagePaths ?? []).map((path) => safeAbsolutePath(path, "Codex image path"));
   const args = input.resumeSessionId
-    ? ["exec", "resume", safeIdentifier(input.resumeSessionId, "Codex session"), "--json", "--strict-config", "--ignore-user-config", "--output-schema", outputSchemaPath, "--model", model, "-c", configOverride("model_reasoning_effort", input.reasoningLevel)]
-    : ["exec", "--json", "--strict-config", "--ignore-user-config", "--skip-git-repo-check", "--output-schema", outputSchemaPath, ...(input.finalOutputPath ? ["--output-last-message", safeAbsolutePath(input.finalOutputPath, "Codex final output path")] : []), "--model", model, "-c", configOverride("model_reasoning_effort", input.reasoningLevel), "-C", repositoryPath, "--sandbox", "read-only", ...images.flatMap((path) => ["--image", path])];
+    ? ["exec", "resume", "--dangerously-bypass-approvals-and-sandbox", safeIdentifier(input.resumeSessionId, "Codex session"), "--json", "--strict-config", "--ignore-user-config", "--output-schema", outputSchemaPath, "--model", model, "-c", configOverride("model_reasoning_effort", input.reasoningLevel)]
+    : ["exec", "--json", "--strict-config", "--ignore-user-config", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", "--output-schema", outputSchemaPath, ...(input.finalOutputPath ? ["--output-last-message", safeAbsolutePath(input.finalOutputPath, "Codex final output path")] : []), "--model", model, "-c", configOverride("model_reasoning_effort", input.reasoningLevel), "-C", repositoryPath, ...images.flatMap((path) => ["--image", path])];
   if (input.servicePriority !== "standard") args.push("-c", configOverride("service_tier", "fast"));
   // Keep prompts out of argv (and avoid the variadic --image option consuming
   // the prompt); the detached wrapper supplies it over stdin.

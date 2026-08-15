@@ -356,7 +356,6 @@ export class DeveloperService {
       if (error instanceof Error && "code" in error) throw new AgentFailure(String((error as { code: string }).code), error.message);
       throw error;
     }
-    const metadataDirectories = await this.worktrees.metadataDirectories(repositoryPath, worktree.worktreePath);
     const startedAt = this.now().toISOString();
     const wrapperId = `wrapper_${randomBytes(12).toString("hex")}`;
     let guard: Awaited<ReturnType<typeof createGitCommandGuard>> | undefined;
@@ -375,7 +374,7 @@ export class DeveloperService {
       try {
         const result = await this.processRunner({
           command: this.command,
-          args: this.provider.buildTurnArgs({ prompt, profile, networkAccess: true, addDirectories: metadataDirectories }),
+          args: this.provider.buildTurnArgs({ prompt, profile }),
           cwd: worktree.worktreePath,
           env: withWorktreeMiseTrust(guard.env, worktree.worktreePath),
           detached: true,
@@ -525,7 +524,7 @@ export class DeveloperService {
     try {
       const result = await this.processRunner({
         command: this.command,
-        args: this.provider.buildTurnArgs({ prompt, profile, networkAccess: true, imagePaths: staged.imagePaths }),
+        args: this.provider.buildTurnArgs({ prompt, profile, imagePaths: staged.imagePaths }),
         cwd: activeWorktree.worktreePath,
         env: withWorktreeMiseTrust(guard.env, activeWorktree.worktreePath),
         detached: true,

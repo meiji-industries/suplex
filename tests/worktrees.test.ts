@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -38,10 +38,6 @@ test("creates a deterministic exact-base worktree and guards prohibited Git/prov
     expect(record).toMatchObject({ branchName: "forge/issue/task_exact_base", targetBaseSha: value.baseSha });
     expect(await git(["rev-parse", "HEAD"], record.worktreePath)).toBe(value.baseSha);
     expect(await manager.inspectDelivery(record.worktreePath)).toMatchObject({ branchName: record.branchName, headSha: value.baseSha, dirtyState: "clean" });
-    expect(await manager.metadataDirectories(value.repositoryPath, record.worktreePath)).toEqual([
-      await realpath(join(value.repositoryPath, ".git", "worktrees", "task_exact_base")),
-      await realpath(join(value.repositoryPath, ".git")),
-    ]);
     const guard = await createGitCommandGuard(join(value.root, "runtime"));
     try {
       await expect(execFileAsync("git", ["push"], { cwd: record.worktreePath, env: guard.env })).rejects.toThrow();

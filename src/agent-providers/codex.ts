@@ -261,16 +261,13 @@ function profileArgs(profile: AgentProfileSettings): string[] {
 
 function buildTurnArgs(request: AgentTurnRequest): string[] {
   if (request.resumeSessionId !== undefined) {
-    return ["exec", "resume", ...(request.profile ? profileArgs(request.profile) : []), request.resumeSessionId, "--json", "--skip-git-repo-check", request.prompt];
+    return ["exec", "resume", ...(request.profile ? profileArgs(request.profile) : []), "--dangerously-bypass-approvals-and-sandbox", request.resumeSessionId, "--json", "--skip-git-repo-check", request.prompt];
   }
   return [
     "exec",
     "--json",
     "--skip-git-repo-check",
-    "--sandbox",
-    "workspace-write",
-    ...(request.networkAccess ? ["-c", "sandbox_workspace_write.network_access=true"] : []),
-    ...(request.addDirectories ?? []).flatMap((directory) => ["--add-dir", directory]),
+    "--dangerously-bypass-approvals-and-sandbox",
     ...(request.profile ? profileArgs(request.profile) : []),
     ...(request.imagePaths ?? []).flatMap((path) => ["--image", path]),
     request.prompt,

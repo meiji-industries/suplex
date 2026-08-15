@@ -145,24 +145,6 @@ async function canonicalDirectory(raw: string, code: string): Promise<string> {
 export class WorktreeManager {
   constructor(private readonly git: GitAdapter = defaultGit) {}
 
-  async metadataDirectories(repositoryPath: string, worktreePath: string): Promise<string[]> {
-    const repository = await canonicalDirectory(repositoryPath, "repository-unavailable");
-    const repositoryGit = await canonicalDirectory(join(repository, ".git"), "git-metadata-unavailable");
-    const worktree = await canonicalDirectory(worktreePath, "worktree-unavailable");
-    try {
-      const [rawGitDirectory, rawCommonDirectory] = await Promise.all([
-        this.git.run(["rev-parse", "--absolute-git-dir"], worktree),
-        this.git.run(["rev-parse", "--git-common-dir"], worktree),
-      ]);
-      const directories = await Promise.all([rawGitDirectory, rawCommonDirectory].map((path) => realpath(resolve(worktree, path))));
-      if (directories.some((path) => !withinRoot(repositoryGit, path))) throw new WorktreeFailure("git-metadata-mismatch", "Issue worktree Git metadata escaped the recorded target repository");
-      return [...new Set(directories)];
-    } catch (error) {
-      if (error instanceof WorktreeFailure) throw error;
-      throw new WorktreeFailure("git-metadata-unavailable", "Git metadata for the isolated issue worktree is unavailable");
-    }
-  }
-
   async create(input: WorktreeInput): Promise<WorktreeRecord> {
     if (!taskIdPattern.test(input.taskId)) throw new WorktreeFailure("unsafe-task-id", "Issue identity is not safe for a worktree coordinate");
     if (!shaPattern.test(input.targetBaseSha)) throw new WorktreeFailure("invalid-base-commit", "Target-base revision is not a canonical commit hash");

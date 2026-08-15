@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { promisify } from "node:util";
@@ -642,9 +642,7 @@ test("Developer execution creates an isolated delivery commit and stores an exac
   });
   const runner: LeadProcessRunner = async (invocation) => {
     expect(invocation.args).toEqual(expect.arrayContaining([
-      "-c", "sandbox_workspace_write.network_access=true",
-      "--add-dir", await realpath(join(value.root, "repo", ".git", "worktrees", "task_1")),
-      "--add-dir", await realpath(join(value.root, "repo", ".git")),
+      "--dangerously-bypass-approvals-and-sandbox",
     ]));
     await invocation.onStart(4601, "2026-08-11T00:00:00.000Z");
     await writeFile(join(invocation.cwd, "MARKER.md"), "developer delivery\n");
@@ -765,6 +763,8 @@ test("authorized Developer retry resumes a dirty preserved worktree", async () =
     expect.soft(blocked.deliverySummary).not.toContain("Partial work looks successful");
     await expect(service.run({ ...input, developerTurnExecutionId: "developer_retry_2", developerAttempt: 2, supersedesExecutionId: "developer_retry_1", reuseWorktree: true })).resolves.toMatchObject({ outcome: "completed", dirtyState: "clean", developerSessionRef: "session_authorized_retry" });
     expect(calls).toBe(2);
+    expect(prompts[0]).toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(prompts[1]).toContain("--dangerously-bypass-approvals-and-sandbox");
     for (const prompt of prompts) {
       expect.soft(prompt).toContain("On a new delivery, keep the final authorized step active through staging, creating exactly one ordinary local commit, and final read-only Git verification.");
       expect.soft(prompt).toContain("forge-step complete <final step number> must be the final shell command before the delivery JSON");

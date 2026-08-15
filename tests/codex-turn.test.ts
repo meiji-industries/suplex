@@ -14,9 +14,10 @@ import type { ProcessController } from "../src/process-manager.js";
 
 test("Codex initial and resume turns carry the complete pinned configuration", () => {
   const initial = buildCodexTurnArgs({ model: "gpt-5.6-sol", reasoningLevel: "high", servicePriority: "priority", outputSchemaPath: "/var/forge/schema.json", finalOutputPath: "/var/forge/final.json", repositoryPath: "/var/forge/repository", imagePaths: ["/var/forge/image.png"], prompt: "Plan the bounded change" });
-  expect(initial).toEqual(expect.arrayContaining(["exec", "--strict-config", "--ignore-user-config", "--output-schema", "/var/forge/schema.json", "--model", "gpt-5.6-sol", "-C", "/var/forge/repository", "--sandbox", "read-only", "--image", "/var/forge/image.png", "-c", 'service_tier="fast"']));
+  expect(initial).toEqual(expect.arrayContaining(["exec", "--strict-config", "--ignore-user-config", "--dangerously-bypass-approvals-and-sandbox", "--output-schema", "/var/forge/schema.json", "--model", "gpt-5.6-sol", "-C", "/var/forge/repository", "--image", "/var/forge/image.png", "-c", 'service_tier="fast"']));
   const resume = buildCodexTurnArgs({ model: "gpt-5.6-sol", reasoningLevel: "high", servicePriority: "standard", outputSchemaPath: "/var/forge/schema.json", repositoryPath: "/var/forge/repository", imagePaths: ["/var/forge/image.png"], resumeSessionId: "thread_opaque", prompt: "Continue" });
   expect(resume).toContain("thread_opaque");
+  expect(resume).toContain("--dangerously-bypass-approvals-and-sandbox");
   expect(resume).not.toContain("-C");
   expect(resume).not.toContain("/var/forge/image.png");
   const fast = buildCodexTurnArgs({ model: "gpt-5.6-luna", reasoningLevel: "xhigh", servicePriority: "fast", outputSchemaPath: "/var/forge/schema.json", repositoryPath: "/var/forge/repository", prompt: "Fast" });

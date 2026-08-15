@@ -49,7 +49,7 @@ realTest("real Codex Developer turn uses one supervised child and one ordinary c
     try {
       const turn = await runDeveloperTurn({
         command: process.env.FORGE_CODEX_COMMAND ?? "codex",
-        args: ["exec", "--json", "--skip-git-repo-check", "--sandbox", "workspace-write", ...(model ? ["--model", model] : [])],
+        args: ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", ...(model ? ["--model", model] : [])],
         cwd: worktree,
         env: guard.env,
         worktreePath: worktree,

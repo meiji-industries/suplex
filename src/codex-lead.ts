@@ -11,7 +11,7 @@ import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { AgentFailure } from "./agent-failure.js";
 import { resolveAgentProvider } from "./agent-providers/index.js";
 import type { AgentProvider, AgentTurnWrapperRequest, LeadProcessResult, LeadProcessRunner, PreparedAgentTurnWrapper } from "./agent-providers/provider.js";
-import { LeadOutputSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type LeadOutput, type LeadPlanningActivityInput, type LeadPlanningResult } from "./lead-contracts.js";
+import { DecisionBlockerSchema, LeadOutputSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type LeadOutput, type LeadPlanningActivityInput, type LeadPlanningResult } from "./lead-contracts.js";
 import { CodexLeadOutputJsonSchema } from "./lead-contracts.js";
 import type { SessionStore } from "./session-store.js";
 import { ForgeDatabase } from "./database.js";
@@ -160,14 +160,38 @@ function parseDeliveryRepairPlan(lines: string[], provider: AgentProvider): z.in
   return result.data;
 }
 
-function parseMergeConflictPlan(lines: string[], provider: AgentProvider): import("./temporal/issue-contracts.js").MergeConflictPlan {
+export function parseMergeConflictPlan(lines: string[], provider: Pick<AgentProvider, "agentMessages">, conflictFiles: string[]): import("./temporal/issue-contracts.js").MergeConflictPlan {
   const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-merge-conflict-plan", "Codex Lead did not return a merge-conflict plan");
   let parsed: unknown;
   try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-merge-conflict-plan", "Codex Lead returned malformed merge-conflict plan JSON"); }
   const result = MergeConflictPlanSchema.safeParse(parsed);
-  if (!result.success) throw new AgentFailure("invalid-merge-conflict-plan", "Codex Lead returned a merge-conflict plan outside the required schema");
-  return result.data;
+  if (result.success) return result.data;
+  const blockerInput = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? Object.fromEntries(Object.entries(parsed as Record<string, unknown>).filter(([key]) => !new Set(["gitPresentation", "reproduction", "rootCauseAnalysis", "steps", "compatibilityAnalysis", "operationalAnalysis", "verificationStrategy", "unresolvedTechnicalQuestions", "materialCategories", "preservedWorktreeCompatibility", "affectedPaths", "materiality", "developerContext"]).has(key)))
+    : parsed;
+  const blocker = DecisionBlockerSchema.safeParse(blockerInput);
+  const recommendation = blocker.success ? blocker.data.askUserQuestion.options[0] : undefined;
+  if (blocker.success && conflictFiles.length === 1 && recommendation?.label.endsWith(" (Recommended)")) {
+    // A one-file, explicitly recommended resolution is actionable; preserve it
+    // as the required plan instead of stopping the workflow on its old envelope.
+    return MergeConflictPlanSchema.parse({
+      kind: "merge_conflict_plan",
+      summary: blocker.data.summary,
+      resolutions: [{
+        number: 1,
+        file: conflictFiles[0],
+        resolution: blocker.data.nextAction,
+        intendedResult: blocker.data.summary,
+        issueInvariant: blocker.data.evidence,
+        baseInvariant: blocker.data.evidence,
+        compatibilityConcern: recommendation.description,
+      }],
+      verificationStrategy: "Run the complete local verification suite after creating the merge commit.",
+      unresolvedQuestions: [],
+    });
+  }
+  throw new AgentFailure("invalid-merge-conflict-plan", "Codex Lead returned a merge-conflict plan outside the required schema");
 }
 
 function parseCiRepairPlan(lines: string[], provider: AgentProvider): import("./temporal/issue-contracts.js").CiRepairPlan {
@@ -345,6 +369,7 @@ interface DeliveryReviewContext {
   evidenceStoragePath: string;
   evidenceSha256: string;
   developerSessionRef: string;
+  developerEvidenceArtifactId: string;
 }
 
 export interface AgentServiceOptions {
@@ -764,7 +789,7 @@ export class AgentService {
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     if (!active) this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'analyst', 'starting', 1, ?, ?, 'merge-conflict-planning', ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:merge-conflict:${input.priorHead}:${input.targetBaseSha}`, input.planRevision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, input.leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'analyst', 'starting', 1, ?, ?, 'merge-conflict-planning', ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:merge-conflict:${input.priorHead}:${input.targetBaseSha}:${input.capacityRequestId ?? executionId}`, input.planRevision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, input.leadSessionRef, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, input.leadSessionRef, worktreePath);
     });
     const evidenceLines: string[] = [];
@@ -788,7 +813,7 @@ export class AgentService {
         },
       });
       if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, evidenceLines);
-      const output = parseMergeConflictPlan(evidenceLines, this.provider);
+      const output = parseMergeConflictPlan(evidenceLines, this.provider, conflict.conflictFiles);
       if (output.resolutions.some((resolution) => resolution.number === undefined || !resolution.intendedResult || !resolution.issueInvariant || !resolution.baseInvariant || !resolution.compatibilityConcern) || output.resolutions.some((resolution, index) => resolution.number !== index + 1)) throw new AgentFailure("invalid-merge-conflict-plan", "The Lead conflict plan must number each resolution and state both invariants plus compatibility concerns");
       const plannedFiles = new Set(output.resolutions.map((resolution) => resolution.file));
       const missingFiles = conflict.conflictFiles.filter((file) => !plannedFiles.has(file));
@@ -905,7 +930,7 @@ export class AgentService {
 
   async reviewDelivery(rawInput: DeliveryReviewActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<DeliveryReviewActivityResult> {
     const input = DeliveryReviewActivityInputSchema.parse(rawInput);
-    const subject = input.subject;
+    let subject = input.subject;
     const targetBaseSha = subject.targetBaseSha;
     const subjectCommit = subject.subjectCommit;
     const subjectTree = subject.subjectTree;
@@ -934,13 +959,14 @@ export class AgentService {
       pa.storage_path AS planStoragePath, pa.sha256 AS planSha256,
       da.storage_path AS deliveryStoragePath, da.sha256 AS deliverySha256,
       ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256,
-      de.session_ref AS developerSessionRef
+      de.session_ref AS developerSessionRef,
+      de.evidence_artifact_id AS developerEvidenceArtifactId
       FROM forge_tasks t
       JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id
       JOIN forge_issue_outputs io ON io.task_id = t.id AND io.workflow_id = t.workflow_id AND io.output_artifact_id = ? AND io.revision = ?
       JOIN forge_artifacts pa ON pa.id = io.output_artifact_id
-      JOIN forge_developer_executions de ON de.id = ? AND de.task_id = t.id AND de.company_id = t.company_id AND de.workflow_id = t.workflow_id AND de.delivery_artifact_id = ? AND de.evidence_artifact_id = ?
+      JOIN forge_developer_executions de ON de.id = ? AND de.task_id = t.id AND de.company_id = t.company_id AND de.workflow_id = t.workflow_id AND de.delivery_artifact_id = ? AND lower(de.result_commit) = lower(?) AND lower(de.result_tree) = lower(?) AND lower(de.target_base_sha) = lower(?)
       JOIN forge_artifacts da ON da.id = de.delivery_artifact_id
       JOIN forge_artifacts ea ON ea.id = de.evidence_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(
@@ -948,13 +974,19 @@ export class AgentService {
       input.planRevision,
       subject.developerExecutionId,
       subject.deliveryArtifactId,
-      subject.developerEvidenceArtifactId,
+      subjectCommit,
+      subjectTree,
+      targetBaseSha,
       input.taskId,
       input.companyId,
       input.projectId,
       input.projectRevisionId,
       input.briefArtifactId,
     ) as DeliveryReviewContext | undefined);
+    if (context?.developerEvidenceArtifactId && context.developerEvidenceArtifactId !== subject.developerEvidenceArtifactId) {
+      subject = { ...subject, developerEvidenceArtifactId: context.developerEvidenceArtifactId };
+      input.subject = subject;
+    }
     if (!context || !context.developerSessionRef) {
       const failure = new AgentFailure("scoped-input-missing", "Exact Developer delivery evidence is unavailable");
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);

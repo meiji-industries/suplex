@@ -108,6 +108,7 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
   environment = await TestWorkflowEnvironment.createTimeSkipping();
   const histories: Array<{ history: Parameters<typeof Worker.runReplayHistory>[1]; workflowId: string }> = [];
   const outcomes = new Map<string, "no_drift" | "revalidated" | "provider" | "race" | "verification_then_pass" | "conflict">();
+  const failConflictPlanning = new Map<string, boolean>();
   const attempts = new Map<string, number>();
   const capacity = createImmediateCapacityActivities();
   const activities: Partial<IssueActivities> = {
@@ -128,7 +129,10 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
     finalReview: async () => ({ finalReviewId: "final_new", leadExecutionId: "lead_final", leadSessionRef: "lead_session", opinionArtifactId: "opinion_final", evidenceArtifactId: "evidence_final", reviewArtifact: { artifactId: "review_final", companyId: "company_test", kind: "delivery-review", sha256: artifactSha, byteSize: 1, mimeType: "application/json" }, outcome: "approved", summary: "Exact head approved", findings: [], repairPlan: null, repairPlanArtifactId: null, repairPlanSha256: null }),
     acceptDelivery: async () => ({ acceptanceId: "acceptance_new", status: "accepted", pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42" }),
     reconcileMerge: async () => ({ outcome: "open", mergeObservationId: "merge-observation", completionReceiptId: null, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", observedAt: "2026-08-12T00:00:00.000Z", mergedAt: null, retryAt: null }),
-    planMergeConflict: async () => ({ planId: "conflict_plan", planArtifactId: "conflict_plan_artifact", evidenceArtifactId: "conflict_plan_evidence", leadExecutionId: "lead_conflict", leadSessionRef: "lead_session", summary: "Preserve both branch invariants" }),
+    planMergeConflict: async (activityInput) => {
+      if (failConflictPlanning.get(activityInput.taskId)) throw new Error("invalid merge-conflict plan");
+      return { planId: "conflict_plan", planArtifactId: "conflict_plan_artifact", evidenceArtifactId: "conflict_plan_evidence", leadExecutionId: "lead_conflict", leadSessionRef: "lead_session", summary: "Preserve both branch invariants" };
+    },
     resolveMergeConflict: async () => ({ outcome: "verification_blocked", developerExecutionId: "developer_conflict_resolution", developerSessionRef: "developer_session", resultCommit: mergedHead, resultTree: mergedTree, evidenceArtifactId: "conflict_resolution_evidence", verificationArtifact: { id: "verification_failed", sha256: artifactSha, kind: "forward-merge-verification" }, code: "verification_failed", summary: "Pinned verification failed after conflict resolution" }),
     resolveMergeConflictSupervised: async () => ({ status: "completed", result: { outcome: "verification_blocked", developerExecutionId: "developer_conflict_resolution", developerSessionRef: "developer_session", resultCommit: mergedHead, resultTree: mergedTree, evidenceArtifactId: "conflict_resolution_evidence", verificationArtifact: { id: "verification_failed", sha256: artifactSha, kind: "forward-merge-verification" }, code: "verification_failed", summary: "Pinned verification failed after conflict resolution" }, resultHash: artifactSha }),
   };
@@ -191,6 +195,18 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
     const conflictRecovered = await conflictHandle.executeUpdate(retryForwardMergeVerificationUpdate, { args: [{ expectedRevision: verificationBlocked.revision, actorUserId: "member_test" }] });
     expect(conflictRecovered).toMatchObject({ phase: "delivery_ready", developerExecutionId: "developer_forward_merge", resultCommit: mergedHead, resultTree: mergedTree, releaseId: "release_original", pullRequestNumber: 42, deliveryReviewId: null, ciRunId: null, finalReviewId: null });
     histories.push({ history: await conflictHandle.fetchHistory(), workflowId: conflictInput.workflowId });
+
+    const retryConflictIssue = "pre_final_review_conflict_plan_retry";
+    outcomes.set(retryConflictIssue, "conflict");
+    failConflictPlanning.set(retryConflictIssue, true);
+    const retryConflictInput = input(retryConflictIssue, "pre_final_review");
+    const retryConflictHandle = await environment.client.workflow.start(issueWorkflow, { workflowId: retryConflictInput.workflowId, taskQueue: "target-base-time-skipping", args: [retryConflictInput] });
+    const planBlocked = await retryConflictHandle.executeUpdate(finalReviewUpdate, { args: [{ expectedRevision: 10, actorUserId: "member_test" }] });
+    expect(planBlocked).toMatchObject({ phase: "merge_conflict_required", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Forge could not prepare a conflict plan. Try resolving again." });
+    failConflictPlanning.set(retryConflictIssue, false);
+    const retryResolved = await retryConflictHandle.executeUpdate(resolveMergeConflictUpdate, { args: [{ expectedRevision: planBlocked.revision, actorUserId: "member_test" }] });
+    expect(retryResolved).toMatchObject({ phase: "delivery_blocked", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], developerExecutionId: "developer_conflict_resolution" });
+    histories.push({ history: await retryConflictHandle.fetchHistory(), workflowId: retryConflictInput.workflowId });
   } finally {
     worker.shutdown();
     await workerRun;

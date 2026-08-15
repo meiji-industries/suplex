@@ -495,10 +495,10 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       projectState(deliveredState);
       await page.reload();
       await taskDetail.locator('[data-status="delivery_ready"]').waitFor();
-      expect(await taskDetail.getByRole("heading", { name: "Review completed delivery", exact: true }).isVisible()).toBe(true);
+      expect(await taskDetail.getByRole("heading", { name: "Review delivery", exact: true }).isVisible()).toBe(true);
       const deliveryHandoff = taskDetail.locator("[data-delivery-handoff]");
-      expect(await deliveryHandoff.getByText("Open Diffs and compare the diff", { exact: false }).isVisible()).toBe(true);
-      expect(await deliveryHandoff.getByText("acme/forge", { exact: true }).isVisible()).toBe(true);
+      expect(await deliveryHandoff.getByText("What happened", { exact: true }).isVisible()).toBe(true);
+      expect(await deliveryHandoff.getByText("What you need to do", { exact: true }).isVisible()).toBe(true);
       expect(await deliveryHandoff.getByText(worktreeRoot, { exact: true }).isVisible()).toBe(true);
       expect(await deliveryHandoff.getByText("work/browser-development", { exact: true }).isVisible()).toBe(true);
       await taskDetail.getByRole("button", { name: "Show Diff", exact: true }).click();

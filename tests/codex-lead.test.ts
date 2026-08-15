@@ -9,7 +9,7 @@ import { ApplicationFailure } from "@temporalio/activity";
 
 import { ArtifactStore } from "../src/artifacts.js";
 import { CapacityManager } from "../src/capacity.js";
-import { AgentFailure, AgentService, LeadOutputSchema, parseLeadOutput, resolveAgentCommand, runCodexProcess, type LeadProcessRunner, type SessionStore } from "../src/codex-lead.js";
+import { AgentFailure, AgentService, LeadOutputSchema, parseLeadOutput, parseMergeConflictPlan, resolveAgentCommand, runCodexProcess, type LeadProcessRunner, type SessionStore } from "../src/codex-lead.js";
 import { CodexLeadOutputJsonSchema } from "../src/codex-lead-contracts.js";
 import { DeveloperService } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
@@ -44,6 +44,50 @@ test("Codex command resolution bypasses a mise shim that depends on target trust
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test("Lead normalizes an explicitly recommended one-file conflict decision into a plan", () => {
+  const output = parseMergeConflictPlan([JSON.stringify({
+    kind: "decision_blocker",
+    gitPresentation: null,
+    reproduction: null,
+    rootCauseAnalysis: null,
+    steps: null,
+    compatibilityAnalysis: null,
+    operationalAnalysis: null,
+    verificationStrategy: null,
+    unresolvedTechnicalQuestions: null,
+    materialCategories: null,
+    preservedWorktreeCompatibility: null,
+    affectedPaths: null,
+    materiality: null,
+    developerContext: null,
+    category: "human_decision",
+    summary: "Keep both sidebar behaviors in the merged stylesheet.",
+    evidence: "The only conflict is the shared stylesheet; both changes are required.",
+    owner: "human",
+    nextAction: "Combine both sides and keep the target layout behavior.",
+    resumePhase: "planning",
+    askUserQuestion: {
+      header: "Conflict",
+      id: "merge_choice",
+      question: "Which version should win?",
+      options: [
+        { label: "Combine both (Recommended)", description: "Keep both required behaviors." },
+        { label: "Use issue", description: "Discard the target behavior." },
+        { label: "Use target", description: "Discard the issue behavior." },
+      ],
+      isOther: true,
+      isSecret: false,
+    },
+  })], { agentMessages: (lines) => lines }, ["server/assets/studio.css"]);
+
+  expect(output).toMatchObject({
+    kind: "merge_conflict_plan",
+    summary: "Keep both sidebar behaviors in the merged stylesheet.",
+    resolutions: [{ number: 1, file: "server/assets/studio.css", resolution: "Combine both sides and keep the target layout behavior." }],
+    unresolvedQuestions: [],
+  });
 });
 
 async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixture repository."): Promise<{ root: string; database: ForgeDatabase; config: ReturnType<typeof createTestConfig>; briefId: string }> {
@@ -886,9 +930,9 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
   };
   try {
     const lead = new AgentService(value.database, value.config, { processRunner: reviewRunner, sessionStore });
-    const reviewInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadOutputArtifactId: plan.id, subject: { planRevision: 1, targetBaseSha, subjectCommit, subjectTree, developerExecutionId: "developer_review_subject", deliveryArtifactId: delivery.id, developerEvidenceArtifactId: developerEvidence.id, leadSessionRef: "session_lead", developerSessionRef: "session_developer" }, worktreePath, branchName: "forge/issue/task_1", supersedesReviewId: null };
+    const reviewInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadOutputArtifactId: plan.id, subject: { planRevision: 1, targetBaseSha, subjectCommit, subjectTree, developerExecutionId: "developer_review_subject", deliveryArtifactId: delivery.id, developerEvidenceArtifactId: "stale_verification_artifact", leadSessionRef: "session_lead", developerSessionRef: "session_developer" }, worktreePath, branchName: "forge/issue/task_1", supersedesReviewId: null };
     const review = await lead.reviewDelivery(reviewInput);
-    expect(review).toMatchObject({ outcome: "completed", subject: { subjectCommit, subjectTree }, review: { opinion: "blocking", leadSessionRef: "session_lead" } });
+    expect(review).toMatchObject({ outcome: "completed", subject: { subjectCommit, subjectTree, developerEvidenceArtifactId: developerEvidence.id }, review: { opinion: "blocking", leadSessionRef: "session_lead" } });
     if (review.outcome !== "completed") throw new Error("Fixture review did not complete");
     const completedReview = review;
     expect(review.correctionAttempts).toBe(1);

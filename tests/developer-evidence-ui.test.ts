@@ -2,13 +2,17 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import { TaskLeadPlan } from "../src/frontend/components/app/task-lead-plan.js";
-import { activityRelativeDate, extractAgentTranscript, TaskActivity } from "../src/frontend/components/app/task-history.js";
+import { activityRelativeDate, extractAgentTranscript, harnessSummary, TaskActivity } from "../src/frontend/components/app/task-history.js";
 import { invocationActorLabel } from "../src/frontend/components/app/task-invocations.js";
 import type { DeveloperExecutionEventView, DeveloperExecutionView } from "../src/frontend/components/tasks/developer-evidence.js";
 import type { TaskResponse } from "../src/http/contracts/tasks.js";
 
 test("labels an agent with its execution profile", () => {
   expect(invocationActorLabel({ agentName: "Analyst", profileName: "Smart", role: "analyst" })).toBe("Analyst (Smart)");
+});
+
+test("makes conflict summaries easy to scan", () => {
+  expect(harnessSummary({ kind: "decision_blocker", summary: "The forward merge has one resolvable conflict in `server/assets/studio.css`; the approved improvements can be preserved." })).toBe("There is a conflict in server/assets/studio.css. Choose how to resolve it.");
 });
 
 test("shows live receipts inside the active step and rolls up completed steps", () => {
@@ -97,10 +101,10 @@ test("collapses repeated development and CI updates without changing their audit
   ];
   const html = renderToStaticMarkup(createElement(TaskActivity, { timeline, agentInvocations: [], developerAttempts: [{ attempt: 1 }, { attempt: 2 }], ci: { outcome: "waiting", status: "waiting", attempts: [{ attemptNumber: 1, outcome: "waiting", checks: [{ status: "in_progress", selectedForEvaluation: true }] }] } }));
 
-  expect(html).toContain("Development · attempt 1 · blocked");
-  expect(html).toContain("Development · attempt 2");
+  expect(html).toContain("Development stopped");
+  expect(html).toContain("Development retry started");
   expect(html).toContain("Waiting for CI · poll 1 · polling · 0/1 checks · 2 polls");
-  expect(html.match(/Development · attempt 1/g)?.length).toBe(1);
+  expect(html.match(/Development stopped/g)?.length).toBe(1);
   expect(html.match(/Waiting for CI ·/g)?.length).toBe(1);
 });
 

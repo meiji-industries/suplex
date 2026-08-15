@@ -119,6 +119,12 @@ export function extractAgentTranscript(evidence: string): string {
 
 type HarnessMessage = { kind?: string | undefined; summary?: string | undefined; outcome?: string | undefined; findings?: Array<{ severity?: string | undefined; rationale?: string | undefined; disposition?: string | undefined }> | undefined; repairPlan?: string | null | undefined };
 
+export function harnessSummary(message: HarnessMessage): string | undefined {
+  if (message.kind !== "decision_blocker" || !message.summary) return message.summary;
+  const file = message.summary.match(/`([^`]+)`/)?.[1];
+  return file ? `There is a conflict in ${file}. Choose how to resolve it.` : "There is a conflict that needs your choice.";
+}
+
 function parseHarnessMessage(output: string): HarnessMessage | undefined {
   const firstMessage = output.split("\n\n", 1)[0] ?? "";
   try {
@@ -143,29 +149,32 @@ function AgentHarnessOutput({ taskId, invocation }: { taskId: string; invocation
     const controller = new AbortController();
     void fetch(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(invocation.evidenceArtifactId)}`, { signal: controller.signal })
       .then(async (response) => response.ok ? extractAgentTranscript(await response.text()) : "")
-      .then((next) => { if (!controller.signal.aborted) setOutput(next || "Harness output unavailable"); })
-      .catch(() => { if (!controller.signal.aborted) setOutput("Harness output unavailable"); });
+      .then((next) => { if (!controller.signal.aborted) setOutput(next); })
+      .catch(() => { if (!controller.signal.aborted) setOutput(""); });
     return () => controller.abort();
   }, [invocation.evidenceArtifactId, taskId]);
   if (!invocation.evidenceArtifactId) return null;
-  const message = output ? parseHarnessMessage(output) : undefined;
+  if (!output) return null;
+  const message = parseHarnessMessage(output);
+  const summary = message ? harnessSummary(message) : undefined;
   const findings = message?.findings?.filter((finding) => finding.rationale || finding.severity) ?? [];
   return <Card data-agent-harness-output data-agent-execution-id={invocation.id} size="sm" className="mt-2 gap-0">
     <CardContent className="gap-2 py-2 text-[12px]">
-      {message?.summary ? <p className="whitespace-pre-wrap break-words">{message.summary}</p> : null}
+      {summary ? <p className="whitespace-pre-wrap break-words">{summary}</p> : null}
       {findings.length ? <div className="divide-y border-y text-[11px]">{findings.map((finding, index) => <div className="py-1.5" key={`${finding.severity ?? "finding"}-${index}`}><span className="font-medium">{finding.severity ?? "Finding"}</span>{finding.rationale ? <span className="text-muted-foreground"> · {finding.rationale}</span> : null}</div>)}</div> : null}
       {message?.repairPlan ? <div className="text-[11px]"><span className="font-medium">Repair plan</span><span className="text-muted-foreground"> · {message.repairPlan}</span></div> : null}
-      {!message?.summary ? <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-4 text-foreground">{output ?? "Loading harness output…"}</pre> : null}
+      {!summary ? <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-4 text-foreground">{output}</pre> : null}
     </CardContent>
   </Card>;
 }
 
 function BlockedReason({ value }: { value: string }) {
+  const summary = /receipt-outside-step/.test(value) ? "Forge could not confirm this development run." : value;
   return <Collapsible.Root className="group/blocked-reason min-w-0">
     <Alert variant="destructive" data-task-blocked-reason className="flex min-w-0 items-center gap-2 px-3 py-2 text-[12px]">
       <CircleX className="size-4 shrink-0" />
       <Collapsible.Trigger className="flex min-w-0 flex-1 items-center gap-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring">
-        <span className="min-w-0 flex-1 truncate" title={value}>{value}</span>
+        <span className="min-w-0 flex-1 truncate" title={summary}>{summary}</span>
         <ChevronRight aria-hidden="true" className="size-3 shrink-0 text-current transition-transform group-data-[panel-open]/blocked-reason:rotate-90" />
       </Collapsible.Trigger>
     </Alert>
@@ -191,7 +200,7 @@ function ActivityTimeline({ taskId, timeline, invocations = [], revisionContent,
         const blockedReasons = group.entries.flatMap((candidate) => typeof candidate.metadata.blockedReason === "string" ? [candidate.metadata.blockedReason] : []);
         const hasBlocker = blockedReasons.length > 0;
         const attemptIndex = group.kind === "development" ? developmentGroupIndex++ : -1;
-        const title = group.kind === "development" ? `Development · attempt ${developerAttempts[attemptIndex]?.attempt ?? attemptIndex + 1}${(developerAttempts[attemptIndex]?.attempt ?? attemptIndex + 1) > 1 ? " · retry" : ""}${hasBlocker ? " · blocked" : group.entries.length > 1 ? ` · ${group.entries.length} updates` : ""}` : group.kind === "ci" ? `Waiting for CI · ${ciPollState(ci)}${group.entries.length > 1 ? ` · ${group.entries.length} polls` : ""}` : activityCopy(entry);
+        const title = group.kind === "development" ? hasBlocker ? "Development stopped" : (developerAttempts[attemptIndex]?.attempt ?? attemptIndex + 1) > 1 ? "Development retry started" : "Development started" : group.kind === "ci" ? `Waiting for CI · ${ciPollState(ci)}${group.entries.length > 1 ? ` · ${group.entries.length} polls` : ""}` : activityCopy(entry);
         const hasDeliveryReview = group.entries.some((candidate) => candidate.id === deliveryReviewEntryId);
         return <TimelineItem key={entry.id} step={index + 1} data-task-activity-kind={entry.kind ?? "workflow"} data-task-activity-revision={entry.revision} data-task-activity-revisions={group.entries.map((candidate) => candidate.revision).join(",")}>
           <TimelineHeader className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">

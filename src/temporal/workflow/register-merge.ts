@@ -37,8 +37,31 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
   setHandler(issueUpdates.resolve_merge_conflict, async (rawInput) => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "merge_conflict_required") throw new Error("Merge-conflict resolution is not available in the current phase");
-    if (!ctx.state.mergeResolutionPlanArtifactId || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.forwardMergeId || !ctx.state.forwardMergePriorHead || !ctx.state.forwardMergePriorTree || !ctx.state.forwardMergeTargetBaseSha || !ctx.state.forwardMergeConflictArtifact || typeof ctx.state.forwardMergeConflictFileCount !== "number" || !ctx.state.targetBaseSha) throw new Error("A Lead conflict plan and owned Developer worktree are required");
+    if (!ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.leadSessionRef || !ctx.state.leadOutputArtifactId || !ctx.state.branchName || !ctx.state.forwardMergeId || !ctx.state.forwardMergePriorHead || !ctx.state.forwardMergePriorTree || !ctx.state.forwardMergeTargetBaseSha || !ctx.state.forwardMergeConflictArtifact || typeof ctx.state.forwardMergeConflictFileCount !== "number" || !ctx.state.targetBaseSha) throw new Error("An owned Developer execution and forward-merge evidence are required");
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
+    if (!ctx.state.mergeResolutionPlanArtifactId) {
+      await ctx.withStateMutation(() => {
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_reviewing", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Preparing a conflict plan", activeOperation: { commandId: command.commandId, kind: "repair", startedRevision: ctx.state.revision + 1 }, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      });
+      await ctx.project();
+      try {
+        const plan = await ctx.acquireExternalTurn<contracts.MergeConflictPlanActivityResult>(
+          { operation: "merge_conflict_plan", role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
+          (capacityRequestId) => activityProxies.planMergeConflict({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, worktreePath: ctx.state.worktreePath!, branchName: ctx.state.branchName!, forwardMergeId: ctx.state.forwardMergeId!, priorHead: ctx.state.forwardMergePriorHead!, targetBaseSha: ctx.state.forwardMergeTargetBaseSha!, conflictArtifact: ctx.state.forwardMergeConflictArtifact!, conflictFileCount: ctx.state.forwardMergeConflictFileCount!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+          (result) => result.leadExecutionId,
+        );
+        await ctx.withStateMutation(() => {
+          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Resolving the conflict", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+        });
+      } catch {
+        await ctx.withStateMutation(() => {
+          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Forge could not prepare a conflict plan. Try resolving again.", activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+        });
+        await ctx.project();
+        return ctx.state;
+      }
+    }
+    if (!ctx.state.mergeResolutionPlanArtifactId) throw new Error("A Lead conflict plan is required");
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
     const turnExecutionId = developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "merge_conflict_resolution");
     const prior = { forwardMergeId: ctx.state.forwardMergeId, developerExecutionId: ctx.state.developerExecutionId, developerSessionRef: ctx.state.developerSessionRef, branchName: ctx.state.branchName, priorHead: ctx.state.forwardMergePriorHead, priorTree: ctx.state.forwardMergePriorTree, targetBaseSha: ctx.state.forwardMergeTargetBaseSha, expectedBaseSha: ctx.state.targetBaseSha, conflictArtifact: ctx.state.forwardMergeConflictArtifact, conflictFileCount: ctx.state.forwardMergeConflictFileCount, planArtifactId: ctx.state.mergeResolutionPlanArtifactId };
@@ -74,7 +97,7 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
         }
         const successfulResult = result as Extract<typeof result, { deliveryArtifactId: string }>;
         ctx.state = applyTargetBaseRevalidation(ctx.state, { outcome: "revalidated", checkId: prior.forwardMergeId, checkpoint: ctx.state.targetBaseCheckpoint ?? "pre_release", expectedBaseSha: prior.expectedBaseSha, observedBaseSha: prior.targetBaseSha, priorHead: prior.priorHead, priorTree: prior.priorTree, headSha: successfulResult.resultCommit, headTree: successfulResult.resultTree, developerExecutionId: successfulResult.developerExecutionId, deliveryArtifact: { id: successfulResult.deliveryArtifactId, sha256: successfulResult.deliveryArtifactSha256, kind: "forward-merge-delivery" }, verificationArtifact: { id: successfulResult.verificationArtifactId, sha256: successfulResult.verificationArtifactSha256, kind: "forward-merge-verification" } });
-        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, developerSessionRef: successfulResult.developerSessionRef, deliverySummary: successfulResult.summary, developerEvidenceArtifactId: successfulResult.verificationArtifactId, mergeResolutionDeveloperExecutionId: successfulResult.developerExecutionId, mergeResolutionDeveloperSessionRef: successfulResult.developerSessionRef, ...ctx.recoveryFields("active", null, "Developer merge-conflict result claimed.", null), activeOperation: null });
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, developerSessionRef: successfulResult.developerSessionRef, deliverySummary: successfulResult.summary, developerEvidenceArtifactId: successfulResult.evidenceArtifactId, mergeResolutionDeveloperExecutionId: successfulResult.developerExecutionId, mergeResolutionDeveloperSessionRef: successfulResult.developerSessionRef, ...ctx.recoveryFields("active", null, "Developer merge-conflict result claimed.", null), activeOperation: null });
       });
     } catch {
       await ctx.withStateMutation(() => {

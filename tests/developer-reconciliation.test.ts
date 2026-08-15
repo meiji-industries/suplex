@@ -42,6 +42,9 @@ test("reconciliation allowlists only read-only staged-context bootstrap commands
   const bootstrapFinished = { ...receipt("command_finished", 2, 0, "bootstrap"), stepNumber: null, summary: `${bootstrapStarted.summary}\n{}` };
   const valid = reconcileDeveloperDelivery(input({ receipts: [bootstrapStarted, bootstrapFinished, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] }));
   expect(valid.outcome).toBe("completed");
+  const labelledStarted = { ...bootstrapStarted, summary: "/bin/zsh -lc 'printf %s\\n --- instructions --- && sed -n 1,240p .forge-context/execution/final-plan.json'" };
+  const labelledFinished = { ...bootstrapFinished, summary: `${labelledStarted.summary}\n{}` };
+  expect(reconcileDeveloperDelivery(input({ receipts: [labelledStarted, labelledFinished, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).outcome).toBe("completed");
   const unsafe = { ...bootstrapFinished, summary: "/bin/zsh -lc 'touch escaped.txt'\n" };
   expect(reconcileDeveloperDelivery(input({ receipts: [bootstrapStarted, unsafe, receipt("step_started", 3), receipt("command_finished", 4, 0), receipt("step_completed", 5)] })).mismatches).toContain("receipt-outside-step");
   const compoundStarted = { ...bootstrapStarted, summary: "/bin/zsh -lc \"find .forge-context -type f -print -exec sh -c 'sed -n 1,20p $1' _ {} \\; && git status --short\"" };

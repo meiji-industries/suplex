@@ -64,7 +64,8 @@ test("claimed Developer recovery does not hide delivery review actions", () => {
     commands: [],
     pendingAction: "Lead delivery review",
     projection: { status: "current" },
-    developerExecution: { branchName: "work/readme-joke", worktreePath: "/tmp/forge/worktrees/task-1", resultCommit: "a".repeat(40) },
+    developerExecution: { branchName: "work/readme-joke", worktreePath: "/tmp/forge/worktrees/task-1", resultCommit: "a".repeat(40), verificationResults: ["Server tests passed.", "Browser check unavailable."] },
+    agentInvocations: [{ role: "implementer", status: "completed", agentName: "Marin", avatarSeed: "marin" }],
     developerRecovery: { status: "active" },
   } as unknown as ApiTask;
   const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
@@ -76,10 +77,19 @@ test("claimed Developer recovery does not hide delivery review actions", () => {
     onContinueWork: async () => undefined,
     onOpenDiff: () => undefined,
   }) }));
-  expect(html).toContain("Review completed delivery");
-  expect(html).toContain("cd /tmp/forge/worktrees/task-1");
+  expect(html).toContain("Marin completed the approved work.");
+  expect(html).toContain('data-size="xs"');
+  expect(html).toContain("What you need to do");
+  expect(html).toContain("/tmp/forge/worktrees/task-1");
+  expect(html).not.toContain(">cd /tmp/forge/worktrees/task-1<");
   expect(html).toContain("work/readme-joke");
   expect(html).toContain("Copy worktree command");
+  expect(html).toContain("Server tests passed.");
+  expect(html).toContain("Passed: ");
+  expect(html).toContain("Result not confirmed: ");
+  expect(html).toContain("text-emerald-600");
+  expect(html).toContain("text-muted-foreground");
+  expect(html).not.toContain("Delivered commit");
   expect(html).toContain("Looks Good");
   expect(html.indexOf(">Show Diff<")).toBeLessThan(html.indexOf(">Request Changes<"));
   expect(html.indexOf(">Request Changes<")).toBeLessThan(html.indexOf(">Looks Good<"));
@@ -104,8 +114,8 @@ test("explains required delivery changes in human terms", () => {
   }) }));
 
   expect(html).toContain("More proof is needed");
-  expect(html).toContain("Some checks are missing. Continue now, or ask the Developer to run them.");
-  expect(html).toContain("Ask Developer to check");
+  expect(html).toContain("Missing verification: Verify keyboard navigation and the logout redirect at desktop and mobile widths.");
+  expect(html).toContain("Run missing check");
   expect(html).toContain("Continue anyway");
   expect(html).not.toContain("Repair delivery");
 });

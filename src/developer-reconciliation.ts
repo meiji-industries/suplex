@@ -20,7 +20,7 @@ function canonicalCommand(value: string): string {
 // ambiguous subcommands (remote, worktree, mutating branch forms, ...) stay excluded.
 const readOnlyGit = "(?:status|rev-parse|log|show|diff|diff-tree|merge-base|rev-list|ls-files|cat-file|describe|branch\\s+--show-current)";
 const forbiddenBootstrapCommand = new RegExp(`\\b(?:rm|mv|cp|touch|mkdir|rmdir|chmod|chown|curl|wget)\\b|\\bgit\\s+(?!${readOnlyGit}\\b)`);
-const allowedBootstrapCommand = new RegExp(`^(?:for\\b|pwd|git ${readOnlyGit}\\b|(?:cat|head|tail|sed|ls|find|file|sha256sum|xxd|nl|wc|rg)\\s+)`);
+const allowedBootstrapCommand = new RegExp(`^(?:for\\b|pwd|git ${readOnlyGit}\\b|(?:cat|head|tail|sed|ls|find|file|printf|sha256sum|xxd|nl|wc|rg)\\s+)`);
 const allowedFinalGitCommand = new RegExp(`^git ${readOnlyGit}\\b`);
 
 function isAllowlistedBootstrapReceipt(receipt: ExecutionReceipt, firstStepSequence: number): boolean {

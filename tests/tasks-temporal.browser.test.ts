@@ -154,7 +154,7 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
       await pane.getByRole("heading", { name: "Durable browser task", exact: true }).waitFor();
       const persisted = apiDatabase!.authQuery((db) => db.prepare("SELECT id, workflow_id, role_agents_json, supplemental_review FROM forge_tasks WHERE title = 'Durable browser task'").get() as { id: string; workflow_id: string; role_agents_json: string; supplemental_review: number });
       workflowId = persisted.workflow_id;
-      expect(JSON.parse(persisted.role_agents_json)).toMatchObject({ analyst: profile.id, implementer: profile.id });
+      expect(JSON.parse(persisted.role_agents_json)).toMatchObject({ analyst: analyst.id, implementer: implementer.id });
       expect(persisted.supplemental_review).toBe(0);
       expect(apiDatabase!.authQuery((db) => db.prepare("SELECT state FROM forge_task_creation_intents WHERE task_id = ?").get(persisted.id))).toEqual({ state: "started" });
       expect(apiDatabase!.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE id = ?").get(persisted.id))).toEqual({ count: 1 });

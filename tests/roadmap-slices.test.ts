@@ -350,6 +350,10 @@ test("restore drill preserves users, completed work, artifacts, and draft releas
       db.prepare("INSERT INTO forge_challenges (id, challenge, kind, invitation_id, user_id, expires_at, created_at) VALUES ('challenge-a', 'challenge', 'user', 'invite-a', 'member-a', '2099-01-01T00:00:00.000Z', ?)").run(now);
       db.prepare("INSERT INTO forge_credentials (id, user_id, credential_id, public_key, counter, transports, created_at) VALUES ('credential-a', 'member-a', 'credential-id', ?, 0, '[]', ?)").run(Buffer.from("public-key"), now);
       db.prepare("INSERT INTO forge_sessions (id, token_hash, user_id, expires_at, created_at) VALUES ('session-a', 'session-hash', 'member-a', '2099-01-01T00:00:00.000Z', ?)").run(now);
+      db.prepare("INSERT INTO forge_agents (id, kind, name, avatar_seed, created_at, updated_at) VALUES ('external-agent-a', 'hermes', 'Hermes A', 'hermes-a', ?, ?)").run(now, now);
+      db.prepare("INSERT INTO forge_external_agents (id, company_id, hermes_profile_id, status, paired_at, created_at, updated_at) VALUES ('external-agent-a', 'company-a', 'profile-a', 'paired', ?, ?, ?)").run(now, now, now);
+      db.prepare("INSERT INTO forge_hermes_pairing_codes (id, agent_id, code_hash, purpose, expires_at, created_at) VALUES ('pairing-a', 'external-agent-a', 'pairing-hash', 'rotation', '2099-01-01T00:00:00.000Z', ?)").run(now);
+      db.prepare("INSERT INTO forge_external_agent_credentials (id, agent_id, credential_hash, created_at) VALUES ('external-credential-a', 'external-agent-a', 'external-credential-hash', ?)").run(now);
     });
 
     const service = new BackupService(value.config);
@@ -367,6 +371,8 @@ test("restore drill preserves users, completed work, artifacts, and draft releas
       expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_credentials WHERE revoked_at IS NULL").get())).toEqual({ count: 0 });
       expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_sessions WHERE revoked_at IS NULL").get())).toEqual({ count: 0 });
       expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_invitations").get())).toEqual({ count: 0 });
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_hermes_pairing_codes").get())).toEqual({ count: 0 });
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_external_agent_credentials").get())).toEqual({ count: 0 });
 
       restoredDatabase.authTransaction((db) => db.prepare("DELETE FROM forge_attention_items").run());
       expect(new AttentionService(restoredDatabase, new AuthService(restoredDatabase, value.config)).rebuildAll()).toBe(2);

@@ -11,6 +11,7 @@ import type { ReleaseService } from "./github-release.js";
 import type { ForgeDatabase } from "./database.js";
 import type { ForgeConfig } from "./config.js";
 import type { CapacityManager } from "./capacity.js";
+import type { HermesAgentService } from "./hermes-agents.js";
 import { inspectHostHealth, type HealthSnapshot, type HostHealthDependencies } from "./health.js";
 import { ProjectService } from "./projects.js";
 import { TaskService } from "./tasks.js";
@@ -28,6 +29,8 @@ import authenticated from "./http/routes/authenticated.js";
 import assets from "./http/routes/assets.js";
 import health from "./http/routes/health.js";
 import pages from "./http/routes/pages.js";
+import hermesPairing from "./http/routes/hermes-pairing.js";
+import { registerHermesTaskRoutes } from "./http/routes/hermes-tasks.js";
 
 export interface AppDependencies {
   config: ForgeConfig;
@@ -44,6 +47,7 @@ export interface AppDependencies {
   rebuild?: ProjectionRebuildService;
   logger?: Logger | false;
   capacity?: CapacityManager;
+  hermes?: HermesAgentService;
   https?: { key: Buffer; cert: Buffer };
   frontendDevelopment?: {
     transformIndexHtml(url: string, html: string): Promise<string>;
@@ -91,7 +95,9 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
   void app.register(health, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config });
   if (auth) {
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
-    void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(releaseService ? { release: releaseService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}), ...(rebuild ? { rebuild } : {}), ...(dependencies.capacity ? { capacity: dependencies.capacity } : {}) });
+    if (dependencies.hermes) void app.register(hermesPairing, { hermes: dependencies.hermes });
+    if (dependencies.hermes && taskService) registerHermesTaskRoutes(app, { hermes: dependencies.hermes, tasks: taskService });
+    void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(releaseService ? { release: releaseService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}), ...(rebuild ? { rebuild } : {}), ...(dependencies.capacity ? { capacity: dependencies.capacity } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
   }
   if (!dependencies.frontendDevelopment) void app.register(assets, { prefix: "/assets" });
 }

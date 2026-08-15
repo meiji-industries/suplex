@@ -9,6 +9,7 @@ test("redacts credential-shaped keys and values before serialization", () => {
     nested: {
       password: "hunter2",
       message: "gho_1234567890abcdef and token=another-secret",
+      hermes: "pair fhp_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO12 with fha_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO12",
     },
   });
 
@@ -18,6 +19,7 @@ test("redacts credential-shaped keys and values before serialization", () => {
     nested: {
       password: "[REDACTED]",
       message: "[REDACTED] and [REDACTED]",
+      hermes: "pair [REDACTED] with [REDACTED]",
     },
   });
 });

@@ -1,8 +1,10 @@
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
+import { Badge } from ".././components/ui/badge.js";
 import { Button } from ".././components/ui/button.js";
+import { Checkbox } from ".././components/ui/checkbox.js";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from ".././components/ui/dialog.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from ".././components/ui/dropdown-menu.js";
-import { Field, FieldDescription, FieldGroup, FieldLabel } from ".././components/ui/field.js";
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from ".././components/ui/field.js";
 import { Input } from ".././components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".././components/ui/select.js";
 import { Skeleton } from ".././components/ui/skeleton.js";
@@ -12,8 +14,8 @@ import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTable
 import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { readJson, withCompany, type ApiUser } from ".././lib/api.js";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
-import { adminDate, type ApiCredential, type ApiInvitation, type ApiModel, type ApiProfile } from "../lib/view-shared.js";
-import { Ellipsis, Pencil, Save } from "lucide-react";
+import { adminDate, type ApiAgent, type ApiCredential, type ApiHermesAgent, type ApiInvitation, type ApiModel, type ApiProfile, type ApiProject } from "../lib/view-shared.js";
+import { Check, Copy, Ellipsis, Key, Pencil, RotateCw, Save, ShieldAlert } from "lucide-react";
 
 const USER_COLUMNS: SettingsTableColumn[] = [
   { key: "indent", width: 60 },
@@ -37,11 +39,23 @@ const PROFILE_COLUMNS: SettingsTableColumn[] = [
   { key: "save", width: 28 },
   { key: "end", width: 32 },
 ];
+
 const AGENT_COLUMNS: SettingsTableColumn[] = [
   { key: "indent", width: 60 },
   { key: "name", label: "Name ↓", width: 240 },
   { key: "role", label: "Role", width: 140 },
   { key: "profile", label: "Profile", width: 220 },
+  { key: "end", width: 32 },
+];
+
+const HERMES_AGENT_COLUMNS: SettingsTableColumn[] = [
+  { key: "indent", width: 60 },
+  { key: "name", label: "Name ↓", width: 200 },
+  { key: "status", label: "Status", width: 280 },
+  { key: "projects", label: "Projects", width: 180 },
+  { key: "credentialCreatedAt", label: "Credential created", width: 140 },
+  { key: "lastUsed", label: "Last used", width: 140 },
+  { key: "menu", width: 28 },
   { key: "end", width: 32 },
 ];
 
@@ -57,7 +71,9 @@ export function AdminView(): ReactElement {
   const [invitations, setInvitations] = useState<ApiInvitation[]>([]);
   const [credentials, setCredentials] = useState<ApiCredential[]>([]);
   const [profiles, setProfiles] = useState<ApiProfile[]>([]);
-  const [agents, setAgents] = useState<import("../lib/view-shared.js").ApiAgent[]>([]);
+  const [agents, setAgents] = useState<ApiAgent[]>([]);
+  const [hermesAgents, setHermesAgents] = useState<ApiHermesAgent[]>([]);
+  const [companyProjects, setCompanyProjects] = useState<ApiProject[]>([]);
   const [models, setModels] = useState<ApiModel[]>([]);
   const [displayName, setDisplayName] = useState("");
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -85,14 +101,31 @@ export function AdminView(): ReactElement {
   const [pendingAction, setPendingAction] = useState("");
   const [error, setError] = useState("");
 
+  // Hermes agent administration state
+  const [newHermesOpen, setNewHermesOpen] = useState(false);
+  const [hermesName, setHermesName] = useState("");
+  const [hermesError, setHermesError] = useState("");
+  const [hermesProjectIds, setHermesProjectIds] = useState<string[]>([]);
+  const [hermesAvatarSeed, setHermesAvatarSeed] = useState("");
+  const [pairingCodeModalOpen, setPairingCodeModalOpen] = useState(false);
+  const [pairingCodeData, setPairingCodeData] = useState<{ code: string; expiresAt: string; agentName: string } | null>(null);
+  const [hermesProfileName, setHermesProfileName] = useState("default");
+  const [pairingCodeCopied, setPairingCodeCopied] = useState(false);
+  const [pairingInstructionsCopied, setPairingInstructionsCopied] = useState(false);
+  const [editProjectsModalOpen, setEditProjectsModalOpen] = useState(false);
+  const [editingHermesAgent, setEditingHermesAgent] = useState<ApiHermesAgent | null>(null);
+  const [editingHermesProjectIds, setEditingHermesProjectIds] = useState<string[]>([]);
+
   const reload = useCallback(async (): Promise<void> => {
     try {
-      const [userList, invitationList, credentialList, profileList, agentList, modelList, laneList] = await Promise.all([
+      const [userList, invitationList, credentialList, profileList, agentList, hermesList, projectList, modelList, laneList] = await Promise.all([
         readJson<{ users: ApiUser[] }>("/api/admin/users"),
         readJson<{ invitations: ApiInvitation[] }>("/api/admin/invitations"),
         readJson<{ credentials: ApiCredential[] }>("/api/admin/credentials"),
         readJson<{ profiles: ApiProfile[] }>("/api/profiles").catch(() => ({ profiles: [] })),
-        readJson<{ agents: import("../lib/view-shared.js").ApiAgent[] }>("/api/agents").catch(() => ({ agents: [] })),
+        readJson<{ agents: ApiAgent[] }>("/api/agents").catch(() => ({ agents: [] })),
+        readJson<{ agents: ApiHermesAgent[] }>(`/api/admin/hermes-agents${currentCompany ? `?companyId=${encodeURIComponent(currentCompany.id)}` : ""}`).catch(() => ({ agents: [] })),
+        currentCompany ? readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(currentCompany.id)}/projects`).catch(() => ({ projects: [] })) : Promise.resolve({ projects: [] }),
         readJson<{ models: ApiModel[] }>("/api/admin/models").catch(() => ({ models: [] })),
         readJson<{ lanes: Array<{ profileId: string; activeCount: number; queuedCount: number }> }>("/api/admin/capacity").catch(() => ({ lanes: [] })),
       ]);
@@ -101,6 +134,11 @@ export function AdminView(): ReactElement {
       setCredentials(credentialList.credentials);
       setProfiles(profileList.profiles);
       setAgents(agentList.agents);
+      setHermesAgents(hermesList.agents);
+      setCompanyProjects(projectList.projects);
+      const projectIds = new Set(projectList.projects.map((project) => project.id));
+      setHermesProjectIds((selected) => selected.filter((projectId) => projectIds.has(projectId)));
+      setEditingHermesProjectIds((selected) => selected.filter((projectId) => projectIds.has(projectId)));
       setModels(modelList.models);
       setCapacityLanes(laneList.lanes);
       const activeModels = modelList.models.filter((model) => model.status === "active");
@@ -109,7 +147,8 @@ export function AdminView(): ReactElement {
       if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
       else setError("Unable to load administration");
     }
-  }, []);
+  }, [currentCompany]);
+
   useEffect(() => { if (!loading && user?.role === "admin") void reload(); }, [loading, reload, user?.role]);
 
   const invite = async (): Promise<void> => {
@@ -143,7 +182,7 @@ export function AdminView(): ReactElement {
     } catch { setError(editing ? "Unable to update profile" : "Unable to create profile"); }
   };
   const openNewAgent = (): void => { setEditingAgentId(null); setAgentName(""); setAgentRole("analyst"); setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", "")); setAgentProfileId(profiles[0]?.id ?? ""); setAgentOpen(true); };
-  const openEditAgent = (agent: import("../lib/view-shared.js").ApiAgent): void => { setEditingAgentId(agent.id); setAgentName(agent.name); setAgentRole(agent.role); setAgentAvatarSeed(agent.avatarSeed); setAgentProfileId(agent.profileId); setAgentOpen(true); };
+  const openEditAgent = (agent: ApiAgent): void => { setEditingAgentId(agent.id); setAgentName(agent.name); setAgentRole(agent.role); setAgentAvatarSeed(agent.avatarSeed); setAgentProfileId(agent.profileId); setAgentOpen(true); };
   const saveAgent = async (): Promise<void> => {
     const editing = editingAgentId !== null;
     try {
@@ -151,6 +190,190 @@ export function AdminView(): ReactElement {
       setAgentOpen(false); setEditingAgentId(null); await reload();
     } catch { setError(editing ? "Unable to update agent" : "Unable to create agent"); }
   };
+
+  // Hermes handlers
+  const openNewHermesAgent = (): void => {
+    setHermesName("");
+    setHermesError("");
+    setHermesProjectIds([]);
+    setHermesAvatarSeed(crypto.randomUUID().replaceAll("-", ""));
+    setNewHermesOpen(true);
+  };
+
+  const createHermesAgent = async (): Promise<void> => {
+    if (!currentCompany) return;
+    setHermesError("");
+    try {
+      const result = await readJson<{ agent: ApiHermesAgent; pairingCode: string; expiresAt: string }>("/api/admin/hermes-agents", {
+        method: "POST",
+        body: JSON.stringify({
+          name: hermesName.trim(),
+          companyId: currentCompany.id,
+          projectIds: hermesProjectIds,
+          avatarSeed: hermesAvatarSeed,
+        }),
+      });
+      setNewHermesOpen(false);
+      setPairingCodeData({ code: result.pairingCode, expiresAt: result.expiresAt, agentName: result.agent.name });
+      setHermesProfileName("default");
+      setPairingCodeCopied(false);
+      setPairingInstructionsCopied(false);
+      setPairingCodeModalOpen(true);
+      await reload();
+    } catch (error) {
+      setHermesError(error instanceof Error ? error.message : "Unable to create Hermes agent");
+    }
+  };
+
+  const reissueHermesPairing = async (agent: ApiHermesAgent): Promise<void> => {
+    try {
+      const result = await readJson<{ pairingCode: string; expiresAt: string }>(`/api/admin/hermes-agents/${encodeURIComponent(agent.id)}/pairing-code`, {
+        method: "POST",
+        body: "{}",
+      });
+      setPairingCodeData({ code: result.pairingCode, expiresAt: result.expiresAt, agentName: agent.name });
+      setHermesProfileName("default");
+      setPairingCodeCopied(false);
+      setPairingInstructionsCopied(false);
+      setPairingCodeModalOpen(true);
+      await reload();
+    } catch {
+      setError("Unable to reissue pairing code");
+    }
+  };
+
+  const rotateHermesAgent = async (agent: ApiHermesAgent): Promise<void> => {
+    try {
+      const result = await readJson<{ pairingCode: string; expiresAt: string }>(`/api/admin/hermes-agents/${encodeURIComponent(agent.id)}/rotate`, {
+        method: "POST",
+        body: "{}",
+      });
+      setPairingCodeData({ code: result.pairingCode, expiresAt: result.expiresAt, agentName: agent.name });
+      setHermesProfileName("default");
+      setPairingCodeCopied(false);
+      setPairingInstructionsCopied(false);
+      setPairingCodeModalOpen(true);
+      await reload();
+    } catch {
+      setError("Unable to rotate Hermes agent");
+    }
+  };
+
+  const revokeHermesAgent = async (agent: ApiHermesAgent): Promise<void> => {
+    const action = `hermes:revoke:${agent.id}`;
+    if (pendingAction !== action) {
+      setPendingAction(action);
+      return;
+    }
+    try {
+      await readJson(`/api/admin/hermes-agents/${encodeURIComponent(agent.id)}/revoke`, {
+        method: "POST",
+        body: "{}",
+      });
+      setPendingAction("");
+      await reload();
+    } catch {
+      setError("Unable to revoke Hermes agent");
+    }
+  };
+
+  const openEditHermesProjects = (agent: ApiHermesAgent): void => {
+    setEditingHermesAgent(agent);
+    setEditingHermesProjectIds([...agent.projectIds]);
+    setEditProjectsModalOpen(true);
+  };
+
+  const saveHermesProjects = async (): Promise<void> => {
+    if (!editingHermesAgent) return;
+    try {
+      await readJson<{ agent: ApiHermesAgent }>(`/api/admin/hermes-agents/${encodeURIComponent(editingHermesAgent.id)}/projects`, {
+        method: "PUT",
+        body: JSON.stringify({ projectIds: editingHermesProjectIds }),
+      });
+      setEditProjectsModalOpen(false);
+      setEditingHermesAgent(null);
+      await reload();
+    } catch {
+      setError("Unable to update agent projects");
+    }
+  };
+
+  const copyPairingCode = async (): Promise<void> => {
+    if (!pairingCodeData?.code) return;
+    try {
+      await navigator.clipboard.writeText(pairingCodeData.code);
+      setPairingCodeCopied(true);
+    } catch {
+      setError("Unable to copy pairing code");
+    }
+  };
+
+  const hermesSetupInstructions = (): string => {
+    if (!pairingCodeData?.code || !pairingCodeData.expiresAt) return "";
+    const baseUrl = window.location.origin;
+    const profileId = hermesProfileName.trim() || "default";
+    const instructions = [
+      "# Connect this Hermes profile to Forge",
+      "",
+      "Configure only the active Hermes profile.",
+      "",
+      "- Forge base URL: `" + baseUrl + "`",
+      "- One-time pairing code: `" + pairingCodeData.code + "`",
+      "- Pairing code expires: `" + adminDate(pairingCodeData.expiresAt) + "`",
+      "",
+      "Complete these steps:",
+      "",
+      "1. Pair the Hermes profile `" + profileId + "`.",
+      "",
+      "2. Exchange the pairing code by sending JSON to `POST " + baseUrl + "/api/hermes/pairing/exchange`:",
+      "",
+      "   ```json",
+      "   {",
+      "     \"pairingCode\": \"" + pairingCodeData.code + "\",",
+      "     \"profileId\": \"" + profileId + "\"",
+      "   }",
+      "   ```",
+      "",
+      "3. Capture the exchange response without printing the raw response or credential. Preserve the active profile's existing `$HERMES_HOME/.env` contents and set:",
+      "",
+      "   - `FORGE_BASE_URL=" + baseUrl + "`",
+      "   - `FORGE_AGENT_CREDENTIAL=<returned credential>`",
+      "",
+      "   Replace existing values for those keys instead of creating duplicates. Keep the file profile-local and restricted to the current user. Never put the credential in chat output, memory, logs, shell history, skill markdown, or source control.",
+      "",
+      "4. Create or update a profile-local Forge skill at `$HERMES_HOME/skills/forge/`. Use the Python standard library and read the Forge URL and credential from the environment at runtime. The skill must support:",
+      "",
+      "   - Creating a task with `POST /api/hermes/tasks` and JSON fields `projectId`, `title`, `description`, and `idempotencyKey`.",
+      "   - Retrieving status with `GET /api/hermes/tasks/{taskId}`.",
+      "   - Sending `Authorization: Bearer <credential>` on every Forge machine request.",
+      "   - Generating one idempotency key per requested task, reusing it for retries of the same payload, and never reusing it for a different payload.",
+      "   - Requiring an explicit project ID and treating Forge's persisted project grants as authoritative.",
+      "",
+      "5. Create one persistent connectivity acknowledgment task by sending `POST " + baseUrl + "/api/hermes/tasks` with the stored bearer credential. Build the request from the exchange response:",
+      "",
+      "   - `projectId`: the first value in the returned `agent.projectIds` array.",
+      "   - `title`: `Hermes connectivity confirmed`.",
+      "   - `description`: `Connection acknowledged. Do not plan or execute this task.`",
+      "   - `idempotencyKey`: `forge-connectivity-` followed by the returned `agent.id`.",
+      "",
+      "   Reuse that exact request if retrying. A `200` or `201` response confirms connectivity. The task must remain in `backlog` with `Start planning` pending; do not invoke any task command. If no allowed project ID was returned, do not create the task and report that project access is required.",
+      "",
+      "6. Report only the pairing result, Forge agent name/ID, active profile ID, allowed project IDs, and the acknowledgment task issue key/ID and phase. Never echo the pairing code or bearer credential.",
+    ].join("\n");
+    return instructions;
+  };
+  const copyHermesSetupInstructions = async (): Promise<void> => {
+    const instructions = hermesSetupInstructions();
+    if (!instructions) return;
+    try {
+      await navigator.clipboard.writeText(instructions);
+      setPairingInstructionsCopied(true);
+    } catch {
+      setPairingInstructionsCopied(false);
+      setError("Unable to copy Hermes setup instructions");
+    }
+  };
+
   const updateCapacity = async (profile: ApiProfile): Promise<void> => {
     const raw = capacityEdits[profile.id] ?? (profile.capacity === null ? "" : String(profile.capacity));
     try { await readJson(`/api/admin/profiles/${encodeURIComponent(profile.id)}/capacity`, { method: "PATCH", body: JSON.stringify({ capacity: raw.trim() === "" ? null : Number(raw) }) }); await reload(); } catch { setError("Unable to update capacity"); }
@@ -203,6 +426,7 @@ export function AdminView(): ReactElement {
       await reload();
     } catch { setError("Unable to revoke passkey"); }
   };
+
   const isProfiles = window.location.pathname.endsWith("/profiles");
   const isAgents = window.location.pathname.endsWith("/agents");
   const isModels = window.location.pathname.endsWith("/models");
@@ -230,55 +454,373 @@ export function AdminView(): ReactElement {
 
   return (
     <SettingsLayout title={viewTitle} companyId={currentCompany?.id ?? ""} backHref={backHref} activeHref={activeHref} contentClassName="">
-      <div>{!isProfiles && !isAgents && !isModels && !isCompanies && !isInvitations && !isPasskeys ? (<>
-        <section>
-          <SettingsToolbar searchLabel="Search users" searchPlaceholder="Search by name or username" filterLabel="All" actions={<SettingsToolbarAction disabled>Export CSV</SettingsToolbarAction>} />
-          <SettingsDataTable label="Users" columns={USER_COLUMNS} className="mt-5">
-            {USER_GROUPS.map((group) => { const groupUsers = users.filter((candidate) => candidate.status === group.status); if (groupUsers.length === 0) return null; return <SettingsTableGroup columnCount={USER_COLUMNS.length} count={groupUsers.length} key={group.status} label={group.label}>{groupUsers.map((candidate) => { const action = `user:${candidate.id}`; const passkeyCount = credentials.filter((credential) => credential.userId === candidate.id && !credential.revokedAt).length; return <SettingsTableRow key={candidate.id} size="member"><SettingsTableCell className="p-0" /><SettingsTableCell><span className="flex min-w-0 items-center gap-2"><ProfileAvatar name={candidate.displayName} seed={candidate.avatarSeed} collection="pixel-art-neutral" /><span className="truncate">{candidate.displayName}</span></span></SettingsTableCell><SettingsTableCell className="truncate text-muted-foreground">@{candidate.username}</SettingsTableCell><SettingsTableCell><span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">{candidate.role}</span></SettingsTableCell><SettingsTableCell className="text-muted-foreground">{candidate.companyIds.length}</SettingsTableCell><SettingsTableCell className="text-muted-foreground">{passkeyCount}</SettingsTableCell><SettingsTableCell><span className="flex items-center gap-1.5 text-muted-foreground"><span className={candidate.status === "active" ? "size-1.5 rounded-full bg-emerald-500" : candidate.status === "pending" ? "size-1.5 rounded-full bg-amber-500" : "size-1.5 rounded-full bg-muted-foreground"} />{candidate.status}</span></SettingsTableCell><SettingsTableCell className="p-0">{candidate.role !== "admin" && candidate.status === "active" ? <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${candidate.displayName} actions`} title={`${candidate.displayName} actions`} />}><Ellipsis /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem variant="destructive" onClick={() => void revokeUser(candidate)}>{pendingAction === action ? "Confirm revoke" : "Revoke user"}</DropdownMenuItem>{pendingAction === action ? <DropdownMenuItem onClick={() => setPendingAction("")}>Cancel</DropdownMenuItem> : null}</DropdownMenuContent></DropdownMenu> : null}</SettingsTableCell><SettingsTableCell className="p-0" /></SettingsTableRow>; })}</SettingsTableGroup>; })}
-            {users.length === 0 ? <SettingsTableEmpty columnCount={USER_COLUMNS.length}>No users configured.</SettingsTableEmpty> : null}
-          </SettingsDataTable>
-        </section>
-        </>) : null}
-        {isProfiles ? (<>
+      <div>
+        {!isProfiles && !isAgents && !isModels && !isCompanies && !isInvitations && !isPasskeys ? (
           <section>
-            <SettingsToolbar searchLabel="Filter profiles by name" searchPlaceholder="Filter by name…" filterLabel="All models" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={openNewProfile}>New profile</SettingsToolbarAction>} />
-            <SettingsDataTable label="Profiles" columns={PROFILE_COLUMNS} className="mt-10">
-              <tbody>{profiles.map((profile) => { const lane = capacityLanes.find((item) => item.profileId === profile.id); const edit = capacityEdits[profile.id] ?? (profile.capacity === null ? "" : String(profile.capacity)); const saved = profile.capacity === null ? "" : String(profile.capacity); const formId = `capacity-${profile.id}`; return <SettingsTableRow aria-label={`Edit ${profile.name}`} key={profile.id} onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input")) openEditProfile(profile); }} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); openEditProfile(profile); } }} tabIndex={0}><SettingsTableCell className="p-0" /><SettingsTableCell><span className="flex min-w-0 items-center gap-3"><span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{profile.name[0]?.toUpperCase()}</span><span className="min-w-0"><span className="block truncate">{profile.name}</span><span className="block truncate text-[10px] leading-3 text-muted-foreground">{profile.capacity === null ? `Default · ${profile.effectiveCapacity} slots effective` : `Override · ${profile.capacity} slots`} · {lane?.activeCount ?? 0} active / {lane?.queuedCount ?? 0} queued</span></span></span></SettingsTableCell><SettingsTableCell className="truncate">{profile.model}</SettingsTableCell><SettingsTableCell className="truncate text-muted-foreground">{profile.reasoningLevel}</SettingsTableCell><SettingsTableCell className="truncate text-muted-foreground">{profile.servicePriority}</SettingsTableCell><SettingsTableCell><form id={formId} onSubmit={(event) => { event.preventDefault(); void updateCapacity(profile); }}><input aria-label={`${profile.name} capacity`} className="h-7 w-[86px] rounded-md border-[0.5px] border-border bg-transparent px-2 text-[12px] outline-none focus:border-ring" inputMode="numeric" placeholder="Default" value={edit} onChange={(event) => setCapacityEdits((current) => ({ ...current, [profile.id]: event.target.value }))} /></form></SettingsTableCell><SettingsTableCell className="p-0"><button aria-label="Save" className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-black/5 hover:text-foreground disabled:opacity-30" disabled={edit === saved} form={formId} title="Save capacity" type="submit"><Save className="size-3.5" /></button></SettingsTableCell><SettingsTableCell className="p-0"><Button variant="ghost" size="icon-xs" aria-label={`Edit ${profile.name}`} title={`Edit ${profile.name}`} onClick={() => openEditProfile(profile)}><Pencil /></Button></SettingsTableCell></SettingsTableRow>; })}</tbody>
-              {profiles.length === 0 ? <SettingsTableEmpty columnCount={PROFILE_COLUMNS.length}>No profiles configured.</SettingsTableEmpty> : null}
+            <SettingsToolbar searchLabel="Search users" searchPlaceholder="Search by name or username" filterLabel="All" actions={<SettingsToolbarAction disabled>Export CSV</SettingsToolbarAction>} />
+            <SettingsDataTable label="Users" columns={USER_COLUMNS} className="mt-5">
+              {USER_GROUPS.map((group) => {
+                const groupUsers = users.filter((candidate) => candidate.status === group.status);
+                if (groupUsers.length === 0) return null;
+                return (
+                  <SettingsTableGroup columnCount={USER_COLUMNS.length} count={groupUsers.length} key={group.status} label={group.label}>
+                    {groupUsers.map((candidate) => {
+                      const action = `user:${candidate.id}`;
+                      const passkeyCount = credentials.filter((credential) => credential.userId === candidate.id && !credential.revokedAt).length;
+                      return (
+                        <SettingsTableRow key={candidate.id} size="member">
+                          <SettingsTableCell className="p-0" />
+                          <SettingsTableCell><span className="flex min-w-0 items-center gap-2"><ProfileAvatar name={candidate.displayName} seed={candidate.avatarSeed} collection="pixel-art-neutral" /><span className="truncate">{candidate.displayName}</span></span></SettingsTableCell>
+                          <SettingsTableCell className="truncate text-muted-foreground">@{candidate.username}</SettingsTableCell>
+                          <SettingsTableCell><span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">{candidate.role}</span></SettingsTableCell>
+                          <SettingsTableCell className="text-muted-foreground">{candidate.companyIds.length}</SettingsTableCell>
+                          <SettingsTableCell className="text-muted-foreground">{passkeyCount}</SettingsTableCell>
+                          <SettingsTableCell><span className="flex items-center gap-1.5 text-muted-foreground"><span className={candidate.status === "active" ? "size-1.5 rounded-full bg-emerald-500" : candidate.status === "pending" ? "size-1.5 rounded-full bg-amber-500" : "size-1.5 rounded-full bg-muted-foreground"} />{candidate.status}</span></SettingsTableCell>
+                          <SettingsTableCell className="p-0">{candidate.role !== "admin" && candidate.status === "active" ? <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${candidate.displayName} actions`} title={`${candidate.displayName} actions`} />}><Ellipsis /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem variant="destructive" onClick={() => void revokeUser(candidate)}>{pendingAction === action ? "Confirm revoke" : "Revoke user"}</DropdownMenuItem>{pendingAction === action ? <DropdownMenuItem onClick={() => setPendingAction("")}>Cancel</DropdownMenuItem> : null}</DropdownMenuContent></DropdownMenu> : null}</SettingsTableCell>
+                          <SettingsTableCell className="p-0" />
+                        </SettingsTableRow>
+                      );
+                    })}
+                  </SettingsTableGroup>
+                );
+              })}
+              {users.length === 0 ? <SettingsTableEmpty columnCount={USER_COLUMNS.length}>No users configured.</SettingsTableEmpty> : null}
             </SettingsDataTable>
           </section>
-              <Dialog open={profileOpen} onOpenChange={(open) => { setProfileOpen(open); if (!open) setEditingProfileId(null); }}><DialogContent><DialogHeader><DialogTitle>{editingProfileId ? "Edit profile" : "New profile"}</DialogTitle><DialogDescription>Configure a reusable Codex execution profile.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void saveProfile(); }}><FieldGroup><Field><FieldLabel htmlFor="profile-name">Profile name</FieldLabel><Input id="profile-name" autoFocus value={profileName} onChange={(event) => setProfileName(event.target.value)} /></Field><Field><FieldLabel htmlFor="profile-model">Model</FieldLabel><Select value={profileModel || null} onValueChange={(value) => setProfileModel(value ?? "")}><SelectTrigger id="profile-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{models.filter((model) => model.status === "active").map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field><Field><FieldLabel htmlFor="profile-reasoning">Reasoning level</FieldLabel><Select value={profileReasoning} onValueChange={(value) => setProfileReasoning(value ?? "medium")}><SelectTrigger id="profile-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem><SelectItem value="xhigh">XHigh</SelectItem></SelectContent></Select></Field><Field><FieldLabel htmlFor="profile-priority">Service priority</FieldLabel><Select value={profilePriority} onValueChange={(value) => setProfilePriority(value ?? "standard")}><SelectTrigger id="profile-priority"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="standard">Standard</SelectItem><SelectItem value="priority">Priority</SelectItem><SelectItem value="fast">Fast</SelectItem></SelectContent></Select></Field><Field><FieldLabel htmlFor="profile-capacity">Capacity override</FieldLabel><Input id="profile-capacity" inputMode="numeric" placeholder="Default" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><FieldDescription>Blank inherits the host default.</FieldDescription></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!profileName.trim() || !profileModel}>{editingProfileId ? "Save changes" : "Create profile"}</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
-        </>) : null}
-        {isAgents ? (<>
+        ) : null}
+
+        {isProfiles ? (
+          <>
+            <section>
+              <SettingsToolbar searchLabel="Filter profiles by name" searchPlaceholder="Filter by name…" filterLabel="All models" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={openNewProfile}>New profile</SettingsToolbarAction>} />
+              <SettingsDataTable label="Profiles" columns={PROFILE_COLUMNS} className="mt-10">
+                <tbody>
+                  {profiles.map((profile) => {
+                    const lane = capacityLanes.find((item) => item.profileId === profile.id);
+                    const edit = capacityEdits[profile.id] ?? (profile.capacity === null ? "" : String(profile.capacity));
+                    const saved = profile.capacity === null ? "" : String(profile.capacity);
+                    const formId = `capacity-${profile.id}`;
+                    return (
+                      <SettingsTableRow aria-label={`Edit ${profile.name}`} key={profile.id} onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input")) openEditProfile(profile); }} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); openEditProfile(profile); } }} tabIndex={0}>
+                        <SettingsTableCell className="p-0" />
+                        <SettingsTableCell><span className="flex min-w-0 items-center gap-3"><span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{profile.name[0]?.toUpperCase()}</span><span className="min-w-0"><span className="block truncate">{profile.name}</span><span className="block truncate text-[10px] leading-3 text-muted-foreground">{profile.capacity === null ? `Default · ${profile.effectiveCapacity} slots effective` : `Override · ${profile.capacity} slots`} · {lane?.activeCount ?? 0} active / {lane?.queuedCount ?? 0} queued</span></span></span></SettingsTableCell>
+                        <SettingsTableCell className="truncate">{profile.model}</SettingsTableCell>
+                        <SettingsTableCell className="truncate text-muted-foreground">{profile.reasoningLevel}</SettingsTableCell>
+                        <SettingsTableCell className="truncate text-muted-foreground">{profile.servicePriority}</SettingsTableCell>
+                        <SettingsTableCell><form id={formId} onSubmit={(event) => { event.preventDefault(); void updateCapacity(profile); }}><input aria-label={`${profile.name} capacity`} className="h-7 w-[86px] rounded-md border-[0.5px] border-border bg-transparent px-2 text-[12px] outline-none focus:border-ring" inputMode="numeric" placeholder="Default" value={edit} onChange={(event) => setCapacityEdits((current) => ({ ...current, [profile.id]: event.target.value }))} /></form></SettingsTableCell>
+                        <SettingsTableCell className="p-0"><button aria-label="Save" className="flex size-7 items-center justify-center rounded-md text-muted-foreground hover:bg-black/5 hover:text-foreground disabled:opacity-30" disabled={edit === saved} form={formId} title="Save capacity" type="submit"><Save className="size-3.5" /></button></SettingsTableCell>
+                        <SettingsTableCell className="p-0"><Button variant="ghost" size="icon-xs" aria-label={`Edit ${profile.name}`} title={`Edit ${profile.name}`} onClick={() => openEditProfile(profile)}><Pencil /></Button></SettingsTableCell>
+                      </SettingsTableRow>
+                    );
+                  })}
+                </tbody>
+                {profiles.length === 0 ? <SettingsTableEmpty columnCount={PROFILE_COLUMNS.length}>No profiles configured.</SettingsTableEmpty> : null}
+              </SettingsDataTable>
+            </section>
+            <Dialog open={profileOpen} onOpenChange={(open) => { setProfileOpen(open); if (!open) setEditingProfileId(null); }}>
+              <DialogContent>
+                <DialogHeader><DialogTitle>{editingProfileId ? "Edit profile" : "New profile"}</DialogTitle><DialogDescription>Configure a reusable Codex execution profile.</DialogDescription></DialogHeader>
+                <form onSubmit={(event) => { event.preventDefault(); void saveProfile(); }}>
+                  <FieldGroup>
+                    <Field><FieldLabel htmlFor="profile-name">Profile name</FieldLabel><Input id="profile-name" autoFocus value={profileName} onChange={(event) => setProfileName(event.target.value)} /></Field>
+                    <Field><FieldLabel htmlFor="profile-model">Model</FieldLabel><Select value={profileModel || null} onValueChange={(value) => setProfileModel(value ?? "")}><SelectTrigger id="profile-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{models.filter((model) => model.status === "active").map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field>
+                    <Field><FieldLabel htmlFor="profile-reasoning">Reasoning level</FieldLabel><Select value={profileReasoning} onValueChange={(value) => setProfileReasoning(value ?? "medium")}><SelectTrigger id="profile-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem><SelectItem value="xhigh">XHigh</SelectItem></SelectContent></Select></Field>
+                    <Field><FieldLabel htmlFor="profile-priority">Service priority</FieldLabel><Select value={profilePriority} onValueChange={(value) => setProfilePriority(value ?? "standard")}><SelectTrigger id="profile-priority"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="standard">Standard</SelectItem><SelectItem value="priority">Priority</SelectItem><SelectItem value="fast">Fast</SelectItem></SelectContent></Select></Field>
+                    <Field><FieldLabel htmlFor="profile-capacity">Capacity override</FieldLabel><Input id="profile-capacity" inputMode="numeric" placeholder="Default" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><FieldDescription>Blank inherits the host default.</FieldDescription></Field>
+                    <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!profileName.trim() || !profileModel}>{editingProfileId ? "Save changes" : "Create profile"}</Button></DialogFooter>
+                  </FieldGroup>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </>
+        ) : null}
+
+        {isAgents ? (
+          <div className="space-y-12">
+            <section>
+              <SettingsToolbar searchLabel="Filter internal agents by name" searchPlaceholder="Filter by name…" filterLabel="All roles" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={openNewAgent}>New internal agent</SettingsToolbarAction>} />
+              <div className="mt-4 flex h-8 items-center justify-between">
+                <div className="flex items-baseline gap-2">
+                  <h2 className="text-base font-medium">Internal agents</h2>
+                  <span className="text-[11px] text-muted-foreground">{agents.length}</span>
+                </div>
+              </div>
+              <SettingsDataTable label="Internal Agents" columns={AGENT_COLUMNS} className="mt-3">
+                <tbody>
+                  {agents.map((agent) => (
+                    <SettingsTableRow aria-label={`Edit ${agent.name}`} key={agent.id} onClick={() => openEditAgent(agent)} tabIndex={0}>
+                      <SettingsTableCell className="p-0" />
+                      <SettingsTableCell><span className="flex items-center gap-3"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><span>{agent.name}</span></span></SettingsTableCell>
+                      <SettingsTableCell className="capitalize">{agent.role}</SettingsTableCell>
+                      <SettingsTableCell className="truncate">{profiles.find((profile) => profile.id === agent.profileId)?.name ?? agent.profileId}</SettingsTableCell>
+                      <SettingsTableCell className="p-0"><Button variant="ghost" size="icon-xs" aria-label={`Edit ${agent.name}`} title={`Edit ${agent.name}`} onClick={() => openEditAgent(agent)}><Pencil /></Button></SettingsTableCell>
+                    </SettingsTableRow>
+                  ))}
+                </tbody>
+                {agents.length === 0 ? <SettingsTableEmpty columnCount={AGENT_COLUMNS.length}>No internal agents configured.</SettingsTableEmpty> : null}
+              </SettingsDataTable>
+            </section>
+
+            <section>
+              <div className="flex h-8 items-center justify-between">
+                <div className="flex items-baseline gap-2">
+                  <h2 className="text-base font-medium">Hermes agents</h2>
+                  <span className="text-[11px] text-muted-foreground">{hermesAgents.length}</span>
+                </div>
+                <Button size="sm" onClick={openNewHermesAgent}>New Hermes agent</Button>
+              </div>
+              <SettingsDataTable label="Hermes Agents" columns={HERMES_AGENT_COLUMNS} className="mt-3">
+                <tbody>
+                  {hermesAgents.map((agent) => {
+                    const action = `hermes:revoke:${agent.id}`;
+                    return (
+                      <SettingsTableRow aria-label={`Hermes agent ${agent.name}`} key={agent.id}>
+                        <SettingsTableCell className="p-0" />
+                        <SettingsTableCell>
+                          <span className="flex items-center gap-3">
+                            <ProfileAvatar name={agent.name} seed={agent.avatarSeed} collection="bottts-neutral" />
+                            <span className="truncate font-medium">{agent.name}</span>
+                          </span>
+                        </SettingsTableCell>
+                        <SettingsTableCell>
+                          <span className="flex items-center gap-1.5 whitespace-nowrap text-muted-foreground">
+                            <span className={agent.status === "paired" ? "size-1.5 shrink-0 rounded-full bg-emerald-500" : agent.status === "pending" ? "size-1.5 shrink-0 rounded-full bg-amber-500" : "size-1.5 shrink-0 rounded-full bg-muted-foreground"} />
+                            <span>{agent.status === "pending" && agent.pairingExpiresAt ? `Pending until ${adminDate(agent.pairingExpiresAt)}` : agent.status.charAt(0).toUpperCase() + agent.status.slice(1)}</span>
+                          </span>
+                        </SettingsTableCell>
+                        <SettingsTableCell>
+                          <span className="truncate text-muted-foreground" title={agent.projectIds.map((id) => companyProjects.find((p) => p.id === id)?.name ?? id).join(", ")}>
+                            {agent.projectIds.length === 0 ? "None" : agent.projectIds.map((id) => companyProjects.find((p) => p.id === id)?.name ?? id).join(", ")}
+                          </span>
+                        </SettingsTableCell>
+                        <SettingsTableCell className="truncate text-muted-foreground text-xs">
+                          {agent.credentialCreatedAt ? adminDate(agent.credentialCreatedAt) : "—"}
+                        </SettingsTableCell>
+                        <SettingsTableCell className="truncate text-muted-foreground text-xs">
+                          {agent.lastUsedAt ? adminDate(agent.lastUsedAt) : "Never"}
+                        </SettingsTableCell>
+                        <SettingsTableCell className="p-0">
+                          {agent.status !== "revoked" ? (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${agent.name} actions`} title={`${agent.name} actions`} />}>
+                                <Ellipsis className="size-4" />
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                {agent.status === "pending" ? (
+                                  <DropdownMenuItem onClick={() => void reissueHermesPairing(agent)}>
+                                    <Key className="mr-2 size-3.5" /> Reissue pairing code
+                                  </DropdownMenuItem>
+                                ) : (
+                                  <DropdownMenuItem onClick={() => void rotateHermesAgent(agent)}>
+                                    <RotateCw className="mr-2 size-3.5" /> Rotate credential
+                                  </DropdownMenuItem>
+                                )}
+                                <DropdownMenuItem onClick={() => openEditHermesProjects(agent)}>
+                                  <Pencil className="mr-2 size-3.5" /> Edit project scope
+                                </DropdownMenuItem>
+                                <DropdownMenuItem variant="destructive" onClick={() => void revokeHermesAgent(agent)}>
+                                  <ShieldAlert className="mr-2 size-3.5" /> {pendingAction === action ? "Confirm revoke" : "Revoke agent"}
+                                </DropdownMenuItem>
+                                {pendingAction === action ? <DropdownMenuItem onClick={() => setPendingAction("")}>Cancel</DropdownMenuItem> : null}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          ) : null}
+                        </SettingsTableCell>
+                        <SettingsTableCell className="p-0" />
+                      </SettingsTableRow>
+                    );
+                  })}
+                </tbody>
+                {hermesAgents.length === 0 ? <SettingsTableEmpty columnCount={HERMES_AGENT_COLUMNS.length}>No Hermes agents configured.</SettingsTableEmpty> : null}
+              </SettingsDataTable>
+            </section>
+
+            {/* Internal agent dialog */}
+            <Dialog open={agentOpen} onOpenChange={(open) => { setAgentOpen(open); if (!open) setEditingAgentId(null); }}>
+              <DialogContent>
+                <DialogHeader><DialogTitle>{editingAgentId ? "Edit agent" : "New internal agent"}</DialogTitle><DialogDescription>Assign a stable role identity to an execution profile.</DialogDescription></DialogHeader>
+                <form onSubmit={(event) => { event.preventDefault(); void saveAgent(); }}>
+                  <FieldGroup>
+                    <Field><FieldLabel>Avatar</FieldLabel><span className="flex items-center gap-3"><ProfileAvatar name={agentName || "Agent"} seed={agentAvatarSeed} /><Button type="button" variant="outline" size="sm" onClick={() => setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", ""))}>Randomize</Button></span></Field>
+                    <Field><FieldLabel htmlFor="agent-name">Agent name</FieldLabel><Input id="agent-name" autoFocus value={agentName} onChange={(event) => setAgentName(event.target.value)} /></Field>
+                    <Field><FieldLabel htmlFor="agent-role">Role</FieldLabel><Select value={agentRole} onValueChange={(value) => setAgentRole((value ?? "analyst") as typeof agentRole)}><SelectTrigger id="agent-role"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="analyst">Analyst</SelectItem><SelectItem value="implementer">Implementer</SelectItem><SelectItem value="reviewer">Reviewer</SelectItem></SelectContent></Select></Field>
+                    <Field><FieldLabel htmlFor="agent-profile">Execution profile</FieldLabel><Select value={agentProfileId || null} onValueChange={(value) => setAgentProfileId(value ?? "")}><SelectTrigger id="agent-profile"><SelectValue placeholder="Select a profile" /></SelectTrigger><SelectContent>{profiles.map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>)}</SelectContent></Select></Field>
+                    <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!agentName.trim() || !agentProfileId}>{editingAgentId ? "Save changes" : "Create agent"}</Button></DialogFooter>
+                  </FieldGroup>
+                </form>
+              </DialogContent>
+            </Dialog>
+
+            {/* New Hermes agent dialog */}
+            <Dialog open={newHermesOpen} onOpenChange={setNewHermesOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>New Hermes agent</DialogTitle>
+                  <DialogDescription>Create a scoped external agent for autonomous task creation and tracking.</DialogDescription>
+                </DialogHeader>
+                <form onSubmit={(event) => { event.preventDefault(); void createHermesAgent(); }}>
+                  <FieldGroup>
+                    <Field>
+                      <FieldLabel>Avatar</FieldLabel>
+                      <span className="flex items-center gap-3">
+                        <ProfileAvatar name={hermesName || "Hermes"} seed={hermesAvatarSeed} collection="bottts-neutral" />
+                        <Button type="button" variant="outline" size="sm" onClick={() => setHermesAvatarSeed(crypto.randomUUID().replaceAll("-", ""))}>Randomize</Button>
+                      </span>
+                    </Field>
+                    <Field data-invalid={Boolean(hermesError)}>
+                      <FieldLabel htmlFor="hermes-name">Agent name</FieldLabel>
+                      <Input id="hermes-name" autoFocus aria-invalid={Boolean(hermesError)} placeholder="e.g. SRE Hermes Bot" value={hermesName} onChange={(event) => { setHermesName(event.target.value); setHermesError(""); }} />
+                      <FieldError>{hermesError}</FieldError>
+                    </Field>
+                    <Field>
+                      <FieldLabel>Allowed projects</FieldLabel>
+                      <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border p-2">
+                        {companyProjects.map((project) => {
+                          const checked = hermesProjectIds.includes(project.id);
+                          return (
+                            <label key={project.id} className="flex cursor-pointer items-center gap-2 text-xs">
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(val) => {
+                                  if (val) setHermesProjectIds((prev) => [...prev, project.id]);
+                                  else setHermesProjectIds((prev) => prev.filter((id) => id !== project.id));
+                                }}
+                              />
+                              <span className="font-medium">{project.name}</span>
+                              <span className="text-muted-foreground">({project.repository})</span>
+                            </label>
+                          );
+                        })}
+                        {companyProjects.length === 0 ? <span className="text-xs text-muted-foreground">No projects found in this workspace.</span> : null}
+                      </div>
+                      <FieldDescription>The agent will only be permitted to create and inspect tasks within selected projects.</FieldDescription>
+                    </Field>
+                    <DialogFooter>
+                      <DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose>
+                      <Button type="submit" size="sm" disabled={!hermesName.trim() || hermesProjectIds.length === 0}>Create Hermes agent</Button>
+                    </DialogFooter>
+                  </FieldGroup>
+                </form>
+              </DialogContent>
+            </Dialog>
+
+            {/* Hermes pairing code modal */}
+            <Dialog open={pairingCodeModalOpen} onOpenChange={setPairingCodeModalOpen}>
+              <DialogContent aria-label="Pairing code">
+                <div className="min-w-0 space-y-3 py-2">
+                  <div className="space-y-3">
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2"><p className="text-sm font-medium">Paste into Hermes</p><Badge variant="secondary">Recommended</Badge></div>
+                      <p className="text-[11px] text-muted-foreground">Paste them into the Hermes profile you are pairing.</p>
+                    </div>
+                    <Field>
+                      <FieldLabel htmlFor="hermes-profile-name">Hermes profile name</FieldLabel>
+                      <Input id="hermes-profile-name" value={hermesProfileName} onChange={(event) => { setHermesProfileName(event.target.value); setPairingInstructionsCopied(false); }} />
+                    </Field>
+                    <button type="button" className="relative w-full max-w-full cursor-pointer rounded-md border bg-muted/50 p-3 pr-10 text-left font-mono text-xs" aria-label="Copy setup instructions" onClick={() => void copyHermesSetupInstructions()}>
+                      <span className="block h-12 overflow-hidden whitespace-pre-wrap break-words">{hermesSetupInstructions().replaceAll("\n\n", "\n")}</span>
+                      <span className="absolute top-1/2 right-2 -translate-y-1/2">
+                        {pairingInstructionsCopied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+                      </span>
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2 text-[11px] text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">or</div>
+                  <div className="space-y-2">
+                    <div>
+                      <p className="text-sm font-medium">Manual setup</p>
+                      <p className="text-[11px] text-muted-foreground">Use this single-use code to configure the Hermes profile yourself.</p>
+                    </div>
+                    <button type="button" className="relative w-full max-w-full cursor-pointer rounded-md border bg-muted/50 p-3 pr-10 text-left font-mono text-xs" aria-label="Copy pairing code" onClick={() => void copyPairingCode()}>
+                      <span className="block truncate">{pairingCodeData?.code}</span>
+                      <span className="absolute top-1/2 right-2 -translate-y-1/2">
+                        {pairingCodeCopied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+                      </span>
+                    </button>
+                    {pairingCodeData?.expiresAt ? <p className="text-[11px] text-muted-foreground">Expires {adminDate(pairingCodeData.expiresAt)}</p> : null}
+                  </div>
+                </div>
+                {pairingCodeCopied || pairingInstructionsCopied ? <span className="pointer-events-none fixed top-4 left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-[11px] text-popover-foreground animate-in slide-in-from-top-2 duration-150" role="status" aria-live="polite">Copied to Clipboard</span> : null}
+                <DialogFooter>
+                  <DialogClose render={<Button type="button" size="sm" disabled={!pairingCodeCopied && !pairingInstructionsCopied} />}>{pairingCodeCopied || pairingInstructionsCopied ? "Continue" : "Copy to Continue"}</DialogClose>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+
+            {/* Hermes edit projects dialog */}
+            <Dialog open={editProjectsModalOpen} onOpenChange={setEditProjectsModalOpen}>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Edit allowed projects</DialogTitle>
+                  <DialogDescription>Manage project access grants for {editingHermesAgent?.name}.</DialogDescription>
+                </DialogHeader>
+                <form onSubmit={(event) => { event.preventDefault(); void saveHermesProjects(); }}>
+                  <FieldGroup>
+                    <Field>
+                      <FieldLabel>Projects</FieldLabel>
+                      <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border p-2">
+                        {companyProjects.map((project) => {
+                          const checked = editingHermesProjectIds.includes(project.id);
+                          return (
+                            <label key={project.id} className="flex cursor-pointer items-center gap-2 text-xs">
+                              <Checkbox
+                                checked={checked}
+                                onCheckedChange={(val) => {
+                                  if (val) setEditingHermesProjectIds((prev) => [...prev, project.id]);
+                                  else setEditingHermesProjectIds((prev) => prev.filter((id) => id !== project.id));
+                                }}
+                              />
+                              <span className="font-medium">{project.name}</span>
+                              <span className="text-muted-foreground">({project.repository})</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </Field>
+                    <DialogFooter>
+                      <DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose>
+                      <Button type="submit" size="sm">Save project grants</Button>
+                    </DialogFooter>
+                  </FieldGroup>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </div>
+        ) : null}
+
+        {isCompanies ? (
           <section>
-            <SettingsToolbar searchLabel="Filter agents by name" searchPlaceholder="Filter by name…" filterLabel="All roles" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={openNewAgent}>New agent</SettingsToolbarAction>} />
-            <SettingsDataTable label="Agents" columns={AGENT_COLUMNS} className="mt-10"><tbody>{agents.map((agent) => <SettingsTableRow aria-label={`Edit ${agent.name}`} key={agent.id} onClick={() => openEditAgent(agent)} tabIndex={0}><SettingsTableCell className="p-0" /><SettingsTableCell><span className="flex items-center gap-3"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><span>{agent.name}</span></span></SettingsTableCell><SettingsTableCell className="capitalize">{agent.role}</SettingsTableCell><SettingsTableCell className="truncate">{profiles.find((profile) => profile.id === agent.profileId)?.name ?? agent.profileId}</SettingsTableCell><SettingsTableCell className="p-0"><Button variant="ghost" size="icon-xs" aria-label={`Edit ${agent.name}`} title={`Edit ${agent.name}`} onClick={() => openEditAgent(agent)}><Pencil /></Button></SettingsTableCell></SettingsTableRow>)}</tbody>{agents.length === 0 ? <SettingsTableEmpty columnCount={AGENT_COLUMNS.length}>No agents configured.</SettingsTableEmpty> : null}</SettingsDataTable>
+            <div className="flex h-8 items-center justify-between gap-3"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Companies</h2><span className="text-[11px] text-muted-foreground">{companies.length}</span></div></div>
+            <div className="mt-5">{companies.map((company) => <div className="rounded-lg px-1 py-2.5 text-xs hover:bg-black/[0.025]" key={company.id}><div className="mb-2 flex flex-wrap items-center justify-between gap-2"><span className="min-w-0 truncate"><span className="font-medium">{company.name}</span> <span className="text-muted-foreground">· {company.status}</span></span><a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={withCompany(`/companies/${encodeURIComponent(company.id)}/settings`, company.id)}>Settings</a></div><div className="flex flex-wrap gap-1.5">{users.filter((candidate) => candidate.role === "member" && candidate.status === "active").map((candidate) => { const assigned = candidate.companyIds.includes(company.id); const action = `membership:${company.id}:${candidate.id}`; return <span className="flex items-center gap-1" key={candidate.id}><Button variant={assigned ? "secondary" : "outline"} size="sm" onClick={() => void changeMembership(company.id, candidate.id, !assigned)}>{assigned ? "− " : "+ "}{candidate.displayName}</Button>{pendingAction === action ? <><span className="text-[11px] text-muted-foreground">Confirm remove</span><Button variant="outline" size="sm" onClick={() => setPendingAction("")}>Cancel</Button></> : null}</span>; })}</div></div>)}</div>
           </section>
-          <Dialog open={agentOpen} onOpenChange={(open) => { setAgentOpen(open); if (!open) setEditingAgentId(null); }}><DialogContent><DialogHeader><DialogTitle>{editingAgentId ? "Edit agent" : "New agent"}</DialogTitle><DialogDescription>Assign a stable role identity to an execution profile.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void saveAgent(); }}><FieldGroup><Field><FieldLabel>Avatar</FieldLabel><span className="flex items-center gap-3"><ProfileAvatar name={agentName || "Agent"} seed={agentAvatarSeed} /><Button type="button" variant="outline" size="sm" onClick={() => setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", ""))}>Randomize</Button></span></Field><Field><FieldLabel htmlFor="agent-name">Agent name</FieldLabel><Input id="agent-name" autoFocus value={agentName} onChange={(event) => setAgentName(event.target.value)} /></Field><Field><FieldLabel htmlFor="agent-role">Role</FieldLabel><Select value={agentRole} onValueChange={(value) => setAgentRole((value ?? "analyst") as typeof agentRole)}><SelectTrigger id="agent-role"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="analyst">Analyst</SelectItem><SelectItem value="implementer">Implementer</SelectItem><SelectItem value="reviewer">Reviewer</SelectItem></SelectContent></Select></Field><Field><FieldLabel htmlFor="agent-profile">Execution profile</FieldLabel><Select value={agentProfileId || null} onValueChange={(value) => setAgentProfileId(value ?? "")}><SelectTrigger id="agent-profile"><SelectValue placeholder="Select a profile" /></SelectTrigger><SelectContent>{profiles.map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>)}</SelectContent></Select></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!agentName.trim() || !agentProfileId}>{editingAgentId ? "Save changes" : "Create agent"}</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
-        </>) : null}
-        {isCompanies ? (<>
-          <section><div className="flex h-8 items-center justify-between gap-3"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Companies</h2><span className="text-[11px] text-muted-foreground">{companies.length}</span></div></div><div className="mt-5">{companies.map((company) => <div className="rounded-lg px-1 py-2.5 text-xs hover:bg-black/[0.025]" key={company.id}><div className="mb-2 flex flex-wrap items-center justify-between gap-2"><span className="min-w-0 truncate"><span className="font-medium">{company.name}</span> <span className="text-muted-foreground">· {company.status}</span></span><a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={withCompany(`/companies/${encodeURIComponent(company.id)}/settings`, company.id)}>Settings</a></div><div className="flex flex-wrap gap-1.5">{users.filter((candidate) => candidate.role === "member" && candidate.status === "active").map((candidate) => { const assigned = candidate.companyIds.includes(company.id); const action = `membership:${company.id}:${candidate.id}`; return <span className="flex items-center gap-1" key={candidate.id}><Button variant={assigned ? "secondary" : "outline"} size="sm" onClick={() => void changeMembership(company.id, candidate.id, !assigned)}>{assigned ? "− " : "+ "}{candidate.displayName}</Button>{pendingAction === action ? <><span className="text-[11px] text-muted-foreground">Confirm remove</span><Button variant="outline" size="sm" onClick={() => setPendingAction("")}>Cancel</Button></> : null}</span>; })}</div></div>)}</div></section>
-        </>) : null}
-        {isInvitations ? (<>
-          <section>
-            <SettingsToolbar searchLabel="Search invitations" searchPlaceholder="Search invitations…" filterLabel="All" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={() => { setInviteToken(""); setCopied(false); setInviteOpen(true); }}>Invite</SettingsToolbarAction>} />
-            <div className="mt-10"><div className="flex h-8 items-center justify-between"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Invitations</h2><span className="text-[11px] text-muted-foreground">{invitations.length}</span></div></div><div className="mt-5">{invitations.map((invitation) => <div className="rounded-lg px-1 py-2.5 text-xs hover:bg-black/[0.025]" key={invitation.id}><div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate font-medium">{invitation.displayName}</span><span className="shrink-0 text-muted-foreground">{invitation.status}</span></div><div className="mt-1 text-[11px] text-muted-foreground">{invitation.kind} · expires {adminDate(invitation.expiresAt)}</div></div>)}</div></div>
-          </section>
-          <Dialog open={inviteOpen} onOpenChange={(open) => { setInviteOpen(open); if (!open) { setInviteToken(""); setCopied(false); } }}><DialogContent><DialogHeader><DialogTitle>{inviteToken ? "Invitation ready" : "Invite user"}</DialogTitle><DialogDescription>{inviteToken ? `Shown once · expires ${adminDate(inviteExpiresAt)}` : "Create an invitation for a Forge user."}</DialogDescription></DialogHeader>{inviteToken ? <><code className="break-all text-xs">{inviteToken}</code><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Close</DialogClose><Button type="button" size="sm" onClick={() => void copyInvitation()}>{copied ? "Copied" : "Copy invitation"}</Button></DialogFooter></> : <form onSubmit={(event) => { event.preventDefault(); void invite(); }}><FieldGroup><Field><FieldLabel htmlFor="invite-display-name">Display name</FieldLabel><Input id="invite-display-name" autoFocus placeholder="Forge user" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm">Invite</Button></DialogFooter></FieldGroup></form>}</DialogContent></Dialog>
-        </>) : null}
-        {isPasskeys ? (<>
+        ) : null}
+
+        {isInvitations ? (
+          <>
+            <section>
+              <SettingsToolbar searchLabel="Search invitations" searchPlaceholder="Search invitations…" filterLabel="All" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={() => { setInviteToken(""); setCopied(false); setInviteOpen(true); }}>Invite</SettingsToolbarAction>} />
+              <div className="mt-10"><div className="flex h-8 items-center justify-between"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Invitations</h2><span className="text-[11px] text-muted-foreground">{invitations.length}</span></div></div><div className="mt-5">{invitations.map((invitation) => <div className="rounded-lg px-1 py-2.5 text-xs hover:bg-black/[0.025]" key={invitation.id}><div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate font-medium">{invitation.displayName}</span><span className="shrink-0 text-muted-foreground">{invitation.status}</span></div><div className="mt-1 text-[11px] text-muted-foreground">{invitation.kind} · expires {adminDate(invitation.expiresAt)}</div></div>)}</div></div>
+            </section>
+            <Dialog open={inviteOpen} onOpenChange={(open) => { setInviteOpen(open); if (!open) { setInviteToken(""); setCopied(false); } }}><DialogContent><DialogHeader><DialogTitle>{inviteToken ? "Invitation ready" : "Invite user"}</DialogTitle><DialogDescription>{inviteToken ? `Shown once · expires ${adminDate(inviteExpiresAt)}` : "Create an invitation for a Forge user."}</DialogDescription></DialogHeader>{inviteToken ? <><code className="break-all text-xs">{inviteToken}</code><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Close</DialogClose><Button type="button" size="sm" onClick={() => void copyInvitation()}>{copied ? "Copied" : "Copy invitation"}</Button></DialogFooter></> : <form onSubmit={(event) => { event.preventDefault(); void invite(); }}><FieldGroup><Field><FieldLabel htmlFor="invite-display-name">Display name</FieldLabel><Input id="invite-display-name" autoFocus placeholder="Forge user" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm">Invite</Button></DialogFooter></FieldGroup></form>}</DialogContent></Dialog>
+          </>
+        ) : null}
+
+        {isPasskeys ? (
           <section>
             <SettingsToolbar searchLabel="Search passkeys" searchPlaceholder="Search passkeys…" filterLabel="All" searchWidth="compact" actions={null} />
             <div className="mt-10"><div className="flex h-8 items-center justify-between"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Passkeys</h2><span className="text-[11px] text-muted-foreground">{credentials.filter((credential) => !credential.revokedAt).length} active</span></div></div><div className="mt-5">{credentials.map((credential) => { const candidate = users.find((entry) => entry.id === credential.userId); const action = `credential:${credential.id}`; return <div className="flex min-h-11 items-center justify-between gap-2 rounded-lg px-1 text-xs hover:bg-black/[0.025]" key={credential.id}><span className="min-w-0 truncate">{candidate?.displayName ?? "User"}<span className="ml-2 text-muted-foreground">{credential.revokedAt ? "revoked" : `created ${adminDate(credential.createdAt)}`}</span></span>{!credential.revokedAt && credential.userId !== user.id ? <span className="flex shrink-0 items-center gap-1">{pendingAction === action ? <span className="text-[11px] text-muted-foreground">Confirm</span> : null}<Button variant="ghost" size="sm" onClick={() => void revokeCredential(credential)}>{pendingAction === action ? "Confirm revoke" : "Revoke"}</Button>{pendingAction === action ? <Button variant="outline" size="sm" onClick={() => setPendingAction("")}>Cancel</Button> : null}</span> : null}</div>; })}</div></div>
           </section>
-        </>) : null}
-        {isModels ? (<>
-          <section>
-            <div className="flex h-8 items-center justify-between gap-3"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Model catalog</h2><span className="text-[11px] text-muted-foreground">{models.filter((model) => model.status === "active").length} active</span></div><Button variant="outline" size="sm" onClick={() => setModelOpen(true)}>Add model</Button></div>
-            <div className="mt-5">{models.map((model) => <div className="flex h-11 items-center justify-between gap-3 rounded-lg px-1 text-[13px] hover:bg-black/[0.025]" key={model.id}><div className="min-w-0"><div className="truncate">{model.displayName} <code className="ml-1 text-[11px] text-muted-foreground">{model.id}</code></div><div className="truncate text-[10px] leading-3 text-muted-foreground">{model.status}{model.description ? ` · ${model.description}` : ""}</div></div><Button variant="ghost" size="sm" onClick={() => void toggleModel(model)}>{model.status === "active" ? "Retire" : "Restore"}</Button></div>)}</div>
-          </section>
-          <Dialog open={modelOpen} onOpenChange={setModelOpen}><DialogContent><DialogHeader><DialogTitle>Add model</DialogTitle><DialogDescription>Make a model available to new profiles.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void createModel(); }}><FieldGroup><Field><FieldLabel htmlFor="model-id">Model ID</FieldLabel><Input id="model-id" autoFocus placeholder="gpt-5-codex" value={modelId} onChange={(event) => setModelId(event.target.value)} /></Field><Field><FieldLabel htmlFor="model-display-name">Display name</FieldLabel><Input id="model-display-name" value={modelName} onChange={(event) => setModelName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!modelId.trim() || !modelName.trim()}>Add model</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
-        </>) : null}
+        ) : null}
+
+        {isModels ? (
+          <>
+            <section>
+              <div className="flex h-8 items-center justify-between gap-3"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Model catalog</h2><span className="text-[11px] text-muted-foreground">{models.filter((model) => model.status === "active").length} active</span></div><Button variant="outline" size="sm" onClick={() => setModelOpen(true)}>Add model</Button></div>
+              <div className="mt-5">{models.map((model) => <div className="flex h-11 items-center justify-between gap-3 rounded-lg px-1 text-[13px] hover:bg-black/[0.025]" key={model.id}><div className="min-w-0"><div className="truncate">{model.displayName} <code className="ml-1 text-[11px] text-muted-foreground">{model.id}</code></div><div className="truncate text-[10px] leading-3 text-muted-foreground">{model.status}{model.description ? ` · ${model.description}` : ""}</div></div><Button variant="ghost" size="sm" onClick={() => void toggleModel(model)}>{model.status === "active" ? "Retire" : "Restore"}</Button></div>)}</div>
+            </section>
+            <Dialog open={modelOpen} onOpenChange={setModelOpen}><DialogContent><DialogHeader><DialogTitle>Add model</DialogTitle><DialogDescription>Make a model available to new profiles.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void createModel(); }}><FieldGroup><Field><FieldLabel htmlFor="model-id">Model ID</FieldLabel><Input id="model-id" autoFocus placeholder="gpt-5-codex" value={modelId} onChange={(event) => setModelId(event.target.value)} /></Field><Field><FieldLabel htmlFor="model-display-name">Display name</FieldLabel><Input id="model-display-name" value={modelName} onChange={(event) => setModelName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!modelId.trim() || !modelName.trim()}>Add model</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
+          </>
+        ) : null}
+
         {error ? <div className="px-4 py-3 text-xs text-rose-700"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       </div>
     </SettingsLayout>

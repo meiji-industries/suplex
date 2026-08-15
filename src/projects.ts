@@ -659,7 +659,7 @@ export class ProjectService {
     const id = identifier("agent");
     try {
       this.database.authTransaction((db) => {
-        db.prepare("INSERT INTO forge_agents (id, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, agentInput.name, agentInput.role, agentInput.avatarSeed, agentInput.profileId, now, now);
+        db.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES (?, 'internal', ?, ?, ?, ?, ?, ?)").run(id, agentInput.name, agentInput.role, agentInput.avatarSeed, agentInput.profileId, now, now);
         this.auth.recordAuditEventInTransaction(db, actorUserId, "agent_created", undefined, undefined, { agentId: id });
       });
     } catch {
@@ -674,7 +674,7 @@ export class ProjectService {
     const now = this.now().toISOString();
     try {
       return this.database.authTransaction((db) => {
-        const result = db.prepare("UPDATE forge_agents SET name = ?, role = ?, avatar_seed = ?, profile_id = ?, updated_at = ? WHERE id = ?").run(agentInput.name, agentInput.role, agentInput.avatarSeed, agentInput.profileId, now, agentId);
+        const result = db.prepare("UPDATE forge_agents SET name = ?, role = ?, avatar_seed = ?, profile_id = ?, updated_at = ? WHERE id = ? AND kind = 'internal'").run(agentInput.name, agentInput.role, agentInput.avatarSeed, agentInput.profileId, now, agentId);
         if (result.changes !== 1) throw new ProjectFailure("Agent not found", [], 404);
         this.auth.recordAuditEventInTransaction(db, actorUserId, "agent_updated", undefined, undefined, { agentId });
         return publicAgent(db.prepare("SELECT * FROM forge_agents WHERE id = ?").get(agentId) as AgentRow);
@@ -697,7 +697,7 @@ export class ProjectService {
         COALESCE((SELECT MAX(COALESCE(e.heartbeat_at, e.finished_at, e.started_at)) FROM forge_agent_executions e JOIN forge_tasks t ON t.id = e.task_id WHERE json_extract(t.role_agents_json, '$.' || e.role) = a.id${scope}), ''),
         COALESCE((SELECT MAX(COALESCE(d.heartbeat_at, d.finished_at, d.started_at)) FROM forge_developer_executions d JOIN forge_tasks t ON t.id = d.task_id WHERE json_extract(t.role_agents_json, '$.implementer') = a.id${scope}), '')
       ), ''), a.created_at) AS last_seen_at
-      FROM forge_agents a ORDER BY active_count DESC, a.name COLLATE NOCASE, a.id`).all(...params) as AgentRow[]).map(publicAgent));
+      FROM forge_agents a WHERE a.kind = 'internal' ORDER BY active_count DESC, a.name COLLATE NOCASE, a.id`).all(...params) as AgentRow[]).map(publicAgent));
   }
 
   updateProfileCapacity(actorUserId: string, profileId: string, capacity: number | null): CodexProfile {
@@ -837,7 +837,7 @@ export class ProjectService {
     if (project.status === "archived") throw new ProjectFailure("Project activation failed", [finding("project-archived", "status", "Archived projects cannot be activated")], 409);
     const findings: ProjectFinding[] = [];
     const local = await this.localRepositoryPromise;
-    const agents = this.database.authQuery((db) => db.prepare("SELECT id, role FROM forge_agents").all() as Array<{ id: string; role: ProjectRole }>);
+    const agents = this.database.authQuery((db) => db.prepare("SELECT id, role FROM forge_agents WHERE kind = 'internal'").all() as Array<{ id: string; role: ProjectRole }>);
     const agentRoles = new Map(agents.map((agent) => [agent.id, agent.role]));
     for (const role of ["analyst", "implementer", "reviewer"] as const) {
       const agentId = project.roleDefaults[role];
@@ -964,7 +964,7 @@ export class ProjectService {
       try { await access(worktree.path, constants.W_OK); } catch { findings.push(finding("worktree-unwritable", "worktreeRoot", "Worktree root must be writable")); }
     }
     const normalized = normalizedInput(input, { repositoryPath: repository.path ?? resolve(input.repositoryPath), worktreeRoot: worktree.path ?? resolve(input.worktreeRoot) });
-    const agentRows = this.database.authQuery((db) => db.prepare("SELECT id, role FROM forge_agents").all() as Array<{ id: string; role: ProjectRole }>);
+    const agentRows = this.database.authQuery((db) => db.prepare("SELECT id, role FROM forge_agents WHERE kind = 'internal'").all() as Array<{ id: string; role: ProjectRole }>);
     const agentRoles = new Map(agentRows.map((agent) => [agent.id, agent.role]));
     for (const role of ["analyst", "implementer", "reviewer"] as const) {
       const agentId = normalized.roleDefaults[role];

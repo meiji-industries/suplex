@@ -52,7 +52,15 @@ function activityCopy(entry: TaskActivityEntry): string {
 }
 
 function activityActor(entry: TaskActivityEntry, actionIndex: number, invocations: TaskInvocation[], processing?: ProcessingActivity): { label: string; initials: string; avatarSeed?: string; avatarCollection?: DiceBearCollection } {
-  if (entry.actor) return { label: entry.actor.displayName, initials: entry.actor.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?", avatarSeed: entry.actor.avatarSeed ?? entry.actor.username ?? entry.actor.displayName, avatarCollection: "pixel-art-neutral" };
+  if (entry.actor) {
+    const isAgent = "kind" in entry.actor && entry.actor.kind === "agent";
+    return {
+      label: entry.actor.displayName,
+      initials: entry.actor.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?",
+      avatarSeed: entry.actor.avatarSeed ?? ("username" in entry.actor ? entry.actor.username : entry.actor.displayName),
+      avatarCollection: isAgent ? "bottts-neutral" : "pixel-art-neutral",
+    };
+  }
   if (entry.eventType === "task_created") return { label: "Forge", initials: "F" };
   const profileInvocations = invocations.filter((invocation) => invocation.agentName);
   const invocation = profileInvocations[Math.min(actionIndex, profileInvocations.length - 1)];

@@ -481,11 +481,19 @@ export class AuthService {
   }
 
   recordAuditEvent(actorUserId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
-    this.repository.recordAuditEvent({ id: id("audit"), actorUserId: actorUserId ?? null, action, targetUserId: targetUserId ?? null, companyId: companyId ?? null, metadataJson: safeJson(metadata), createdAt: this.now().toISOString() });
+    this.repository.recordAuditEvent({ id: id("audit"), actorUserId: actorUserId ?? null, actorAgentId: null, action, targetUserId: targetUserId ?? null, companyId: companyId ?? null, metadataJson: safeJson(metadata), createdAt: this.now().toISOString() });
   }
 
   recordAuditEventInTransaction(_database: import("better-sqlite3").Database | undefined, actorUserId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
-    this.repository.recordAuditEvent({ id: id("audit"), actorUserId: actorUserId ?? null, action, targetUserId: targetUserId ?? null, companyId: companyId ?? null, metadataJson: safeJson(metadata), createdAt: this.now().toISOString() });
+    this.repository.recordAuditEvent({ id: id("audit"), actorUserId: actorUserId ?? null, actorAgentId: null, action, targetUserId: targetUserId ?? null, companyId: companyId ?? null, metadataJson: safeJson(metadata), createdAt: this.now().toISOString() });
+  }
+
+  recordAgentAuditEvent(actorAgentId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
+    this.repository.recordAuditEvent({ id: id("audit"), actorUserId: null, actorAgentId: actorAgentId ?? null, action, targetUserId: targetUserId ?? null, companyId: companyId ?? null, metadataJson: safeJson(metadata), createdAt: this.now().toISOString() });
+  }
+
+  recordAgentAuditEventInTransaction(_database: import("better-sqlite3").Database | undefined, actorAgentId: string | undefined, action: string, targetUserId?: string, companyId?: string, metadata: Record<string, string> = {}): void {
+    this.repository.recordAuditEvent({ id: id("audit"), actorUserId: null, actorAgentId: actorAgentId ?? null, action, targetUserId: targetUserId ?? null, companyId: companyId ?? null, metadataJson: safeJson(metadata), createdAt: this.now().toISOString() });
   }
 
   signOut(rawToken: string): void {

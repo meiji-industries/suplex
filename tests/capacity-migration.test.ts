@@ -51,12 +51,20 @@ test("the durable capacity migration preserves legacy history, binds a unique ow
 
     await cp(join(drizzleRoot, "20260812065000_durable_capacity_lanes.sql"), join(folder, "20260812065000_durable_capacity_lanes.sql"));
     applyMigrations(sqlite, folder);
+    const agentsTimestamp = Number(agentsMigration.slice(0, 14));
     for (const filename of await readdir(drizzleRoot)) {
       const timestamp = Number(filename.slice(0, 14));
-      if (/^\d{14}(?:\d{3})?_.*\.sql$/.test(filename) && timestamp > durableMigrationTimestamp && filename !== agentsMigration) await cp(join(drizzleRoot, filename), join(folder, filename));
+      if (/^\d{14}(?:\d{3})?_.*\.sql$/.test(filename) && timestamp > durableMigrationTimestamp && timestamp < agentsTimestamp) {
+        await cp(join(drizzleRoot, filename), join(folder, filename));
+      }
     }
     applyMigrations(sqlite, folder);
-    await cp(join(drizzleRoot, agentsMigration), join(folder, agentsMigration));
+    for (const filename of await readdir(drizzleRoot)) {
+      const timestamp = Number(filename.slice(0, 14));
+      if (/^\d{14}(?:\d{3})?_.*\.sql$/.test(filename) && timestamp >= agentsTimestamp) {
+        await cp(join(drizzleRoot, filename), join(folder, filename));
+      }
+    }
     applyMigrations(sqlite, folder);
 
     const rows = sqlite.prepare("SELECT id, logical_turn_key, profile_id, provider, model, reasoning_level, service_priority, lane_key, requested_capacity, status, execution_kind, execution_id, terminal_reason FROM forge_capacity_requests ORDER BY id").all() as Array<Record<string, unknown>>;

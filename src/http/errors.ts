@@ -4,6 +4,7 @@ import { AuthFailure } from "../auth.js";
 import { ProjectFailure } from "../projects.js";
 import { TaskFailure } from "../tasks.js";
 import { redact } from "../logging.js";
+import { HermesAgentFailure } from "../hermes-agents.js";
 
 interface ValidationIssue {
   instancePath?: string;
@@ -37,8 +38,8 @@ function conflictSnapshot(task: TaskFailure["current"]): unknown {
   };
 }
 
-function sendDomainFailure(reply: FastifyReply, error: AuthFailure | ProjectFailure | TaskFailure): void {
-  const body = error instanceof AuthFailure
+function sendDomainFailure(reply: FastifyReply, error: AuthFailure | ProjectFailure | TaskFailure | HermesAgentFailure): void {
+  const body = error instanceof AuthFailure || error instanceof HermesAgentFailure
     ? { error: error.publicMessage, ...(error.code !== "auth_failure" ? { code: error.code } : {}) }
     : { error: error.publicMessage, findings: error.findings, ...(error instanceof TaskFailure && error.current ? { current: conflictSnapshot(error.current) } : {}) };
   reply.code(error.statusCode).send(body);
@@ -52,7 +53,7 @@ export function installHttpErrorHandlers(app: FastifyInstance): void {
       reply.code(400).send({ error: "Invalid request", ...(findings.length > 0 ? { findings } : {}) });
       return;
     }
-    if (error instanceof AuthFailure || error instanceof ProjectFailure || error instanceof TaskFailure) {
+    if (error instanceof AuthFailure || error instanceof ProjectFailure || error instanceof TaskFailure || error instanceof HermesAgentFailure) {
       request.log.warn({ requestId: request.id, statusCode: error.statusCode, error: redact(error.publicMessage), ...(error instanceof ProjectFailure || error instanceof TaskFailure ? { findings: redact(error.findings) } : {}) }, "Request rejected");
       sendDomainFailure(reply, error);
       return;

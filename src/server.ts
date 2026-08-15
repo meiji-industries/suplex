@@ -19,6 +19,7 @@ import { TaskService } from "./tasks.js";
 import { CapacityManager } from "./capacity.js";
 import { createGithubReleasePort, ReleaseService } from "./github-release.js";
 import { ProjectionRebuildService } from "./projection-rebuild.js";
+import { HermesAgentService } from "./hermes-agents.js";
 
 export interface ForgeServer {
   app: FastifyInstance;
@@ -30,6 +31,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   await mkdir(config.worktreeRoot, { recursive: true });
   const database = new ForgeDatabase(config.databasePath);
   const auth = new AuthService(database, config);
+  const hermes = new HermesAgentService(database, auth);
   const projects = new ProjectService(database, auth, config);
   await seedDevelopmentData(auth, projects, config);
   const artifactStore = new ArtifactStore(config.artifactRoot);
@@ -45,6 +47,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     config,
     health: createHostHealthDependencies(config, database),
     auth,
+    hermes,
     projects,
     tasks,
     attention,

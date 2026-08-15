@@ -3,10 +3,12 @@ import { ISSUE_PHASES, type IssuePhase } from "../../issue-phases.js";
 import type { AttentionActionResponse, AttentionEvidenceResponse, AttentionItemResponse, CompanyAttentionResponse } from "../../http/contracts/attention.js";
 import type { CredentialResponse, InvitationSummaryResponse } from "../../http/contracts/common.js";
 import type { AgentResponse, ModelResponse, ProfileResponse, ProjectCheckResponse, ProjectResponse } from "../../http/contracts/projects.js";
+import type { HermesAdminAgent } from "../../http/contracts/hermes.js";
 import type { TaskResponse } from "../../http/contracts/tasks.js";
 
 export type ApiProfile = ProfileResponse;
 export type ApiAgent = AgentResponse;
+export type ApiHermesAgent = HermesAdminAgent;
 export type ApiModel = ModelResponse;
 export type ApiCheck = ProjectCheckResponse;
 export type ApiInvitation = InvitationSummaryResponse;

@@ -77,6 +77,7 @@ export const forgeMemberships = sqliteTable("forge_memberships", {
 export const forgeAuditEvents = sqliteTable("forge_audit_events", {
   id: text("id").primaryKey(),
   actorUserId: text("actor_user_id"),
+  actorAgentId: text("actor_agent_id"),
   action: text("action").notNull(),
   targetUserId: text("target_user_id"),
   companyId: text("company_id"),

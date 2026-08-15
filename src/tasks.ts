@@ -11,7 +11,7 @@ import type { PublicCapacityStatus } from "./capacity-contracts.js";
 import { ForgeDatabase, projectionStateHash } from "./database.js";
 import { canonicalJson } from "./canonical-json.js";
 import { redact } from "./logging.js";
-import { ProjectFailure, ProjectService, resolveAgentProfiles, type ProjectRole, type RoleAssignments } from "./projects.js";
+import { ProjectFailure, ProjectService, resolveAgentProfiles, type ProjectRole, type ProjectStatus, type RoleAssignments } from "./projects.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
 import { acceptIssueDevelopment, acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, reviseIssuePlan, startIssueWorkflow } from "./temporal/service.js";
 import { issueCommands } from "./commands/registry.js";
@@ -21,7 +21,14 @@ import { taskCommandDescriptors, type TaskCommandDescriptor } from "./task-comma
 import { MaterialityEvidenceArtifactSchema, PlanMaterialCategorySchema, PlanSubjectSchema, deterministicMaterialCategories, samePlanSubject, type MaterialityEvidenceSubject, type PlanBlockerSubject, type PlanDecisionSubject, type PlanMaterialCategory, type PlanSubject, type SupplementalReviewSubject } from "./plan-governance.js";
 import { PlanGovernanceRepository, hashPlanBlockerSubject, hashPlanDecisionSubject } from "./plan-governance-repository.js";
 
+import type { HermesPrincipal } from "./hermes-agents.js";
+import type { HermesSafeTaskProjection } from "./http/contracts/hermes.js";
+
 export type TaskPhase = IssuePhase;
+
+export type TaskCreationAuthority =
+  | { kind: "user"; userId: string }
+  | { kind: "hermes"; agentId: string; companyId: string; projectIds: string[] };
 
 export interface TaskFinding {
   code: string;
@@ -109,9 +116,13 @@ export interface TaskTimelineEntry {
   createdAt: string;
 }
 
+export type ActivityActor =
+  | { kind?: "user"; id: string; displayName: string; username: string; avatarSeed: string }
+  | { kind: "agent"; id: string; displayName: string; avatarSeed: string };
+
 export interface TaskActivityEntry extends TaskTimelineEntry {
   kind: "workflow" | "member";
-  actor?: { id: string; displayName: string; username: string; avatarSeed: string } | undefined;
+  actor?: ActivityActor | undefined;
 }
 
 export interface TaskAgentInvocation {
@@ -720,6 +731,7 @@ interface CreationIntentRow {
   idempotency_key: string;
   request_hash: string;
   project_revision_id: string;
+  creator_agent_id: string | null;
   artifact_ids_json: string;
   artifact_manifest_json: string;
   lease_token: string | null;
@@ -845,6 +857,8 @@ export function creationRequestHash(input: {
   roleAgents: RoleAssignments;
   supplementalReview: boolean;
   projectRevisionId: string;
+  authorityKind?: string;
+  creatorId?: string;
 }): string {
   const roles = Object.fromEntries(Object.entries(input.roleAgents).sort(([left], [right]) => left.localeCompare(right)));
   return createHash("sha256").update(canonicalJson({
@@ -856,6 +870,8 @@ export function creationRequestHash(input: {
     roleAgents: roles,
     supplementalReview: input.supplementalReview,
     projectRevisionId: normalizeText(input.projectRevisionId),
+    ...(input.authorityKind ? { authorityKind: input.authorityKind } : {}),
+    ...(input.creatorId ? { creatorId: input.creatorId } : {}),
   })).digest("hex");
 }
 
@@ -973,6 +989,28 @@ export class TaskService {
     return this.publicTask(actorUserId, row);
   }
 
+  private getTaskByIdInternal(taskId: string): ForgeTask {
+    const row = this.database.authQuery((db) => db.prepare(this.taskQuery("t.id = ?")).get(taskId) as TaskRow | undefined);
+    if (!row) throw new TaskFailure("Not found", [], 404);
+    return this.publicTask("", row);
+  }
+
+  getHermesTask(principal: HermesPrincipal, taskId: string): HermesSafeTaskProjection {
+    if (principal.projectIds.length === 0) throw new TaskFailure("Not found", [], 404);
+    const placeholders = principal.projectIds.map(() => "?").join(",");
+    const row = this.database.authQuery((db) => db.prepare(`SELECT t.id, c.issue_code, t.issue_number, t.project_id, t.title, p.phase, p.revision, p.pending_action, t.created_at, p.updated_at
+        FROM forge_tasks t
+        JOIN forge_companies c ON c.id = t.company_id
+        JOIN forge_issue_projections p ON p.task_id = t.id
+        WHERE t.id = ? AND t.company_id = ? AND t.creator_agent_id = ? AND t.project_id IN (${placeholders})`).get(taskId, principal.companyId, principal.agentId, ...principal.projectIds) as {
+        id: string; issue_code: string | null; issue_number: number | null; project_id: string; title: string;
+        phase: string; revision: number; pending_action: string | null; created_at: string; updated_at: string;
+      } | undefined);
+    if (!row) throw new TaskFailure("Not found", [], 404);
+    const issueKey = row.issue_code && row.issue_number ? `${row.issue_code}-${row.issue_number}` : null;
+    return { id: row.id, issueKey, projectId: row.project_id, title: row.title, phase: row.phase as HermesSafeTaskProjection["phase"], revision: row.revision, pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at };
+  }
+
   updateTaskAgents(actorUserId: string, taskId: string, partial: RoleAssignments): ForgeTask {
     const current = this.getTask(actorUserId, taskId);
     const merged = { ...current.roleAgents };
@@ -1017,10 +1055,42 @@ export class TaskService {
   }
 
   async createTask(actorUserId: string, companyId: string, input: TaskInput): Promise<{ task: ForgeTask; created: boolean }> {
-    const company = this.auth.requireCompanyAccess(actorUserId, companyId);
-    if (company.status !== "active") throw new TaskFailure("Task creation failed", [finding("company-inactive", "companyId", "Task creation requires an active company")], 409);
-    const project = this.projects.getProject(actorUserId, input.projectId);
-    if (project.companyId !== companyId) throw new TaskFailure("Not found", [], 404);
+    return this.createTaskInternal({ kind: "user", userId: actorUserId }, companyId, input);
+  }
+
+  async createTaskForHermes(principal: HermesPrincipal, input: { projectId: string; title: string; description: string; idempotencyKey: string }): Promise<{ task: HermesSafeTaskProjection; created: boolean }> {
+    const authority: TaskCreationAuthority = { kind: "hermes", agentId: principal.agentId, companyId: principal.companyId, projectIds: principal.projectIds };
+    const taskInput: TaskInput = {
+      projectId: input.projectId,
+      title: input.title,
+      description: input.description,
+      idempotencyKey: input.idempotencyKey,
+      images: [],
+      supplementalReview: false,
+    };
+    const result = await this.createTaskInternal(authority, principal.companyId, taskInput);
+    const safeTask = this.getHermesTask(principal, result.task.id);
+    return { task: safeTask, created: result.created };
+  }
+
+  private async createTaskInternal(authority: TaskCreationAuthority, companyId: string, input: TaskInput): Promise<{ task: ForgeTask; created: boolean }> {
+    let project: { companyId: string; status: ProjectStatus; activeRevisionId?: string | null; roleDefaults: RoleAssignments };
+    if (authority.kind === "user") {
+      const company = this.auth.requireCompanyAccess(authority.userId, companyId);
+      if (company.status !== "active") throw new TaskFailure("Task creation failed", [finding("company-inactive", "companyId", "Task creation requires an active company")], 409);
+      const proj = this.projects.getProject(authority.userId, input.projectId);
+      if (proj.companyId !== companyId) throw new TaskFailure("Not found", [], 404);
+      project = proj;
+    } else {
+      if (authority.companyId !== companyId) throw new TaskFailure("Not found", [], 404);
+      if (!authority.projectIds.includes(input.projectId)) throw new TaskFailure("Not found", [], 404);
+      const company = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_companies WHERE id = ?").get(companyId) as { status: string } | undefined);
+      if (!company || company.status !== "active") throw new TaskFailure("Task creation failed", [finding("company-inactive", "companyId", "Task creation requires an active company")], 409);
+      const proj = this.database.authQuery((db) => db.prepare("SELECT company_id, status, active_revision_id, role_defaults_json FROM forge_projects WHERE id = ? AND company_id = ?").get(input.projectId, companyId) as { company_id: string; status: ProjectStatus; active_revision_id: string | null; role_defaults_json: string } | undefined);
+      if (!proj) throw new TaskFailure("Not found", [], 404);
+      project = { companyId: proj.company_id, status: proj.status, activeRevisionId: proj.active_revision_id, roleDefaults: JSON.parse(proj.role_defaults_json) as RoleAssignments };
+    }
+
     if (project.status !== "active" || !project.activeRevisionId) {
       const needsReactivation = project.status === "needs-reactivation";
       throw new TaskFailure("Task creation failed", [finding(needsReactivation ? "project-needs-reactivation" : "project-inactive", "projectId", needsReactivation ? "Project must be reactivated before tasks can be created" : "Tasks require an active project")], 409);
@@ -1037,6 +1107,8 @@ export class TaskService {
       if (error instanceof ArtifactFailure) throw new TaskFailure("Task brief is invalid", [finding(error.code, "images", error.message)], 422);
       throw error;
     }
+    const creatorId = authority.kind === "user" ? authority.userId : authority.agentId;
+    const creatorAgentId = authority.kind === "hermes" ? authority.agentId : null;
     const requestHash = creationRequestHash({
       companyId,
       projectId: input.projectId,
@@ -1046,9 +1118,11 @@ export class TaskService {
       roleAgents,
       supplementalReview: input.supplementalReview === true,
       projectRevisionId: project.activeRevisionId,
+      authorityKind: authority.kind,
+      creatorId,
     });
     const idempotencyKey = input.idempotencyKey.trim();
-    let reserved = this.reserveCreationIntent({ companyId, projectId: input.projectId, idempotencyKey, requestHash, projectRevisionId: project.activeRevisionId });
+    let reserved = this.reserveCreationIntent({ companyId, projectId: input.projectId, idempotencyKey, requestHash, projectRevisionId: project.activeRevisionId, creatorAgentId });
     await this.maybeFault("after_intent_reserved", { intentId: reserved.intent.id, taskId: reserved.intent.task_id });
     if (!reserved.created) {
       if (reserved.intent.request_hash === "legacy-unknown") {
@@ -1057,9 +1131,9 @@ export class TaskService {
       if (reserved.intent.request_hash !== requestHash) {
         throw new TaskFailure("This idempotency key was already used for a different task request", [finding("idempotency_conflict", "idempotencyKey", "Retry with the original request or use a new idempotency key")], 409);
       }
-      if (reserved.intent.state !== "failed_before_start") return this.resumeCreationIntent(actorUserId, reserved.intent, input);
+      if (reserved.intent.state !== "failed_before_start") return this.resumeCreationIntent(authority, reserved.intent, input);
       const claimed = this.claimCreationIntent(reserved.intent.id, "failed_before_start");
-      if (!claimed) return this.resumeCreationIntent(actorUserId, this.readCreationIntent({ id: reserved.intent.id }) ?? reserved.intent, input);
+      if (!claimed) return this.resumeCreationIntent(authority, this.readCreationIntent({ id: reserved.intent.id }) ?? reserved.intent, input);
       await this.cleanupCreationArtifacts(claimed);
       reserved = { created: true, intent: claimed };
     }
@@ -1093,17 +1167,21 @@ export class TaskService {
       this.database.authTransaction((db) => {
         db.prepare(`INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(briefArtifact!.id, companyId, briefArtifact!.kind, briefArtifact!.filename, briefArtifact!.mimeType, briefArtifact!.byteSize, briefArtifact!.sha256, briefArtifact!.storagePath, briefArtifact!.createdAt);
         for (const artifact of imageArtifacts) db.prepare(`INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(artifact.id, companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-        db.prepare(`INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(taskId, companyId, input.projectId, input.title.trim(), briefArtifact!.id, JSON.stringify(imageArtifacts.map((artifact) => artifact.id)), JSON.stringify(roleAgents), input.supplementalReview === true ? 1 : 0, workflowId, project.activeRevisionId, idempotencyKey, requestHash, now, now);
+        db.prepare(`INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, creator_agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(taskId, companyId, input.projectId, input.title.trim(), briefArtifact!.id, JSON.stringify(imageArtifacts.map((artifact) => artifact.id)), JSON.stringify(roleAgents), input.supplementalReview === true ? 1 : 0, workflowId, project.activeRevisionId, idempotencyKey, requestHash, creatorAgentId, now, now);
         db.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, authoritative_event_hash, projected_at) VALUES (?, ?, ?, ?, 0, 'backlog', 'human', ?, ?, ?, ?, ?, 0, ?, ?)`).run(taskId, companyId, input.projectId, workflowId, JSON.stringify(["start_planning"]), "Start planning", now, `${workflowId}:0`, eventHash, eventHash, now);
         db.prepare(`INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, 0, 'task_created', ?, ?, ?)`).run(`${workflowId}:0`, taskId, companyId, workflowId, JSON.stringify({ revision: 0, stateHash: eventHash }), now, eventHash);
         db.prepare(`INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, ?, ?, 0, ?, ?)`).run(taskId, companyId, workflowId, JSON.stringify(initialState), now);
         const intentUpdate = db.prepare("UPDATE forge_task_creation_intents SET task_id = ?, state = 'workflow_starting', lease_expires_at = ?, updated_at = ?, error_code = NULL WHERE id = ? AND lease_token = ?").run(taskId, new Date(this.now().getTime() + 30_000).toISOString(), now, reserved.intent.id, reserved.intent.lease_token);
         if (intentUpdate.changes !== 1) throw new CreationLeaseLost();
-        this.auth.recordAuditEventInTransaction(db, actorUserId, "task_created", undefined, companyId, { taskId, projectId: input.projectId, workflowId });
+        if (authority.kind === "user") {
+          this.auth.recordAuditEventInTransaction(db, authority.userId, "task_created", undefined, companyId, { taskId, projectId: input.projectId, workflowId });
+        } else {
+          this.auth.recordAgentAuditEventInTransaction(db, authority.agentId, "task_created", undefined, companyId, { taskId, projectId: input.projectId, workflowId });
+        }
       });
       await this.maybeFault("after_task_committed", { intentId: reserved.intent.id, taskId });
       await this.startCreationWorkflow(reserved.intent.id, reserved.intent.lease_token, taskId, companyId, input.projectId, project.activeRevisionId, briefArtifact, imageArtifacts, roleAgents, input.supplementalReview === true, requestHash, workflowId);
-      const task = this.getTask(actorUserId, taskId);
+      const task = this.getTaskByIdInternal(taskId);
       await this.maybeFault("before_response", { intentId: reserved.intent.id, taskId });
       return { task, created: true };
     } catch (error) {
@@ -1132,16 +1210,16 @@ export class TaskService {
     }
   }
 
-  private reserveCreationIntent(input: { companyId: string; projectId: string; idempotencyKey: string; requestHash: string; projectRevisionId: string }): { created: boolean; intent: CreationIntentRow } {
+  private reserveCreationIntent(input: { companyId: string; projectId: string; idempotencyKey: string; requestHash: string; projectRevisionId: string; creatorAgentId?: string | null }): { created: boolean; intent: CreationIntentRow } {
     return this.database.authTransaction((db) => {
-      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents";
+      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents";
       const now = this.now().toISOString();
       const leaseToken = id("lease");
       const leaseExpiresAt = new Date(this.now().getTime() + 30_000).toISOString();
       const taskId = id("task");
       const workflowId = `${this.config.installationId ? `workflow-${this.config.installationId}` : "workflow"}-issue-${taskId}`;
       const intentId = id("creation");
-      const inserted = db.prepare(`INSERT INTO forge_task_creation_intents (id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?, 'staging', 0, ?, ?) ON CONFLICT(company_id, idempotency_key) DO NOTHING`).run(intentId, input.companyId, input.projectId, taskId, workflowId, input.idempotencyKey, input.requestHash, input.projectRevisionId, leaseToken, leaseExpiresAt, now, now);
+      const inserted = db.prepare(`INSERT INTO forge_task_creation_intents (id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?, 'staging', 0, ?, ?) ON CONFLICT(company_id, idempotency_key) DO NOTHING`).run(intentId, input.companyId, input.projectId, taskId, workflowId, input.idempotencyKey, input.requestHash, input.projectRevisionId, input.creatorAgentId ?? null, leaseToken, leaseExpiresAt, now, now);
       const intent = db.prepare(`${select} WHERE company_id = ? AND idempotency_key = ?`).get(input.companyId, input.idempotencyKey) as CreationIntentRow;
       return { created: inserted.changes === 1, intent };
     });
@@ -1156,14 +1234,14 @@ export class TaskService {
         ? db.prepare("UPDATE forge_task_creation_intents SET state = 'staging', lease_token = ?, lease_expires_at = ?, error_code = NULL, updated_at = ? WHERE id = ? AND state = 'failed_before_start'").run(token, expiry, now.toISOString(), intentId)
         : db.prepare("UPDATE forge_task_creation_intents SET lease_token = ?, lease_expires_at = ?, updated_at = ? WHERE id = ? AND state = 'staging' AND lease_token = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?)").run(token, expiry, now.toISOString(), intentId, expectedLeaseToken ?? "", now.toISOString());
       if (result.changes !== 1) return undefined;
-      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents WHERE id = ?";
+      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents WHERE id = ?";
       return db.prepare(select).get(intentId) as CreationIntentRow | undefined;
     });
   }
 
   private readCreationIntent(idOrCompany: { id: string } | { companyId: string; idempotencyKey: string }): CreationIntentRow | undefined {
     return this.database.authQuery((db) => {
-      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents";
+      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents";
       if ("id" in idOrCompany) return db.prepare(`${select} WHERE id = ?`).get(idOrCompany.id) as CreationIntentRow | undefined;
       return db.prepare(`${select} WHERE company_id = ? AND idempotency_key = ?`).get(idOrCompany.companyId, idOrCompany.idempotencyKey) as CreationIntentRow | undefined;
     });
@@ -1206,9 +1284,9 @@ export class TaskService {
     await Promise.all(exactPaths.map((path) => this.artifacts.removePlanned(path)));
   }
 
-  private async resumeCreationIntent(actorUserId: string, intent: CreationIntentRow, input: TaskInput): Promise<{ task: ForgeTask; created: boolean }> {
+  private async resumeCreationIntent(authority: TaskCreationAuthority, intent: CreationIntentRow, input: TaskInput): Promise<{ task: ForgeTask; created: boolean }> {
     if (intent.state === "started") {
-      const task = this.getTask(actorUserId, intent.task_id);
+      const task = this.getTaskByIdInternal(intent.task_id);
       return { task, created: false };
     }
     if (intent.state === "workflow_starting") {
@@ -1221,12 +1299,12 @@ export class TaskService {
           return db.prepare(`SELECT id, sha256 FROM forge_artifacts WHERE company_id = ? AND id IN (${placeholders}) ORDER BY rowid`).all(intent.company_id, ...imageIds) as Array<{ id: string; sha256: string }>;
         });
         await this.startCreationWorkflow(intent.id, intent.lease_token, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), JSON.parse(task.role_agents_json) as RoleAssignments, task.supplemental_review === 1, intent.request_hash, task.workflow_id);
-        const updated = this.getTask(actorUserId, task.id);
+        const updated = this.getTaskByIdInternal(task.id);
         return { task: updated, created: false };
       }
       this.updateCreationIntent(intent.id, { state: "failed_before_start", errorCode: "missing-task" });
       await this.cleanupCreationArtifacts(intent);
-      return this.createTask(actorUserId, intent.company_id, input);
+      return this.createTaskInternal(authority, intent.company_id, input);
     }
 
     // A staging intent may be left behind by a process crash. Give an active
@@ -1234,13 +1312,13 @@ export class TaskService {
     for (let attempt = 0; attempt < 50; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 100));
       const current = this.readCreationIntent({ id: intent.id });
-      if (!current || current.state !== "staging") return this.createTask(actorUserId, intent.company_id, input);
+      if (!current || current.state !== "staging") return this.createTaskInternal(authority, intent.company_id, input);
     }
     const claimed = this.claimCreationIntent(intent.id, "staging", intent.lease_token);
-    if (!claimed) return this.resumeCreationIntent(actorUserId, this.readCreationIntent({ id: intent.id }) ?? intent, input);
+    if (!claimed) return this.resumeCreationIntent(authority, this.readCreationIntent({ id: intent.id }) ?? intent, input);
     await this.cleanupCreationArtifacts(claimed);
     this.updateCreationIntent(intent.id, { state: "failed_before_start", errorCode: "staging-interrupted" }, claimed.lease_token);
-    return this.createTask(actorUserId, intent.company_id, input);
+    return this.createTaskInternal(authority, intent.company_id, input);
   }
 
   private async startCreationWorkflow(intentId: string, leaseToken: string | null, taskId: string, companyId: string, projectId: string, projectRevisionId: string, briefArtifact: Pick<StoredArtifact, "id" | "sha256">, imageArtifacts: Array<Pick<StoredArtifact, "id" | "sha256">>, roleAgents: RoleAssignments, supplementalReview: boolean, requestHash: string, workflowId: string): Promise<void> {
@@ -1854,14 +1932,40 @@ export class TaskService {
       priorTimelineEntryWasPlanning = true;
       return { id: entry.id, revision: entry.revision, eventType: entry.event_type, metadata: { ...metadata, planningStage }, createdAt: entry.created_at };
     });
-    const memberRows = this.database.authQuery((db) => db.prepare(`SELECT a.id, a.action, a.metadata_json, a.created_at, u.id AS actor_id, u.display_name AS actor_name, u.username AS actor_username, u.avatar_seed AS actor_avatar_seed
-      FROM forge_audit_events a JOIN forge_users u ON u.id = a.actor_user_id
+    const memberRows = this.database.authQuery((db) => db.prepare(`SELECT a.id, a.action, a.metadata_json, a.created_at,
+        u.id AS user_id, u.display_name AS user_name, u.username AS user_username, u.avatar_seed AS user_avatar_seed,
+        ag.id AS agent_id, ag.name AS agent_name, ag.avatar_seed AS agent_avatar_seed
+      FROM forge_audit_events a
+      LEFT JOIN forge_users u ON u.id = a.actor_user_id
+      LEFT JOIN forge_agents ag ON ag.id = a.actor_agent_id
       WHERE a.company_id = ? AND json_extract(a.metadata_json, '$.taskId') = ? AND a.action IN ('task_created', 'task_command')
-      ORDER BY a.created_at, a.id`).all(row.company_id, row.id) as Array<{ id: string; action: string; metadata_json: string; created_at: string; actor_id: string; actor_name: string; actor_username: string; actor_avatar_seed: string }>);
-    const creator = memberRows.find((entry) => entry.action === "task_created");
-    const commandActivity: TaskActivityEntry[] = memberRows.filter((entry) => entry.action === "task_command").map((entry) => {
+      ORDER BY a.created_at, a.id`).all(row.company_id, row.id) as Array<{
+        id: string; action: string; metadata_json: string; created_at: string;
+        user_id: string | null; user_name: string | null; user_username: string | null; user_avatar_seed: string | null;
+        agent_id: string | null; agent_name: string | null; agent_avatar_seed: string | null;
+      }>);
+    const creatorEntry = memberRows.find((entry) => entry.action === "task_created");
+    let creatorActor: ActivityActor | undefined;
+    if (creatorEntry) {
+      if (creatorEntry.user_id) {
+        creatorActor = {
+          id: creatorEntry.user_id,
+          displayName: creatorEntry.user_name!,
+          username: creatorEntry.user_username!,
+          avatarSeed: creatorEntry.user_avatar_seed || creatorEntry.user_username!,
+        };
+      } else if (creatorEntry.agent_id) {
+        creatorActor = {
+          kind: "agent",
+          id: creatorEntry.agent_id,
+          displayName: creatorEntry.agent_name!,
+          avatarSeed: creatorEntry.agent_avatar_seed || creatorEntry.agent_name!,
+        };
+      }
+    }
+    const commandActivity: TaskActivityEntry[] = memberRows.filter((entry) => entry.action === "task_command" && entry.user_id).map((entry) => {
       const metadata = parseMetadata(entry.metadata_json);
-      return { id: entry.id, revision: Number(metadata.revision), eventType: "member_action", metadata, createdAt: entry.created_at, kind: "member" as const, actor: { id: entry.actor_id, displayName: entry.actor_name, username: entry.actor_username, avatarSeed: entry.actor_avatar_seed || entry.actor_username } };
+      return { id: entry.id, revision: Number(metadata.revision), eventType: "member_action", metadata, createdAt: entry.created_at, kind: "member" as const, actor: { id: entry.user_id!, displayName: entry.user_name!, username: entry.user_username!, avatarSeed: entry.user_avatar_seed || entry.user_username! } };
     }).filter((entry) => Number.isInteger(entry.revision));
     const commandKeys = new Set(commandActivity.map((entry) => `${entry.actor?.id}:${entry.revision}:${String(entry.metadata.command)}`));
     const decisionActivity = this.database.authQuery((db) => db.prepare(`SELECT d.id, d.plan_revision, d.decision, d.actor_user_id, d.expected_workflow_revision, d.created_at, u.display_name, u.username, u.avatar_seed
@@ -1872,7 +1976,7 @@ export class TaskService {
       if (commandKeys.has(`${entry.actor_user_id}:${revision}:${command}`)) return [];
       return [{ id: `plan-decision-${entry.id}`, revision, eventType: "member_action", metadata: { command, actionLabel: issueCommands[command].label }, createdAt: entry.created_at, kind: "member", actor: { id: entry.actor_user_id, displayName: entry.display_name, username: entry.username, avatarSeed: entry.avatar_seed || entry.username } }];
     });
-    const activity: TaskActivityEntry[] = [...timeline.map((entry): TaskActivityEntry => ({ ...entry, kind: "workflow", ...(entry.eventType === "task_created" && creator ? { actor: { id: creator.actor_id, displayName: creator.actor_name, username: creator.actor_username, avatarSeed: creator.actor_avatar_seed || creator.actor_username } } : {}) })), ...commandActivity, ...decisionActivity]
+    const activity: TaskActivityEntry[] = [...timeline.map((entry): TaskActivityEntry => ({ ...entry, kind: "workflow", ...(entry.eventType === "task_created" && creatorActor ? { actor: creatorActor } : {}) })), ...commandActivity, ...decisionActivity]
       .sort((left, right) => left.revision - right.revision || (left.kind === right.kind ? left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id) : left.kind === "member" ? -1 : 1));
     // ponytail: display agent resolved via current task assignment; add agent_id columns to execution tables if history fidelity ever matters
     const agentInvocations = this.database.authQuery((db) => db.prepare(`SELECT e.id, e.role, e.status, e.attempt, e.session_ref, e.started_at, e.finished_at, e.failure_code, e.failure_summary, e.evidence_artifact_id,

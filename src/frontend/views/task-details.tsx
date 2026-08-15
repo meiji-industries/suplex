@@ -31,6 +31,7 @@ import type { DeveloperExecutionEventView } from "../components/tasks/developer-
 import { adminDate, type ApiAgent, type ApiCi, type ApiProject, type ApiTask } from "../lib/view-shared.js";
 import { readJson, withCompany } from "../lib/api.js";
 import type { IssueCommandSlug } from "../../commands/registry.js";
+import { BLOCKED_PHASES, phaseLabel } from "../../issue-phases.js";
 import { releaseFailureCopy } from "../../release-failures.js";
 import { Check, Copy, Ellipsis, ExternalLink, GitPullRequest, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
@@ -150,11 +151,22 @@ export function TaskActions({ task, project, busy, onStartPlanning, onPlanAction
   const supplementalSubject = supplementalCommand?.subject?.kind === "supplemental_review" ? supplementalCommand.subject.value : undefined;
   const hasVisibleActions = Boolean(supplementalCommand) || canRevise || canContinue || task.allowedCommands.some((command) => !["cancel_issue", "approve_plan", "reject_plan", "request_plan_revision", "respond_plan_blocker", "resolve_decision_blocker"].includes(command));
   const recoveryOwnsActions = Boolean(task.developerRecovery && task.allowedCommands.some((command) => ["retry_development", "cancel_development", "verify_developer_ownership"].includes(command)));
-  if (!hasVisibleActions || task.phase === "development" || recoveryOwnsActions) return <div data-task-actions />;
+  const isBlocked = BLOCKED_PHASES.has(task.phase);
+  if (!hasVisibleActions) {
+    const presentationPhase = taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome });
+    return <Card data-task-actions data-task-status-card size="sm" aria-label={`${phaseLabel(presentationPhase)} status`}>
+      <CardHeader>
+        <CardTitle><h3><TaskStatus phase={task.phase} presentationPhase={presentationPhase} processing={taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status })} /></h3></CardTitle>
+        <CardDescription>{task.pendingAction ?? "No action is required right now."}</CardDescription>
+      </CardHeader>
+    </Card>;
+  }
+  if (task.phase === "development" || recoveryOwnsActions) return <div data-task-actions />;
   return (
-    <Card data-task-actions size="sm">
+    <Card data-task-actions data-task-blocked-card={isBlocked || undefined} size="sm">
       <CardHeader>
         <CardTitle><h3>{canReviewDelivery ? "Review completed delivery" : task.pendingAction ?? "Next action"}</h3></CardTitle>
+        {isBlocked ? <CardAction><Badge variant="destructive">{phaseLabel(task.phase)}</Badge></CardAction> : null}
       </CardHeader>
       {canReviewDelivery ? <CardContent className="space-y-3" data-delivery-handoff>
         <div className="space-y-1">
@@ -195,7 +207,7 @@ export function TaskActions({ task, project, busy, onStartPlanning, onPlanAction
       {task.allowedCommands.includes("record_delivery_decision") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("record-delivery-decision", "Member decision recorded")} disabled={disabled}>Record decision</Button> : null}
       {task.allowedCommands.includes("retry_capacity") ? <Button size="sm" onClick={() => void onPlanAction("retry-capacity")} disabled={disabled}>Retry capacity</Button> : null}
       {task.allowedCommands.includes("accept_delivery") ? <Button size="sm" onClick={() => void onPlanAction("accept-delivery")} disabled={disabled}>{busy ? "Publishing…" : "Publish"}</Button> : null}
-      {task.allowedCommands.includes("publish_draft") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("publish-draft")} disabled={disabled}>{busy ? "Publishing…" : task.release?.status === "blocked" ? "Retry release" : "Publish Draft"}</Button> : null}
+      {task.allowedCommands.includes("publish_draft") ? <Button size="sm" variant="default" onClick={() => void onPlanAction("publish-draft")} disabled={disabled}>{busy ? "Publishing…" : task.release?.status === "blocked" ? "Retry release" : "Publish Draft"}</Button> : null}
       {task.allowedCommands.includes("resolve_merge_conflict") ? <Button size="sm" onClick={() => void onPlanAction("resolve-merge-conflict")} disabled={disabled}>{busy ? "Resolving…" : "Resolve conflicts"}</Button> : null}
       {task.allowedCommands.includes("retry_target_base_reconciliation") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("retry-target-base-reconciliation")} disabled={disabled}>{busy ? "Retrying…" : "Retry reconciliation"}</Button> : null}
       {task.allowedCommands.includes("retry_forward_merge_verification") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("retry-forward-merge-verification")} disabled={disabled}>{busy ? "Verifying…" : "Retry verification"}</Button> : null}
@@ -505,7 +517,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
   </>;
   const hasChanges = task.developerExecution?.status === "completed";
   const hasChecks = Boolean(task.ci);
-  const pullRequestInFlight = Boolean(task.release?.pullRequestUrl) && (["releasing", "ci_waiting", "final_review", "ready_reconciliation"].includes(task.phase) || task.phase === "delivery_blocked" && task.allowedCommands.includes("reconcile_ci"));
+  const pullRequestInFlight = Boolean(task.release?.pullRequestUrl && task.release.pullRequestNumber !== null) && (["releasing", "ci_waiting", "final_review", "ready_reconciliation"].includes(task.phase) || task.phase === "delivery_blocked" && task.allowedCommands.includes("reconcile_ci"));
   const workContent = <>
     <TabsList variant="line" className="mb-4 w-full justify-start rounded-none border-b border-border p-0">
       <TabsTrigger value="activity">Activity <Badge variant="secondary" className="size-5 rounded-full px-0 text-[10px]">{activityCount}</Badge></TabsTrigger>

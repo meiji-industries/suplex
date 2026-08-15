@@ -107,8 +107,52 @@ test("shows the exact draft publication preview and diff action", () => {
   expect(html).toContain(">Publish<");
   expect(html).toContain(">Publish Draft<");
   expect(html).toContain(">Request Changes<");
+  expect(html.match(/<button[^>]*>Publish Draft<\/button>/)?.[0]).toContain("bg-primary");
   expect(html.indexOf(">Publish<")).toBeLessThan(html.indexOf(">Publish Draft<"));
   expect(html.indexOf(">Publish Draft<")).toBeLessThan(html.indexOf(">Request Changes<"));
+});
+
+test("shows a status card when a background phase has no action", () => {
+  const task = {
+    phase: "releasing",
+    allowedCommands: [],
+    commands: [],
+    pendingAction: "Publishing draft pull request",
+    projection: { status: "current" },
+  } as unknown as ApiTask;
+  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
+    task,
+    busy: false,
+    onStartPlanning: async () => undefined,
+    onPlanAction: async () => undefined,
+    onRevisePlan: async () => undefined,
+    onContinueWork: async () => undefined,
+  }) }));
+  expect(html).toContain('data-task-status-card="true"');
+  expect(html).toContain("Releasing");
+  expect(html).toContain("Publishing draft pull request");
+});
+
+test("marks blocked action cards with the destructive status badge", () => {
+  const task = {
+    phase: "delivery_blocked",
+    allowedCommands: ["retry_forward_merge_verification"],
+    commands: [],
+    pendingAction: "mise run test did not complete successfully",
+    projection: { status: "current" },
+  } as unknown as ApiTask;
+  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
+    task,
+    busy: false,
+    onStartPlanning: async () => undefined,
+    onPlanAction: async () => undefined,
+    onRevisePlan: async () => undefined,
+    onContinueWork: async () => undefined,
+  }) }));
+  expect(html).toContain('data-task-blocked-card="true"');
+  expect(html).toContain('data-variant="destructive"');
+  expect(html).toContain("bg-destructive/10");
+  expect(html).toContain(">Blocked<");
 });
 
 test("claimed Developer recovery does not remain an active Development card", () => {

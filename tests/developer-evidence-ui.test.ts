@@ -20,6 +20,11 @@ test("shows live receipts inside the active step and rolls up completed steps", 
   expect(html).toContain("Step 2 · active");
   expect(html).toContain('data-plan-steps="true"');
   expect(html).toContain('data-orientation="vertical"');
+  expect(html).toMatch(/data-plan-steps="true"><div[^>]*data-slot="timeline-item"/);
+  expect(html).toContain('data-slot="timeline"');
+  expect(html).toContain('data-slot="timeline-indicator"');
+  expect(html).toContain("lucide-check");
+  expect(html).toContain("lucide-loader-circle");
   expect(html).toContain("Implementer execution");
   expect(html).toContain("Plan: Stream progress");
   expect(html).not.toContain("Revision 1");

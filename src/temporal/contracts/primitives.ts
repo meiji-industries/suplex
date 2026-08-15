@@ -106,6 +106,7 @@ const revalidatedResult = z.object({
   developerExecutionId: durableId,
   deliveryArtifact: ArtifactReferenceSchema,
   verificationArtifact: ArtifactReferenceSchema,
+  developerEvidenceArtifactId: durableId.optional(),
 }).strict();
 const conflictResult = z.object({
   outcome: z.literal("conflict"),

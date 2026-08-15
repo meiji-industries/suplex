@@ -44,7 +44,7 @@ export function applyTargetBaseRevalidation(
     resultTree: result.headTree,
     dirtyState: "clean",
     deliveryArtifactId: result.deliveryArtifact.id,
-    developerEvidenceArtifactId: result.verificationArtifact.id,
+    developerEvidenceArtifactId: result.developerEvidenceArtifactId ?? result.verificationArtifact.id,
     deliverySummary: "Forward-merge delivery revalidated",
     developerOutcome: "completed",
     deliveryReviewSupersedesId: null,

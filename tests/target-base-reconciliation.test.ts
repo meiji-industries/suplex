@@ -184,6 +184,7 @@ describe("target-base reconciliation contracts", () => {
       developerExecutionId: "developer-new",
       deliveryArtifact: artifact,
       verificationArtifact: { ...artifact, id: "artifact-verification", kind: "forward-merge-verification" },
+      developerEvidenceArtifactId: "artifact-developer-evidence",
     });
     expect(next).toMatchObject({
       phase: "delivery_ready",
@@ -194,7 +195,7 @@ describe("target-base reconciliation contracts", () => {
       resultCommit: sha("f"),
       resultTree: sha("9"),
       deliveryArtifactId: artifact.id,
-      developerEvidenceArtifactId: "artifact-verification",
+      developerEvidenceArtifactId: "artifact-developer-evidence",
       deliveryReviewId: null,
       deliveryReviewSupersedesId: null,
       repairCycle: 0,

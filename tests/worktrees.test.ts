@@ -109,6 +109,7 @@ test("reads the current delivery diff from the recorded base through committed a
     await writeFile(join(record.worktreePath, "DELIVERED.md"), "committed delivery\n");
     await git(["add", "DELIVERED.md"], record.worktreePath);
     await git(["commit", "-m", "deliver fixture"], record.worktreePath);
+    const resultCommit = await git(["rev-parse", "HEAD"], record.worktreePath);
     await writeFile(join(record.worktreePath, "README.md"), "tracked current change\n");
 
     const current = await manager.currentDiff({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_diff", targetBaseSha: value.baseSha, branchName: record.branchName, worktreePath: record.worktreePath });
@@ -116,6 +117,10 @@ test("reads the current delivery diff from the recorded base through committed a
     expect(current.patch).toContain("diff --git a/DELIVERED.md b/DELIVERED.md");
     expect(current.patch).toContain("+committed delivery");
     expect(current.patch).toContain("+tracked current change");
+    const delivered = await manager.currentDiff({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_diff", targetBaseSha: value.baseSha, branchName: record.branchName, worktreePath: record.worktreePath, resultCommit });
+    expect(delivered.headSha).toBe(resultCommit);
+    expect(delivered.patch).toContain("+committed delivery");
+    expect(delivered.patch).not.toContain("+tracked current change");
     await expect(manager.currentDiff({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_diff", targetBaseSha: value.baseSha, branchName: record.branchName, worktreePath: value.repositoryPath })).rejects.toMatchObject({ code: "worktree-reuse-mismatch" });
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });

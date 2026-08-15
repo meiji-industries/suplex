@@ -375,7 +375,7 @@ export class AcceptanceService {
       JOIN forge_final_reviews fr ON fr.id = ? AND fr.task_id = t.id AND fr.company_id = t.company_id AND fr.workflow_id = t.workflow_id AND fr.release_id = r.id AND fr.delivery_review_id = dr.id
       JOIN forge_developer_executions de ON de.id = fr.developer_execution_id AND de.task_id = t.id AND de.company_id = t.company_id AND de.workflow_id = t.workflow_id
       JOIN forge_ci_runs c ON c.id = ? AND c.task_id = t.id AND c.company_id = t.company_id AND c.release_id = r.id
-      JOIN forge_issue_outputs io ON io.task_id = t.id AND io.company_id = t.company_id AND io.workflow_id = t.workflow_id AND io.execution_id = fr.lead_execution_id AND io.revision = fr.plan_revision AND io.kind = 'plan' AND io.session_ref = fr.session_ref AND io.session_ref <> de.session_ref
+      JOIN forge_issue_outputs io ON io.task_id = t.id AND io.company_id = t.company_id AND io.workflow_id = t.workflow_id AND io.revision = fr.plan_revision AND io.kind = 'plan' AND io.session_ref = fr.session_ref AND io.session_ref <> de.session_ref
       JOIN forge_users u ON u.id = ? AND u.status = 'active' AND (u.role = 'admin' OR EXISTS (SELECT 1 FROM forge_memberships m WHERE m.user_id = u.id AND m.company_id = t.company_id))
       WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_revision_id = ? AND pr.id = ?`).get(
       input.releaseId, input.workflowId, input.deliveryReviewId, input.finalReviewId, input.ciRunId, input.actorUserId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId, input.projectRevisionId,

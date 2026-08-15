@@ -258,12 +258,17 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   };
   const planAction = async (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>): Promise<void> => {
     if (!selected) return;
+    const retryPendingAction = path === "retry-forward-merge-verification" ? "Retrying pinned forward-merge verification" : path === "retry-target-base-reconciliation" ? "Retrying target-base reconciliation" : undefined;
     setBusy(true); setError("");
+    if (retryPendingAction) {
+      const optimistic: ApiTask = { ...selected, revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: retryPendingAction };
+      selectedRef.current = optimistic; setSelected(optimistic); setTasks((current) => current.map((task) => task.id === optimistic.id ? optimistic : task));
+    }
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/${path}`, { method: "POST", body: JSON.stringify(taskActionPayload(selected.revision, note, payload)) }); selectedRef.current = updated; setSelected(updated); await reload(); }
     catch (reason) {
       if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
       const staleRevision = isApiError(reason, 409);
-      if (staleRevision) { await reload(); throw reason; }
+      if (staleRevision || retryPendingAction) { await reload(); if (staleRevision) throw reason; }
       setError(staleRevision ? "Issue changed; the latest state was loaded." : reason instanceof Error ? reason.message : "Unable to update the plan");
     }
     finally { setBusy(false); }

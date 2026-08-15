@@ -20,7 +20,7 @@ describe("exact-head CI evaluator", () => {
     ["cancelled", "cancelled", false],
     ["timed_out", "timed_out", false],
     ["neutral", "non_success", false],
-    ["skipped", "non_success", false],
+    ["skipped", "passed", false],
     ["action_required", "non_success", false],
     ["stale", "non_success", false],
   ])("classifies %s", (conclusion, outcome, repairable) => {

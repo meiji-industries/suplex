@@ -175,7 +175,8 @@ function BlockedReason({ value }: { value: string }) {
 
 function ActivityTimeline({ taskId, timeline, invocations = [], revisionContent, processing, collapsePlan, deliveryReviewTask, repository, developerAttempts = [], ci }: { taskId: string; timeline: TaskActivityEntry[]; invocations?: TaskInvocation[]; revisionContent?: { revision: number; content: ReactNode } | undefined; processing?: ProcessingActivity | undefined; collapsePlan?: boolean; deliveryReviewTask?: TaskResponse; repository?: string | undefined; developerAttempts?: ReadonlyArray<DeveloperAttempt> | undefined; ci?: CiActivityState | undefined }) {
   const contentEntryId = revisionContent ? (timeline.find((entry) => entry.revision === revisionContent.revision && entry.kind !== "member") ?? timeline.find((entry) => entry.revision === revisionContent.revision))?.id : undefined;
-  const deliveryReviewEntryId = deliveryReviewTask ? [...timeline].reverse().find((entry) => ["phase_delivery_reviewed", "phase_repair_required", "phase_delivery_blocked"].includes(entry.eventType))?.id : undefined;
+  const deliveryReviewEventTypes = deliveryReviewTask?.reviewLineage.currentReview?.outcome === "approved" ? ["phase_delivery_reviewed"] : deliveryReviewTask?.reviewLineage.currentReview ? ["phase_repair_required"] : ["phase_repair_required", "phase_delivery_blocked"];
+  const deliveryReviewEntryId = deliveryReviewTask ? [...timeline].reverse().find((entry) => deliveryReviewEventTypes.includes(entry.eventType))?.id : undefined;
   const groups = groupActivity(timeline);
   let developmentGroupIndex = 0;
   return <div data-task-activity>
@@ -204,7 +205,7 @@ function ActivityTimeline({ taskId, timeline, invocations = [], revisionContent,
           <TimelineContent className="text-[12px]">
             {blockedReasons.length ? <div className="mt-2 space-y-1">{blockedReasons.map((reason, reasonIndex) => <BlockedReason key={`${reason}-${reasonIndex}`} value={reason} />)}</div> : null}
             {group.entries.some((candidate) => candidate.id === contentEntryId) ? <div data-task-activity-plan className={collapsePlan ? "mt-2 text-foreground" : "mt-4 text-foreground"}>{revisionContent?.content}</div> : null}
-            {hasDeliveryReview ? <div data-task-activity-delivery-review className="mt-3"><DeliveryReviewPanel task={deliveryReviewTask!} repository={repository} /></div> : null}
+            {hasDeliveryReview ? <section data-task-activity-delivery-review className="mt-3" aria-label="Delivery review result"><p className="mb-1 text-[11px] font-medium text-muted-foreground">Review result</p><DeliveryReviewPanel task={deliveryReviewTask!} repository={repository} /></section> : null}
             {phaseInvocations.map((invocation) => <AgentHarnessOutput key={invocation.id} taskId={taskId} invocation={invocation} />)}
           </TimelineContent>
         </TimelineItem>;

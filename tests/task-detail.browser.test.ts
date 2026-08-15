@@ -48,6 +48,8 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
   let plannedState: IssueWorkflowState | undefined;
   let finishPlanning = (): void => {};
   const planningGate = new Promise<void>((resolve) => { finishPlanning = resolve; });
+  let finishForwardMergeVerification = (): void => {};
+  const forwardMergeVerificationGate = new Promise<void>((resolve) => { finishForwardMergeVerification = resolve; });
   const projectState = (state: IssueWorkflowState): void => {
     const event = IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state });
     workerDatabase.projectIssueEvent(event);
@@ -131,8 +133,11 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
     projectState(plannedState);
     return plannedState;
   }, async retryForwardMergeVerification(workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, owner: "lead", allowedCommands: [], pendingAction: "Retrying pinned forward-merge verification", lastEventId: `${workflowId}:${input.expectedRevision + 1}` };
+    projectState(plannedState);
+    await forwardMergeVerificationGate;
     database.authQuery((db) => db.prepare("UPDATE forge_forward_merges SET status = 'no_drift', failure_code = NULL, failure_summary = NULL, updated_at = ? WHERE id = 'merge-browser'").run(new Date().toISOString()));
-    plannedState = { ...plannedState!, revision: input.expectedRevision + 1, phase: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish one exact draft pull request", lastEventId: `${workflowId}:${input.expectedRevision + 1}`, targetBaseOutcome: "no_drift", targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null };
+    plannedState = { ...plannedState!, revision: plannedState!.revision + 1, phase: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish one exact draft pull request", lastEventId: `${workflowId}:${plannedState!.revision + 1}`, targetBaseOutcome: "no_drift", targetBaseBlockerCode: null, targetBaseBlockerOwner: null, targetBaseBlockerRetryable: null, targetBaseBlockerSummary: null };
     projectState(plannedState);
     return plannedState;
   }, async rejectPlan(_workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
@@ -391,6 +396,9 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await taskDetail.locator('[data-status="delivery_blocked"]').waitFor();
       await taskDetail.getByText("Pinned verification failed", { exact: true }).first().waitFor();
       await taskDetail.getByRole("button", { name: "Retry verification", exact: true }).click();
+      await taskDetail.getByText("Retrying pinned forward-merge verification", { exact: true }).waitFor();
+      expect(await taskDetail.getByRole("button", { name: "Retry verification", exact: true }).count()).toBe(0);
+      finishForwardMergeVerification();
       await taskDetail.locator('[data-status="delivery_reviewed"]').waitFor();
       await taskDetail.getByText("no_drift", { exact: true }).waitFor();
       await taskDetail.getByRole("button", { name: "Publish draft", exact: true }).click();
@@ -446,6 +454,12 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       projectState(finalGateState);
       await page.reload();
       await taskDetail.locator("[data-final-gate]").waitFor();
+      await taskDetail.locator("[data-task-current] [data-active-pull-request]").waitFor();
+      expect(await taskDetail.locator("[data-task-properties] [data-pull-request-card]").count()).toBe(0);
+      expect(await taskDetail.locator("[data-task-current] [data-task-actions]").count()).toBe(0);
+      const mergedPullRequest = taskDetail.locator("[data-task-current] [data-pull-request-card]");
+      expect(await mergedPullRequest.getByText("Merged", { exact: true }).isVisible()).toBe(true);
+      expect(await mergedPullRequest.getByText("merged into", { exact: false }).isVisible()).toBe(true);
       const activityDeliveryReview = taskDetail.locator("[data-task-activity-delivery-review]");
       await activityDeliveryReview.waitFor();
       expect(await activityDeliveryReview.getByText("Exact delivery approved", { exact: true }).isVisible()).toBe(true);
@@ -487,10 +501,10 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await deliveryHandoff.getByText("acme/forge", { exact: true }).isVisible()).toBe(true);
       expect(await deliveryHandoff.getByText(worktreeRoot, { exact: true }).isVisible()).toBe(true);
       expect(await deliveryHandoff.getByText("work/browser-development", { exact: true }).isVisible()).toBe(true);
-      await taskDetail.getByRole("button", { name: "Diff", exact: true }).click();
+      await taskDetail.getByRole("button", { name: "Show Diff", exact: true }).click();
       expect(await taskDetail.locator('[data-task-work-tabs] [role="tab"][aria-label="Diffs"]').getAttribute("aria-selected")).toBe("true");
       expect(await taskDetail.locator("[data-task-diff-panel]").isVisible()).toBe(true);
-      expect(await taskDetail.getByRole("button", { name: "Approve delivery", exact: true }).isVisible()).toBe(true);
+      expect(await taskDetail.getByRole("button", { name: "Looks Good", exact: true }).isVisible()).toBe(true);
       const narrow = await context.newPage();
       await narrow.setViewportSize({ width: 390, height: 844 });
       await narrow.goto(`${baseUrl}${detailPath}`);

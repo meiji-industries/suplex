@@ -41,6 +41,8 @@ type DevelopmentState = { status: string; execution: DevelopmentExecution | null
 type DeveloperEventState = { executionId: string | null; events: DeveloperExecutionEventView[]; terminalSteps: Record<number, "completed" | "blocked"> };
 
 function NextAction({ value }: { value: string | null }): ReactElement {
+  if (value === "Lead delivery review" || value?.startsWith("Fresh Lead delivery review")) return <>Forge is checking the completed work against the approved plan.</>;
+  if (value === "Developer repair of blocking findings") return <>Developer needs to address required review feedback</>;
   const match = value?.match(/^Required checks are (?:still )?missing: (.+)$/);
   if (!match) return <>{value ?? "None"}</>;
   return <ul className="list-disc space-y-0.5 pl-4 text-[11px]">{(match[1] ?? "").split(", ").map((check) => <li key={check}>{check}</li>)}</ul>;
@@ -65,7 +67,8 @@ function ShellOutput({ value }: { value: string }): ReactElement {
   return <div className="mt-1 max-h-48 overflow-auto" data-shell-output><File file={file} options={options} disableWorkerPool /></div>;
 }
 
-function DevelopmentStatus({ state, now, inline = false }: { state: DevelopmentState; now: number; inline?: boolean }): ReactElement {
+function DevelopmentStatus({ state, now, inline = false }: { state: DevelopmentState; now: number; inline?: boolean }): ReactElement | null {
+  if (state.status === "completed") return null;
   const execution = state.execution;
   const active = ["starting", "running", "cancelling"].includes(state.status);
   const freshnessAt = execution?.lastHeartbeatAt ?? execution?.startedAt;
@@ -119,16 +122,20 @@ export function nextPullRequestReviewAction(allowedCommands: ApiTask["allowedCom
   return undefined;
 }
 
-function PublicationPreview({ release }: { release: NonNullable<ApiTask["release"]> | null | undefined }): ReactElement {
-  const description = release?.bodyPreview?.trim() ?? "";
+function PublicationPreview({ release, planned, loading }: { release: NonNullable<ApiTask["release"]> | null | undefined; planned?: { pullRequestTitle: string; pullRequestDescription: string } | undefined; loading: boolean }): ReactElement {
+  const [descriptionExpanded, setDescriptionExpanded] = useState(false);
+  if (loading && !release) return <section data-publication-preview-loading className="space-y-2 border-t pt-3">
+    <div className="space-y-2"><Skeleton className="h-5 w-2/3" /><div className="space-y-1.5"><Skeleton className="h-3 w-full" /><Skeleton className="h-3 w-4/5" /></div></div>
+  </section>;
+  const title = release?.title ?? planned?.pullRequestTitle;
+  const description = release?.bodyPreview?.trim() || planned?.pullRequestDescription || "";
   const descriptionIsLong = description.length > 240 || description.split(/\r?\n/).length > 3;
   return <section data-task-publication-preview className="space-y-2 border-t pt-3">
-    <h4 className="text-xs font-medium">What will be published?</h4>
-    {release ? <dl className="space-y-2 text-[11px]">
-      <div><dt className="text-muted-foreground">PR title</dt><dd className="break-words text-[12px]">{release.title}</dd></div>
-      <div><dt className="text-muted-foreground">PR description</dt><dd className={descriptionIsLong ? "relative max-h-[3.75rem] overflow-hidden" : undefined}><p className="whitespace-pre-wrap break-words leading-5 text-[12px] text-muted-foreground">{description || "Description is not available."}</p>{descriptionIsLong ? <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-card to-transparent" /> : null}</dd></div>
-      <div><dt className="text-muted-foreground">Target</dt><dd className="break-words"><code>{release.headBranch}</code> → <code>{release.baseBranch}</code> · {release.repository}</dd></div>
-    </dl> : <p className="text-[12px] text-muted-foreground">Publication details are not available yet.</p>}
+    {title ? <div className="space-y-2">
+      <h5 className="flex items-start gap-2 break-words text-base font-semibold leading-6"><GitPullRequest aria-hidden="true" className="mt-0.5 size-4 shrink-0" />{title}</h5>
+      {descriptionIsLong ? <button type="button" data-publication-description aria-expanded={descriptionExpanded} aria-label={`${descriptionExpanded ? "Collapse" : "Expand"} PR description`} className={`relative block w-full cursor-pointer text-left outline-none focus-visible:ring-2 focus-visible:ring-ring${descriptionExpanded ? "" : " max-h-[3.75rem] overflow-hidden"}`} onClick={() => setDescriptionExpanded((expanded) => !expanded)}><span className="whitespace-pre-wrap break-words leading-5 text-[12px] text-muted-foreground">{description}</span>{descriptionExpanded ? null : <span aria-hidden="true" className="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-card to-transparent" />}</button> : <p className="whitespace-pre-wrap break-words leading-5 text-[12px] text-muted-foreground">{description || "Description is not available."}</p>}
+      {release ? <p className="break-words text-[11px]"><code>{release.headBranch}</code> → <code>{release.baseBranch}</code> · {release.repository}</p> : null}
+    </div> : <p className="text-[12px] text-muted-foreground">Publication details are not available yet.</p>}
   </section>;
 }
 
@@ -144,9 +151,14 @@ export function TaskActions({ task, project, busy, onStartPlanning, onPlanAction
   const canRevise = task.allowedCommands.includes("revise_plan");
   const canContinue = task.allowedCommands.includes("continue_work");
   const canReviewDelivery = task.allowedCommands.includes("review_delivery");
+  const canRepairDelivery = task.allowedCommands.includes("repair_delivery");
+  const canContinuePastReview = canRepairDelivery || task.allowedCommands.includes("record_delivery_decision");
+  const canAcceptDelivery = task.allowedCommands.includes("accept_delivery");
   const canPublishDraft = task.allowedCommands.includes("publish_draft");
+  const plannedPublication = task.leadOutput?.content.kind === "plan" ? task.leadOutput.content.gitPresentation ?? undefined : undefined;
   const canOpenDiff = task.developerExecution?.status === "completed";
   const resultCommit = task.developerExecution?.resultCommit;
+  const worktreePath = task.developerExecution?.worktreePath;
   const supplementalCommand = task.commands.find((command) => command.name === "request_supplemental_review" && command.subject?.kind === "supplemental_review");
   const supplementalSubject = supplementalCommand?.subject?.kind === "supplemental_review" ? supplementalCommand.subject.value : undefined;
   const hasVisibleActions = Boolean(supplementalCommand) || canRevise || canContinue || task.allowedCommands.some((command) => !["cancel_issue", "approve_plan", "reject_plan", "request_plan_revision", "respond_plan_blocker", "resolve_decision_blocker"].includes(command));
@@ -157,7 +169,7 @@ export function TaskActions({ task, project, busy, onStartPlanning, onPlanAction
     return <Card data-task-actions data-task-status-card size="sm" aria-label={`${phaseLabel(presentationPhase)} status`}>
       <CardHeader>
         <CardTitle><h3><TaskStatus phase={task.phase} presentationPhase={presentationPhase} processing={taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status })} /></h3></CardTitle>
-        <CardDescription>{task.pendingAction ?? "No action is required right now."}</CardDescription>
+        <CardDescription><NextAction value={task.pendingAction} /></CardDescription>
       </CardHeader>
     </Card>;
   }
@@ -165,7 +177,8 @@ export function TaskActions({ task, project, busy, onStartPlanning, onPlanAction
   return (
     <Card data-task-actions data-task-blocked-card={isBlocked || undefined} size="sm">
       <CardHeader>
-        <CardTitle><h3>{canReviewDelivery ? "Review completed delivery" : task.pendingAction ?? "Next action"}</h3></CardTitle>
+        <CardTitle><h3>{canReviewDelivery ? "Review completed delivery" : canRepairDelivery ? "More proof is needed" : canPublishDraft ? "Ready to Create Pull Request" : canAcceptDelivery ? "Ready to publish" : task.pendingAction ?? "Next action"}</h3></CardTitle>
+        {canRepairDelivery ? <CardDescription>Some checks are missing. Continue now, or ask the Developer to run them.</CardDescription> : canAcceptDelivery ? <CardDescription>The work is ready. Publish makes the pull request available for review. Request Changes sends it back to the Developer.</CardDescription> : null}
         {isBlocked ? <CardAction><Badge variant="destructive">{phaseLabel(task.phase)}</Badge></CardAction> : null}
       </CardHeader>
       {canReviewDelivery ? <CardContent className="space-y-3" data-delivery-handoff>
@@ -175,12 +188,12 @@ export function TaskActions({ task, project, busy, onStartPlanning, onPlanAction
         </div>
         <dl className="grid min-w-0 gap-2 text-[11px] sm:grid-cols-2">
           <div><dt className="text-muted-foreground">Repository</dt><dd className="break-all">{project?.repository ?? "Unavailable"}{project?.repositoryPath ? <><br /><code>{project.repositoryPath}</code></> : null}</dd></div>
-          <div><dt className="text-muted-foreground">Worktree</dt><dd className="break-all"><code>{task.developerExecution?.worktreePath ?? "Unavailable"}</code></dd></div>
+          <div><dt className="text-muted-foreground">Worktree</dt><dd className="flex min-w-0 items-start gap-1"><code className="min-w-0 flex-1 break-all">{worktreePath ? `cd ${worktreePath}` : "Unavailable"}</code>{worktreePath ? <CopyBranchButton value={`cd ${worktreePath}`} label="Copy worktree command" /> : null}</dd></div>
           <div><dt className="text-muted-foreground">Branch</dt><dd className="break-all"><code>{task.developerExecution?.branchName ?? "Unavailable"}</code></dd></div>
           <div><dt className="text-muted-foreground">Delivered commit</dt><dd>{resultCommit ? <CommitSha sha={resultCommit} abbreviated={`${resultCommit.slice(0, 12)}…`} repository={project?.repository} /> : "Not recorded"}</dd></div>
         </dl>
       </CardContent> : null}
-      {canPublishDraft ? <CardContent className="space-y-3" data-task-publish-preview><PublicationPreview release={task.release} /></CardContent> : null}
+      {canPublishDraft ? <CardContent className="space-y-3" data-task-publish-preview><PublicationPreview release={task.release} planned={plannedPublication} loading={busy} /></CardContent> : null}
       {(revisionOpen || continueOpen) ? <CardContent>
         {revisionOpen ? <form className="max-w-xl space-y-3 border-l-2 pl-3" onSubmit={(event) => { event.preventDefault(); void onRevisePlan({ worktreeDisposition, reason: revisionReason, ...(worktreeDisposition === "new" ? { exactBaseSha } : {}) }); }}>
           <Field><FieldLabel htmlFor="revision-reason">Why revise this plan?</FieldLabel><Textarea id="revision-reason" required value={revisionReason} onChange={(event) => setRevisionReason(event.target.value)} placeholder="Describe the changed requirement or observed problem." /></Field>
@@ -200,14 +213,14 @@ export function TaskActions({ task, project, busy, onStartPlanning, onPlanAction
       {task.allowedCommands.includes("start_development") ? <Button size="sm" onClick={() => void onPlanAction("start-development")} disabled={disabled}>{busy ? "Executing…" : "Start development"}</Button> : null}
       {!task.developerRecovery && task.allowedCommands.includes("retry_development") ? <Button size="sm" onClick={() => void onPlanAction("retry-development")} disabled={disabled}>{busy ? "Retrying…" : "Retry development"}</Button> : null}
       {!task.developerRecovery && task.allowedCommands.includes("cancel_development") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("cancel-development")} disabled={disabled}>Cancel development</Button> : null}
+      {(canReviewDelivery || canPublishDraft) && onOpenDiff ? <Button size="sm" variant="outline" onClick={onOpenDiff} disabled={disabled || !canOpenDiff}>Show Diff</Button> : null}
       {canReviewDelivery ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reject-plan", "Member requested delivery changes")} disabled={disabled}>Request Changes</Button> : null}
-      {(canReviewDelivery || canPublishDraft) && onOpenDiff ? <Button size="sm" variant="outline" onClick={onOpenDiff} disabled={disabled || !canOpenDiff}>Diff</Button> : null}
-      {canReviewDelivery ? <Button size="sm" onClick={() => void onPlanAction("review-delivery")} disabled={disabled}>{busy ? "Reviewing…" : "Approve delivery"}</Button> : null}
-      {task.allowedCommands.includes("repair_delivery") ? <Button size="sm" onClick={() => void onPlanAction("repair-delivery")} disabled={disabled}>{busy ? "Repairing…" : "Repair delivery"}</Button> : null}
-      {task.allowedCommands.includes("record_delivery_decision") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("record-delivery-decision", "Member decision recorded")} disabled={disabled}>Record decision</Button> : null}
+      {canReviewDelivery ? <Button size="sm" onClick={() => void onPlanAction("review-delivery")} disabled={disabled}>{busy ? "Reviewing…" : "Looks Good"}</Button> : null}
+      {canRepairDelivery ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("repair-delivery")} disabled={disabled}>{busy ? "Starting Developer…" : "Ask Developer to check"}</Button> : null}
+      {canContinuePastReview ? <Button size="sm" onClick={() => void onPlanAction("record-delivery-decision", "Member chose to continue despite incomplete verification.")} disabled={disabled}>{busy ? "Continuing…" : "Continue anyway"}</Button> : null}
       {task.allowedCommands.includes("retry_capacity") ? <Button size="sm" onClick={() => void onPlanAction("retry-capacity")} disabled={disabled}>Retry capacity</Button> : null}
-      {task.allowedCommands.includes("accept_delivery") ? <Button size="sm" onClick={() => void onPlanAction("accept-delivery")} disabled={disabled}>{busy ? "Publishing…" : "Publish"}</Button> : null}
-      {task.allowedCommands.includes("publish_draft") ? <Button size="sm" variant="default" onClick={() => void onPlanAction("publish-draft")} disabled={disabled}>{busy ? "Publishing…" : task.release?.status === "blocked" ? "Retry release" : "Publish Draft"}</Button> : null}
+      {canAcceptDelivery ? <Button size="sm" onClick={() => void onPlanAction("accept-delivery")} disabled={disabled}>{busy ? "Publishing…" : "Publish"}</Button> : null}
+      {task.allowedCommands.includes("publish_draft") ? <Button size="sm" variant="default" onClick={() => void onPlanAction("publish-draft")} disabled={disabled}>{busy ? "Publishing…" : task.release?.status === "blocked" ? "Retry release" : "Draft Pull Request"}</Button> : null}
       {task.allowedCommands.includes("resolve_merge_conflict") ? <Button size="sm" onClick={() => void onPlanAction("resolve-merge-conflict")} disabled={disabled}>{busy ? "Resolving…" : "Resolve conflicts"}</Button> : null}
       {task.allowedCommands.includes("retry_target_base_reconciliation") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("retry-target-base-reconciliation")} disabled={disabled}>{busy ? "Retrying…" : "Retry reconciliation"}</Button> : null}
       {task.allowedCommands.includes("retry_forward_merge_verification") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("retry-forward-merge-verification")} disabled={disabled}>{busy ? "Verifying…" : "Retry verification"}</Button> : null}
@@ -255,6 +268,13 @@ function PullRequestCard({ task, busy, onMarkReady, onCheckCi }: { task: ApiTask
   const status = providerState === "merged" ? "Merged" : providerState === "closed" ? "Closed" : providerState === "ready" || !release.isDraft ? "Open" : "Draft";
   const checks = task.ci?.outcome ?? task.ci?.status;
   const branchComparison = `${release.headBranch} → ${release.baseBranch}`;
+  if (status === "Merged") return <Card data-pull-request-card size="sm" aria-label={`Pull request #${release.pullRequestNumber}`}>
+    <CardHeader>
+      <CardTitle><span className="min-w-0 break-words">{release.title} <a className="font-normal text-muted-foreground hover:underline" href={release.pullRequestUrl} target="_blank" rel="noreferrer">#{release.pullRequestNumber}</a></span></CardTitle>
+      <CardDescription><span className="flex min-w-0 flex-nowrap items-center gap-2"><Badge variant="default" className="h-6 bg-violet-600 px-2.5 text-xs text-white"><GitPullRequest aria-hidden="true" />Merged</Badge><span className="min-w-0 truncate">merged into <code>{release.baseBranch}</code> from <code>{release.headBranch}</code></span><CopyBranchButton value={branchComparison} /></span></CardDescription>
+    </CardHeader>
+    {checks ? <CardContent><div className="text-xs"><span className="text-muted-foreground">Checks</span> · {checks.replaceAll("_", " ")}</div></CardContent> : null}
+  </Card>;
   return <Card data-pull-request-card size="sm" aria-label={`Pull request #${release.pullRequestNumber}`}>
     <CardHeader>
       <CardTitle><span className="min-w-0 break-words">{release.title}</span></CardTitle>
@@ -265,7 +285,7 @@ function PullRequestCard({ task, busy, onMarkReady, onCheckCi }: { task: ApiTask
       {checks ? <div className="text-xs"><span className="text-muted-foreground">Checks</span> · {checks.replaceAll("_", " ")}</div> : null}
     </CardContent>
     <CardFooter>
-      <div className="flex w-full items-center gap-2">
+      <div className="flex w-full items-center justify-end gap-2">
         {release.isDraft ? <Button size="sm" onClick={() => void onMarkReady()} disabled={busy}>{busy ? "Ready…" : "Ready"}</Button> : null}
         {onCheckCi ? <Button size="sm" variant="outline" onClick={() => void onCheckCi()} disabled={busy}>{busy ? "Checking…" : "Check CI"}</Button> : null}
         <Button render={<a href={release.pullRequestUrl} target="_blank" rel="noreferrer" />} variant="outline" size="sm">Open PR<ExternalLink aria-hidden="true" /></Button>
@@ -274,7 +294,7 @@ function PullRequestCard({ task, busy, onMarkReady, onCheckCi }: { task: ApiTask
   </Card>;
 }
 
-function CopyBranchButton({ value }: { value: string }): ReactElement {
+function CopyBranchButton({ value, label = "Copy branch comparison" }: { value: string; label?: string }): ReactElement {
   const [copied, setCopied] = useState(false);
   const copy = async (): Promise<void> => {
     try {
@@ -305,7 +325,7 @@ function CopyBranchButton({ value }: { value: string }): ReactElement {
       setCopied(false);
     }
   };
-  return <span className="shrink-0"><Button variant="ghost" size="icon-xs" aria-label="Copy branch comparison" title="Copy to clipboard" onClick={() => void copy()}>{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}</Button>{copied ? <span className="pointer-events-none fixed bottom-4 right-4 z-50 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-[11px] text-popover-foreground" role="status" aria-live="polite">Copied to Clipboard</span> : null}</span>;
+  return <span className="shrink-0"><Button variant="ghost" size="icon-xs" aria-label={label} title="Copy to clipboard" onClick={() => void copy()}>{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}</Button>{copied ? <span className="pointer-events-none fixed bottom-4 right-4 z-50 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-[11px] text-popover-foreground" role="status" aria-live="polite">Copied to Clipboard</span> : null}</span>;
 }
 
 function CiDiagnostics({ task, ci }: { task: ApiTask; ci: ApiCi }): ReactElement {
@@ -517,7 +537,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
   </>;
   const hasChanges = task.developerExecution?.status === "completed";
   const hasChecks = Boolean(task.ci);
-  const pullRequestInFlight = Boolean(task.release?.pullRequestUrl && task.release.pullRequestNumber !== null) && (["releasing", "ci_waiting", "final_review", "ready_reconciliation"].includes(task.phase) || task.phase === "delivery_blocked" && task.allowedCommands.includes("reconcile_ci"));
+  const pullRequestInMain = Boolean(task.release?.pullRequestUrl && task.release.pullRequestNumber !== null) && (["releasing", "ci_waiting", "final_review", "ready_reconciliation", "done"].includes(task.phase) || task.phase === "delivery_blocked" && task.allowedCommands.includes("reconcile_ci"));
   const workContent = <>
     <TabsList variant="line" className="mb-4 w-full justify-start rounded-none border-b border-border p-0">
       <TabsTrigger value="activity">Activity <Badge variant="secondary" className="size-5 rounded-full px-0 text-[10px]">{activityCount}</Badge></TabsTrigger>
@@ -548,7 +568,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                 <div data-task-current className="sticky top-0 z-10 -mx-4 border-y border-border/70 bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10">
                   <div className="mx-auto max-w-4xl space-y-4">
                     <PlanningRunCard task={task} />
-                    {pullRequestInFlight ? <div data-active-pull-request><PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} {...(task.allowedCommands.includes("reconcile_ci") ? { onCheckCi: () => onPlanAction("reconcile-ci") } : {})} /></div> : <TaskActions task={task} project={project} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
+                    {pullRequestInMain ? <div data-active-pull-request><PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} {...(task.allowedCommands.includes("reconcile_ci") ? { onCheckCi: () => onPlanAction("reconcile-ci") } : {})} /></div> : <TaskActions task={task} project={project} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
                     {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} developmentStatus={developerLiveness ? <DevelopmentStatus state={developerLiveness} now={developmentNow} inline /> : undefined} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><DevelopmentRun taskId={task.id} onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} compact /></DeveloperRecoveryStatus> : <DevelopmentRun taskId={task.id} onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
                     {currentPlan ?? decisionControls}
@@ -585,7 +605,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
             </div>
           </div>
           <aside data-task-properties className="border-border border-t bg-muted/20 px-4 py-6 sm:px-6 lg:sticky lg:top-0 lg:h-fit lg:border-t-0 lg:border-l">
-            <div className="mb-6 space-y-4"><TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} agentInvocations={task.agentInvocations} activeCapacity={task.capacity?.status === "active" ? task.capacity : undefined} developerLiveness={developerLiveness} />{pullRequestInFlight ? null : <PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} />}</div>
+            <div className="mb-6 space-y-4">{pullRequestInMain ? null : <PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} />}<TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} agentInvocations={task.agentInvocations} activeCapacity={task.capacity?.status === "active" ? task.capacity : undefined} developerLiveness={developerLiveness} /></div>
             <TaskAgentAssignments task={task} onRefresh={onRefresh} />
             <h3 className="mb-5 text-xs font-semibold">Properties</h3>
             <dl className="space-y-4 text-xs">

@@ -43,6 +43,7 @@ export interface DeliveryGitState {
 
 export interface WorktreeDiffInput extends WorktreeInput {
   worktreePath: string;
+  resultCommit?: string;
 }
 
 export interface WorktreeDiff {
@@ -208,11 +209,17 @@ export class WorktreeManager {
   async currentDiff(input: WorktreeDiffInput): Promise<WorktreeDiff> {
     const record = await this.reuse(input);
     if (resolve(input.worktreePath) !== record.worktreePath) throw new WorktreeFailure("worktree-reuse-mismatch", "Recorded Developer worktree did not match the task worktree coordinate");
+    if (input.resultCommit && !shaPattern.test(input.resultCommit)) throw new WorktreeFailure("invalid-result-commit", "Recorded Developer result is not a canonical commit hash");
     try {
-      const [patch, headSha] = await Promise.all([
-        this.git.run(["diff", "--no-ext-diff", "--find-renames", input.targetBaseSha, "--"], record.worktreePath),
-        this.git.run(["rev-parse", "HEAD"], record.worktreePath),
-      ]);
+      const [patch, headSha] = input.resultCommit
+        ? await Promise.all([
+          this.git.run(["diff", "--no-ext-diff", "--find-renames", input.targetBaseSha, input.resultCommit, "--"], record.worktreePath),
+          this.git.run(["rev-parse", "--verify", `${input.resultCommit}^{commit}`], record.worktreePath),
+        ])
+        : await Promise.all([
+          this.git.run(["diff", "--no-ext-diff", "--find-renames", input.targetBaseSha, "--"], record.worktreePath),
+          this.git.run(["rev-parse", "HEAD"], record.worktreePath),
+        ]);
       return { patch, headSha };
     } catch (error) {
       if (error instanceof WorktreeFailure) throw error;

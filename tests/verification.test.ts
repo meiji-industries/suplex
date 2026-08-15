@@ -19,6 +19,7 @@ test("runs setup before verification and returns bounded redacted evidence", asy
     guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
     execute: async (command, args, options) => {
       expect(options.env.MISE_TRUSTED_CONFIG_PATHS).toContain("/worktrees/task-1");
+      expect(options.maxBuffer).toBe(4 * 1024 * 1024);
       calls.push(`${command} ${args.join(" ")}`);
       return { stdout: `Bearer gho_secret ${"x".repeat(70_000)}`, stderr: "" };
     },
@@ -34,17 +35,31 @@ test("runs setup before verification and returns bounded redacted evidence", asy
   expect(JSON.stringify(result).length).toBeLessThanOrEqual(256 * 1024);
 });
 
+test("trusts a worktree before running mise tasks", async () => {
+  const calls: string[] = [];
+  const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "mise run setup", verificationCommand: "mise run test" }, {
+    guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
+    execute: async (command, args) => {
+      calls.push(`${command} ${args.join(" ")}`);
+      return { stdout: "", stderr: "" };
+    },
+  });
+
+  expect(calls).toEqual(["mise trust", "mise run setup", "mise run test"]);
+  expect(result.outcome).toBe("passed");
+});
+
 test("returns a typed failure without running verification after setup failure", async () => {
   const calls: string[] = [];
   const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "pnpm install", verificationCommand: "pnpm test" }, {
     guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
     execute: async (command) => {
       calls.push(command);
-      throw Object.assign(new Error("setup failed"), { code: 1 });
+      throw Object.assign(new Error("setup failed"), { code: 1, stdout: "building\nerror: setup failed" });
     },
   });
   expect(calls).toEqual(["pnpm"]);
-  expect(result).toMatchObject({ outcome: "failed", code: "verification_failed" });
+  expect(result).toMatchObject({ outcome: "failed", code: "verification_failed", summary: "pnpm install did not complete successfully: error: setup failed" });
 });
 
 test("bounds oversized verification evidence before returning it", async () => {

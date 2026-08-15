@@ -57,7 +57,7 @@ export interface IssueWorkflowContext {
   readonly markCommandProcessed: (commandId: string) => void;
   readonly applyTargetBaseBlocked: (result: Extract<ReconcileTargetBaseActivityResult, { outcome: "blocked" }>) => void;
   readonly runTargetBaseCheckpoint: (checkpoint: TargetBaseCheckpoint, verificationOnly?: boolean) => Promise<boolean>;
-  readonly recoveryFields: (status: RecoveryStatus, reasonCode: string | null, summary: string | null, heartbeatAt: string | null) => Record<string, unknown>;
+  readonly recoveryFields: (status: RecoveryStatus | null, reasonCode: string | null, summary: string | null, heartbeatAt: string | null) => Record<string, unknown>;
   readonly applyCompletedDeveloperResult: (rawResult: unknown, summary: string) => boolean;
   readonly projectCapacityState: (capacity: IssueWorkflowState["capacity"], pendingAction?: string) => Promise<number>;
   readonly acquireExternalTurn: <T>(spec: ExternalTurnSpec, run: (capacityRequestId?: string) => Promise<T>, executionId: (result: T) => string | undefined, durableCapacityEnabled?: boolean) => Promise<T>;

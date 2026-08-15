@@ -18,7 +18,7 @@ test("blocked delivery recovery submits a reconcile-only idempotent workflow upd
   expect(recovered).toBe(1);
   expect(calls).toEqual([
     { route: "workflow-test-issue-1" },
-    { workflowId: "workflow-test-issue-1", input: { expectedRevision: 9, actorUserId: "system-reconciliation", commandId: "delivery-reconcile-v3-developer_1-9", reconcileOnly: true } },
+    { workflowId: "workflow-test-issue-1", input: { expectedRevision: 9, actorUserId: "system-reconciliation", commandId: "delivery-reconcile-v4-developer_1-9", reconcileOnly: true } },
   ]);
 });
 

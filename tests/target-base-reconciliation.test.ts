@@ -99,6 +99,14 @@ describe("target-base reconciliation contracts", () => {
     })).toMatchObject({ outcome: "blocked" });
   });
 
+  test("allows a recorded forward merge to repair a stale workflow execution id", () => {
+    const input = ReconcileTargetBaseActivityInputSchema.parse({
+      taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: "revision-1", checkpoint: "pre_release",
+      developerExecutionId: "developer-stale", expectedBaseSha: sha("b"), expectedHeadSha: sha("c"), expectedHeadTree: sha("d"), forwardMergeId: "merge-1",
+    });
+    expect(input.forwardMergeId).toBe("merge-1");
+  });
+
   test("rejects raw conflict material, sentinel values, unknown blockers, and oversized summaries", () => {
     expect(() => ArtifactReferenceSchema.parse({ id: "artifact", sha256: sha("a") })).toThrow();
     expect(() => ReconcileTargetBaseActivityResultSchema.parse({
@@ -163,7 +171,7 @@ describe("target-base reconciliation contracts", () => {
       pullRequestNumber: 12,
       pullRequestUrl: "https://github.com/acme/repo/pull/12",
     });
-    const next = applyTargetBaseRevalidation(state, {
+    const next = applyTargetBaseRevalidation(IssueWorkflowStateSchema.parse({ ...state, deliveryReviewSupersedesId: "review-blocking", repairCycle: 1 }), {
       outcome: "revalidated",
       checkId: "check-5",
       checkpoint: "pre_release",
@@ -188,6 +196,8 @@ describe("target-base reconciliation contracts", () => {
       deliveryArtifactId: artifact.id,
       developerEvidenceArtifactId: "artifact-verification",
       deliveryReviewId: null,
+      deliveryReviewSupersedesId: null,
+      repairCycle: 0,
       ciRunId: null,
       finalReviewId: null,
       acceptanceId: null,

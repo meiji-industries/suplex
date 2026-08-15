@@ -47,6 +47,8 @@ export function applyTargetBaseRevalidation(
     developerEvidenceArtifactId: result.verificationArtifact.id,
     deliverySummary: "Forward-merge delivery revalidated",
     developerOutcome: "completed",
+    deliveryReviewSupersedesId: null,
+    repairCycle: 0,
     deliveryReviewId: null,
     deliveryReviewOutcome: null,
     deliveryReviewSummary: null,

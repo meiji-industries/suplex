@@ -154,7 +154,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   };
   const applyTargetBaseBlocked = (result: Extract<ReconcileTargetBaseActivityResult, { outcome: "blocked" }>): void => {
     const verification = result.code === "verification_failed" || result.code === "verification_timed_out" || result.code === "verification_evidence_too_large";
-    const allowedCommands = result.retryable ? [verification ? "retry_forward_merge_verification" : "retry_target_base_reconciliation", "cancel_issue"] as const : ["cancel_issue"] as const;
+    const retryable = result.retryable || (result.code === "merge_state_ownership_mismatch" && Boolean(state.forwardMergeId));
+    const allowedCommands = retryable ? [verification ? "retry_forward_merge_verification" : "retry_target_base_reconciliation", "cancel_issue"] as const : ["cancel_issue"] as const;
     state = IssueWorkflowStateSchema.parse({
       ...state,
       revision: state.revision + 1,
@@ -168,8 +169,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       targetBaseOutcome: result.outcome,
       targetBaseBlockerCode: result.code,
       targetBaseBlockerOwner: result.owner,
-      targetBaseBlockerRetryable: result.retryable,
+      targetBaseBlockerRetryable: retryable,
       targetBaseBlockerSummary: result.summary,
+      ...recoveryFields(null, null, null, null),
       ...(verification && result.observedBaseSha ? { forwardMergeTargetBaseSha: result.observedBaseSha } : {}),
       ...(verification && result.resultHead ? { resultCommit: result.resultHead } : {}),
       ...(verification && result.resultTree ? { resultTree: result.resultTree } : {}),
@@ -179,7 +181,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const runTargetBaseCheckpoint = async (checkpoint: TargetBaseCheckpoint, verificationOnly = false): Promise<boolean> => {
     if (!patched(targetBaseReconciliationPatch)) return true;
     if (!state.developerExecutionId || !state.targetBaseSha || !state.resultCommit || !state.resultTree) throw new Error("An exact Developer delivery is required before target-base reconciliation");
-    const result = await reconcileTargetBase({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectRevisionId: validatedInput.projectRevisionId, checkpoint, developerExecutionId: state.developerExecutionId, expectedBaseSha: state.targetBaseSha, expectedHeadSha: state.resultCommit, expectedHeadTree: state.resultTree, ...(verificationOnly ? { verificationOnly: true, forwardMergeId: state.targetBaseCheckId ?? undefined } : {}), ...(state.deliveryReviewId ? { deliveryReviewId: state.deliveryReviewId } : {}), ...(state.ciRunId ? { ciRunId: state.ciRunId } : {}), ...(state.finalReviewId ? { finalReviewId: state.finalReviewId } : {}), ...(state.acceptanceId ? { acceptanceId: state.acceptanceId } : {}), ...(state.releaseId ? { releaseId: state.releaseId } : {}) });
+    const result = await reconcileTargetBase({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectRevisionId: validatedInput.projectRevisionId, checkpoint, developerExecutionId: state.developerExecutionId, expectedBaseSha: state.targetBaseSha, expectedHeadSha: state.resultCommit, expectedHeadTree: state.resultTree, ...(state.forwardMergeId ? { forwardMergeId: state.forwardMergeId } : {}), ...(verificationOnly ? { verificationOnly: true } : {}), ...(state.deliveryReviewId ? { deliveryReviewId: state.deliveryReviewId } : {}), ...(state.ciRunId ? { ciRunId: state.ciRunId } : {}), ...(state.finalReviewId ? { finalReviewId: state.finalReviewId } : {}), ...(state.acceptanceId ? { acceptanceId: state.acceptanceId } : {}), ...(state.releaseId ? { releaseId: state.releaseId } : {}) });
     if (result.outcome === "no_drift") {
       const priorRevision = state.revision;
       state = applyTargetBaseNoDrift(state, result);
@@ -202,7 +204,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     return false;
   };
   const supervisedDeveloperTurns = patched(developerSupervisorPatch);
-  const recoveryFields = (status: "starting" | "active" | "reconnecting" | "result_pending_claim" | "cancellation_requested" | "cancelling" | "interrupted" | "cancelled" | "ownership_ambiguous" | "failed", reasonCode: string | null, summary: string | null, heartbeatAt: string | null) => ({ developerRecoveryStatus: status, developerRecoveryReasonCode: reasonCode, developerRecoverySummary: summary, developerLastHeartbeatAt: heartbeatAt });
+  const recoveryFields = (status: "starting" | "active" | "reconnecting" | "result_pending_claim" | "cancellation_requested" | "cancelling" | "interrupted" | "cancelled" | "ownership_ambiguous" | "failed" | null, reasonCode: string | null, summary: string | null, heartbeatAt: string | null) => ({ developerRecoveryStatus: status, developerRecoveryReasonCode: reasonCode, developerRecoverySummary: summary, developerLastHeartbeatAt: heartbeatAt });
   const applyCompletedDeveloperResult = (rawResult: unknown, summary: string): boolean => {
     if (!rawResult || typeof rawResult !== "object") return false;
     const result = rawResult as Record<string, unknown>;

@@ -18,7 +18,7 @@ export const deliveryReviewCommands = {
     name: "repair_delivery",
     slug: "repair-delivery",
     updateName: "repairDelivery",
-    label: "Repair delivery",
+    label: "Send back to Developer",
     family: "start",
     durableCommandKind: "delivery repair command",
     payloadLabel: "delivery repair command",

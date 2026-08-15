@@ -315,6 +315,21 @@ test("retries draft publication from a typed provider-failure state", async () =
   }
 });
 
+test("shows the current target-base blocker instead of stale Developer recovery text", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Review blocked delivery", description: "Reviewed delivery", idempotencyKey: "review-blocked-0001", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    const blocked = IssueWorkflowStateSchema.parse({ ...initial, revision: 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], pendingAction: "mise run test did not complete successfully", developerRecoveryStatus: "active", developerRecoverySummary: "Developer repair result claimed.", targetBaseBlockerCode: "verification_failed", targetBaseBlockerSummary: "mise run test did not complete successfully", lastEventId: `${initial.workflowId}:1` });
+    value.stateByTask.set(created.task.id, blocked);
+    projectState(value.database, blocked);
+
+    expect(value.tasks.getTask(value.adminId, created.task.id).activity).toContainEqual(expect.objectContaining({ eventType: "phase_delivery_blocked", metadata: expect.objectContaining({ blockedReason: "mise run test did not complete successfully" }) }));
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("repairs the legacy revision-zero seed before applying the Temporal initial projection", async () => {
   const value = await fixture();
   try {

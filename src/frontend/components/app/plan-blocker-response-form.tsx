@@ -60,7 +60,7 @@ export function PlanBlockerResponseForm({ blocker, expectedRevision, busy, onSub
             {error ? <FieldError ref={errorRef} tabIndex={-1}>{error}</FieldError> : null}
           </FieldSet> : <Field><FieldLabel htmlFor="plan-blocker-answer">Answer</FieldLabel>{composer}{error ? <FieldError ref={errorRef} tabIndex={-1}>{error}</FieldError> : null}</Field>}
         </CardContent>
-        {hasChoices && selected !== OTHER ? <CardFooter>{sendButton}</CardFooter> : null}
+        {hasChoices && selected !== OTHER ? <CardFooter className="justify-end">{sendButton}</CardFooter> : null}
       </Card>
     </form>
   );

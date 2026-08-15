@@ -61,7 +61,7 @@ export async function reconcileBlockedDeveloperDeliveries(database: ForgeDatabas
   for (const row of rows) {
     try {
       await route?.(row.workflowId);
-      const state = await reconcile(config, row.workflowId, { expectedRevision: row.revision, actorUserId: "system-reconciliation", commandId: `delivery-reconcile-v3-${row.executionId}-${row.revision}`.slice(0, 256), reconcileOnly: true });
+      const state = await reconcile(config, row.workflowId, { expectedRevision: row.revision, actorUserId: "system-reconciliation", commandId: `delivery-reconcile-v4-${row.executionId}-${row.revision}`.slice(0, 256), reconcileOnly: true });
       if (state.phase === "delivery_ready") recovered += 1;
     } catch (error) {
       new StructuredLogger().error("Developer delivery reconciliation attempt failed", { workflowId: row.workflowId }, { executionId: row.executionId, error: error instanceof Error ? error.message : "unknown error" });

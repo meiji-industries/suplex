@@ -5,6 +5,7 @@ import { TaskLeadPlan } from "../src/frontend/components/app/task-lead-plan.js";
 import { activityRelativeDate, extractAgentTranscript, TaskActivity } from "../src/frontend/components/app/task-history.js";
 import { invocationActorLabel } from "../src/frontend/components/app/task-invocations.js";
 import type { DeveloperExecutionEventView, DeveloperExecutionView } from "../src/frontend/components/tasks/developer-evidence.js";
+import type { TaskResponse } from "../src/http/contracts/tasks.js";
 
 test("labels an agent with its execution profile", () => {
   expect(invocationActorLabel({ agentName: "Analyst", profileName: "Smart", role: "analyst" })).toBe("Analyst (Smart)");
@@ -68,6 +69,20 @@ test("shows the recorded reason when a task moves to Blocked", () => {
   expect(html).toContain("The Developer process exited unexpectedly.");
   expect(html).toContain('data-task-blocked-reason="true"');
   expect(html).toContain('aria-expanded="false"');
+});
+
+test("places an approved delivery review at its Reviewed activity, not a later blocker", () => {
+  const hash = "a".repeat(40);
+  const task = { id: "task_1", owner: "lead", allowedCommands: [], reviewLineage: { currentReview: { id: "review_1", outcome: "approved", summary: "Approved delivery", planRevision: 1, baseSha: hash, baseShaAbbrev: hash.slice(0, 8), subjectCommit: hash, subjectCommitAbbrev: hash.slice(0, 8), subjectTree: hash, subjectTreeAbbrev: hash.slice(0, 8), opinionArtifactId: "opinion_1", evidenceArtifactId: "evidence_1", correctionAttempts: 0, supersedesReviewId: null, successorReviewId: null, leadSessionContinued: true, developerSessionContinued: true, createdAt: "2026-08-13T00:00:00.000Z", findings: [] }, priorReviews: [], reviewAttempts: [], repairAttempts: [] } } as unknown as TaskResponse;
+  const timeline = [
+    { id: "reviewed", revision: 1, eventType: "phase_delivery_reviewed", metadata: {}, createdAt: "2026-08-13T00:00:00.000Z", kind: "workflow" as const },
+    { id: "blocked", revision: 2, eventType: "phase_delivery_blocked", metadata: { blockedReason: "Pinned verification failed" }, createdAt: "2026-08-13T00:01:00.000Z", kind: "workflow" as const },
+  ];
+  const html = renderToStaticMarkup(createElement(TaskActivity, { timeline, agentInvocations: [], deliveryReviewTask: task }));
+
+  expect(html).toContain("Review result");
+  expect(html.indexOf("moved the task to Reviewed")).toBeLessThan(html.indexOf("data-task-activity-delivery-review"));
+  expect(html.indexOf("data-task-activity-delivery-review")).toBeLessThan(html.indexOf("moved the task to Blocked"));
 });
 
 test("collapses repeated development and CI updates without changing their audit source", () => {

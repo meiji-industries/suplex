@@ -51,6 +51,8 @@ function continuation(checkpoint: TargetBaseCheckpoint): NonNullable<IssueWorkfl
     developerEvidenceArtifactId: "evidence_original",
     deliverySummary: "Verified delivery",
     developerOutcome: "completed",
+    developerRecoveryStatus: "active",
+    developerRecoverySummary: "Developer repair result claimed.",
     deliveryReviewId: "review_original",
     deliveryReviewOutcome: "approved",
     releaseId: checkpoint === "pre_release" ? null : "release_original",
@@ -172,7 +174,7 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
     const retryInput = input(retryIssue, "pre_release");
     const retryHandle = await environment.client.workflow.start(issueWorkflow, { workflowId: retryInput.workflowId, taskQueue: "target-base-time-skipping", args: [retryInput] });
     const blocked = await retryHandle.executeUpdate(publishDraftUpdate, { args: [{ expectedRevision: 10, actorUserId: "member_test" }] });
-    expect(blocked).toMatchObject({ phase: "delivery_blocked", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], resultCommit: mergedHead, resultTree: mergedTree });
+    expect(blocked).toMatchObject({ phase: "delivery_blocked", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], resultCommit: mergedHead, resultTree: mergedTree, developerRecoveryStatus: null, developerRecoverySummary: null });
     const retried = await retryHandle.executeUpdate(retryForwardMergeVerificationUpdate, { args: [{ expectedRevision: blocked.revision, actorUserId: "member_test" }] });
     expect(retried).toMatchObject({ phase: "delivery_ready", targetBaseSha: nextBase, resultCommit: mergedHead, resultTree: mergedTree });
     expect(attempts.get(retryIssue)).toBe(2);
@@ -185,7 +187,7 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
     const planned = await conflictHandle.executeUpdate(finalReviewUpdate, { args: [{ expectedRevision: 10, actorUserId: "member_test" }] });
     expect(planned).toMatchObject({ phase: "merge_conflict_required", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], releaseId: "release_original", pullRequestNumber: 42, forwardMergeConflictFileCount: 1 });
     const verificationBlocked = await conflictHandle.executeUpdate(resolveMergeConflictUpdate, { args: [{ expectedRevision: planned.revision, actorUserId: "member_test" }] });
-    expect(verificationBlocked).toMatchObject({ phase: "delivery_blocked", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], developerExecutionId: "developer_conflict_resolution", resultCommit: mergedHead, resultTree: mergedTree, releaseId: "release_original", pullRequestNumber: 42 });
+    expect(verificationBlocked).toMatchObject({ phase: "delivery_blocked", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], developerExecutionId: "developer_conflict_resolution", resultCommit: mergedHead, resultTree: mergedTree, releaseId: "release_original", pullRequestNumber: 42, developerRecoveryStatus: null, developerRecoverySummary: null });
     const conflictRecovered = await conflictHandle.executeUpdate(retryForwardMergeVerificationUpdate, { args: [{ expectedRevision: verificationBlocked.revision, actorUserId: "member_test" }] });
     expect(conflictRecovered).toMatchObject({ phase: "delivery_ready", developerExecutionId: "developer_forward_merge", resultCommit: mergedHead, resultTree: mergedTree, releaseId: "release_original", pullRequestNumber: 42, deliveryReviewId: null, ciRunId: null, finalReviewId: null });
     histories.push({ history: await conflictHandle.fetchHistory(), workflowId: conflictInput.workflowId });

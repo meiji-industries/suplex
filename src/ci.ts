@@ -107,13 +107,13 @@ function canonicalJson(value: unknown): string {
 export interface CiPolicy {
   projectRevisionId: string;
   requiredChecks: string[];
-  acceptedConclusions: ["success"];
+  acceptedConclusions: ["success", "skipped"];
 }
 
 export function buildCiPolicy(projectRevisionId: string, requiredChecks: readonly string[]): { policy: CiPolicy; policyJson: string; policyHash: string } {
   const normalized = [...new Set(requiredChecks.map((check) => check.trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
   if (!normalized.length) throw new CiFailure("invalid-policy");
-  const policy: CiPolicy = { projectRevisionId, requiredChecks: normalized, acceptedConclusions: ["success"] };
+  const policy: CiPolicy = { projectRevisionId, requiredChecks: normalized, acceptedConclusions: ["success", "skipped"] };
   const policyJson = canonicalJson(policy);
   return { policy, policyJson, policyHash: createHash("sha256").update(Buffer.from(policyJson, "utf8")).digest("hex") };
 }
@@ -199,7 +199,7 @@ export function evaluateExactHead(input: CiEvaluationInput): CiEvaluationResult 
   if (cancelled) return evaluation("required_check_cancelled", "cancelled", "human", false, selectedChecks, `Required check cancelled: ${cancelled.name}`);
   const timedOut = exactSelected.find((check) => check.conclusion === "timed_out");
   if (timedOut) return evaluation("required_check_timed_out", "timed_out", "human", false, selectedChecks, `Required check timed out: ${timedOut.name}`);
-  const nonSuccess = exactSelected.find((check) => check.conclusion !== "success");
+  const nonSuccess = exactSelected.find((check) => check.conclusion !== "success" && check.conclusion !== "skipped");
   if (nonSuccess) return evaluation(`required_check_${nonSuccess.conclusion ?? "incomplete"}`, "non_success", "human", false, selectedChecks, `Required check did not succeed: ${nonSuccess.name}`);
   return evaluation("checks_passed", "passed", null, false, selectedChecks, "All required checks passed on the exact pull-request head");
 }

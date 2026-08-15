@@ -8,7 +8,7 @@ export function registerTargetBaseHandlers(ctx: IssueWorkflowContext): void {
     const checkpoint = ctx.state.targetBaseCheckpoint;
     if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "delivery_blocked" || !checkpoint) throw new Error("Target-base reconciliation retry is not available in the current phase");
     if (verificationOnly && !["verification_failed", "verification_timed_out", "verification_evidence_too_large"].includes(ctx.state.targetBaseBlockerCode ?? "")) throw new Error("Verification retry is not available for the current blocker");
-    if (!verificationOnly && !ctx.state.targetBaseBlockerRetryable) throw new Error("Target-base reconciliation is not retryable");
+    if (!verificationOnly && !ctx.state.targetBaseBlockerRetryable && !(ctx.state.targetBaseBlockerCode === "merge_state_ownership_mismatch" && ctx.state.forwardMergeId)) throw new Error("Target-base reconciliation is not retryable");
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: verificationOnly ? "Retrying pinned forward-merge verification" : "Retrying target-base reconciliation", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     await ctx.runTargetBaseCheckpoint(checkpoint, verificationOnly);

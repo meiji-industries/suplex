@@ -16,8 +16,8 @@ function pullRequestStatus(task: ApiTask): { label: string; dotClass: string } |
   return { label: "draft", dotClass: "bg-amber-500" };
 }
 
-export function recentTasks<T extends { updatedAt: string }>(tasks: T[]): T[] {
-  return [...tasks].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)).slice(0, 5);
+export function recentTasks<T extends { phase: string; updatedAt: string }>(tasks: T[]): T[] {
+  return tasks.filter((task) => task.phase !== "cancelled").sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)).slice(0, 5);
 }
 
 export function showRecentTasks(pathname: string): boolean {

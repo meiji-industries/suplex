@@ -851,7 +851,7 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
   const subjectTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: worktreePath })).stdout.trim();
   const plan = await artifactStore.put("company_1", "lead-plan", { filename: "review-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Exact fixture plan", reproduction: null, rootCauseAnalysis: "The fixture needs a delivery marker.", steps: [{ number: 1, instruction: "Create the delivery marker.", verification: "The marker exists." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the exact commit.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
   const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead-review.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
-  const delivery = await artifactStore.put("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from("{\"kind\":\"delivery\"}\n") });
+  const delivery = await artifactStore.put("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "delivery", report: "x".repeat(250_000), exactTail: "preserved-tail" })) });
   const developerEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "developer.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"developer\"}\n") });
   const now = new Date().toISOString();
   value.database.authTransaction((db) => {
@@ -896,6 +896,9 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
     expect(reviewRequestPrompt).toContain(targetBaseSha);
     expect(reviewRequestPrompt).toContain(subjectCommit);
     expect(reviewRequestPrompt).toContain(subjectTree);
+    expect(reviewRequestPrompt.length).toBeLessThan(200_000);
+    expect(reviewRequestPrompt).toContain("[truncated ");
+    expect(reviewRequestPrompt).toContain("preserved-tail");
     expect(reviewOutputSchema).toMatchObject({ properties: { kind: { const: "delivery_review" } } });
     expect(value.database.authQuery((db) => db.prepare("SELECT outcome, session_ref, subject_commit FROM forge_delivery_reviews WHERE id = ?").get(completedReview.review.reviewId))).toEqual({ outcome: "blocking", session_ref: "session_lead", subject_commit: subjectCommit });
     const reviewEvidenceRow = value.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_delivery_review_attempts attempt ON attempt.evidence_artifact_id = a.id WHERE attempt.completed_review_id = ?").get(completedReview.review.reviewId) as { storagePath: string; sha256: string });
@@ -929,6 +932,13 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
       expect(blocked).toMatchObject({ outcome: "blocked", code, subject: { subjectCommit, subjectTree } });
       if (blocked.outcome !== "blocked") throw new Error("Expected a blocked review fixture");
       expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, finished_at FROM forge_delivery_review_attempts WHERE id = ?").get(blocked.attemptId))).toMatchObject({ status: "blocked", failure_code: code, finished_at: expect.any(String) });
+      if (code === "process-failed") {
+        const artifact = value.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(blocked.evidenceArtifactId)) as { storagePath: string; sha256: string };
+        const evidence = (await new ArtifactStore(value.config.artifactRoot).read({ companyId: "company_1", ...artifact })).toString("utf8");
+        expect(evidence).toContain("forge.review-wrapper-stderr");
+        expect(evidence).toContain("worker crashed");
+        expect(evidence).toContain('{"type":"forge.review-turn-failed","code":"process-exited"}');
+      }
     }
     const oversizedRepairRunner: LeadProcessRunner = async (invocation) => {
       await invocation.onStart(4702, "2026-08-11T00:01:00.000Z");

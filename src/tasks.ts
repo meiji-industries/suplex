@@ -564,7 +564,7 @@ export interface TaskCiProjection {
   owner: CiOwner;
   repairable: boolean;
   policyHash: string;
-  policy: { projectRevisionId: string; requiredChecks: string[]; acceptedConclusions: ["success"] };
+  policy: { projectRevisionId: string; requiredChecks: string[]; acceptedConclusions: ["success", "skipped"] };
   leadSessionContinuity: boolean;
   developerSessionContinuity: boolean;
   firstObservedAt: string | null;
@@ -1046,6 +1046,7 @@ export class TaskService {
         targetBaseSha: execution.targetBaseSha,
         branchName: execution.branchName,
         worktreePath: worktree.worktreePath,
+        ...(execution.resultCommit ? { resultCommit: execution.resultCommit } : {}),
       });
       return { patch: diff.patch, branchName: execution.branchName, repository: project.repository, baseSha: execution.targetBaseSha, headSha: diff.headSha };
     } catch (error) {
@@ -1387,7 +1388,8 @@ export class TaskService {
     const expectedRevision = payload.expectedRevision;
     if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
     const retryingCancellation = command === "cancel_development" && task.developerRecovery?.status === "cancellation_requested";
-    if (!task.allowedCommands.includes(command) && !retryingCancellation) {
+    const canContinuePastReview = command === "record_delivery_decision" && (task.phase === "repair_required" || (task.phase === "delivery_blocked" && task.allowedCommands.includes("repair_delivery")));
+    if (!task.allowedCommands.includes(command) && !retryingCancellation && !canContinuePastReview) {
       const message = command === "start_planning" ? "Planning cannot start from the current state" : command === "record_delivery_decision" ? "A delivery decision is not available" : descriptor.family === "start" ? "Plan action is not available" : "Task action is not available";
       throw new TaskFailure(message, [finding("illegal-command", "phase", message)], 409, task);
     }
@@ -1923,8 +1925,8 @@ export class TaskService {
       const metadata = parseMetadata(entry.metadata_json);
       if (entry.event_type !== "planning_started") {
         priorTimelineEntryWasPlanning = false;
-        const state = entry.event_type === "phase_blocked" || entry.event_type === "phase_delivery_blocked" ? json<{ pendingAction?: unknown; developerRecoverySummary?: unknown; blocker?: { summary?: unknown } | null }>(entry.state_json ?? "{}", {}) : undefined;
-        const reason = state?.blocker?.summary ?? state?.developerRecoverySummary ?? state?.pendingAction;
+        const state = entry.event_type === "phase_blocked" || entry.event_type === "phase_delivery_blocked" ? json<{ pendingAction?: unknown; developerRecoverySummary?: unknown; deliveryReviewBlockerSummary?: unknown; deliveryRepairBlockerSummary?: unknown; targetBaseBlockerSummary?: unknown; blocker?: { summary?: unknown } | null }>(entry.state_json ?? "{}", {}) : undefined;
+        const reason = state?.blocker?.summary ?? state?.deliveryReviewBlockerSummary ?? state?.deliveryRepairBlockerSummary ?? state?.targetBaseBlockerSummary ?? state?.developerRecoverySummary ?? state?.pendingAction;
         return { id: entry.id, revision: entry.revision, eventType: entry.event_type, metadata: typeof reason === "string" && reason.trim() ? { ...metadata, blockedReason: redact(reason) as string } : metadata, createdAt: entry.created_at };
       }
       const capacityStatus = json<{ capacity?: { status?: unknown } }>(entry.state_json ?? "{}", {}).capacity?.status;
@@ -2161,7 +2163,7 @@ export class TaskService {
     const continuity = this.database.authQuery((db) => db.prepare(`SELECT
       EXISTS (SELECT 1 FROM forge_ci_repair_plans p JOIN forge_issue_outputs o ON o.task_id = p.task_id AND o.company_id = p.company_id AND o.workflow_id = p.workflow_id AND o.session_ref = p.lead_session_ref WHERE p.task_id = ? AND p.company_id = ?) AS lead,
       EXISTS (SELECT 1 FROM forge_ci_repairs x JOIN forge_ci_repair_plans p ON p.id = x.repair_plan_id JOIN forge_developer_executions d ON d.id = x.prior_developer_execution_id AND d.task_id = p.task_id AND d.company_id = p.company_id AND d.workflow_id = p.workflow_id WHERE p.task_id = ? AND p.company_id = ? AND d.session_ref = x.prior_developer_session_ref AND x.result_developer_session_ref = x.prior_developer_session_ref) AS developer`).get(taskId, companyId, taskId, companyId) as { lead: number; developer: number });
-    const policy = json<TaskCiProjection["policy"]>(run.policyJson ?? "{}", { projectRevisionId: "", requiredChecks: [], acceptedConclusions: ["success"] });
+    const policy = json<TaskCiProjection["policy"]>(run.policyJson ?? "{}", { projectRevisionId: "", requiredChecks: [], acceptedConclusions: ["success", "skipped"] });
     return { runId: run.runId, releaseId: run.releaseId, repository: run.repository, pullRequestNumber: run.pullRequestNumber, pullRequestUrl: run.pullRequestUrl, baseBranch: run.baseBranch, headBranch: run.headBranch, expectedHeadSha: run.expectedHeadSha, expectedHeadTree: run.expectedHeadTree, status: run.status, outcome: latest?.outcome ?? null, reason: latest?.reason ?? null, owner: latest?.owner ?? null, repairable: latest?.repairable ?? false, policyHash: run.policyHash, policy, leadSessionContinuity: continuity.lead === 1, developerSessionContinuity: continuity.developer === 1, firstObservedAt: run.firstObservedAt, propagationDeadline: run.propagationDeadline, overallDeadline: run.overallDeadline, nextRetryAt: run.nextRetryAt, completedAt: run.completedAt, supersededAt: run.supersededAt, supersededRuns, attempts, repairPlan, repairs };
 /*
     if (content.kind === "plan") return { kind: "plan", summary: row.summary, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };

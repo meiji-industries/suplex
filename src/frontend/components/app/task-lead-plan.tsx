@@ -127,7 +127,7 @@ export function TaskLeadPlan({
           <Collapsible.Panel><div className="mt-3 flex flex-col gap-3">{details}</div></Collapsible.Panel>
         </Collapsible.Root> : <><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold">{heading}</h3></div>{details}</>}
       </CardContent>
-      {decisionControls ? <CardFooter data-plan-decision-controls>{decisionControls}</CardFooter> : null}
+      {decisionControls ? <CardFooter className="justify-end" data-plan-decision-controls>{decisionControls}</CardFooter> : null}
     </Card>
   );
 }

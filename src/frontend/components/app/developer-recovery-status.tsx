@@ -45,7 +45,7 @@ export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, bus
             {recovery.lastHeartbeatAt ? <p className="mt-1 text-xs">Last heartbeat {new Date(recovery.lastHeartbeatAt).toLocaleString()}</p> : null}
             {recovery.evidenceArtifactId ? <p className="mt-1 text-xs"><a href={`/api/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(recovery.evidenceArtifactId)}`} target="_blank" rel="noreferrer">Open retained evidence</a></p> : null}
           </CardContent>
-          {hasActions ? <CardFooter className="border-t"><DeveloperRecoveryActions allowedCommands={recoveryCommands} busy={busy} isAdmin={isAdmin} onAction={onAction} /></CardFooter> : null}
+          {hasActions ? <CardFooter className="justify-end border-t"><DeveloperRecoveryActions allowedCommands={recoveryCommands} busy={busy} isAdmin={isAdmin} onAction={onAction} /></CardFooter> : null}
         </Collapsible.Panel>
       </Collapsible.Root>
     </Card>;

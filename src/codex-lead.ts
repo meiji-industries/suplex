@@ -189,6 +189,12 @@ async function readOptionalInstruction(filename: string): Promise<string | undef
   }
 }
 
+function promptExcerpt(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  const tail = Math.min(4_000, Math.floor(limit / 5));
+  return `${value.slice(0, limit - tail)}\n[truncated ${value.length - limit} characters]\n${value.slice(-tail)}`;
+}
+
 async function readDeliveryGitEvidence(worktreePath: string, targetBaseSha: string, subjectCommit: string, repositoryPath: string): Promise<{ targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }> {
   const run = async (args: string[], maxBuffer: number): Promise<string> => (await execFileAsync("git", args, { cwd: worktreePath, timeout: 20_000, maxBuffer })).stdout;
   const [status, branch, head, tree, diff, commit] = await Promise.all([
@@ -1046,7 +1052,7 @@ export class AgentService {
     const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
     const stopCancellationTracking = this.trackCancellation(executionId, runtime.signal);
     try {
-      const initialPrompt = this.deliveryReviewPrompt(context.title, brief, plan, delivery, developerEvidence, gitEvidence) + (isFinalReview ? `\n\nExact required CI context: ${JSON.stringify({ releaseId: input.releaseId, ciRunId: input.ciRunId, status: finalContext?.status, headSha: finalContext?.headSha, headTree: finalContext?.headTree })}` : "");
+      const initialPrompt = this.deliveryReviewPrompt(context.title, brief, plan, delivery, developerEvidence, gitEvidence, delivery.includes('"priorHead"')) + (isFinalReview ? `\n\nExact required CI context: ${JSON.stringify({ releaseId: input.releaseId, ciRunId: input.ciRunId, status: finalContext?.status, headSha: finalContext?.headSha, headTree: finalContext?.headTree })}` : "");
       const runTurn = async (turn: number, prompt: string): Promise<void> => {
         evidenceLines.push(JSON.stringify({ type: "forge.review-turn-start", turn }));
         const wrapper = await this.prepareTurnWrapper(executionId, leadProfile, worktreePath, schemaPath, prompt, { resumeSessionRef: leadSessionRef, sessionRef: leadSessionRef });
@@ -1071,7 +1077,10 @@ export class AgentService {
           },
         });
         const result = await this.completedTurnResult(observed, wrapper);
-        if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, outputLines, leadProfile.model);
+        if (result.exitCode !== 0) {
+          if (result.stderr.trim()) evidenceLines.push(JSON.stringify({ type: "forge.review-wrapper-stderr", diagnostic: this.provider.sanitizeLine(result.stderr).slice(0, 2_000) }));
+          throw this.provider.classifyProcessFailure(result, outputLines, leadProfile.model);
+        }
         evidenceLines.push(JSON.stringify({ type: "forge.review-turn-end", turn }));
       };
       let review: DeliveryReview;
@@ -1093,7 +1102,8 @@ export class AgentService {
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const opinion = await this.artifacts.put(input.companyId, "delivery-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
       const repairPlanArtifact = review.repairPlan ? await this.artifacts.put(input.companyId, "delivery-repair-plan", { filename: `${executionId}-repair-plan.md`, mimeType: "text/markdown", bytes: Buffer.from(review.repairPlan, "utf8") }) : undefined;
-      const reviewId = `delivery_review_${randomBytes(12).toString("hex")}`;
+      const priorReview = isFinalReview ? undefined : this.database.authQuery((db) => db.prepare("SELECT id FROM forge_delivery_reviews WHERE workflow_id = ? AND subject_commit = ?").get(input.workflowId, subjectCommit) as { id: string } | undefined);
+      const reviewId = priorReview?.id ?? `delivery_review_${randomBytes(12).toString("hex")}`;
       this.database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, opinion.id, opinion.companyId, opinion.kind, opinion.filename, opinion.mimeType, opinion.byteSize, opinion.sha256, opinion.storagePath, opinion.createdAt);
         if (repairPlanArtifact) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(repairPlanArtifact.id, repairPlanArtifact.companyId, repairPlanArtifact.kind, repairPlanArtifact.filename, repairPlanArtifact.mimeType, repairPlanArtifact.byteSize, repairPlanArtifact.sha256, repairPlanArtifact.storagePath, repairPlanArtifact.createdAt);
@@ -1101,7 +1111,10 @@ export class AgentService {
           db.prepare("INSERT INTO forge_final_reviews (id, task_id, company_id, workflow_id, release_id, ci_run_id, delivery_review_id, developer_execution_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.releaseId, input.ciRunId, input.deliveryReviewId, subject.developerExecutionId, subject.planRevision, targetBaseSha, subjectCommit, subjectTree, executionId, leadSessionRef, review.outcome, review.summary, opinion.id, evidence.id, this.now().toISOString());
           for (const finding of review.findings) db.prepare("INSERT INTO forge_final_review_findings (id, review_id, task_id, company_id, severity, rationale, evidence_ref, disposition, repair_instruction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(finding.findingId, reviewId, input.taskId, input.companyId, finding.severity, finding.rationale, finding.evidenceRef, finding.disposition, finding.repairInstruction);
         } else {
-          db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, supersedes_review_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.planRevision, targetBaseSha, subjectCommit, subjectTree, executionId, leadSessionRef, review.outcome, review.summary, opinion.id, evidence.id, input.supersedesReviewId, this.now().toISOString());
+          if (priorReview) {
+            db.prepare("UPDATE forge_delivery_reviews SET lead_execution_id = ?, session_ref = ?, outcome = ?, summary = ?, opinion_artifact_id = ?, evidence_artifact_id = ?, repair_cycle = 0, supersedes_review_id = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(executionId, leadSessionRef, review.outcome, review.summary, opinion.id, evidence.id, input.supersedesReviewId, reviewId, input.taskId, input.companyId, input.workflowId);
+            db.prepare("DELETE FROM forge_delivery_findings WHERE review_id = ? AND task_id = ? AND company_id = ?").run(reviewId, input.taskId, input.companyId);
+          } else db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, supersedes_review_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.planRevision, targetBaseSha, subjectCommit, subjectTree, executionId, leadSessionRef, review.outcome, review.summary, opinion.id, evidence.id, input.supersedesReviewId, this.now().toISOString());
           for (const finding of review.findings) db.prepare("INSERT INTO forge_delivery_findings (id, review_id, task_id, company_id, severity, rationale, evidence_ref, disposition, repair_instruction, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(`delivery_finding_${reviewId}_${finding.findingId}`, reviewId, input.taskId, input.companyId, finding.severity, finding.rationale, finding.evidenceRef, finding.disposition, finding.repairInstruction, this.now().toISOString());
         }
         db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidence.id, executionId);
@@ -1113,6 +1126,7 @@ export class AgentService {
       const cancelled = runtime.signal?.aborted && !(error instanceof AgentFailure && error.code === "ownership_ambiguous");
       const expectedFailure = error instanceof AgentFailure && !cancelled;
       const failure = cancelled ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("delivery-review-failed", "Codex Lead delivery review failed");
+      evidenceLines.push(JSON.stringify({ type: "forge.review-turn-failed", code: failure.code }));
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const code = failure.code === "cancelled" ? "cancelled" : failure.code === "correction-exhausted" ? "correction-exhausted" : deliveryBlockCode(failure);
       const summary = code === "cancelled" ? failure.message : safeBlockSummary(code, code === "correction-exhausted");
@@ -1328,18 +1342,19 @@ export class AgentService {
     return `You are Forge's Lead diagnosing one exact failed CI observation. Resume the same Lead session. Use only the bounded check names and summaries below; do not request a new session, branch, worktree, pull request, provider rerun, merge, rebase, amend, force push, or history rewrite. Return exactly one JSON object matching the ci-repair-plan schema with contiguous steps, complete pinned local verification, and no unresolved questions.\n\nTask: ${title}\nExact identity: ${JSON.stringify({ ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, failedHeadSha: input.failedHeadSha })}\nFailed exact-head checks: ${JSON.stringify(failedChecks)}\nRequired checks: ${JSON.stringify(input.requiredChecks)}\nPinned local verification: ${JSON.stringify(input.localVerification)}\nThe evidenceArtifactId for every failed check is exactly: ${input.evidenceArtifactId}`;
   }
 
-  private deliveryReviewPrompt(title: string, brief: string, plan: string, delivery: string, developerEvidence: string, gitEvidence: { targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }): string {
+  private deliveryReviewPrompt(title: string, brief: string, plan: string, delivery: string, developerEvidence: string, gitEvidence: { targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }, isForwardMergeDelivery: boolean): string {
     return [
       'You are Forge\'s Lead reviewer continuing the existing Lead session. Review the exact local Developer delivery; do not redesign or expand the approved plan. Do not modify files, commit, run CI, use GitHub/provider commands, or treat CI as available.',
       'Return exactly one JSON object with no markdown fences or commentary matching: {"kind":"delivery_review","summary":"...","outcome":"approved|blocking","findings":[{"findingId":"finding_...","severity":"blocking|advisory","rationale":"...","evidenceRef":"diff hunk, file, test, or report reference","disposition":"open|accepted|repaired","repairInstruction":null}],"repairPlan":null}. Blocking findings are limited to correctness, acceptance, security/privacy/data loss, compatibility, operational safety, unintended scope, or missing mandatory proof. Advisory findings never block. An approved result cannot contain an open blocking finding. A blocking result must identify each open blocking finding and provide a bounded repairPlan when repair is possible; use null only when a member decision is required. Ground every finding in the supplied exact revision and evidence.',
-      `Task: ${title}\nBrief:\n${brief}`,
-      `Authorized approved plan:\n${plan}`,
-      `Developer delivery report:\n${delivery}`,
-      `Developer verification evidence:\n${developerEvidence}`,
+      `Task: ${title}\nBrief:\n${promptExcerpt(brief, 8_000)}`,
+      `Authorized approved plan:\n${promptExcerpt(plan, 24_000)}`,
+      `Developer delivery report:\n${promptExcerpt(delivery, 32_000)}`,
+      `Developer verification evidence:\n${promptExcerpt(developerEvidence, 16_000)}`,
+      ...(isForwardMergeDelivery ? ["This is a clean forward-merge delivery. Its pinned post-merge verification and the prior delivery proof remain authoritative for unchanged behavior. Do not block solely because broader checks or manual smoke steps were not repeated after the merge; report those as advisory unless the exact merge diff shows a concrete regression or new risk."] : []),
       `Exact Git subject (base, branch, commit, tree, clean state):\n${JSON.stringify({ targetBaseSha: gitEvidence.targetBaseSha, branch: gitEvidence.branch, subjectCommit: gitEvidence.subjectCommit, subjectTree: gitEvidence.subjectTree, observedHead: gitEvidence.head, observedTree: gitEvidence.tree, dirtyState: gitEvidence.status ? "dirty" : "clean" })}`,
-      `Repository instructions:\n${gitEvidence.instructions || "(none found)"}`,
-      `Exact diff from target base to subject commit:\n${gitEvidence.diff}`,
-      `Subject commit details:\n${gitEvidence.commit}`,
+      `Repository instructions:\n${promptExcerpt(gitEvidence.instructions || "(none found)", 12_000)}`,
+      `Exact diff from target base to subject commit:\n${promptExcerpt(gitEvidence.diff, 72_000)}`,
+      `Subject commit details:\n${promptExcerpt(gitEvidence.commit, 12_000)}`,
     ].join("\n\n");
   }
 

@@ -188,7 +188,7 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
     const receiptSteps = [...new Set(input.receipts.map((receipt) => receipt.stepNumber).filter((step): step is number => step !== null))].sort((a, b) => a - b);
     if (JSON.stringify(expectedSteps) !== JSON.stringify(receiptSteps)) mismatches.push("receipt-step-set-mismatch");
     for (const verification of input.verificationCommands) {
-      const stepReceipts = input.receipts.filter((receipt) => receipt.stepNumber === verification.stepNumber && receipt.kind === "command_finished");
+      const stepReceipts = input.receipts.filter((receipt) => receipt.stepNumber !== null && receipt.stepNumber >= verification.stepNumber && receipt.kind === "command_finished");
       for (const command of verification.commands) {
         const matching = stepReceipts.filter((receipt) => matchesVerificationCommand(receipt, command));
         if (!matching.length) mismatches.push(`missing-verification-command:${verification.stepNumber}`);

@@ -14,7 +14,7 @@ test("task command descriptors preserve the legacy public command projection", (
     { name: "cancel_development", label: "Cancel development", endpoint: "cancel-development", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "verify_developer_ownership", label: "Verify developer ownership", endpoint: "verify-developer-ownership", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "review_delivery", label: "Review delivery", endpoint: "review-delivery", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
-    { name: "repair_delivery", label: "Repair delivery", endpoint: "repair-delivery", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
+    { name: "repair_delivery", label: "Send back to Developer", endpoint: "repair-delivery", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "record_delivery_decision", label: "Record delivery decision", endpoint: "record-delivery-decision", method: "POST", expectedRevision: 7, note: "required", idempotency: "required" },
     { name: "publish_draft", label: "Publish draft", endpoint: "publish-draft", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "resolve_merge_conflict", label: "Resolve merge conflict", endpoint: "resolve-merge-conflict", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },

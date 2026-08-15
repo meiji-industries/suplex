@@ -107,6 +107,15 @@ test("reconciliation accepts successful combined verification commands", () => {
   expect(reconcileDeveloperDelivery(input({ receipts: [receipt("step_started", 1), combined, receipt("step_completed", 3)], verificationCommands, manifest: { ...manifest, verificationCommands } })).outcome).toBe("completed");
 });
 
+test("reconciliation accepts a TDD verification that fails first and passes in a later step", () => {
+  const verificationCommands = [{ stepNumber: 1, commands: ["pnpm test"] }, { stepNumber: 2, commands: [] }];
+  const later = (kind: Parameters<typeof receipt>[0], sequence: number, exitCode: number | null = null) => ({ ...receipt(kind, sequence, exitCode), stepNumber: 2 });
+  const tddReport = { ...report, steps: [report.steps[0], { number: 2, status: "completed" as const, filesChanged: [], notes: "implementation complete" }] };
+  const receipts = [receipt("step_started", 1), receipt("command_finished", 2, 1), receipt("step_completed", 3), later("step_started", 4), later("command_finished", 5, 0), later("step_completed", 6)];
+
+  expect(reconcileDeveloperDelivery(input({ report: tddReport, receipts, verificationCommands, manifest: { ...manifest, verificationCommands } })).outcome).toBe("completed");
+});
+
 test("reconciliation blocks omitted or blocked authorized steps", () => {
   const blockedReport = { ...report, steps: [{ ...report.steps[0], status: "blocked" as const }], authorizedStepsNotCompleted: [1], blocker: "verification failed" };
   const result = reconcileDeveloperDelivery(input({ report: blockedReport, receipts: [receipt("step_started", 1), receipt("step_completed", 2)] }));

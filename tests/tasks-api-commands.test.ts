@@ -201,6 +201,7 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     const resultCommit = await git(["rev-parse", "HEAD"], delivery.worktreePath);
     const resultTree = await git(["rev-parse", "HEAD^{tree}"], delivery.worktreePath);
     const startingTree = await git(["rev-parse", `${targetBaseSha}^{tree}`], delivery.worktreePath);
+    await writeFile(join(delivery.worktreePath, "LATER.md"), "not part of the delivery\n");
     const now = "2026-08-11T00:01:00.000Z";
     database.authTransaction((db) => {
       db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES ('authorization-api-diff', ?, ?, ?, ?, 1, ?, ?, 'routine_auto', NULL, ?)").run(task.id, company.id, project.id, task.workflowId, repairReport.id, repairReport.sha256, now);
@@ -211,6 +212,7 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     const developerDiff = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/developer-diff`, headers: { cookie, origin } });
     expect(developerDiff.statusCode).toBe(200);
     expect(developerDiff.json()).toMatchObject({ branchName: delivery.branchName, baseSha: targetBaseSha, headSha: resultCommit, patch: expect.stringContaining("+API delivery") });
+    expect(developerDiff.json().patch).not.toContain("+not part of the delivery");
     expect(JSON.stringify(developerDiff.json())).not.toContain(delivery.worktreePath);
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: approvalPayload })).statusCode).toBe(409);
     expect((await app.inject({ method: "GET", url: "/api/tasks", headers: { cookie, origin } })).json().tasks).toHaveLength(1);

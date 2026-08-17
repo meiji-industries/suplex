@@ -18,7 +18,7 @@ const unixSocketPathLimit = 100;
 export function developerSupervisorSocketPath(executionRoot: string): string {
   const socketPath = join(resolve(executionRoot), "control.sock");
   if (Buffer.byteLength(socketPath) <= unixSocketPathLimit) return socketPath;
-  return join("/private/tmp", `forge-developer-${createHash("sha256").update(socketPath).digest("hex").slice(0, 24)}.sock`);
+  return join("/tmp", `forge-developer-${createHash("sha256").update(socketPath).digest("hex").slice(0, 24)}.sock`);
 }
 
 function identity(inspection: ProcessInspection): DeveloperSupervisorIdentity {

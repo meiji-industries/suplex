@@ -11,7 +11,7 @@ import { developerSupervisorSocketPath, observeOwnedProcessExit } from "../src/d
 test("uses a short deterministic socket for long runtime paths", () => {
   const executionRoot = "/Users/dev/conductor/workspaces/forge/curitiba-v1/.forge/data/runtime/developer-executions/developer_aaaaaaaaaaaaaaaaaaaaaaaa";
   const socketPath = developerSupervisorSocketPath(executionRoot);
-  expect(socketPath).toMatch(/^\/private\/tmp\/forge-developer-[a-f0-9]{24}\.sock$/);
+  expect(socketPath).toMatch(/^\/tmp\/forge-developer-[a-f0-9]{24}\.sock$/);
   expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(100);
 });
 

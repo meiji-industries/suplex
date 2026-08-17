@@ -107,7 +107,7 @@ test("activates from the current origin branch instead of a stale local branch",
     await git(["config", "user.name", "Forge test"], value.repositoryPath);
     await git(["config", "user.email", "forge-test@example.invalid"], value.repositoryPath);
     await git(["commit", "--allow-empty", "-m", "Initial"], value.repositoryPath);
-    await git(["init", "--bare", remotePath], value.root);
+    await git(["init", "--bare", "--initial-branch=main", remotePath], value.root);
     const remoteUrl = "https://github.com/acme/forge.git";
     await git(["remote", "add", "origin", remoteUrl], value.repositoryPath);
     await git(["config", `url.${remotePath}.insteadOf`, remoteUrl], value.repositoryPath);

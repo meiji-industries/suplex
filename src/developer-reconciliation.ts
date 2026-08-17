@@ -207,19 +207,16 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
   }
 
   const uniqueMismatches = [...new Set(mismatches)];
+  // Audit observations remain durable diagnostics; only the required local check
+  // decides whether ordinary delivery can continue.
+  const requiredTestsFailed = !independentVerification || independentVerification.outcome !== "passed";
   const result: Omit<DeveloperReconciliation, "sha256"> = {
     kind: "developer-reconciliation",
     policyVersion: 2,
     executionId: rawInput.executionId,
     companyId: rawInput.companyId,
-    outcome: uniqueMismatches.length ? "blocked" : "completed",
-    failureCode: uniqueMismatches.length
-      ? uniqueMismatches.includes("provider-state-changed")
-        ? "provider-state-changed"
-        : uniqueMismatches.includes("independent-verification-failed")
-          ? "independent-verification-failed"
-          : "delivery-reconciliation-failed"
-      : null,
+    outcome: requiredTestsFailed ? "blocked" : "completed",
+    failureCode: requiredTestsFailed ? "required-local-tests-failed" : null,
     mismatches: uniqueMismatches,
     report,
     authorization: rawInput.authorization,

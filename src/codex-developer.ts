@@ -689,7 +689,7 @@ export class DeveloperService {
       const reconciliation = reconcileDeveloperDelivery({ executionId, companyId: input.companyId, report: parsed.finalReport, independentVerification, git, startingSha: activeWorktree.startingSha, neutralBranch: activeWorktree.branchName, providerBeforeSha256: beforeObservation.sha256, providerAfterSha256: after.observation?.sha256 ?? null, processExitCode: result.exitCode, malformedLines: parsed.malformedLines, developerSessionId: rawSessionId ?? null, leadSessionId: leadSessionId ?? null, authorization, manifest: evidence.manifest });
       const deliverySummary = reconciliation.outcome === "completed"
         ? reconciliation.report?.summary ?? "Developer delivery reconciled"
-        : `Developer delivery could not be accepted: ${reconciliation.mismatches.join(", ") || "reconciliation failed"}.${independentVerification.outcome === "failed" ? ` Independent verification: ${independentVerification.summary}` : ""}`;
+        : `Required local tests failed: ${independentVerification.summary}`;
       const reconciliationArtifact = await this.artifacts.putIdempotent(input.companyId, "developer-reconciliation", `${executionId}:reconciliation:v3`, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(reconciliation), "utf8") });
       this.database.authTransaction((db) => {
         for (const artifact of [after.artifact, rawReportArtifact, gitArtifact, reconciliationArtifact]) registerArtifact(db, artifact);

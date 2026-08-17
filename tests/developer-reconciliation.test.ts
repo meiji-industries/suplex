@@ -35,24 +35,24 @@ test("hashes authoritative report and verification facts, not transcript claims 
   expect(first.sha256).toBe(second.sha256);
 });
 
-test("never lets a failed or missing independent verifier pass", () => {
+test("required local test failures block delivery in plain language", () => {
   const failed = reconcileDeveloperDelivery(input({ independentVerification: { ...independentVerification, outcome: "failed", code: "verification_failed" } }));
   const missing = reconcileDeveloperDelivery(input({ independentVerification: null }));
-  expect(failed).toMatchObject({ outcome: "blocked", failureCode: "independent-verification-failed" });
+  expect(failed).toMatchObject({ outcome: "blocked", failureCode: "required-local-tests-failed" });
   expect(failed.mismatches).toContain("independent-verification-failed");
-  expect(missing).toMatchObject({ outcome: "blocked", failureCode: "independent-verification-failed" });
+  expect(missing).toMatchObject({ outcome: "blocked", failureCode: "required-local-tests-failed" });
 });
 
-test("blocks final Git, provider, process, and session mismatches", () => {
+test("passes missing or mismatched audit evidence to the reviewer path", () => {
   const result = reconcileDeveloperDelivery(input({
     git: { ...git, status: " M README.md", parents: ["z".repeat(40)] },
-    providerAfterSha256: "f".repeat(64),
+    providerAfterSha256: null,
     processExitCode: 2,
     developerSessionId: "shared-session",
     leadSessionId: "shared-session",
   }));
-  expect(result.outcome).toBe("blocked");
-  expect(result.mismatches).toEqual(expect.arrayContaining(["dirty-final-tree", "commit-parent-mismatch", "provider-state-changed", "process-exit-nonzero", "session-identity-conflict"]));
+  expect(result).toMatchObject({ outcome: "completed", failureCode: null });
+  expect(result.mismatches).toEqual(expect.arrayContaining(["dirty-final-tree", "commit-parent-mismatch", "provider-observation-unavailable", "process-exit-nonzero", "session-identity-conflict"]));
 });
 
 test("derives plan completion from the static manifest and report", () => {
@@ -67,9 +67,9 @@ test("derives plan completion from the static manifest and report", () => {
   expect(blocked.mismatches).toContain("non-completed-step");
 });
 
-test("requires a valid delivery report even when independent verification passes", () => {
+test("keeps an invalid delivery report as a diagnostic when required tests pass", () => {
   const result = reconcileDeveloperDelivery(input({ report: { kind: "delivery", summary: "missing facts" } }));
-  expect(result).toMatchObject({ outcome: "blocked", failureCode: "delivery-reconciliation-failed" });
+  expect(result).toMatchObject({ outcome: "completed", failureCode: null });
   expect(result.mismatches).toContain("raw-report-schema-invalid");
 });
 

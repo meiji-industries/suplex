@@ -13,12 +13,12 @@ function artifactHref(taskId: string, artifactId: string): string {
 }
 
 export function DevelopmentStatus({ execution, repository }: { execution: DeveloperExecutionView; repository?: string | undefined }): ReactElement {
-  const reconciled = execution.status === "completed" && Boolean(execution.reconciliationArtifactId);
+  const completed = execution.status === "completed";
   return (
     <section className="space-y-3" data-developer-status>
-      <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold">Implementer execution</h3><Badge variant={reconciled ? "secondary" : execution.status === "blocked" || execution.status === "failed" ? "destructive" : "outline"}>{reconciled ? "reconciled" : execution.status}</Badge></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold">Implementer execution</h3><Badge variant={completed ? "secondary" : execution.status === "blocked" || execution.status === "failed" ? "destructive" : "outline"}>{execution.status}</Badge></div>
       <div className="min-w-0 truncate text-xs text-muted-foreground">Attempt {execution.attempt} · <code title={execution.branchName}>{execution.branchName}</code></div>
-      {execution.failureSummary ? <p className="text-xs text-destructive">{execution.failureCode ? `${execution.failureCode}: ` : ""}{execution.failureSummary}</p> : null}
+      {execution.failureSummary ? <p className="text-xs text-destructive">{execution.failureSummary}</p> : null}
       <Collapsible.Root>
         <Collapsible.Trigger render={<Button variant="ghost" size="sm" />}>Execution details</Collapsible.Trigger>
         <Collapsible.Panel><div className="grid gap-x-4 gap-y-2 pt-2 text-xs sm:grid-cols-2">
@@ -44,7 +44,7 @@ export function DeliveryReportPanel({ taskId, execution }: { taskId: string; exe
   if (!links.some(([, artifactId]) => artifactId)) return null;
   return (
     <section className="space-y-2" data-delivery-report>
-      <h3 className="text-xs font-semibold">Delivery evidence</h3>
+      <h3 className="text-xs font-semibold">Delivery details</h3>
       <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">{links.map(([label, artifactId]) => artifactId ? <a className="underline underline-offset-2" href={artifactHref(taskId, artifactId)} target="_blank" rel="noreferrer" key={label}>{label}</a> : null)}</div>
     </section>
   );

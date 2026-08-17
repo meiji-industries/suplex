@@ -8,7 +8,7 @@ import type { ForgeConfig } from "./config.js";
 import { compareProcessIdentity, defaultProcessController, type ProcessController } from "./process-manager.js";
 import { DeveloperExecutionLeaseRepository, deriveDeveloperExecutionId, type DeveloperExecutionLease, type DeveloperResultClaim, type DeveloperTurnKind } from "./developer-execution-leases.js";
 import { requestDeveloperSupervisor, spawnDeveloperSupervisor } from "./developer-supervisor.js";
-import { DeveloperSupervisorInvocationSchema, DeveloperSupervisorSnapshotSchema, validateSupervisorResult, type DeveloperSupervisorIdentity, type DeveloperSupervisorResponse } from "./developer-supervisor-protocol.js";
+import { DeveloperSupervisorInvocationSchema, DeveloperSupervisorSnapshotSchema, validateSupervisorResult, type DeveloperSupervisorIdentity, type DeveloperSupervisorInvocation, type DeveloperSupervisorResponse } from "./developer-supervisor-protocol.js";
 import { cancelDeveloperExecution } from "./developer-recovery.js";
 
 export interface DeveloperTurnRunInput {
@@ -53,11 +53,22 @@ async function writeExclusive(path: string, content: string): Promise<void> {
   try { await handle.writeFile(content, "utf8"); } finally { await handle.close(); }
 }
 
+function stableInvocation(value: DeveloperSupervisorInvocation): DeveloperSupervisorInvocation {
+  const guardDirectory = value.env.FORGE_GIT_GUARD_DIR;
+  if (!guardDirectory) return value;
+  const env = { ...value.env };
+  delete env.FORGE_GIT_GUARD_DIR;
+  if (env.PATH) env.PATH = env.PATH.split(process.platform === "win32" ? ";" : ":").filter((segment) => segment !== guardDirectory).join(process.platform === "win32" ? ";" : ":");
+  return { ...value, env };
+}
+
 async function writeExclusiveOrVerify(path: string, content: string): Promise<void> {
   try { await writeExclusive(path, content); }
   catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-    if (await readFile(path, "utf8") !== content) throw new Error("Developer execution input conflicts with the durable start record");
+    const existing = DeveloperSupervisorInvocationSchema.parse(JSON.parse(await readFile(path, "utf8")));
+    const current = DeveloperSupervisorInvocationSchema.parse(JSON.parse(content));
+    if (JSON.stringify(stableInvocation(existing)) !== JSON.stringify(stableInvocation(current))) throw new Error("Developer execution input conflicts with the durable start record");
   }
 }
 

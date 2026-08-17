@@ -41,6 +41,10 @@ export const IssueWorkflowInputSchema = z.object({
   }, z.object({ analyst: durableId.optional(), implementer: durableId.optional(), reviewer: durableId.optional() })),
   supplementalReview: z.boolean(),
   repairCycleLimit: z.number().int().min(0).max(5).default(2),
+  autoApprovePlan: z.boolean().optional(),
+  autoApprovePlanActorUserId: durableId.optional(),
+  pullRequestMode: z.enum(["draft", "ready", "auto_merge"]).optional(),
+  autoMergeActorUserId: durableId.optional(),
 }).merge(IssueWorkflowInputWithContinuationSchema);
 
 

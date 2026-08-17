@@ -13,6 +13,7 @@ const execFileAsync = promisify(execFile);
 export const CI_POLL_INTERVAL_MS = 15_000;
 export const CI_PROPAGATION_WINDOW_MS = 5 * 60_000;
 export const CI_OVERALL_WINDOW_MS = 60 * 60_000;
+export const CI_MERGE_OBSERVATION_INTERVAL_MS = 5 * 60_000;
 export const CI_TRANSIENT_BACKOFF_MS = [15_000, 30_000, 60_000, 120_000, 240_000] as const;
 export const CI_MAX_CONSECUTIVE_PROVIDER_FAILURES = CI_TRANSIENT_BACKOFF_MS.length;
 export const CI_ACCEPTED_CONCLUSIONS = ["success"] as const;
@@ -43,6 +44,7 @@ export const PullRequestObservationSchema = z.object({
   number: z.number().int().positive(),
   url: z.string().url().max(2_000),
   state: z.enum(["open", "closed"]),
+  mergedAt: z.string().datetime().nullable().optional(),
   draft: z.boolean(),
   baseBranch: z.string().min(1).max(256),
   baseSha: CommitShaSchema,
@@ -182,17 +184,18 @@ export function evaluateExactHead(input: CiEvaluationInput): CiEvaluationResult 
   const selectedChecks = selectLatestCheckRuns(input.checks, input.requiredChecks, input.expectedHeadSha);
   const pr = input.observedPullRequest;
   if (pr.repository.toLowerCase() !== input.expectedRepository.toLowerCase() || pr.number !== input.expectedPullRequestNumber) return evaluation("pull_request_identity_changed", "stale_head", "human", false, selectedChecks, "Pull request identity changed");
-  if (pr.state !== "open") return evaluation("pull_request_not_open", "stale_head", "human", false, selectedChecks, "Pull request is not open");
+  if (pr.state !== "open" && !pr.mergedAt) return evaluation("pull_request_not_open", "stale_head", "human", false, selectedChecks, "Pull request closed without merge");
   if (pr.baseBranch !== input.expectedBaseBranch) return evaluation("pull_request_base_branch_changed", "stale_head", "human", false, selectedChecks, "Pull request base branch changed");
   if (pr.headBranch !== input.expectedHeadBranch) return evaluation("pull_request_head_branch_changed", "stale_head", "human", false, selectedChecks, "Pull request head branch changed");
   if (pr.headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) return evaluation("pull_request_head_changed", "stale_head", "human", false, selectedChecks, "Pull request head changed");
-  if (Date.parse(input.now) >= Date.parse(input.overallDeadline)) return evaluation("poll_window_exhausted", "timed_out", "human", false, selectedChecks, "CI polling window exhausted");
+  if (pr.mergedAt) return evaluation("checks_passed_merged", "passed", null, false, selectedChecks, "The exact pull request was merged");
   const exactSelected = selectedChecks.filter((check) => check.selectedForEvaluation && check.headSha.toLowerCase() === input.expectedHeadSha.toLowerCase());
   const missing = input.requiredChecks.filter((name) => !exactSelected.some((check) => check.name === name));
   if (missing.length && Date.parse(input.now) < Date.parse(input.propagationDeadline)) return evaluation("checks_propagating", "waiting", "system", false, selectedChecks, "Required checks are still propagating", new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
+  if (missing.length && Date.parse(input.now) >= Date.parse(input.overallDeadline)) return evaluation("poll_window_exhausted", "waiting", "system", false, selectedChecks, `Waiting for required checks after the initial CI window: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_MERGE_OBSERVATION_INTERVAL_MS).toISOString());
   if (missing.length) return evaluation("required_check_missing", "waiting", "system", false, selectedChecks, `Required checks are still missing: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
   const active = exactSelected.filter((check) => check.status !== "completed");
-  if (active.length) return evaluation("checks_queued", "waiting", "system", false, selectedChecks, "Required checks are queued or running", new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
+  if (active.length) return evaluation("checks_queued", "waiting", "system", false, selectedChecks, "Required checks are queued or running", new Date(Date.parse(input.now) + (Date.parse(input.now) >= Date.parse(input.overallDeadline) ? CI_MERGE_OBSERVATION_INTERVAL_MS : CI_POLL_INTERVAL_MS)).toISOString());
   const failed = exactSelected.filter((check) => check.conclusion === "failure");
   if (failed.length) return evaluation("required_check_failed", "failed", "lead", true, selectedChecks, `Required checks failed: ${failed.map((check) => check.name).join(", ")}`);
   const cancelled = exactSelected.find((check) => check.conclusion === "cancelled");
@@ -272,7 +275,7 @@ function parsePullRequest(value: unknown): PullRequestObservation {
   const head = githubPayload(row.head);
   const base = githubPayload(row.base);
   const repository = githubPayload(head.repo).full_name;
-  const parsed = PullRequestObservationSchema.safeParse({ repository, number: row.number, url: row.html_url, state: row.state, draft: row.draft, baseBranch: base.ref, baseSha: base.sha, headBranch: head.ref, headSha: head.sha });
+  const parsed = PullRequestObservationSchema.safeParse({ repository, number: row.number, url: row.html_url, state: row.state, mergedAt: row.merged_at ?? null, draft: row.draft, baseBranch: base.ref, baseSha: base.sha, headBranch: head.ref, headSha: head.sha });
   if (!parsed.success) throw new CiProviderFailure("invalid_response", null, "GitHub pull request identity is invalid");
   return parsed.data;
 }
@@ -378,9 +381,6 @@ export class CiService {
     const attemptNumber = requestedAttempt;
     const existing = this.database.authQuery((db) => db.prepare("SELECT id, observed_head_sha AS observedHeadSha, evidence_artifact_id AS evidenceArtifactId, outcome, reason, owner, repairable, retry_at AS retryAt, summary, attempt_number AS attemptNumber FROM forge_ci_attempts WHERE run_id = ? AND attempt_number = ?").get(run.id, attemptNumber) as { id: string; observedHeadSha: string | null; evidenceArtifactId: string | null; outcome: CiOutcome; reason: string; owner: CiOwner; repairable: number; retryAt: string | null; summary: string; attemptNumber: number } | undefined);
     if (existing) return { runId: run.id, attemptId: existing.id, attemptNumber: existing.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: existing.observedHeadSha, evidenceArtifactId: existing.evidenceArtifactId, policyHash, policy, propagationDeadline, overallDeadline, outcome: existing.outcome, reason: existing.reason, owner: existing.owner, repairable: existing.repairable === 1, retryAt: existing.retryAt, nextPollAt: existing.retryAt, selectedChecks: this.readAttemptChecks(existing.id), summary: existing.summary };
-    if (Date.parse(now) >= Date.parse(overallDeadline)) {
-      return this.persistObservation(input, run, policy, policyHash, null, evaluation("poll_window_exhausted", "timed_out", "human", false, [], "CI polling window exhausted"), [], firstObservedAt, propagationDeadline, overallDeadline, 0, now);
-    }
     let observed: PullRequestObservation;
     try {
       observed = await this.provider.getPullRequest({ repository: revision.repository, pullRequestNumber: context.pullRequestNumber });

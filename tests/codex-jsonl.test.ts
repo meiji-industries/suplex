@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 
 import { codexProvider } from "../src/agent-providers/codex.js";
 import { parseCodexJsonl } from "../src/codex-jsonl.js";
+import { sanitizeCodexLine } from "../src/codex-turn-supervisor.js";
 
 const options = { executionId: "developer_jsonl", attempt: 1, worktreePath: "/tmp/worktree" };
 
@@ -12,16 +13,17 @@ test("disables the inner sandbox for new and resumed Codex turns", () => {
   expect(resumed).toEqual(expect.arrayContaining(["exec", "resume", "--dangerously-bypass-approvals-and-sandbox", "thread_opaque"]));
 });
 
-test("parses Codex file-change changes and preserves malformed output as a blocker receipt", () => {
+test("parses Codex file changes and preserves malformed output as diagnostic evidence", () => {
   const parsed = parseCodexJsonl([
-    JSON.stringify({ type: "item.started", item: { id: "cmd_1", type: "command_execution", command: "forge-step start 1" } }),
-    JSON.stringify({ type: "item.completed", item: { id: "cmd_1", type: "command_execution", command: "forge-step start 1", exit_code: 0 } }),
+    JSON.stringify({ type: "item.started", item: { id: "cmd_1", type: "command_execution", command: "git status --short" } }),
+    JSON.stringify({ type: "item.completed", item: { id: "cmd_1", type: "command_execution", command: "git status --short", exit_code: 0 } }),
     JSON.stringify({ type: "item.completed", item: { id: "change_1", type: "file_change", changes: [{ path: "README.md", kind: "update" }] } }),
     "not-json",
   ], options);
   expect(parsed.receipts.some((receipt) => receipt.kind === "file_change" && receipt.summary === "README.md")).toBe(true);
   expect(parsed.malformedLines).toBe(1);
   expect(parsed.receipts.some((receipt) => receipt.kind === "reconciliation")).toBe(true);
+  expect(parsed.receipts.every((receipt) => receipt.stepNumber === null)).toBe(true);
 });
 
 test("normalizes absolute file changes inside the owned worktree and rejects escapes", () => {
@@ -33,26 +35,25 @@ test("normalizes absolute file changes inside the owned worktree and rejects esc
   expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "reconciliation", summary: "Developer file-change path escaped the owned worktree" }));
 });
 
-test("treats forge-step markers as terminal command events and preserves parser state", () => {
+test("keeps command events independent from plan steps and preserves parser state", () => {
   const parsed = parseCodexJsonl([
-    JSON.stringify({ type: "item.started", item: { id: "start_1", type: "command_execution", command: "forge-step start 1" } }),
-    JSON.stringify({ type: "item.completed", item: { id: "start_1", type: "command_execution", command: "forge-step start 1", exit_code: 0 } }),
-  ], { ...options, authorizedStepNumbers: [1] });
+    JSON.stringify({ type: "item.started", item: { id: "start_1", type: "command_execution", command: "git status --short" } }),
+    JSON.stringify({ type: "item.completed", item: { id: "start_1", type: "command_execution", command: "git status --short", exit_code: 0 } }),
+  ], options);
 
-  expect(parsed.receipts.map((receipt) => receipt.kind)).toEqual(["command_started", "step_started", "command_finished"]);
-  expect(parsed.receipts.some((receipt) => receipt.kind === "reconciliation" && receipt.summary.includes("Invalid forge-step marker"))).toBe(false);
-  expect(parsed.parserState).toMatchObject({ activeStep: 1, startedSteps: [1], terminalSteps: [], sequence: 3 });
+  expect(parsed.receipts.map((receipt) => receipt.kind)).toEqual(["command_started", "command_finished"]);
+  expect(parsed.receipts.every((receipt) => receipt.stepNumber === null)).toBe(true);
+  expect(parsed.parserState).toMatchObject({ sequence: 2, terminalItemIds: ["start_1"] });
 });
 
 test("persists a distinct test-result receipt for completed test commands", () => {
   const parsed = parseCodexJsonl([
-    JSON.stringify({ type: "item.completed", item: { id: "start_1", type: "command_execution", command: "forge-step start 1", exit_code: 0 } }),
     JSON.stringify({ type: "item.started", item: { id: "test_1", type: "command_execution", command: "pnpm exec vitest run tests/example.test.ts" } }),
     JSON.stringify({ type: "item.completed", item: { id: "test_1", type: "command_execution", command: "pnpm exec vitest run tests/example.test.ts", exit_code: 1, aggregated_output: "one failed" } }),
-  ], { ...options, authorizedStepNumbers: [1] });
+  ], options);
 
-  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "command_finished", sourceItemId: "test_1", stepNumber: 1, exitCode: 1 }));
-  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "test_result", sourceItemId: "test_1", stepNumber: 1, exitCode: 1 }));
+  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "command_finished", sourceItemId: "test_1", stepNumber: null, exitCode: 1 }));
+  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "test_result", sourceItemId: "test_1", stepNumber: null, exitCode: 1 }));
 });
 
 test("redacts credentials before command and test receipts are persisted", () => {
@@ -86,6 +87,21 @@ test("keeps agent updates and named tool calls in the public activity stream", (
   expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "agent_update", summary: "Plan update:\nInspect the parser — completed\nFix the projection — in_progress" }));
 });
 
+test("preserves the wrapper-observed event time for live activity", () => {
+  const observedAt = "2026-08-16T15:00:12.000Z";
+  const parsed = parseCodexJsonl([
+    JSON.stringify({ type: "item.started", observedAt, item: { id: "cmd_1", type: "command_execution", command: "rg README" } }),
+  ], options);
+
+  expect(parsed.receipts).toContainEqual(expect.objectContaining({ occurredAt: observedAt, summary: "rg README" }));
+});
+
+test("keeps a safe command category while discarding command arguments", () => {
+  const line = sanitizeCodexLine(JSON.stringify({ type: "item.started", item: { type: "command_execution", command: "rg --glob '*.md' super-secret README.md" } }));
+  expect(line).toContain("Searching repository files");
+  expect(line).not.toContain("super-secret");
+});
+
 test("uses a fixed summary for unknown events and redacts Codex errors", () => {
   const parsed = parseCodexJsonl([
     JSON.stringify({ type: "unknown.event", prompt: "private reasoning", aws: "AKIAIOSFODNN7EXAMPLE" }),
@@ -93,6 +109,17 @@ test("uses a fixed summary for unknown events and redacts Codex errors", () => {
   ], options);
 
   expect(parsed.receipts.map((receipt) => receipt.summary)).toEqual(["Codex event could not be classified", "Codex reported an error: [REDACTED]"]);
+});
+
+test("ignores wrapper metadata and transient reconnect notices", () => {
+  const parsed = parseCodexJsonl([
+    JSON.stringify({ type: "forge.wrapper_started", childPid: 123 }),
+    JSON.stringify({ type: "forge.session_bound", sessionRef: "session_test" }),
+    JSON.stringify({ type: "error", error: { message: "Reconnecting... 1/5" } }),
+    JSON.stringify({ type: "item.completed", item: { id: "message_1", type: "agent_message", text: "Inspecting the README." } }),
+  ], options);
+
+  expect(parsed.receipts.map((receipt) => receipt.summary)).toEqual(["Inspecting the README."]);
 });
 
 test("captures an unexpected turn failure as visible redacted evidence", () => {

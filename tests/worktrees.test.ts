@@ -134,3 +134,16 @@ test("inspects the exact owned worktree registry tuple before activation", async
     expect(inspection).toMatchObject({ repositoryRegistered: true, head: value.baseSha, branch: record.branchName, dirtyState: "clean" });
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
+
+test("reconnects an active owned worktree after its branch advances", async () => {
+  const value = await fixture();
+  try {
+    const manager = new WorktreeManager();
+    const record = await manager.create({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_active", targetBaseSha: value.baseSha, branchName: "work/issue/task_active" });
+    await writeFile(join(record.worktreePath, "DELIVERED.md"), "delivered\n");
+    await git(["add", "DELIVERED.md"], record.worktreePath);
+    await git(["commit", "-m", "deliver fixture"], record.worktreePath);
+
+    await expect(manager.materialize({ leaseId: "lease_active", leaseTokenHash: "a".repeat(64), taskId: "task_active", companyId: "company_1", projectId: "project_1", workflowId: "workflow_1", repositoryRoot: value.repositoryPath, worktreeRoot: value.worktreeRoot, worktreePath: record.worktreePath, branchName: record.branchName, startingSha: value.baseSha, legacy: false, status: "active" })).resolves.toMatchObject({ repositoryRegistered: true, branch: record.branchName, dirtyState: "clean" });
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});

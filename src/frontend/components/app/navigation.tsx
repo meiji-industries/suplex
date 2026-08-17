@@ -1,7 +1,7 @@
 import { ChartNoAxesGantt, CircleHelp, CirclePlus, Columns3, ClipboardList, EllipsisVertical, FolderGit2, Inbox, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 
-import { Button } from "../ui/button.js";
+import { buttonVariants } from "../ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../ui/dialog.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu.js";
 import { Input } from "../ui/input.js";
@@ -51,7 +51,7 @@ function CreateActions({ close }: { close?: () => void }): ReactElement {
   const context = useOptionalCompanyContext();
   const company = context?.currentCompany;
   return (
-    <SidebarMenuItem className="flex gap-2"><SidebarMenuButton className="min-w-8 flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(company?.id); }}><CirclePlus />New Task</SidebarMenuButton><Button render={<a href={withCompany("/attention", company?.id)} onClick={close} />} variant="outline" size="icon-sm" aria-label="Open attention" title="Open attention"><Inbox /></Button></SidebarMenuItem>
+    <SidebarMenuItem className="flex gap-2"><SidebarMenuButton className="min-w-8 flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(company?.id); }}><CirclePlus />New Task</SidebarMenuButton><a className={buttonVariants({ variant: "outline", size: "icon-sm" })} href={withCompany("/attention", company?.id)} onClick={close} aria-label="Open attention" title="Open attention"><Inbox /></a></SidebarMenuItem>
   );
 }
 
@@ -64,7 +64,12 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
     { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 }, { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList }, { href: withCompany("/board", companyId), label: "Board", icon: Columns3 }, { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt }, { href: withCompany("/attention", companyId), label: "Attention", icon: Inbox }, { href: withCompany("/health", companyId), label: "Host health", icon: Shield },
   ];
   const visible = items.filter((item) => item.label.toLowerCase().includes(query.trim().toLowerCase()));
-  return <><SidebarMenuButton render={<button type="button" onClick={() => setOpen(true)}><Search />Search</button>} /><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Search Forge</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Forge" placeholder="Search views…" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1">{visible.map(({ href, label, icon: Icon }) => <Button render={<a href={href} onClick={() => { setOpen(false); close?.(); }} />} variant="ghost" className="w-full justify-start" key={href}><Icon />{label}</Button>)}</div></DialogContent></Dialog></>;
+  useEffect(() => {
+    const openMenu = (): void => { setQuery(""); setOpen(true); };
+    window.addEventListener("forge:command-menu", openMenu);
+    return () => window.removeEventListener("forge:command-menu", openMenu);
+  }, []);
+  return <><SidebarMenuButton render={<button type="button" onClick={() => { setQuery(""); setOpen(true); }} title="Search Forge (⌘K)"><Search />Search</button>} /><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Forge" placeholder="Search views…" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(companyId); }}><CirclePlus />New task <kbd className="ml-auto text-[11px] text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-[11px] text-muted-foreground">⌘K or / search · G then T, B, or L navigates · C creates a task</p></DialogContent></Dialog></>;
 }
 
 function SecondaryNavigation({ close }: { close?: () => void }): ReactElement {
@@ -90,13 +95,29 @@ export function AppSidebar(): ReactElement {
   const { setOpenMobile } = useSidebar();
   const close = (): void => setOpenMobile(false);
   useEffect(() => {
+    let goPending = false;
+    let goTimer: number | undefined;
     const handleShortcut = (event: KeyboardEvent): void => {
-      if (!event.metaKey || event.altKey || event.ctrlKey || event.shiftKey || event.key.toLowerCase() !== "n" || context?.currentCompany?.status !== "active") return;
-      event.preventDefault();
-      requestNewTask(context.currentCompany.id);
+      const target = event.target instanceof HTMLElement ? event.target : null;
+      if (target?.matches("input, textarea, select, button, [contenteditable=true]")) return;
+      const key = event.key.toLowerCase();
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && key === "k" || !event.metaKey && !event.ctrlKey && key === "/") {
+        event.preventDefault(); window.dispatchEvent(new Event("forge:command-menu")); return;
+      }
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && key === "c" && context?.currentCompany?.status === "active") {
+        event.preventDefault(); requestNewTask(context.currentCompany.id); return;
+      }
+      if (!event.metaKey && !event.ctrlKey && !event.altKey && key === "g") {
+        goPending = true; window.clearTimeout(goTimer); goTimer = window.setTimeout(() => { goPending = false; }, 750); return;
+      }
+      if (goPending && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        const path = key === "t" ? "/tasks" : key === "b" ? "/board" : key === "l" ? "/timeline" : undefined;
+        goPending = false; window.clearTimeout(goTimer);
+        if (path) { event.preventDefault(); navigate(withCompany(path, context?.currentCompany?.id)); }
+      }
     };
     window.addEventListener("keydown", handleShortcut);
-    return () => window.removeEventListener("keydown", handleShortcut);
+    return () => { window.removeEventListener("keydown", handleShortcut); window.clearTimeout(goTimer); };
   }, [context?.currentCompany?.id, context?.currentCompany?.status]);
   return (
     <Sidebar variant="inset" collapsible="offcanvas">

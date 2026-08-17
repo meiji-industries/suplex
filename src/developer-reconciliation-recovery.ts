@@ -3,7 +3,8 @@ import proto from "@temporalio/proto";
 
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
-import { StructuredLogger } from "./logging.js";
+import { redact, StructuredLogger } from "./logging.js";
+import { toSafeSummary } from "./temporal/contracts/primitives.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { reconcileIssueDeveloperDelivery } from "./temporal/service.js";
 
@@ -64,7 +65,9 @@ export async function reconcileBlockedDeveloperDeliveries(database: ForgeDatabas
       const state = await reconcile(config, row.workflowId, { expectedRevision: row.revision, actorUserId: "system-reconciliation", commandId: `delivery-reconcile-v4-${row.executionId}-${row.revision}`.slice(0, 256), reconcileOnly: true });
       if (state.phase === "delivery_ready") recovered += 1;
     } catch (error) {
-      new StructuredLogger().error("Developer delivery reconciliation attempt failed", { workflowId: row.workflowId }, { executionId: row.executionId, error: error instanceof Error ? error.message : "unknown error" });
+      const redacted = String(redact(error instanceof Error ? error.message : String(error))).trim();
+      const summary = toSafeSummary(redacted || "unknown error");
+      new StructuredLogger().error("Developer delivery reconciliation attempt failed", { workflowId: row.workflowId }, { executionId: row.executionId, error: summary });
     }
   }
   return recovered;

@@ -22,7 +22,7 @@ function receipt(sequence: number, kind: "command_finished" | "test_result", sum
   };
 }
 
-test("projects only public delivery fields from reconciled Developer evidence", () => {
+test("projects only public delivery fields from receipt-free reconciled Developer evidence", () => {
   const projection = releaseDeliveryProjection({
     kind: "developer-reconciliation",
     report: {
@@ -35,11 +35,11 @@ test("projects only public delivery fields from reconciled Developer evidence", 
       dirtyState: "clean",
       blocker: null,
     },
-    receipts: [
-      receipt(1, "command_finished", "pnpm test", 0),
-      receipt(2, "command_finished", "pnpm lint", 1),
-      receipt(3, "test_result", "12 tests passed", null),
-    ],
+    independentVerification: {
+      outcome: "passed",
+      summary: "Pinned verification passed",
+      commands: [{ command: "pnpm test", argv: ["pnpm", "test"], exitCode: 0, signal: null, timedOut: false, stdout: "", stderr: "" }],
+    },
     git: { changedPaths: ["src/github-release.ts"] },
   });
 
@@ -47,6 +47,28 @@ test("projects only public delivery fields from reconciled Developer evidence", 
     summary: "Improved the Git publishing experience.",
     changes: ["Generate readable branch names and useful pull request copy."],
     filesChanged: ["src/github-release.ts"],
+  });
+});
+
+test("keeps historical receipt-bearing reconciled artifacts readable", () => {
+  expect(releaseDeliveryProjection({
+    kind: "developer-reconciliation",
+    report: {
+      kind: "delivery",
+      summary: "Historical delivery",
+      steps: [{ number: 1, status: "completed", filesChanged: ["src/legacy.ts"], notes: "Preserve existing releases." }],
+      authorizedStepsNotCompleted: [],
+      resultCommit: "b".repeat(40),
+      resultTree: "c".repeat(40),
+      dirtyState: "clean",
+      blocker: null,
+    },
+    receipts: [receipt(1, "command_finished", "pnpm test", 0)],
+    git: { changedPaths: ["src/legacy.ts"] },
+  })).toEqual({
+    summary: "Historical delivery",
+    changes: ["Preserve existing releases."],
+    filesChanged: ["src/legacy.ts"],
   });
 });
 

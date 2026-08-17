@@ -54,10 +54,10 @@ function InlineAttachmentPicker({
       {attachments.length ? (
         <ul className="flex flex-wrap gap-1.5" aria-label="Selected attachments" aria-live="polite">
           {attachments.map((attachment, index) => (
-            <li className="inline-flex h-8 max-w-full items-center gap-1.5 rounded-md bg-muted/35 pl-1 pr-0.5" key={attachment.id}>
-              {attachment.previewUrl ? <img className="size-6 rounded-sm object-cover" src={attachment.previewUrl} alt="" /> : <span className="flex size-6 items-center justify-center text-muted-foreground"><ImageIcon className="size-3.5" /></span>}
+            <li className="relative inline-flex h-9 max-w-full items-center gap-1.5 rounded-md bg-muted/35 pl-1 pr-2" key={attachment.id}>
+              {attachment.previewUrl ? <img className="size-7 rounded-sm object-cover" src={attachment.previewUrl} alt="" /> : <span className="flex size-7 items-center justify-center text-muted-foreground"><ImageIcon className="size-3.5" /></span>}
               <span className="max-w-44 truncate text-[11px]" title={attachment.filename}>{attachment.filename}</span>
-              <Button type="button" variant="ghost" size="icon" className="size-6" aria-label={`Remove ${attachment.filename}`} disabled={disabled} onClick={() => onRemove(index)}><X className="size-3" /></Button>
+              <Button type="button" variant="secondary" size="icon" className="absolute -right-1 -top-1 size-4 rounded-full" aria-label={`Remove ${attachment.filename}`} disabled={disabled} onClick={() => onRemove(index)}><X className="size-2.5" /></Button>
             </li>
           ))}
         </ul>

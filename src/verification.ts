@@ -8,7 +8,18 @@ const execFileAsync = promisify(execFile);
 const tail = (value: string): string => value.length > 64 * 1024 ? value.slice(-64 * 1024) : value;
 const truncateBytes = (value: string, maxBytes: number): string => {
   const bytes = Buffer.from(value, "utf8");
-  return bytes.length <= maxBytes ? value : `…${bytes.subarray(bytes.length - maxBytes).toString("utf8")}`;
+  const marker = "…";
+  if (bytes.length <= maxBytes) return value;
+  const budget = maxBytes - Buffer.byteLength(marker, "utf8");
+  let suffix = "";
+  let used = 0;
+  for (const character of [...value].reverse()) {
+    const size = Buffer.byteLength(character, "utf8");
+    if (used + size > budget) break;
+    suffix = character + suffix;
+    used += size;
+  }
+  return `${marker}${suffix}`;
 };
 const boundedEvidence = (commands: VerificationCommandEvidence[]): VerificationCommandEvidence[] => commands.map((command) => ({ ...command, stdout: truncateBytes(command.stdout, 8 * 1024), stderr: truncateBytes(command.stderr, 8 * 1024) }));
 const failureSummary = (display: string, stdout: string, stderr: string): string => {
@@ -137,8 +148,8 @@ export async function runPinnedVerification(input: PinnedVerificationInput, depe
         exitCode,
         signal,
         timedOut,
-        stdout: String(redact(tail(stdout))),
-        stderr: String(redact(tail(stderr))),
+        stdout: truncateBytes(String(redact(tail(stdout))), 8 * 1024),
+        stderr: truncateBytes(String(redact(tail(stderr))), 8 * 1024),
       };
       evidence.push(commandEvidence);
       const serialized = JSON.stringify({ commands: evidence });

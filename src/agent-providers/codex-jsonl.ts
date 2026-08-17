@@ -107,9 +107,12 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
   let threadId: string | undefined = state.threadId;
   let finalReport: unknown;
   let malformedLines = 0;
+  let observedAt: string | undefined;
   const push = (input: Parameters<typeof createReceipt>[2]) => {
     sequence += 1;
-    receipts.push(createReceipt(options, sequence, input));
+    const receipt = createReceipt(options, sequence, input);
+    if (observedAt) receipt.occurredAt = observedAt;
+    receipts.push(receipt);
   };
 
   for (const line of lines) {
@@ -126,7 +129,9 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
     }
     if (typeof event.thread_id === "string") threadId = event.thread_id;
     if (typeof event.threadId === "string") threadId = event.threadId;
+    observedAt = typeof event.observedAt === "string" && !Number.isNaN(Date.parse(event.observedAt)) ? event.observedAt : undefined;
     const type = typeof event.type === "string" ? event.type : "unknown";
+    if (type.startsWith("forge.")) continue;
     const item = itemValue(event);
     const sourceItemId = itemId(event);
     const itemType = typeof item.type === "string" ? item.type : "";
@@ -192,7 +197,10 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
       const error = event.error && typeof event.error === "object" ? event.error as Record<string, unknown> : event;
       push({ kind: "reconciliation", stepNumber: null, sourceItemId, summary: `Codex turn failed: ${summary(error.message ?? "Unknown error")}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `turn-failed:${createHash("sha256").update(line).digest("hex")}` });
     }
-    else if (type === "error" || itemType === "error") push({ kind: "reconciliation", stepNumber: null, sourceItemId, summary: `Codex reported an error: ${summary(item.message ?? event.message ?? "Unknown error")}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `error:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
+    else if (type === "error" || itemType === "error") {
+      const message = summary(item.message ?? event.message ?? "");
+      if (message && !/^Reconnecting\.\.\./.test(message)) push({ kind: "reconciliation", stepNumber: null, sourceItemId, summary: `Codex reported an error: ${message}`, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `error:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
+    }
     else if (!(["thread.started", "turn.started", "turn.completed", "turn.failed", "item.started", "item.updated", "item.completed"].includes(type))) {
       push({ kind: "reconciliation", stepNumber: null, sourceItemId, summary: "Codex event could not be classified", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `unknown:${sourceItemId ?? createHash("sha256").update(line).digest("hex")}` });
     }

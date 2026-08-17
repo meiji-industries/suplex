@@ -123,6 +123,32 @@ export const DeveloperReconciliationArtifactSchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/i),
 }).passthrough();
 
+const LegacyReceiptMismatch = /^(malformed-jsonl-output|developer-receipt-invalid|receipt-outside-step|duplicate-step-start:\d+|missing-step-start:\d+|duplicate-step-terminal:\d+|step-terminal-order:\d+|missing-step-receipt:\d+|receipt-step-set-mismatch|missing-verification-command:\d+|verification-command-failed:\d+|file-change-not-in-final-tree|missing-command-terminal:.+|command-terminal-without-start:.+)$/;
+
+/** True only for a receipt-era failure that can safely be rechecked. */
+export function isLegacyReceiptOnlyRecovery(raw: unknown): boolean {
+  const parsed = DeveloperReconciliationArtifactSchema.safeParse(raw);
+  if (!parsed.success) return false;
+  const reconciliation = parsed.data;
+  return reconciliation.policyVersion === undefined
+    && reconciliation.independentVerification === undefined
+    && reconciliation.outcome === "blocked"
+    && reconciliation.failureCode === "delivery-reconciliation-failed"
+    && Boolean(reconciliation.receipts?.length)
+    && reconciliation.mismatches.length > 0
+    && reconciliation.mismatches.every((mismatch) => LegacyReceiptMismatch.test(mismatch));
+}
+
+export function independentVerificationResults(raw: unknown): string[] {
+  try {
+    const reconciliation = DeveloperReconciliationArtifactSchema.parse(typeof raw === "string" ? JSON.parse(raw) : raw);
+    if (reconciliation.policyVersion !== 2 || !reconciliation.independentVerification) return [];
+    const verification = reconciliation.independentVerification;
+    if (verification.outcome !== "passed") return [`Verification failed: ${verification.summary}`];
+    return verification.commands.map((command) => `${command.command}: ${command.timedOut ? "timed out" : command.exitCode === 0 ? "passed" : `exit ${command.exitCode ?? "unknown"}`}`);
+  } catch { return []; }
+}
+
 function normalizeVerification(raw: VerificationResult | unknown): IndependentVerification | null {
   const parsed = IndependentVerificationSchema.safeParse(raw);
   return parsed.success ? parsed.data : null;

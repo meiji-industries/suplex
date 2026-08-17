@@ -8,9 +8,9 @@ import { TaskIdParamsSchema } from "../contracts/common.js";
 export interface DevelopmentEventRoutesOptions { tasks: TaskService }
 
 const developmentEvents: FastifyPluginAsync<DevelopmentEventRoutesOptions> = async (app, { tasks }) => {
-  app.withTypeProvider<ZodTypeProvider>().get("/api/tasks/:taskId/development-events", { schema: { params: TaskIdParamsSchema, querystring: z.object({ cursor: z.string().optional() }) } }, async (request, reply) => {
+  const liveEvents = (path: string, prefix: string, progress: (userId: string, taskId: string, cursor?: { executionId: string; sequence: number }) => ReturnType<TaskService["getDeveloperProgress"]>) => app.withTypeProvider<ZodTypeProvider>().get(path, { schema: { params: TaskIdParamsSchema, querystring: z.object({ cursor: z.string().optional() }) } }, async (request, reply) => {
     const header = request.headers["last-event-id"];
-    const match = /^(developer_[a-f0-9]{24}):(\d+)$/.exec(request.query.cursor ?? (Array.isArray(header) ? header[0] : header) ?? "");
+    const match = new RegExp(`^(${prefix}_[a-f0-9]{24}):(\\d+)$`).exec(request.query.cursor ?? (Array.isArray(header) ? header[0] : header) ?? "");
     let cursor = match ? { executionId: match[1]!, sequence: Number(match[2]) } : undefined;
     let previous = "";
     let closed = false;
@@ -26,14 +26,14 @@ const developmentEvents: FastifyPluginAsync<DevelopmentEventRoutesOptions> = asy
     const send = (): void => {
       if (closed || reply.raw.destroyed) return stop();
       try {
-        const progress = tasks.getDeveloperProgress(request.forgeUser.id, request.params.taskId, cursor);
-        const status = JSON.stringify({ status: progress.status, execution: progress.execution });
+        const current = progress(request.forgeUser.id, request.params.taskId, cursor);
+        const status = JSON.stringify({ status: current.status, execution: current.execution });
         if (status !== previous) { reply.raw.write(`event: status\ndata: ${status}\n\n`); previous = status; }
-        if (!progress.execution?.id) return;
-        for (const event of progress.events) {
-          const id = `${progress.execution.id}:${event.sequence}`;
+        if (!current.execution?.id) return;
+        for (const event of current.events) {
+          const id = `${current.execution.id}:${event.sequence}`;
           reply.raw.write(`id: ${id}\nevent: progress\ndata: ${JSON.stringify(event)}\n\n`);
-          cursor = { executionId: progress.execution.id, sequence: event.sequence };
+          cursor = { executionId: current.execution.id, sequence: event.sequence };
         }
       } catch { stop(true); }
     };
@@ -45,6 +45,8 @@ const developmentEvents: FastifyPluginAsync<DevelopmentEventRoutesOptions> = asy
     request.raw.on("close", stop);
     return reply;
   });
+  liveEvents("/api/tasks/:taskId/development-events", "developer", (userId, taskId, cursor) => tasks.getDeveloperProgress(userId, taskId, cursor));
+  liveEvents("/api/tasks/:taskId/planning-events", "agent", (userId, taskId, cursor) => tasks.getPlanningProgress(userId, taskId, cursor));
 };
 
 export default developmentEvents;

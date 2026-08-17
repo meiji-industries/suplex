@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 
 import { serializerCompiler, validatorCompiler } from "@fastify/type-provider-zod";
 import Fastify from "fastify";
@@ -98,3 +98,9 @@ for (const [file, budget] of Object.entries(budgets)) {
     expect(lines, `${file} grew past its budget — new code goes in the per-domain modules (docs/plans/2026-08-12-conflict-hotspot-refactor.md)`).toBeLessThanOrEqual(budget);
   });
 }
+
+test("navigation links do not render through the Button primitive", () => {
+  for (const file of globSync("src/frontend/**/*.tsx")) {
+    expect(readFileSync(file, "utf8"), file).not.toMatch(/<Button\b[^>]*\brender=\{<a\b/);
+  }
+});

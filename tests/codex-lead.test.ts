@@ -14,6 +14,7 @@ import { CodexLeadOutputJsonSchema } from "../src/codex-lead-contracts.js";
 import { DeveloperService } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase, ProjectionIntegrityFailure } from "../src/database.js";
+import { DeveloperReconciliationArtifactSchema } from "../src/developer-reconciliation.js";
 import { asNonRetryableApplicationFailure, createActivities } from "../src/temporal/activities.js";
 import { DeliveryOperationBlockCodeSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeveloperRepairActivityResultSchema } from "../src/temporal/issue-contracts.js";
 
@@ -219,6 +220,22 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
   }
 });
 
+test("Lead planning fails promptly when the provider stops emitting output", async () => {
+  const value = await fixture();
+  const runner: LeadProcessRunner = async (invocation) => {
+    await invocation.onStart(4322, "2026-08-11T00:00:00.000Z");
+    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-silent-session" }));
+    return await new Promise((resolve) => invocation.signal?.addEventListener("abort", () => resolve({ exitCode: 1, stderr: "stream disconnected" }), { once: true }));
+  };
+  try {
+    const service = new AgentService(value.database, value.config, { processRunner: runner, leadOutputIdleTimeoutMs: 10, sessionStore: { async create() { return "session_silent"; }, async read() { return "raw-silent-session"; } } });
+    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "provider-silent" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("Lead planning reuses a failed execution on activity retry", async () => {
   const value = await fixture();
   let calls = 0;
@@ -297,6 +314,11 @@ test("Lead output parsing canonicalizes provider artifact step mappings", () => 
   const parsed = parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })]);
   expect(parsed.kind === "plan" && parsed.developerContext.artifactStepNumbers).toEqual({ artifact_1: [1], "docs/verify.md": [1] });
   expect(parsed.kind === "plan" && parsed.materiality[0]?.evidenceRefs).toEqual(["path:README.md"]);
+});
+
+test("Lead output parsing accepts line-qualified materiality evidence", () => {
+  const output = { kind: "plan", gitPresentation, summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Edit the README title", entryPoint: "README.md:1", completionCriterion: "The title is corrected", verification: "Check the one-line diff", verificationCommands: ["git diff -- README.md"] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: ["user_visible_behavior"], preservedWorktreeCompatibility: null, affectedPaths: ["README.md"], materiality: [{ category: "user_visible_behavior", rationale: "The README title is user-visible.", evidenceRefs: ["README.md:1", "docs/agents/branding-and-ui.md:10-15", "step:1"] }], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: ["docs/agents/branding-and-ui.md"], artifactStepNumbers: [] } };
+  expect(parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })])).toMatchObject({ kind: "plan", materiality: [{ evidenceRefs: output.materiality[0]!.evidenceRefs }] });
 });
 
 test("Lead output parsing removes inactive plan placeholders from blockers", () => {
@@ -749,6 +771,49 @@ test("Developer execution safely resumes an owned worktree after its result was 
   }
 });
 
+test("Developer report claims cannot override a failed pinned verifier", async () => {
+  const value = await fixture();
+  const artifactStore = new ArtifactStore(value.config.artifactRoot);
+  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "verifier-authority.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Prove verifier authority", reproduction: null, rootCauseAnalysis: "The pinned verifier is authoritative.", steps: [{ number: 1, instruction: "Create the marker", verification: "The pinned test decides acceptance", verificationCommands: ["pnpm test"] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the accepted pinned verifier.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["VERIFIER.md", "package.json"], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: {} } })) });
+  const now = new Date().toISOString();
+  value.database.authTransaction((db) => {
+    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(plan.id, plan.companyId, plan.kind, plan.filename, plan.mimeType, plan.byteSize, plan.sha256, plan.storagePath, plan.createdAt);
+    db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES ('authorization_verifier', 'task_1', 'company_1', 'project_1', 'workflow-test-issue-task_1', 1, ?, ?, 'routine_auto', NULL, ?)").run(plan.id, plan.sha256, now);
+  });
+  const authorization = { authorizationId: "authorization_verifier", taskId: "task_1", companyId: "company_1", projectId: "project_1", workflowId: "workflow-test-issue-task_1", planRevision: 1, planArtifactId: plan.id, planSha256: plan.sha256, authorizationKind: "routine_auto" as const, approvalDecisionId: null, authorizedAt: now };
+  const runner: LeadProcessRunner = async (invocation) => {
+    await invocation.onStart(4750, "2026-08-11T00:00:00.000Z");
+    const packagePath = join(invocation.cwd, "package.json");
+    const packageJson = JSON.parse(await readFile(packagePath, "utf8")) as { scripts: { test: string } };
+    packageJson.scripts.test = "node -e 'process.exit(1)'";
+    await writeFile(packagePath, JSON.stringify(packageJson));
+    await writeFile(join(invocation.cwd, "VERIFIER.md"), "claimed passing delivery\n");
+    await execFileAsync("git", ["add", "package.json", "VERIFIER.md"], { cwd: invocation.cwd });
+    await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Create verifier failure fixture"], { cwd: invocation.cwd });
+    const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
+    const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
+    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-verifier-fail" }));
+    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { id: "claimed-test", type: "command_execution", command: "pnpm test", exit_code: 0, aggregated_output: "all tests passed" } }));
+    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery", summary: "Everything passed", steps: [{ number: 1, status: "completed", filesChanged: ["package.json", "VERIFIER.md"], commandsRun: ["pnpm test"], testResults: ["all tests passed"], notes: "Reported success." }], authorizedStepsNotCompleted: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
+    return { exitCode: 0, stderr: "" };
+  };
+  const service = new DeveloperService(value.database, value.config, {
+    processRunner: runner,
+    githubObservation: { async checkAuthentication() {}, async getRepository() { return { nameWithOwner: "acme/forge", url: "https://github.com/acme/forge" }; }, async observeMutationSurface() { return { repository: "acme/forge", observedAt: now, branches: [], pullRequests: [], sha256: "f".repeat(64) }; } },
+    sessionStore: { async create() { return "session_verifier_fail"; }, async read(ref) { return ref === "session_lead" ? "raw-lead" : "raw-verifier-fail"; } },
+  });
+  try {
+    const result = await service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { implementer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, authorization, developerTurnExecutionId: "developer_verifier_fail" });
+    expect(result).toMatchObject({ outcome: "blocked", failureCode: "independent-verification-failed" });
+    const reconciliationRow = value.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(result.reconciliationArtifactId) as { storagePath: string; sha256: string });
+    const reconciliation = DeveloperReconciliationArtifactSchema.parse(JSON.parse((await artifactStore.read({ companyId: "company_1", ...reconciliationRow })).toString("utf8")));
+    expect(reconciliation).toMatchObject({ outcome: "blocked", failureCode: "independent-verification-failed", independentVerification: { outcome: "failed" } });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("authorized Developer retry resumes a dirty preserved worktree", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
@@ -771,7 +836,7 @@ test("authorized Developer retry resumes a dirty preserved worktree", async () =
         const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
         const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
         await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-authorized-retry" }));
-        for (const [id, command] of [["start_1", "forge-step start 1"], ["verify_1", "git status --porcelain"], ["complete_1", "forge-step complete 1"]]) {
+        for (const [id, command] of [["inspect_1", "git status --porcelain"]]) {
           await invocation.onLine(JSON.stringify({ type: "item.started", item: { id, type: "command_execution", command } }));
           await invocation.onLine(JSON.stringify({ type: "item.completed", item: { id, type: "command_execution", command, exit_code: 0, aggregated_output: "" } }));
         }
@@ -785,10 +850,11 @@ test("authorized Developer retry resumes a dirty preserved worktree", async () =
       const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
       const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
       await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-authorized-retry" }));
-      for (const [id, command] of [["start_1", "forge-step start 1"], ["verify_1", "git status --porcelain"], ["complete_1", "forge-step complete 1"]]) {
+      for (const [id, command] of [["inspect_1", "git status --porcelain"]]) {
         await invocation.onLine(JSON.stringify({ type: "item.started", item: { id, type: "command_execution", command } }));
         await invocation.onLine(JSON.stringify({ type: "item.completed", item: { id, type: "command_execution", command, exit_code: 0, aggregated_output: "" } }));
       }
+      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { id: "exploratory-failure", type: "command_execution", command: "false", exit_code: 1, aggregated_output: "exploratory failure" } }));
       await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery", summary: "Recovered partial delivery", steps: [{ number: 1, status: "completed", filesChanged: ["RETRY.md"], commandsRun: ["git status --porcelain"], testResults: ["Worktree clean"], notes: "Committed the preserved partial change." }], authorizedStepsNotCompleted: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
       return { exitCode: 0, stderr: "" };
     },
@@ -805,13 +871,16 @@ test("authorized Developer retry resumes a dirty preserved worktree", async () =
     expect(blocked).toMatchObject({ outcome: "blocked", dirtyState: "dirty" });
     expect.soft(blocked.deliverySummary).toContain("dirty-final-tree");
     expect.soft(blocked.deliverySummary).not.toContain("Partial work looks successful");
-    await expect(service.run({ ...input, developerTurnExecutionId: "developer_retry_2", developerAttempt: 2, supersedesExecutionId: "developer_retry_1", reuseWorktree: true })).resolves.toMatchObject({ outcome: "completed", dirtyState: "clean", developerSessionRef: "session_authorized_retry" });
+    const recovered = await service.run({ ...input, developerTurnExecutionId: "developer_retry_2", developerAttempt: 2, supersedesExecutionId: "developer_retry_1", reuseWorktree: true });
+    expect(recovered).toMatchObject({ outcome: "completed", dirtyState: "clean", developerSessionRef: "session_authorized_retry" });
+    const reconciliationRow = value.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(recovered.reconciliationArtifactId) as { storagePath: string; sha256: string });
+    const reconciliation = DeveloperReconciliationArtifactSchema.parse(JSON.parse((await artifactStore.read({ companyId: "company_1", ...reconciliationRow })).toString("utf8")));
+    expect(reconciliation).toMatchObject({ outcome: "completed", independentVerification: { outcome: "passed" } });
     expect(calls).toBe(2);
     expect(prompts[0]).toContain("--dangerously-bypass-approvals-and-sandbox");
     expect(prompts[1]).toContain("--dangerously-bypass-approvals-and-sandbox");
     for (const prompt of prompts) {
-      expect.soft(prompt).toContain("On a new delivery, keep the final authorized step active through staging, creating exactly one ordinary local commit, and final read-only Git verification.");
-      expect.soft(prompt).toContain("forge-step complete <final step number> must be the final shell command before the delivery JSON");
+      expect.soft(prompt).toContain("Forge will run the accepted pinned setup and final verification independently after the Developer process exits.");
     }
   } finally {
     value.database.close();

@@ -1,6 +1,7 @@
 import { Collapsible } from ".././components/ui/collapsible.js";
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
-import { Button } from ".././components/ui/button.js";
+import { Button, buttonVariants } from ".././components/ui/button.js";
+import { Checkbox } from ".././components/ui/checkbox.js";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbSeparator } from ".././components/ui/breadcrumb.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from ".././components/ui/dropdown-menu.js";
 import { Input } from ".././components/ui/input.js";
@@ -20,8 +21,8 @@ import { TaskStatus, TaskStatusIcon, taskPresentationPhase, taskStatusAppearance
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { navigate } from ".././lib/navigation.js";
 import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES as blockedTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
-import { CheckCircle2, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, Filter, FolderKanban, Layers3, ListFilter, Plus, Tags, UserRound } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { CheckCircle2, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, Filter, FolderKanban, Layers3, ListFilter, Plus, UserRound } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type ReactElement } from "react";
 import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiProject, type ApiTask, type TaskPhase } from "../lib/view-shared.js";
 import { TaskDetailsPage, TaskDetailsNotFound, TaskDetailsSkeleton, type PlanRevisionInput, type TaskPlanAction } from "./task-details.js";
 
@@ -29,7 +30,7 @@ async function fileAsImage(file: File): Promise<{ filename: string; mimeType: st
   return await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error("Unable to read image"));
-    reader.onload = () => resolve({ filename: file.name, mimeType: file.type, base64: String(reader.result).replace(/^data:[^;]+;base64,/, "") });
+    reader.onload = () => resolve({ filename: file.name || `pasted-image.${file.type.split("/")[1] ?? "png"}`, mimeType: file.type, base64: String(reader.result).replace(/^data:[^;]+;base64,/, "") });
     reader.readAsDataURL(file);
   });
 }
@@ -43,7 +44,7 @@ function taskListDate(timestamp: string): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
-function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, projects, projectId, onProjectChange, agents, roleAgents, onRoleAgentChange, title, onTitleChange, description, onDescriptionChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
+function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, projects, projectId, onProjectChange, agents, roleAgents, onRoleAgentChange, title, onTitleChange, description, onDescriptionChange, autoApprovePlan, onAutoApprovePlanChange, pullRequestMode, onPullRequestModeChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   companyName: string | undefined;
@@ -58,6 +59,10 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
   onTitleChange: (title: string) => void;
   description: string;
   onDescriptionChange: (description: string) => void;
+  autoApprovePlan: boolean;
+  onAutoApprovePlanChange: (autoApprovePlan: boolean) => void;
+  pullRequestMode: "draft" | "ready" | "auto_merge";
+  onPullRequestModeChange: (pullRequestMode: "draft" | "ready" | "auto_merge") => void;
   images: Array<{ filename: string; mimeType: string; base64: string }>;
   onAddImages: (files: File[]) => Promise<void>;
   onRemoveImage: (index: number) => void;
@@ -67,6 +72,12 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
 }): ReactElement {
   const active = companyStatus === "active";
   const agentRoles = ["analyst", "implementer", "reviewer"] as const;
+  const pasteImages = (event: ClipboardEvent<HTMLFormElement>): void => {
+    const files = Array.from(event.clipboardData.files);
+    if (!files.length || busy) return;
+    event.preventDefault();
+    void onAddImages(files);
+  };
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!busy) onOpenChange(nextOpen); }}>
       <DialogContent className="max-h-[min(85vh,420px)] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto rounded-xl p-0 shadow-2xl sm:max-w-[936px]" showCloseButton>
@@ -85,7 +96,7 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
           </Breadcrumb>
         </DialogHeader>
         {active ? (
-          <form className="flex min-h-[310px] flex-col" onSubmit={(event) => { event.preventDefault(); void onSubmit(); }}>
+          <form className="flex min-h-[310px] flex-col" onPaste={pasteImages} onKeyDown={(event) => { if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); event.currentTarget.requestSubmit(); } }} onSubmit={(event) => { event.preventDefault(); void onSubmit(); }}>
             <div className="px-5 pt-1">
               <Input id="task-title" aria-label="Task title" autoFocus placeholder="Task title" value={title} onChange={(event) => onTitleChange(event.target.value)} className="h-10 border-0 bg-transparent px-0 text-xl font-medium placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-xl" />
               <Textarea id="task-description" aria-label="Task description" placeholder="Add description…" value={description} onChange={(event) => onDescriptionChange(event.target.value)} className="min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-sm shadow-none focus-visible:ring-0" />
@@ -93,8 +104,6 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
             {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
             <div className="mt-auto flex flex-wrap items-end gap-2 px-5 pb-4">
               <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: `${image.filename}-${image.base64.length}-${index}`, filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={onAddImages} onRemove={onRemoveImage} disabled={busy} />
-              <Button type="button" variant="outline" size="sm" className="rounded-full px-2.5"><CircleDashed className="size-3.5 text-muted-foreground" />Backlog</Button>
-              <Button type="button" variant="outline" size="sm" className="rounded-full px-2.5 text-muted-foreground"><span aria-hidden="true">—</span>Priority</Button>
               <DropdownMenu>
                 <DropdownMenuTrigger render={<Button type="button" variant="outline" size="sm" className="rounded-full px-2.5" aria-label="Assignee"><UserRound className="size-3.5 text-muted-foreground" />Assignee</Button>} />
                 <DropdownMenuContent align="start" className="w-64">
@@ -102,10 +111,11 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
                 </DropdownMenuContent>
               </DropdownMenu>
               <Select value={projectId || null} onValueChange={(value) => onProjectChange(value ?? "")}><SelectTrigger id="task-project" aria-label="Project" size="sm" className="w-auto min-w-0 rounded-full border-border bg-background px-2.5 shadow-none"><FolderKanban className="size-3.5 text-muted-foreground" /><SelectValue placeholder="Project">{(value) => projects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Project")}</SelectValue></SelectTrigger><SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select>
-              <Button type="button" variant="outline" size="sm" className="rounded-full px-2.5 text-muted-foreground"><Tags className="size-3.5" />Labels</Button>
+              <Select value={pullRequestMode} onValueChange={(value) => { if (value === "draft" || value === "ready" || value === "auto_merge") onPullRequestModeChange(value); }}><SelectTrigger aria-label="Pull request handling" size="sm" className="w-auto min-w-0 rounded-full border-border bg-background px-2.5 shadow-none"><SelectValue>{(value) => value === "ready" ? "PR: Ready" : value === "auto_merge" ? "PR: Auto-merge" : "PR: Draft"}</SelectValue></SelectTrigger><SelectContent><SelectItem value="draft">Draft</SelectItem><SelectItem value="ready">Ready for review</SelectItem><SelectItem value="auto_merge">Auto-merge</SelectItem></SelectContent></Select>
               <Button type="button" variant="outline" size="icon-sm" className="rounded-full" aria-label="More task properties"><Ellipsis className="size-3.5" /></Button>
               <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">
-                <Button type="submit" size="sm" variant="outline" disabled={busy || !projectId || !title.trim() || !description.trim()}>{busy ? "Saving…" : "Create task"}</Button>
+                <label className="flex cursor-pointer items-center gap-2 text-xs"><Checkbox id="task-auto-approve-plan" checked={autoApprovePlan} onCheckedChange={(checked) => onAutoApprovePlanChange(checked === true)} />Auto-approve plan</label>
+                <Button type="submit" size="sm" variant="outline" disabled={busy || !projectId || !title.trim() || !description.trim()} title="Create task (⌘Enter)">{busy ? "Saving…" : "Create task"}</Button>
               </DialogFooter>
             </div>
           </form>
@@ -130,6 +140,8 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const [boardProjectId, setBoardProjectId] = useState("all");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
+  const [autoApprovePlan, setAutoApprovePlan] = useState(false);
+  const [pullRequestMode, setPullRequestMode] = useState<"draft" | "ready" | "auto_merge">("draft");
   const [images, setImages] = useState<Array<{ filename: string; mimeType: string; base64: string }>>([]);
   const [error, setError] = useState("");
   const [createError, setCreateError] = useState("");
@@ -184,7 +196,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   }, [mode]);
   useEffect(() => {
     selectedRef.current = undefined;
-    setSelected(undefined); setProjectId(""); setRoleAgentOverrides({}); setTitle(""); setDescription(""); setImages([]); setCreateError(""); setDetailNotFound(false);
+    setSelected(undefined); setProjectId(""); setRoleAgentOverrides({}); setTitle(""); setDescription(""); setAutoApprovePlan(false); setPullRequestMode("draft"); setImages([]); setCreateError(""); setDetailNotFound(false);
   }, [companyId]);
   useEffect(() => {
     const events = new EventSource("/api/tasks/events");
@@ -230,7 +242,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     if (!companyId || currentCompany?.status !== "active") return;
     setBusy(true); setCreateError(""); setError("");
     try {
-      const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, roleAgents: newTaskRoleAgents, idempotencyKey: crypto.randomUUID() }) });
+      const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, roleAgents: newTaskRoleAgents, autoApprovePlan, pullRequestMode, idempotencyKey: crypto.randomUUID() }) });
       const taskPath = withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId);
       if (result.allowedCommands.includes("start_planning")) {
         if (planningUnavailable) { navigate(taskPath); setError(planningUnavailable); return; }
@@ -255,6 +267,28 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); selectedRef.current = updated; setSelected(updated); setTasks((current) => current.map((task) => task.id === updated.id ? updated : task)); await reload(); }
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
     finally { setBusy(false); }
+  };
+  const duplicateTask = async (): Promise<void> => {
+    if (!selected) return;
+    setBusy(true); setError("");
+    try {
+      const duplicate = await readJson<ApiTask>(`/api/tasks/${encodeURIComponent(selected.id)}/duplicate`, { method: "POST", body: JSON.stringify({ idempotencyKey: crypto.randomUUID() }) });
+      navigate(withCompany(`/tasks/${encodeURIComponent(duplicate.id)}`, companyId));
+    } catch (reason) {
+      if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
+      setError(reason instanceof Error ? reason.message : "Unable to duplicate task");
+    } finally { setBusy(false); }
+  };
+  const updateTaskDetails = async (input: { title?: string; description?: string }): Promise<void> => {
+    if (!selected) return;
+    try {
+      const updated = await readJson<ApiTask>(`/api/tasks/${encodeURIComponent(selected.id)}`, { method: "PATCH", body: JSON.stringify(input) });
+      selectedRef.current = updated; setSelected(updated); setTasks((current) => current.map((task) => task.id === updated.id ? updated : task));
+    } catch (reason) {
+      if (await reconcileScopedNotFound(reason, reloadCompanies)) return;
+      setError(reason instanceof Error ? reason.message : "Unable to save task details");
+      throw reason;
+    }
   };
   const planAction = async (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>): Promise<void> => {
     if (!selected) return;
@@ -313,7 +347,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
   if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
-  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} onMarkReady={markReady} onRefresh={reload} />;
+  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} onMarkReady={markReady} onDuplicate={duplicateTask} onUpdateDetails={updateTaskDetails} onRefresh={reload} />;
 
   if (mode === "board") {
     return (
@@ -341,7 +375,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
                   return <KanbanColumn disabled key={phase} value={phase} className="min-h-0 rounded-md bg-muted/45">
                     <div className="flex h-10 shrink-0 items-center justify-between px-3 text-xs">
                       <div className="flex min-w-0 items-center gap-2"><TaskStatus phase={phase} /><span className="text-muted-foreground">{taskBoard[phase].length}</span></div>
-                      <div className="flex items-center gap-0.5 text-muted-foreground"><Button variant="ghost" size="icon-sm" className="size-6" aria-label={`${taskPhaseLabel(phase)} options`}><Ellipsis className="size-3.5" /></Button><Button render={<a href={withCompany("/tasks", companyId)} />} variant="ghost" size="icon-sm" className="size-6" aria-label="Create task"><Plus className="size-3.5" /></Button></div>
+                      <div className="flex items-center gap-0.5 text-muted-foreground"><Button variant="ghost" size="icon-sm" className="size-6" aria-label={`${taskPhaseLabel(phase)} options`}><Ellipsis className="size-3.5" /></Button><a className={buttonVariants({ variant: "ghost", size: "icon-sm", className: "size-6" })} href={withCompany("/tasks", companyId)} aria-label="Create task"><Plus className="size-3.5" /></a></div>
                     </div>
                     <KanbanColumnContent value={phase} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
                       {taskBoard[phase].map((task) => {
@@ -415,7 +449,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
           })}
         </div> : null}
         {!currentCompany && scopeLoaded ? <div className="px-4 py-8 text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</div> : null}
-        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); }} companyName={currentCompany?.name} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setRoleAgentOverrides({}); }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => ({ ...current, [role]: agentId }))} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} />
+        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); else { setAutoApprovePlan(false); setPullRequestMode("draft"); } }} companyName={currentCompany?.name} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setRoleAgentOverrides({}); }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => ({ ...current, [role]: agentId }))} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} autoApprovePlan={autoApprovePlan} onAutoApprovePlanChange={setAutoApprovePlan} pullRequestMode={pullRequestMode} onPullRequestModeChange={setPullRequestMode} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} />
       </div>
     </ApplicationFrame>
   );

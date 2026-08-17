@@ -4,7 +4,7 @@ import { expect, test } from "vitest";
 import { TaskLeadPlan } from "../src/frontend/components/app/task-lead-plan.js";
 import { activityRelativeDate, extractAgentTranscript, harnessSummary, TaskActivity } from "../src/frontend/components/app/task-history.js";
 import { invocationActorLabel } from "../src/frontend/components/app/task-invocations.js";
-import type { DeveloperExecutionEventView, DeveloperExecutionView } from "../src/frontend/components/tasks/developer-evidence.js";
+import { DeveloperEvidence, type DeveloperExecutionView } from "../src/frontend/components/tasks/developer-evidence.js";
 import type { TaskResponse } from "../src/http/contracts/tasks.js";
 
 test("labels an agent with its execution profile", () => {
@@ -15,31 +15,50 @@ test("makes conflict summaries easy to scan", () => {
   expect(harnessSummary({ kind: "decision_blocker", summary: "The forward merge has one resolvable conflict in `server/assets/studio.css`; the approved improvements can be preserved." })).toBe("There is a conflict in server/assets/studio.css. Choose how to resolve it.");
 });
 
-test("shows live receipts inside the active step and rolls up completed steps", () => {
-  const execution: DeveloperExecutionView = { id: "developer_1", status: "running", attempt: 1, branchName: "work/task", currentStep: 1, targetBaseSha: "a".repeat(40), verificationCommands: [{ stepNumber: 1, commands: ["test one"] }, { stepNumber: 2, commands: ["test two"] }] };
-  const event = (eventId: string, sequence: number, kind: string, stepNumber: number, summary: string): DeveloperExecutionEventView => ({ eventId, sequence, kind, stepNumber, occurredAt: "2026-08-13T00:00:00.000Z", summary, exitCode: kind === "command_finished" ? 0 : null, artifactId: null });
-  const events = [event("done", 1, "command_finished", 1, "Completed command"), event("step-done", 2, "step_completed", 1, "Step completed"), event("step-live", 3, "step_started", 2, "Step started"), event("live", 4, "command_started", 2, "Active command")];
-  const html = renderToStaticMarkup(createElement(TaskLeadPlan, { output: { kind: "plan", summary: "Plan", executionId: "lead_1", outputArtifactId: "plan_1", evidenceArtifactId: "evidence_1", content: { kind: "plan", summary: "Plan", gitPresentation: { branchSlug: "stream-progress", pullRequestTitle: "Stream progress", pullRequestDescription: "Show live Developer progress." }, reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "First", entryPoint: null, completionCriterion: null, verification: "test one", verificationCommands: [] }, { number: 2, instruction: "Second", entryPoint: null, completionCriterion: null, verification: "test two", verificationCommands: [] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "No impact", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], preservedWorktreeCompatibility: null, affectedPaths: [], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: {} } } }, decisionControls: createElement("button", null, "Approve Plan"), stepProgress: { taskId: "task_1", execution: { ...execution, currentStep: 2 }, events, terminalSteps: {} } }));
+test("renders the approved plan as static numbered instructions", () => {
+  const html = renderToStaticMarkup(createElement(TaskLeadPlan, { output: { kind: "plan", summary: "Plan", executionId: "lead_1", outputArtifactId: "plan_1", evidenceArtifactId: "evidence_1", content: { kind: "plan", summary: "Plan", gitPresentation: { branchSlug: "stream-progress", pullRequestTitle: "Stream progress", pullRequestDescription: "Show live Developer progress." }, reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "First", entryPoint: null, completionCriterion: null, verification: "test one", verificationCommands: [] }, { number: 2, instruction: "Second", entryPoint: null, completionCriterion: null, verification: "test two", verificationCommands: [] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "No impact", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], preservedWorktreeCompatibility: null, affectedPaths: [], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: {} } } }, decisionControls: createElement("button", null, "Approve Plan") }));
 
-  expect(html).toContain("Step 1 · completed");
-  expect(html).toContain("Step 2 · active");
+  expect(html).toContain("Step 1 — First");
+  expect(html).toContain("Step 2 — Second");
   expect(html).toContain('data-plan-steps="true"');
   expect(html).toContain('data-orientation="vertical"');
   expect(html).toMatch(/data-plan-steps="true"><div[^>]*data-slot="timeline-item"/);
   expect(html).toContain('data-slot="timeline"');
   expect(html).toContain('data-slot="timeline-indicator"');
-  expect(html).toContain("lucide-check");
-  expect(html).toContain("lucide-loader-circle");
-  expect(html).toContain("Implementer execution");
+  expect(html).not.toMatch(/\sdata-completed(?:=|\s|>)/);
+  expect(html).not.toContain("aria-current");
   expect(html).toContain("Plan: Stream progress");
   expect(html).not.toContain("Revision 1");
   expect(html).not.toContain(">Material<");
-  expect(html.indexOf("Implementer execution")).toBeGreaterThan(html.indexOf("Step 2 · active"));
-  expect(html).toContain("Active command");
-  expect(html).not.toContain("Completed command");
+  expect(html).not.toContain("Implementer execution");
+  expect(html).not.toContain("Active command");
   expect(html).not.toContain("Verification receipts");
   expect(html).toContain('data-slot="card-footer"');
   expect(html).toContain("Approve Plan");
+});
+
+test("renders one flat delivery evidence group", () => {
+  const execution = {
+    id: "developer_1",
+    status: "completed",
+    attempt: 1,
+    branchName: "work/evidence",
+    targetBaseSha: "a".repeat(40),
+    manifestArtifactId: "manifest_1",
+    rawReportArtifactId: "raw_1",
+    beforeProviderArtifactId: null,
+    afterProviderArtifactId: "provider_1",
+    reconciliationArtifactId: "reconciliation_1",
+  } as DeveloperExecutionView;
+  const html = renderToStaticMarkup(createElement(DeveloperEvidence, { taskId: "task_1", execution }));
+
+  expect(html.match(/data-developer-evidence="true"/g)).toHaveLength(1);
+  expect(html.match(/data-delivery-report="true"/g)).toHaveLength(1);
+  for (const label of ["Manifest", "Raw delivery", "After provider", "Reconciliation"]) {
+    expect(html.match(new RegExp(`>${label}<`, "g"))).toHaveLength(1);
+  }
+  expect(html).not.toContain("Before provider");
+  expect(html).not.toContain("data-plan-steps");
 });
 
 test("places plan activity at its planning revision", () => {

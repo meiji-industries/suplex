@@ -11,6 +11,18 @@ function safeText(value: string): string {
   return String(redact(value)).replace(/(?:Bearer\s+[^\s,;]+|(?:gho_|github_pat_|sk-)[A-Za-z0-9_-]+)/gi, "[REDACTED]").replace(/(?:\/Users\/|\/home\/|\/tmp\/|[A-Za-z]:\\)[^\s"']+/g, "[PATH]").slice(0, MAX_EVENT_TEXT);
 }
 
+function commandSummary(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const command = value.trim();
+  if (!command) return undefined;
+  if (/(?:^|\s)git\s+(?:status|diff|log|show|rev-parse|branch)\b/i.test(command)) return "Inspecting Git state";
+  if (/(?:^|\s)(?:rg|grep)\b/i.test(command)) return "Searching repository files";
+  if (/(?:^|\s)(?:find|ls|tree)\b/i.test(command)) return "Inspecting repository structure";
+  if (/(?:^|\s)(?:cat|sed|head|tail)\b/i.test(command)) return "Reading repository files";
+  if (/(?:^|\s)(?:mise|pnpm|npm|yarn|bun)\b/i.test(command)) return "Checking project commands";
+  return "Running a repository command";
+}
+
 function sanitizeValue(value: unknown, key = ""): unknown {
   if (sessionKey.test(key) || unsafeKey.test(key)) return undefined;
   if (typeof value === "string") return unsafePath.test(value) ? "[PATH]" : safeText(value);
@@ -35,10 +47,11 @@ export function sanitizeCodexEvent(value: unknown): Record<string, unknown> {
     if (item && typeof item === "object") {
       const itemRecord = item as Record<string, unknown>;
       const itemType = typeof itemRecord.type === "string" ? itemRecord.type : "unknown";
+      const command = commandSummary(itemRecord.command ?? itemRecord.cmd);
       safe.item = itemType === "agent_message"
         ? { type: itemType, text: typeof itemRecord.text === "string" ? safeText(itemRecord.text) : "" }
         : itemType === "command_execution"
-          ? { type: itemType, status: typeof itemRecord.status === "string" ? itemRecord.status : "unknown" }
+          ? { type: itemType, status: typeof itemRecord.status === "string" ? itemRecord.status : "unknown", ...(command ? { command } : {}) }
           : { type: itemType };
     }
   } else if (type === "turn.completed") {

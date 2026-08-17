@@ -36,7 +36,7 @@ describe("exact-head CI evaluator", () => {
     expect(evaluate({ checks: [check({ status: "in_progress", conclusion: null })] }).outcome).toBe("waiting");
     expect(evaluate({ checks: [check({ status: "queued", conclusion: null })] }).outcome).toBe("waiting");
     expect(evaluate({ observedPullRequest: pullRequest({ headSha: otherHead }) }).reason).toBe("pull_request_head_changed");
-    expect(evaluate({ now: overall }).reason).toBe("poll_window_exhausted");
+    expect(evaluate({ now: overall }).reason).toBe("checks_passed");
   });
 
   it.each([
@@ -51,6 +51,16 @@ describe("exact-head CI evaluator", () => {
 
   it("continues evaluating an open PR after it becomes ready for review", () => {
     expect(evaluate({ observedPullRequest: pullRequest({ draft: false }) }).outcome).toBe("passed");
+  });
+
+  it("accepts a merged exact PR as the completion authority", () => {
+    const merged = pullRequest({ state: "closed", mergedAt: "2026-08-11T12:01:00.000Z" });
+    expect(evaluate({ observedPullRequest: merged })).toMatchObject({ outcome: "passed", reason: "checks_passed_merged" });
+    expect(evaluate({ observedPullRequest: merged, checks: [check({ conclusion: "failure" })] })).toMatchObject({ outcome: "passed", reason: "checks_passed_merged" });
+  });
+
+  it("keeps observing after the initial CI window instead of stranding a merged PR", () => {
+    expect(evaluate({ checks: [], now: overall })).toMatchObject({ outcome: "waiting", reason: "poll_window_exhausted", owner: "system" });
   });
 
   it("selects the latest exact-head provider run and preserves all observations", () => {

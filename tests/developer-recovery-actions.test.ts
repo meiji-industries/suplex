@@ -87,10 +87,8 @@ test("claimed Developer recovery does not hide delivery review actions", () => {
   expect(html).toContain("work/readme-joke");
   expect(html).toContain("Copy worktree command");
   expect(html).toContain("Server tests passed.");
-  expect(html).toContain("Passed: ");
-  expect(html).toContain("Result not confirmed: ");
-  expect(html).toContain("text-emerald-600");
-  expect(html).toContain("text-muted-foreground");
+  expect(html).toContain("Browser check unavailable.");
+  expect(html).not.toContain("Passed: ");
   expect(html).not.toContain("Delivered commit");
   expect(html).toContain("Looks Good");
   expect(html.indexOf(">Show Diff<")).toBeLessThan(html.indexOf(">Request Changes<"));

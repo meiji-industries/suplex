@@ -20,7 +20,7 @@ export interface AgentRecoveryOutcome {
 }
 
 function rows(database: ForgeDatabase): AgentExecutionRow[] {
-  return database.authQuery((db) => db.prepare("SELECT id, task_id, status, process_pid, process_group_id, process_start_identity, wrapper_id, wrapper_path FROM forge_agent_executions WHERE status IN ('starting', 'running', 'cancelling') ORDER BY started_at, id").all() as AgentExecutionRow[]);
+  return database.authQuery((db) => db.prepare("SELECT id, task_id, status, process_pid, process_group_id, process_start_identity, wrapper_id, wrapper_path FROM forge_agent_executions WHERE status IN ('starting', 'running', 'cancelling') AND (wrapper_id IS NOT NULL OR wrapper_path IS NOT NULL) ORDER BY started_at, id").all() as AgentExecutionRow[]);
 }
 
 function markAmbiguous(database: ForgeDatabase, row: AgentExecutionRow, reason: string): void {

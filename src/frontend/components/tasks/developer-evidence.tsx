@@ -17,7 +17,7 @@ export function DevelopmentStatus({ execution, repository }: { execution: Develo
   return (
     <section className="space-y-3" data-developer-status>
       <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold">Implementer execution</h3><Badge variant={reconciled ? "secondary" : execution.status === "blocked" || execution.status === "failed" ? "destructive" : "outline"}>{reconciled ? "reconciled" : execution.status}</Badge></div>
-      <div className="min-w-0 truncate text-xs text-muted-foreground">Attempt {execution.attempt} · step {execution.currentStep ?? "none"} · <code title={execution.branchName}>{execution.branchName}</code></div>
+      <div className="min-w-0 truncate text-xs text-muted-foreground">Attempt {execution.attempt} · <code title={execution.branchName}>{execution.branchName}</code></div>
       {execution.failureSummary ? <p className="text-xs text-destructive">{execution.failureCode ? `${execution.failureCode}: ` : ""}{execution.failureSummary}</p> : null}
       <Collapsible.Root>
         <Collapsible.Trigger render={<Button variant="ghost" size="sm" />}>Execution details</Collapsible.Trigger>
@@ -51,5 +51,5 @@ export function DeliveryReportPanel({ taskId, execution }: { taskId: string; exe
 }
 
 export function DeveloperEvidence({ taskId, execution, repository }: { taskId: string; execution: DeveloperExecutionView; repository?: string | undefined }): ReactElement {
-  return <div className="space-y-5"><DevelopmentStatus execution={execution} repository={repository} /><DeliveryReportPanel taskId={taskId} execution={execution} /></div>;
+  return <div className="space-y-5" data-developer-evidence><DevelopmentStatus execution={execution} repository={repository} /><DeliveryReportPanel taskId={taskId} execution={execution} /></div>;
 }

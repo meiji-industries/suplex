@@ -28,6 +28,15 @@ import {
 import { evidencePointer, humanBlocker } from "./state-transitions.js";
 import type { IssueWorkflowContext } from "./context.js";
 
+async function autoApprovePlan(ctx: IssueWorkflowContext): Promise<void> {
+  if (!ctx.input.autoApprovePlan || !ctx.input.autoApprovePlanActorUserId || ctx.state.phase !== "approval" || !ctx.state.planMaterial) return;
+  const subject = ctx.state.finalPlanSubject && ctx.state.materialityEvidence ? { plan: ctx.state.finalPlanSubject, materiality: ctx.state.materialityEvidence, expectedWorkflowRevision: ctx.state.revision } : undefined;
+  const planRevision = subject?.plan.outputRevision ?? ctx.state.planRevision ?? ctx.state.revision;
+  const decision = await recordPlanDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, planRevision, actorUserId: ctx.input.autoApprovePlanActorUserId, decision: "approve", ...(subject ? { subject } : {}), note: "Plan auto-approved when the task was created" });
+  const authorization = ctx.isolatedDeveloperExecutionEnabled && subject ? await authorizeFinalPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, workflowId: ctx.input.workflowId, planRevision, planArtifactId: subject.plan.artifactId, authorizationKind: "human_approval", approvalDecisionId: decision.decisionId }) : undefined;
+  ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ctx.state.finalPlanSubject ? ["start_development", "request_plan_revision", "cancel_issue"] : ctx.addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, decisionId: decision.decisionId, ...(authorization ? { planRevision: authorization.planRevision, planAuthorizationId: authorization.authorizationId, planArtifactSha256: authorization.planArtifactSha256, planAuthorizationKind: authorization.authorizationKind, planAuthorizedAt: authorization.authorizedAt } : {}), blocker: null, stateChangedAt: new Date().toISOString(), ...(subject ? { planDecisionReceipt: { idempotencyKey: `auto-approve:${subject.plan.artifactSha256}`, decisionId: decision.decisionId, decision: "approve" as const, subjectHash: subject.plan.artifactSha256 } } : {}) });
+}
+
 export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
   setHandler(issueUpdates.start_planning, async (rawInput) => {
     if (!ctx.exactPlanAuthorityEnabled && ctx.captureInitialProjectionState) await condition(() => ctx.initialProjectionComplete);
@@ -135,6 +144,7 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
           const authorization = await authorizeFinalPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, workflowId: ctx.input.workflowId, planRevision: ctx.state.finalPlanSubject.outputRevision, planArtifactId: ctx.state.finalPlanSubject.artifactId, authorizationKind: "routine_auto" });
           ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, planRevision: authorization.planRevision, planAuthorizationId: authorization.authorizationId, planArtifactSha256: authorization.planArtifactSha256, planAuthorizationKind: authorization.authorizationKind, planAuthorizedAt: authorization.authorizedAt });
         }
+        await autoApprovePlan(ctx);
       }
       assertPayloadWithinLimit("Issue Workflow result", ctx.state);
       await ctx.project();
@@ -170,6 +180,7 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
       const authorization = await authorizeFinalPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, workflowId: ctx.input.workflowId, planRevision: ctx.state.finalPlanSubject.outputRevision, planArtifactId: ctx.state.finalPlanSubject.artifactId, authorizationKind: "routine_auto" });
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, planRevision: authorization.planRevision, planAuthorizationId: authorization.authorizationId, planArtifactSha256: authorization.planArtifactSha256, planAuthorizationKind: authorization.authorizationKind, planAuthorizedAt: authorization.authorizedAt });
     }
+    await autoApprovePlan(ctx);
     await ctx.project();
     return ctx.state;
   };
@@ -199,6 +210,7 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
       const authorization = await authorizeFinalPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, workflowId: ctx.input.workflowId, planRevision: ctx.state.finalPlanSubject.outputRevision, planArtifactId: ctx.state.finalPlanSubject.artifactId, authorizationKind: "routine_auto" });
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, planRevision: authorization.planRevision, planAuthorizationId: authorization.authorizationId, planArtifactSha256: authorization.planArtifactSha256, planAuthorizationKind: authorization.authorizationKind, planAuthorizedAt: authorization.authorizedAt });
     }
+    await autoApprovePlan(ctx);
     await ctx.project();
     void command;
     return ctx.state;

@@ -24,10 +24,10 @@ export function createMergeConflictActivities(ctx: ActivityContext): MergeConfli
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath }, result);
     },
     async resolveMergeConflictSupervised(input) {
-      return runSupervised<MergeConflictResolutionActivityResult>(input, async (service) => {
+      return invokeAgent(input, () => runSupervised<MergeConflictResolutionActivityResult>(input, async (service) => {
         const worktreePath = input.worktreePath ?? latestWorktree(input, input.developerExecutionId);
         return service.runMergeConflictResolution({ ...input, worktreePath });
-      });
+      }));
     },
   };
 }

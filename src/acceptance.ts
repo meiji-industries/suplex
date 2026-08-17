@@ -247,6 +247,13 @@ export class AcceptanceService {
     return this.reconcileReady({ ...input, decision });
   }
 
+  async enableAutoMerge(input: { repository: string; pullRequestNumber: number; baseBranch: string; baseSha: string; headSha: string }): Promise<void> {
+    const current = await this.github.getPullRequest({ repository: input.repository, number: input.pullRequestNumber });
+    if (current.repository.toLowerCase() !== input.repository.toLowerCase() || current.number !== input.pullRequestNumber || current.state !== "open" || current.isDraft || current.baseBranch !== input.baseBranch || lower(current.baseSha) !== lower(input.baseSha) || lower(current.headSha) !== lower(input.headSha)) throw new AcceptanceFailure("stale");
+    if (!this.github.enableAutoMerge) throw new AcceptanceFailure("provider");
+    await this.github.enableAutoMerge({ repository: input.repository, number: input.pullRequestNumber, headSha: input.headSha });
+  }
+
   async reconcileReady(rawInput: AcceptanceInput | { acceptanceId: string; taskId: string; companyId: string }): Promise<ReadyReconciliationResult> {
     const input = "acceptanceId" in rawInput ? this.inputForAcceptance(rawInput.acceptanceId, rawInput.taskId, rawInput.companyId) : AcceptanceInputSchema.parse(rawInput);
     const acceptanceId = "acceptanceId" in rawInput ? rawInput.acceptanceId : this.findAcceptanceId(input);

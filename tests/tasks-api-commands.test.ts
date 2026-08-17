@@ -140,7 +140,7 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     const artifactStore = new ArtifactStore(config.artifactRoot);
     const reviewEvidence = await artifactStore.put(company.id, "agent-evidence", { filename: "review.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("review evidence\n") });
     const reviewOpinion = await artifactStore.put(company.id, "delivery-review", { filename: "review.json", mimeType: "application/json", bytes: Buffer.from("{\"outcome\":\"approved\"}") });
-    const developerDelivery = await artifactStore.put(company.id, "developer-delivery", { filename: "developer-delivery.json", mimeType: "application/json", bytes: Buffer.from("developer delivery\n") });
+    const developerDelivery = await artifactStore.put(company.id, "developer-delivery", { filename: "developer-delivery.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "delivery", summary: "Agent claimed delivery", testResults: ["Agent claimed pass"] })) });
     const developerEvidence = await artifactStore.put(company.id, "agent-evidence", { filename: "developer-evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("developer evidence\n") });
     const repairReport = await artifactStore.put(company.id, "developer-repair", { filename: "repair.json", mimeType: "application/json", bytes: Buffer.from("repair report\n") });
     const repairEvidence = await artifactStore.put(company.id, "agent-evidence", { filename: "repair-evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("repair evidence\n") });
@@ -209,7 +209,8 @@ test("task API command dispatch preserves revision and evidence lineage", async 
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-api-diff', ?, ?, ?, 1, 2, 'completed', ?, ?, ?, ?, ?, ?, ?, ?, 'clean')").run(task.id, company.id, task.workflowId, delivery.branchName, delivery.worktreePath, targetBaseSha, now, now, now, resultCommit, resultTree);
       db.prepare("INSERT INTO forge_developer_execution_truth (execution_id, authorization_id, worktree_lease_id, manifest_artifact_id, manifest_sha256, reconciliation_artifact_id, reconciliation_sha256, starting_commit, starting_tree, final_commit, final_tree) VALUES ('developer-api-diff', 'authorization-api-diff', 'lease-api-diff', ?, ?, NULL, NULL, ?, ?, ?, ?)").run(repairReport.id, repairReport.sha256, targetBaseSha, startingTree, resultCommit, resultTree);
     });
-    expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } })).json()).toMatchObject({ developerExecution: { id: "developer-api-diff", status: "unverified", resultCommit } });
+    const unverifiedTask = (await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } })).json();
+    expect(unverifiedTask).toMatchObject({ developerExecution: { id: "developer-api-diff", status: "unverified", resultCommit, verificationResults: [] } });
     const developerDiff = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/developer-diff`, headers: { cookie, origin } });
     expect(developerDiff.statusCode).toBe(200);
     expect(developerDiff.json()).toMatchObject({ branchName: delivery.branchName, baseSha: targetBaseSha, headSha: resultCommit, patch: expect.stringContaining("+API delivery") });

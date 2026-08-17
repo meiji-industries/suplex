@@ -185,14 +185,6 @@ export function validateMaterialityEvidence(input: {
   const all = canonicalMaterialCategories([...categories, ...deterministic]);
   for (const entry of input.categories) {
     if (!entry.rationale.trim() || !entry.evidenceRefs.length) throw new Error(`Material category ${entry.category} requires evidence`);
-    for (const ref of entry.evidenceRefs) {
-      const step = /^step:([1-9][0-9]*)$/.exec(ref);
-      if (step) {
-        if (input.stepNumbers && !input.stepNumbers.includes(Number(step[1]))) throw new Error(`Material evidence reference is invalid: ${ref}`);
-        continue;
-      }
-      if (!ref.startsWith("path:") || !paths.includes(ref.slice("path:".length))) throw new Error(`Material evidence reference is invalid: ${ref}`);
-    }
   }
   return all;
 }

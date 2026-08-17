@@ -169,12 +169,11 @@ function AgentHarnessOutput({ taskId, invocation }: { taskId: string; invocation
 }
 
 function BlockedReason({ value }: { value: string }) {
-  const summary = /receipt-outside-step/.test(value) ? "Forge could not confirm this development run." : value;
   return <Collapsible.Root className="group/blocked-reason min-w-0">
     <Alert variant="destructive" data-task-blocked-reason className="flex min-w-0 items-center gap-2 px-3 py-2 text-[12px]">
       <CircleX className="size-4 shrink-0" />
       <Collapsible.Trigger className="flex min-w-0 flex-1 items-center gap-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring">
-        <span className="min-w-0 flex-1 truncate" title={summary}>{summary}</span>
+        <span className="min-w-0 flex-1 truncate" title={value}>{value}</span>
         <ChevronRight aria-hidden="true" className="size-3 shrink-0 text-current transition-transform group-data-[panel-open]/blocked-reason:rotate-90" />
       </Collapsible.Trigger>
     </Alert>

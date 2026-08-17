@@ -107,6 +107,12 @@ test("uses the supported gh command to mark a draft pull request ready", async (
   expect(value.calls.map(({ command, args }) => [command, ...args])).toEqual([["gh", "pr", "ready", "7", "--repo", "acme/forge"]]);
 });
 
+test("enables protected auto-merge for the exact reviewed commit", async () => {
+  const value = runnerFor([{ stdout: "✓ Pull request acme/forge#7 will be automatically merged when all requirements are met\n", stderr: "" }]);
+  await createGithubReleasePort({ runner: value.runner }).enableAutoMerge!({ repository: "acme/forge", number: 7, headSha });
+  expect(value.calls.map(({ command, args }) => [command, ...args])).toEqual([["gh", "pr", "merge", "7", "--repo", "acme/forge", "--auto", "--merge", "--match-head-commit", headSha]]);
+});
+
 test("rejects malformed provider identities and redacts provider failure summaries", async () => {
   const malformed = runnerFor([{ stdout: pull({ html_url: "https://evil.example/pull/7" }), stderr: "" }]);
   await expect(createGithubReleasePort({ runner: malformed.runner }).getPullRequest({ repository: "acme/forge", number: 7 })).rejects.toMatchObject({ code: "invalid-provider-response" });

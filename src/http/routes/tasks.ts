@@ -8,7 +8,7 @@ import { GithubReleaseFailure, type ReleaseService } from "../../github-release.
 import type { PlanCommandInput } from "../../temporal/issue-contracts.js";
 import { routedIssueCommands, type IssueCommand } from "../../commands/registry.js";
 import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, HttpPlanDecisionBodySchema, ResolveDecisionBlockerBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
-import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, PlanRevisionBodySchema, TaskAgentsBodySchema, TaskBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, DuplicateTaskBodySchema, PlanRevisionBodySchema, TaskAgentsBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
 import developmentEvents from "./development-events.js";
 
 export interface TaskRoutesOptions {
@@ -30,6 +30,8 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
     return reply.code(result.created ? 201 : 200).send(result.task);
   });
   typed.get("/api/tasks/:taskId", { schema: { params: TaskIdParamsSchema, ...taskResponse } }, async (request, reply) => reply.send(tasks.getTask(request.forgeUser.id, request.params.taskId)));
+  typed.post("/api/tasks/:taskId/duplicate", { schema: { params: TaskIdParamsSchema, body: DuplicateTaskBodySchema, response: { 201: TaskResponseSchema } } }, async (request, reply) => reply.code(201).send(await tasks.duplicateTask(request.forgeUser.id, request.params.taskId, request.body.idempotencyKey)));
+  typed.patch("/api/tasks/:taskId", { schema: { params: TaskIdParamsSchema, body: TaskDetailsBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.updateTaskDetails(request.forgeUser.id, request.params.taskId, request.body)));
   typed.patch("/api/tasks/:taskId/agents", { schema: { params: TaskIdParamsSchema, body: TaskAgentsBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(tasks.updateTaskAgents(request.forgeUser.id, request.params.taskId, request.body)));
   typed.get("/api/tasks/:taskId/release", { schema: { params: TaskIdParamsSchema, response: { 200: TaskReleaseResponseSchema, 404: z.object({ error: z.string() }) } } }, async (request, reply) => {
     const release = tasks.getRelease(request.forgeUser.id, request.params.taskId);

@@ -20,7 +20,7 @@ function projectState(database: ForgeDatabase, state: IssueWorkflowState, runId 
   database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId, eventId: state.lastEventId, state }));
 }
 
-async function fixture(): Promise<{ root: string; config: ForgeConfig; database: ForgeDatabase; auth: AuthService; projects: ProjectService; tasks: TaskService; workflow: IssueWorkflowPort; stateByTask: Map<string, IssueWorkflowState>; adminId: string; companyId: string; projectId: string; profileId: string }> {
+async function fixture(): Promise<{ root: string; config: ForgeConfig; database: ForgeDatabase; auth: AuthService; projects: ProjectService; tasks: TaskService; workflow: IssueWorkflowPort; stateByTask: Map<string, IssueWorkflowState>; workflowInputsByTask: Map<string, IssueWorkflowInput>; adminId: string; companyId: string; projectId: string; profileId: string }> {
   const root = await mkdtemp(join(tmpdir(), "forge-task-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
@@ -39,9 +39,11 @@ async function fixture(): Promise<{ root: string; config: ForgeConfig; database:
   const project = await projects.createProject("admin-1", company.id, { name: "Forge", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id } });
   await projects.activateProject("admin-1", project.id);
   const stateByTask = new Map<string, IssueWorkflowState>();
+  const workflowInputsByTask = new Map<string, IssueWorkflowInput>();
   let tasks!: TaskService;
   const workflow: IssueWorkflowPort = {
     async start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }) {
+      workflowInputsByTask.set(input.issueId, { ...input, workflowId: input.workflowId! });
       const state = buildInitialIssueWorkflowState({ ...input, workflowId: input.workflowId! });
       stateByTask.set(input.issueId, state);
       database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run-1", eventId: state.lastEventId, state }));
@@ -102,7 +104,7 @@ async function fixture(): Promise<{ root: string; config: ForgeConfig; database:
     },
   };
   tasks = new TaskService(database, auth, projects, config, { workflow });
-  return { root, config, database, auth, projects, tasks, workflow, stateByTask, adminId: "admin-1", companyId: company.id, projectId: project.id, profileId: profile.id };
+  return { root, config, database, auth, projects, tasks, workflow, stateByTask, workflowInputsByTask, adminId: "admin-1", companyId: company.id, projectId: project.id, profileId: profile.id };
 }
 
 test("a creator that loses its lease cannot advance the creation intent", async () => {
@@ -155,6 +157,27 @@ test("Developer progress is scoped, exposes pre-execution startup, prefers super
     expect(resumed.events.map((event) => event.sequence)).toEqual([51, 52, 53, 54, 55]);
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('outsider', 'Outsider', 'outsider@forge.local', 'member', 'active', ?, ?)").run(executionHeartbeat, executionHeartbeat));
     expect(() => value.tasks.getDeveloperProgress("outsider", created.task.id)).toThrow(/Not found/);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("Planning progress reuses the durable agent spool", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Planning progress", description: "body", idempotencyKey: "planning-progress-task", images: [] });
+    const executionId = `agent_${"a".repeat(24)}`;
+    const startedAt = "2026-08-11T00:00:00.000Z";
+    const spoolRelativePath = `agent-turns/${executionId}/spool.ndjson`;
+    await mkdir(join(value.config.runtimeRoot, "agent-turns", executionId), { recursive: true });
+    await writeFile(join(value.config.runtimeRoot, spoolRelativePath), `${JSON.stringify({ type: "item.completed", item: { id: "planning-update", type: "agent_message", text: "Inspecting the README." } })}\n`);
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, started_at, heartbeat_at, spool_relative_path) VALUES (?, ?, ?, ?, 'analyst', 'running', 1, 'planning', ?, ?, ?)").run(executionId, created.task.id, value.companyId, created.task.workflowId, startedAt, startedAt, spoolRelativePath));
+
+    const first = value.tasks.getPlanningProgress(value.adminId, created.task.id);
+    expect(first).toMatchObject({ status: "running", execution: { id: executionId, status: "running" } });
+    expect(first.events).toHaveLength(1);
+    expect(first.events[0]?.summary).toBe("Inspecting the README.");
+    expect(value.tasks.getPlanningProgress(value.adminId, created.task.id, { executionId, sequence: 1 }).events).toEqual([]);
+    value.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'ownership_ambiguous', finished_at = ? WHERE id = ?").run(startedAt, executionId));
+    expect(value.tasks.getPlanningProgress(value.adminId, created.task.id)).toMatchObject({ status: "failed", execution: { status: "failed" } });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -293,6 +316,64 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     ]);
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, profile_id, model, reasoning_level, service_priority, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'analyst', 'failed', 1, ?, 'gpt-5.6-sol', 'medium', 'standard', '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId, value.profileId));
     expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "analyst", profileName: "Default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry." })]);
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("forwards an explicit plan auto-approval to the workflow with its creating member", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Auto approve", description: "Proceed after planning.", idempotencyKey: "auto-approve-plan-0001", autoApprovePlan: true, images: [] });
+    expect(value.workflowInputsByTask.get(created.task.id)).toMatchObject({ autoApprovePlan: true, autoApprovePlanActorUserId: value.adminId });
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("forwards auto-merge pull request handling with its creating member", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Auto merge", description: "Merge after approval.", idempotencyKey: "auto-merge-pull-request-0001", pullRequestMode: "auto_merge", images: [] });
+    expect(value.workflowInputsByTask.get(created.task.id)).toMatchObject({ pullRequestMode: "auto_merge", autoMergeActorUserId: value.adminId });
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("duplicates a task with the next copy suffix and starts planning", async () => {
+  const value = await fixture();
+  try {
+    const source = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Improve README", description: "Keep this description.", idempotencyKey: "duplicate-source-0001", images: [{ filename: "evidence.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] });
+    const duplicate = await value.tasks.duplicateTask(value.adminId, source.task.id, "duplicate-copy-0001");
+    expect(duplicate).toMatchObject({ title: "Improve README (2)", description: "Keep this description.", projectId: source.task.projectId, roleAgents: source.task.roleAgents, phase: "planning", images: [{ filename: "evidence.png", mimeType: "image/png" }] });
+    expect(duplicate.images[0]?.artifactId).not.toBe(source.task.images[0]?.artifactId);
+    const repeated = await value.tasks.duplicateTask(value.adminId, source.task.id, "duplicate-copy-0001");
+    expect(repeated.id).toBe(duplicate.id);
+    const next = await value.tasks.duplicateTask(value.adminId, source.task.id, "duplicate-copy-0002");
+    expect(next.title).toBe("Improve README (3)");
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("normalizes an existing copy suffix when duplicating", async () => {
+  const value = await fixture();
+  try {
+    const source = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Improve README (2)", description: "Keep this description.", idempotencyKey: "duplicate-normalized-source-0001", autoApprovePlan: true, pullRequestMode: "ready", images: [] });
+    const duplicate = await value.tasks.duplicateTask(value.adminId, source.task.id, "duplicate-normalized-copy-0001");
+    expect(duplicate).toMatchObject({ title: "Improve README (3)", autoApprovePlan: true, pullRequestMode: "ready" });
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("updates task title and description without changing its workflow state", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Old title", description: "Old description", idempotencyKey: "edit-task-details-0001", images: [] });
+    const updated = await value.tasks.updateTaskDetails(value.adminId, created.task.id, { title: "New title", description: "New description\nwith detail" });
+    expect(updated).toMatchObject({ title: "New title", description: "New description\nwith detail", phase: "backlog", revision: 0 });
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }

@@ -92,6 +92,7 @@ export interface GithubReleasePort {
 
 export type GithubAcceptancePort = Pick<GithubReleasePort, "getBranchHead" | "getPullRequest"> & {
   markReadyForReview(input: { repository: string; number: number }): Promise<void>;
+  enableAutoMerge?(input: { repository: string; number: number; headSha: string }): Promise<void>;
 };
 export type GithubReleaseAdapter = GithubReleasePort & GithubAcceptancePort;
 
@@ -327,6 +328,9 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
     },
     async markReadyForReview(input) {
       try { await runGh(["pr", "ready", String(input.number), "--repo", input.repository]); } catch (error) { throw classifyCommandFailure(error, "mark ready for review"); }
+    },
+    async enableAutoMerge(input) {
+      try { await runGh(["pr", "merge", String(input.number), "--repo", input.repository, "--auto", "--merge", "--match-head-commit", input.headSha]); } catch (error) { throw classifyCommandFailure(error, "enable auto-merge"); }
     },
   } as GithubReleasePort & GithubAcceptancePort;
 }

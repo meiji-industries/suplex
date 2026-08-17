@@ -182,7 +182,7 @@ export function summarizeAgentTime(tasks: TimelineTask[], projects: Pick<ApiProj
       for (let day = startOfDay(new Date(start)); day.getTime() < end; day = addDays(day, 1)) {
         const nextDay = addDays(day, 1);
         const durationMs = Math.min(end, nextDay.getTime()) - Math.max(start, day.getTime());
-        if (durationMs > 0) addTotal(dayTotals, dateInputValue(day), new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(day), "Recorded agent time", durationMs);
+        if (durationMs > 0) addTotal(dayTotals, dateInputValue(day), new Intl.DateTimeFormat(undefined, { weekday: "short", month: "short", day: "numeric" }).format(day), "Summed agent time", durationMs);
       }
     }
   }
@@ -232,11 +232,12 @@ function axisLabel(timestamp: number, durationMs: number): string {
 }
 
 function SummaryTable({ label, totals, companyId, tickets = false }: { label: string; totals: WorkTotal[]; companyId: string; tickets?: boolean }): ReactElement {
+  const totalDurationMs = totals.reduce((total, item) => total + item.durationMs, 0);
   return (
     <section aria-label={label} className="min-w-0 border-t border-border/70 lg:border-r lg:last:border-r-0">
       <div className="flex h-9 items-center justify-between border-b border-border/70 bg-muted/30 px-3 text-xs sm:px-4">
         <span className="font-medium">{label}</span>
-        <span className="text-muted-foreground">{totals.length}</span>
+        <span className="tabular-nums text-muted-foreground">{totals.length} · {formatDuration(totalDurationMs)}</span>
       </div>
       {totals.length === 0 ? <div className="px-3 py-6 text-xs text-muted-foreground sm:px-4">No recorded time in this range.</div> : (
         <table className="w-full text-left text-xs">
@@ -519,7 +520,7 @@ export function TimelineView(): ReactElement {
         {!scopeLoaded && !error ? <div className="space-y-px p-2" aria-label="Loading timeline" aria-busy="true"><Skeleton className="h-9 w-full" /><Skeleton className="h-14 w-full" /><Skeleton className="h-14 w-full" /></div> : null}
         {scopeLoaded && overview.intervals.length === 0 ? <div className="px-4 py-8 text-xs text-muted-foreground">No agent activity in this range.</div> : null}
         {scopeLoaded && overview.intervals.length > 0 ? <WorkChart summary={summary} overview={overview} range={visibleRange} fullRange={sourceRange} companyId={companyId} now={now} onRangeChange={updateVisibleRange} /> : null}
-        {scopeLoaded ? <div className="grid lg:grid-cols-2"><SummaryTable label="Ticket totals" totals={summary.ticketTotals} companyId={companyId} tickets /><SummaryTable label="Daily totals" totals={summary.dayTotals} companyId={companyId} /></div> : null}
+        {scopeLoaded ? <div className="grid lg:grid-cols-2"><SummaryTable label="Daily agent-hours" totals={summary.dayTotals} companyId={companyId} /><SummaryTable label="Ticket totals" totals={summary.ticketTotals} companyId={companyId} tickets /></div> : null}
       </div>
     </ApplicationFrame>
   );

@@ -27,7 +27,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, ...(deliveryArtifactSha256 ? { deliveryArtifactSha256 } : {}), ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) });
     },
     async runDeveloperExecutionSupervised(input) {
-      return runSupervised<WorkflowDeveloperExecutionResult>(input, async (service) => {
+      return invokeAgent(input, () => runSupervised<WorkflowDeveloperExecutionResult>(input, async (service) => {
         const result = await service.run({ ...input, executionId: input.developerTurnExecutionId });
         activityWorktrees.set(result.developerExecutionId, result.worktreePath);
         activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
@@ -36,7 +36,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
         const evidenceArtifactSha256 = artifactSha256(input.companyId, safeResult.evidenceArtifactId);
         const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, safeResult.failureCode === "delivery-reconciliation-failed" ? "unsafe_recovery" : "agent_contradiction", safeResult.failureCode ?? "developer_delivery_blocked", safeResult.deliverySummary) : undefined;
         return { ...safeResult, ...(deliveryArtifactSha256 ? { deliveryArtifactSha256 } : {}), ...(evidenceArtifactSha256 ? { evidenceArtifactSha256 } : {}), ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) };
-      });
+      }));
     },
     async runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput) {
       const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null } | undefined) ?? { worktreePath: latestWorktree(input, input.developerExecutionId), branchName: input.branchName, targetBaseSha: input.targetBaseSha, resultCommit: input.subjectCommit, resultTree: input.subjectTree };
@@ -67,7 +67,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), summary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.summary)) });
     },
     async runDeveloperRepairSupervised(input) {
-      return runSupervised<WorkflowDeveloperRepairResult>(input, async (service) => {
+      return invokeAgent(input, () => runSupervised<WorkflowDeveloperRepairResult>(input, async (service) => {
         const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null } | undefined) ?? { worktreePath: latestWorktree(input, input.developerExecutionId), branchName: input.branchName, targetBaseSha: input.targetBaseSha, resultCommit: input.subjectCommit, resultTree: input.subjectTree };
         let blockingFindings = input.blockingFindings;
         let repairPlan = input.repairPlan;
@@ -84,7 +84,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
         const { worktreePath: _worktreePath, ...safeResult } = result;
         const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, "verification_unrecoverable", "developer_repair_blocked", safeResult.summary) : undefined;
         return { ...safeResult, ...(attention ? { attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 } : {}), summary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.summary)) };
-      });
+      }));
     },
     async cancelDeveloperExecution(input) {
       const result = await cancelDeveloperExecution(database, input.executionId);

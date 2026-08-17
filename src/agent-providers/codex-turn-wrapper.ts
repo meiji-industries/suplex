@@ -116,7 +116,12 @@ async function runWrapper(requestPath: string): Promise<void> {
   let stderr = "";
   let outputChain = Promise.resolve();
   const append = async (line: string): Promise<void> => {
-    const sanitized = line.startsWith("{\"type\":\"forge.wrapper_started\"") ? line : sanitizeCodexLine(line);
+    const base = line.startsWith("{\"type\":\"forge.wrapper_started\"") ? line : sanitizeCodexLine(line);
+    let sanitized = base;
+    try {
+      const parsed = JSON.parse(base) as Record<string, unknown>;
+      if (typeof parsed.type === "string" && !parsed.type.startsWith("forge.")) sanitized = JSON.stringify({ ...parsed, observedAt: new Date().toISOString() });
+    } catch { /* The sanitized fallback remains safe evidence. */ }
     let sessionRef: string | undefined;
     let event: { thread_id?: unknown; threadId?: unknown } | undefined;
     try { event = JSON.parse(line) as { thread_id?: unknown; threadId?: unknown }; } catch { /* Not every Codex line is JSON. */ }

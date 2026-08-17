@@ -26,6 +26,7 @@ import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { defaultProcessController, type ProcessController, type ProcessInspection } from "./process-manager.js";
 
 const execFileAsync = promisify(execFile);
+const LEAD_OUTPUT_IDLE_TIMEOUT_MS = 5 * 60_000;
 
 type MergeConflictPlanInput = MergeConflictPlanActivityInput;
 
@@ -379,6 +380,7 @@ export interface AgentServiceOptions {
   sessionStore?: SessionStore;
   processController?: ProcessController;
   now?: () => Date;
+  leadOutputIdleTimeoutMs?: number;
 }
 
 export class AgentService {
@@ -389,6 +391,7 @@ export class AgentService {
   private readonly sessionStore: SessionStore;
   private readonly processController: ProcessController;
   private readonly now: () => Date;
+  private readonly leadOutputIdleTimeoutMs: number;
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: AgentServiceOptions = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot);
@@ -398,6 +401,7 @@ export class AgentService {
     this.sessionStore = options.sessionStore ?? this.provider.createSessionStore(config.runtimeRoot);
     this.processController = options.processController ?? defaultProcessController;
     this.now = options.now ?? (() => new Date());
+    this.leadOutputIdleTimeoutMs = options.leadOutputIdleTimeoutMs ?? LEAD_OUTPUT_IDLE_TIMEOUT_MS;
   }
 
   async planDeliveryRepair(rawInput: DeliveryRepairPlanActivityInput): Promise<DeliveryRepairPlanResult> {
@@ -673,16 +677,30 @@ export class AgentService {
         await this.databaseHeartbeat(executionId, "running");
         const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
         const stopCancellationTracking = this.trackCancellation(executionId, runtime.signal);
-        const result = await this.processRunner({
+        const outputController = new AbortController();
+        let providerSilent = false;
+        let lastOutputAt = Date.now();
+        const abortForRuntimeCancellation = () => outputController.abort();
+        runtime.signal?.addEventListener("abort", abortForRuntimeCancellation, { once: true });
+        const outputWatchdog = setInterval(() => {
+          if (Date.now() - lastOutputAt >= this.leadOutputIdleTimeoutMs) {
+            providerSilent = true;
+            outputController.abort();
+          }
+        }, Math.min(1_000, Math.max(1, this.leadOutputIdleTimeoutMs)));
+        let result: LeadProcessResult;
+        try {
+          result = await this.processRunner({
           command: wrapper.command,
           args: wrapper.args,
           cwd: repositoryPath,
           detached: true,
-          ...(runtime.signal ? { signal: runtime.signal } : {}),
+          signal: outputController.signal,
           onStart: async (pid, processStartedAt, inspection) => {
             await this.recordLeadProcessStart(executionId, pid, processStartedAt, inspection);
           },
           onLine: async (line) => {
+            lastOutputAt = Date.now();
             await this.recordLeadChildStart(executionId, line);
             const sanitized = turnSupervisor.sanitizeLine(line);
             evidenceBytes += Buffer.byteLength(line, "utf8") + 1;
@@ -704,7 +722,17 @@ export class AgentService {
             }
             await this.databaseHeartbeat(executionId, "running", evidenceLines.length);
           },
-        }).finally(() => { clearInterval(heartbeat); stopCancellationTracking(); });
+          });
+        } catch (error) {
+          if (providerSilent) throw new AgentFailure("provider-silent", "Codex Lead stopped producing progress and will be retried.");
+          throw error;
+        } finally {
+          clearInterval(heartbeat);
+          clearInterval(outputWatchdog);
+          stopCancellationTracking();
+          runtime.signal?.removeEventListener("abort", abortForRuntimeCancellation);
+        }
+        if (providerSilent) throw new AgentFailure("provider-silent", "Codex Lead stopped producing progress and will be retried.");
         if (result.exitCode !== 0) {
           lastFailure = this.provider.classifyProcessFailure(result, lines, leadProfile.model);
           break;

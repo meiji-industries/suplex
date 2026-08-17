@@ -236,14 +236,27 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await observerDetail.getByRole("heading", { name: "Browser task", exact: true, level: 2 }).waitFor();
       const developerExecutionId = `developer_${"d".repeat(24)}`;
       const developerStartedAt = new Date().toISOString();
+      const developerArtifactStore = new ArtifactStore(config.artifactRoot);
+      const developerArtifacts = await Promise.all([
+        developerArtifactStore.put(company.id, "developer-evidence-manifest", { filename: "developer-manifest.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
+        developerArtifactStore.put(company.id, "developer-delivery-raw", { filename: "developer-delivery.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
+        developerArtifactStore.put(company.id, "developer-provider-observation", { filename: "developer-provider.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
+        developerArtifactStore.put(company.id, "developer-reconciliation", { filename: "developer-reconciliation.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
+      ]);
+      const [developerManifest, developerRaw, developerProvider, developerReconciliation] = developerArtifacts;
       database.authTransaction((db) => {
+        const registerArtifact = db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+        for (const artifact of developerArtifacts) registerArtifact.run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+        db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES ('authorization-browser', ?, ?, ?, ?, 1, ?, ?, 'routine_auto', NULL, ?)").run(taskId, company.id, project.id, plannedState!.workflowId, developerManifest.id, developerManifest.sha256, developerStartedAt);
+        db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, status, reserved_at, activated_at) VALUES ('worktree-browser', ?, ?, ?, ?, ?, ?, ?, 'work/browser-development', ?, ?, 0, 'active', ?, ?)").run(taskId, company.id, project.id, plannedState!.workflowId, repositoryPath, worktreeRoot, worktreeRoot, "a".repeat(40), "f".repeat(64), developerStartedAt, developerStartedAt);
         db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, ?, ?, ?, 1, 1, 'running', 'work/browser-development', ?, ?, ?, ?)").run(developerExecutionId, taskId, company.id, plannedState!.workflowId, worktreeRoot, "a".repeat(40), developerStartedAt, developerStartedAt);
         db.prepare("INSERT INTO forge_developer_execution_leases (execution_id, company_id, task_id, workflow_id, attempt, turn_kind, lease_token_hash, execution_root, canonical_worktree_path, worktree_identity_hash, status, heartbeat_at, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 'implementation', ?, ?, ?, ?, 'running', ?, ?, ?)").run(developerExecutionId, company.id, taskId, plannedState!.workflowId, "e".repeat(64), join(root, "runtime", developerExecutionId), worktreeRoot, "browser-development", developerStartedAt, developerStartedAt, developerStartedAt);
+        db.prepare("INSERT INTO forge_developer_execution_truth (execution_id, authorization_id, worktree_lease_id, manifest_artifact_id, manifest_sha256, after_provider_artifact_id, after_provider_sha256, raw_report_artifact_id, raw_report_sha256, reconciliation_artifact_id, reconciliation_sha256, starting_commit, starting_tree) VALUES (?, 'authorization-browser', 'worktree-browser', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(developerExecutionId, developerManifest.id, developerManifest.sha256, developerProvider.id, developerProvider.sha256, developerRaw.id, developerRaw.sha256, developerReconciliation.id, developerReconciliation.sha256, "a".repeat(40), "b".repeat(40));
       });
       const developmentRun = taskDetail.locator("[data-development-run]");
       await developmentRun.getByText("Running", { exact: true }).waitFor();
       expect(await developmentRun.locator("svg.animate-spin").count()).toBe(1);
-      database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('receipt-browser-development', ?, 1, 1, 'command_finished', 1, 'browser-command', ?, 'pnpm test browser\ndiff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n Forge\n+Browser proof', 0, NULL, NULL, 'browser-command')").run(developerExecutionId, new Date().toISOString()));
+      database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('event-browser-development', ?, 1, 1, 'command_finished', NULL, 'browser-command', ?, 'pnpm test browser\ndiff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n Forge\n+Browser proof', 0, NULL, NULL, 'browser-command')").run(developerExecutionId, new Date().toISOString()));
       await developmentRun.getByText("Ran (exit 0): pnpm test browser", { exact: true }).waitFor();
       expect(await developmentRun.locator("details[open]").count()).toBe(1);
       const shellOutput = developmentRun.locator("[data-shell-output]");
@@ -254,12 +267,12 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await page.evaluate(() => document.documentElement.classList.add("dark"));
       await expect.poll(() => addedLine.evaluate((element) => getComputedStyle(element).color)).not.toBe(lightTokenColor);
       await page.evaluate(() => document.documentElement.classList.remove("dark"));
-      database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('receipt-browser-follow-up', ?, 1, 2, 'command_finished', 1, 'browser-follow-up', ?, 'pnpm test browser follow-up\nfollow-up output', 0, NULL, NULL, 'browser-follow-up')").run(developerExecutionId, new Date().toISOString()));
+      database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('event-browser-follow-up', ?, 1, 2, 'command_finished', NULL, 'browser-follow-up', ?, 'pnpm test browser follow-up\nfollow-up output', 0, NULL, NULL, 'browser-follow-up')").run(developerExecutionId, new Date().toISOString()));
       await developmentRun.getByText("Ran (exit 0): pnpm test browser follow-up", { exact: true }).waitFor();
       expect(await developmentRun.locator("details[open]").count()).toBe(1);
       expect(await developmentRun.locator("details:not([open])").count()).toBe(1);
       await developmentRun.locator("details[open]").getByText("follow-up output", { exact: true }).waitFor();
-      database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('receipt-browser-update', ?, 1, 3, 'agent_update', 1, 'browser-update', ?, 'Updated the browser proof.', NULL, NULL, NULL, 'browser-update')").run(developerExecutionId, new Date().toISOString()));
+      database.authQuery((db) => db.prepare("INSERT INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES ('event-browser-update', ?, 1, 3, 'agent_update', NULL, 'browser-update', ?, 'Updated the browser proof.', NULL, NULL, NULL, 'browser-update')").run(developerExecutionId, new Date().toISOString()));
       await developmentRun.getByText("Developer activity", { exact: true }).waitFor();
       await developmentRun.getByText("Agent update: Updated the browser proof.", { exact: true }).waitFor();
       const elapsedBefore = await developmentRun.locator(".tabular-nums").textContent();
@@ -286,6 +299,17 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await observerDetail.locator('[data-status="planning"]').waitFor();
       const planningRun = observerDetail.locator("[data-planning-run]");
       await planningRun.waitFor();
+      const planningExecutionId = `agent_${"e".repeat(24)}`;
+      const planningSpoolPath = join(config.runtimeRoot, "agent-turns", planningExecutionId, "spool.ndjson");
+      await mkdir(join(config.runtimeRoot, "agent-turns", planningExecutionId), { recursive: true });
+      const planningObservedAt = new Date(Date.now() - 60_000).toISOString();
+      await writeFile(planningSpoolPath, `${JSON.stringify({ type: "item.completed", observedAt: planningObservedAt, item: { id: "planning-browser-update", type: "agent_message", text: "Inspecting README structure." } })}\n`);
+      await writeFile(join(config.runtimeRoot, "agent-turns", planningExecutionId, "status.json"), JSON.stringify({ updatedAt: planningObservedAt }));
+      database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, started_at, heartbeat_at, spool_relative_path) VALUES (?, ?, ?, ?, 'analyst', 'running', 1, 'planning', ?, ?, ?)").run(planningExecutionId, taskId, company.id, plannedState!.workflowId, new Date().toISOString(), new Date().toISOString(), `agent-turns/${planningExecutionId}/spool.ndjson`));
+      const planningActivity = observerDetail.locator("[data-planning-activity]");
+      await planningActivity.getByText("Analyst activity", { exact: true }).waitFor();
+      await planningActivity.getByText("Agent update: Inspecting README structure.", { exact: true }).waitFor();
+      await planningActivity.getByText("Last analyst event 1:00 ago", { exact: true }).waitFor();
       expect(await planningRun.getByText("Browser task profile", { exact: false }).isVisible()).toBe(true);
       const progressDuringPlanning = observerDetail.locator("[data-task-progress]");
       expect(await progressDuringPlanning.locator("svg.animate-spin").count()).toBe(1);
@@ -294,6 +318,12 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await planningRun.getByText("gpt-5.6-sol", { exact: true }).isVisible()).toBe(true);
       expect(await planningRun.getByText("medium", { exact: true }).isVisible()).toBe(true);
       expect(await planningRun.getByText("standard", { exact: true }).isVisible()).toBe(true);
+      const planningNarrow = await context.newPage();
+      await planningNarrow.setViewportSize({ width: 390, height: 844 });
+      await planningNarrow.goto(page.url());
+      await planningNarrow.locator("[data-planning-activity]").getByText("Inspecting README structure.", { exact: false }).waitFor();
+      expect(await planningNarrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+      await planningNarrow.close();
       database.authTransaction((db) => {
         const task = db.prepare("SELECT workflow_id AS workflowId FROM forge_tasks WHERE id = ?").get(taskId) as { workflowId: string };
         const observedAt = "2026-08-11T12:00:00.000Z";
@@ -327,7 +357,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await firstActivityTime.innerText()).toMatch(/ago$/);
       expect(await firstActivityTime.getAttribute("title")).not.toBeNull();
       await taskDetail.getByText("Plan: Improve browser task", { exact: true }).waitFor();
-      await taskDetail.getByRole("button", { name: "Step 1 · pending — Inspect repository", exact: true }).waitFor();
+      await taskDetail.getByRole("button", { name: "Step 1 — Inspect repository", exact: true }).waitFor();
       const activityPlan = taskDetail.locator('[data-task-activity-revision="1"] [data-task-activity-plan]');
       const currentPlan = current.locator('[data-task-lead-plan]');
       expect(await activityPlan.count()).toBe(0);
@@ -335,6 +365,21 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await currentPlan.locator('[data-slot="card-footer"] [data-plan-decision-form]').count()).toBe(1);
       expect(await taskDetail.getByText("Plan step progress", { exact: true }).count()).toBe(0);
       expect(await taskDetail.locator("[data-plan-step-progress]").count()).toBe(0);
+      await page.setViewportSize({ width: 1280, height: 900 });
+      const planSteps = currentPlan.locator("[data-plan-steps]");
+      expect(await planSteps.count()).toBe(1);
+      expect(await planSteps.locator("[data-completed]").count()).toBe(0);
+      expect(await planSteps.locator("[aria-current]").count()).toBe(0);
+      const developerEvidence = current.locator("[data-developer-evidence]");
+      await developerEvidence.waitFor();
+      expect(await developerEvidence.isVisible()).toBe(true);
+      expect(await taskDetail.locator("[data-developer-evidence]").count()).toBe(1);
+      expect(await planSteps.locator("[data-developer-evidence]").count()).toBe(0);
+      expect(await developerEvidence.locator("[data-delivery-report]").count()).toBe(1);
+      for (const label of ["Manifest", "Raw delivery", "After provider", "Reconciliation"]) {
+        expect(await developerEvidence.getByRole("link", { name: label, exact: true }).count()).toBe(1);
+      }
+      expect(await developerEvidence.getByRole("link", { name: /provider/i }).count()).toBe(1);
       expect(await taskDetail.locator("[data-task-work-tabs]").getByRole("tab", { name: /^Activity \d+$/ }).isVisible()).toBe(true);
       const workTabs = taskDetail.locator("[data-task-work-tabs]");
       await workTabs.waitFor();
@@ -365,11 +410,9 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await current.locator('[data-plan-decision-form]').count()).toBe(1);
       expect(await currentPlan.locator('[data-plan-decision-controls]').count()).toBe(1);
       expect(await taskDetail.locator('[data-task-header-content] [data-plan-decision-form]').count()).toBe(0);
-      await taskDetail.getByRole("button", { name: "Step 1 · pending — Inspect repository", exact: true }).click();
+      await taskDetail.getByRole("button", { name: "Step 1 — Inspect repository", exact: true }).click();
       await taskDetail.getByText("The issue is understood", { exact: true }).waitFor();
       await taskDetail.getByText("Review the repository evidence", { exact: true }).waitFor();
-      expect(await currentPlan.locator("[data-developer-status]").isVisible()).toBe(true);
-      expect(await taskDetail.locator("[data-developer-status]").count()).toBe(1);
       await taskDetail.getByRole("button", { name: "Request review", exact: true }).click();
       await taskDetail.getByRole("button", { name: "Approve Plan", exact: true }).waitFor();
       await taskDetail.getByRole("button", { name: "Reject Plan", exact: true }).waitFor();
@@ -519,6 +562,10 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await narrowProgress.locator('[data-slot="timeline"][data-orientation="vertical"]').count()).toBe(1);
       const narrowCurrent = narrowDetail.locator("[data-task-current]");
       expect(await narrowCurrent.isVisible()).toBe(true);
+      const narrowDeveloperEvidence = narrowCurrent.locator("[data-developer-evidence]");
+      expect(await narrowDeveloperEvidence.isVisible()).toBe(true);
+      expect(await narrowDeveloperEvidence.locator("[data-delivery-report]").count()).toBe(1);
+      expect(await narrowDeveloperEvidence.getByRole("link", { name: /provider/i }).count()).toBe(1);
       const narrowHistory = narrowDetail.locator("[data-task-history]");
       const narrowHistoryTrigger = narrowHistory.getByRole("button", { name: /^History · \d+$/ });
       expect(await narrowHistoryTrigger.getAttribute("aria-expanded")).toBe("false");

@@ -315,6 +315,11 @@ export class WorktreeManager {
     const before = await this.inspectOwned(validated, repositoryPath).catch(() => undefined);
     if (before?.pathIsSymlink || before?.pathExists && before.head === null) throw new WorktreeFailure("worktree-registry-ambiguous", "Owned worktree path exists but its Git identity is ambiguous");
     if (before?.repositoryRegistered && before.head && before.branch === validated.branchName && before.head.toLowerCase() === validated.startingSha.toLowerCase() && before.dirtyState === "clean") return before;
+    if (validated.status === "active" && before?.repositoryRegistered && before.head && before.branch === validated.branchName) {
+      try { await this.git.run(["merge-base", "--is-ancestor", validated.startingSha, before.head], repositoryPath); }
+      catch { throw new WorktreeFailure("worktree-registry-ambiguous", "Active worktree no longer descends from its reserved base"); }
+      return before;
+    }
     if (!before?.pathExists && !before?.branchHead) {
       try { await this.git.run(["worktree", "add", "-b", validated.branchName, validated.worktreePath, validated.startingSha], repositoryPath); } catch {
         const afterFailure = await this.inspectOwned(validated, repositoryPath).catch(() => undefined);

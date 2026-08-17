@@ -62,11 +62,12 @@ test("returns a typed failure without running verification after setup failure",
   expect(result).toMatchObject({ outcome: "failed", code: "verification_failed", summary: "pnpm install did not complete successfully: error: setup failed" });
 });
 
-test("bounds oversized verification evidence before returning it", async () => {
+test("preserves a successful verification with bounded command output", async () => {
   const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "pnpm install", verificationCommand: "pnpm test" }, {
     guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
     execute: async () => ({ stdout: "😀".repeat(100_000), stderr: "stderr" }),
   });
-  expect(result).toMatchObject({ outcome: "failed", code: "verification_evidence_too_large" });
+  expect(result).toMatchObject({ outcome: "passed" });
+  for (const command of result.commands) expect(Buffer.byteLength(command.stdout, "utf8")).toBeLessThanOrEqual(8 * 1024);
   expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(256 * 1024);
 });

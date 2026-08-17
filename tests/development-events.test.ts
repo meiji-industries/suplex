@@ -37,3 +37,29 @@ test("Development SSE resumes from Last-Event-ID with ordered framing", async ()
     await app.close();
   }
 });
+
+test("Planning SSE uses the same ordered event framing", async () => {
+  const executionId = `agent_${"b".repeat(24)}`;
+  const tasks = { getPlanningProgress(_actorUserId: string, _taskId: string) {
+    return { status: "running", execution: { id: executionId, status: "running", startedAt: "2026-08-13T00:00:00.000Z", finishedAt: null, lastHeartbeatAt: "2026-08-13T00:00:01.000Z", currentStep: null }, events: [{ eventId: "planning_event", sequence: 1, kind: "agent_update", stepNumber: null, occurredAt: "2026-08-13T00:00:02.000Z", summary: "Inspecting the README.", exitCode: null, artifactId: null }] };
+  }, getDeveloperProgress() { return { status: "idle", execution: null, events: [] }; } } as unknown as TaskService;
+  const app = Fastify();
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
+  app.decorateRequest("forgeUser", undefined as never);
+  app.addHook("preHandler", async (request) => { request.forgeUser = { id: "user_sse" } as never; });
+  await app.register(developmentEvents, { tasks });
+  const address = await app.listen({ host: "127.0.0.1", port: 0 });
+  const controller = new AbortController();
+  try {
+    const response = await fetch(`${address}/api/tasks/task_sse/planning-events`, { signal: controller.signal });
+    const reader = response.body!.getReader();
+    let body = "";
+    while (!body.includes("event: progress")) body += new TextDecoder().decode((await reader.read()).value);
+    expect(body).toContain(`id: ${executionId}:1\nevent: progress`);
+    expect(body).toContain("Inspecting the README.");
+  } finally {
+    controller.abort();
+    await app.close();
+  }
+});

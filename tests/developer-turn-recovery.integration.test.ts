@@ -82,13 +82,13 @@ test("INV-01/INV-02 retry starts the same turn after worker loss before supervis
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, 'task_pre_spawn', 'company_pre_spawn', ?, 1, 1, 'starting', 'forge/issue/task_pre_spawn', ?, ?, ?, ?)").run(executionId, workflowId, worktreePath, "a".repeat(40), now, now);
     });
     const fixture = fileURLToPath(new URL("./fixtures/developer-turn-child.mjs", import.meta.url));
-    const input = { database, config, executionId, developerAttempt: 1, planRevision: 1, turnKind: "implementation" as const, companyId: "company_pre_spawn", taskId: "task_pre_spawn", workflowId, canonicalWorktreePath: worktreePath, worktreeIdentityHash: "w".repeat(64), command: process.execPath, args: [fixture, "--duration", "700", "--output", outputPath, "--launch-count", launchCountPath, "--stderr-noise", "true"], cwd: root, env: { PATH: process.env.PATH ?? "" } };
+    const input = { database, config, executionId, developerAttempt: 1, planRevision: 1, turnKind: "implementation" as const, companyId: "company_pre_spawn", taskId: "task_pre_spawn", workflowId, canonicalWorktreePath: worktreePath, worktreeIdentityHash: "w".repeat(64), command: process.execPath, args: [fixture, "--duration", "700", "--output", outputPath, "--launch-count", launchCountPath, "--stderr-noise", "true"], cwd: root, env: { PATH: "/tmp/guard-before:/usr/bin", FORGE_GIT_REAL_BIN: "/usr/bin/git", FORGE_GIT_GUARD_DIR: "/tmp/guard-before" } };
     await expect(runDeveloperTurn({ ...input, spawnSupervisor: () => { throw new Error("simulated worker loss before supervisor spawn"); } })).rejects.toThrow("simulated worker loss");
     const streamed: string[] = [];
     let sawLiveLine!: () => void;
     const liveLine = new Promise<void>((resolve) => { sawLiveLine = resolve; });
     let completed = false;
-    const running = runDeveloperTurn({ ...input, onLine: async (line) => { streamed.push(line); sawLiveLine(); } }).finally(() => { completed = true; });
+    const running = runDeveloperTurn({ ...input, env: { PATH: "/tmp/guard-after:/usr/bin", FORGE_GIT_REAL_BIN: "/usr/bin/git", FORGE_GIT_GUARD_DIR: "/tmp/guard-after" }, onLine: async (line) => { streamed.push(line); sawLiveLine(); } }).finally(() => { completed = true; });
     await liveLine;
     expect(completed).toBe(false);
     expect(streamed).toHaveLength(1);

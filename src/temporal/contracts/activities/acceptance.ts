@@ -16,6 +16,7 @@ export interface AcceptDeliveryActivityInput {
   expectedHeadSha: string;
   expectedHeadTree: string;
   note?: string;
+  autoMerge?: boolean;
 }
 
 export interface AcceptDeliveryActivityResult {

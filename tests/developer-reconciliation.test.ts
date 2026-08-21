@@ -9,7 +9,7 @@ const manifest = { version: 1 as const, authorizedPlan: authorization, projectRe
 const independentVerification = { outcome: "passed" as const, summary: "Pinned setup and verification passed", commands: [{ command: "pnpm test", argv: ["pnpm", "test"], exitCode: 0, signal: null, timedOut: false, stdout: "", stderr: "" }] };
 
 function input(overrides: Partial<Parameters<typeof reconcileDeveloperDelivery>[0]> = {}) {
-  return { executionId: "developer_1", companyId: "company_1", report, independentVerification, git, startingSha: "a".repeat(40), neutralBranch: git.branch, providerBeforeSha256: "d".repeat(64), providerAfterSha256: "d".repeat(64), processExitCode: 0, developerSessionId: "raw-developer", leadSessionId: "raw-lead", authorization, manifest, ...overrides };
+  return { executionId: "developer_1", companyId: "company_1", report, independentVerification, git, startingSha: "a".repeat(40), neutralBranch: git.branch, providerBeforeSha256: "d".repeat(64), providerAfterSha256: "d".repeat(64), processExitCode: 0, developerSessionId: "raw-developer", leadSessionId: "raw-lead", authorization, manifest, requiredChecks: [], ...overrides };
 }
 
 test("accepts a valid delivery without receipt input", () => {
@@ -48,12 +48,23 @@ test("hashes authoritative report and verification facts, not transcript claims 
   expect(first.sha256).toBe(second.sha256);
 });
 
-test("required local test failures block delivery in plain language", () => {
+test("required local test failures block delivery without a CI gate", () => {
   const failed = reconcileDeveloperDelivery(input({ independentVerification: { ...independentVerification, outcome: "failed", code: "verification_failed" } }));
   const missing = reconcileDeveloperDelivery(input({ independentVerification: null }));
   expect(failed).toMatchObject({ outcome: "blocked", failureCode: "required-local-tests-failed" });
   expect(failed.mismatches).toContain("independent-verification-failed");
   expect(missing).toMatchObject({ outcome: "blocked", failureCode: "required-local-tests-failed" });
+});
+
+test("required GitHub checks make failed local verification advisory", () => {
+  const failed = reconcileDeveloperDelivery(input({
+    requiredChecks: ["Tests / DB-backed"],
+    independentVerification: { ...independentVerification, outcome: "failed", code: "verification_failed", summary: "make test-local did not complete successfully. Output tail:\npre-existing process-flow failure", commands: [{ ...independentVerification.commands[0], exitCode: 1, stderr: "pre-existing process-flow failure" }] },
+  }));
+  expect(failed).toMatchObject({ outcome: "completed", failureCode: null });
+  expect(failed.mismatches).toContain("independent-verification-failed");
+  expect(failed.independentVerification?.commands[0]).toMatchObject({ command: "pnpm test", exitCode: 1, stderr: "pre-existing process-flow failure" });
+  expect(developerReconciliationSummary(failed)).toContain("Local verification pnpm test FAILED — make test-local did not complete successfully. Output tail:\npre-existing process-flow failure");
 });
 
 test("does not accept a clean no-change delivery for an authorized plan", () => {

@@ -56,6 +56,7 @@ export interface DeveloperReconciliationInput {
   authorization: AuthorizedPlanSubject;
   manifest: EvidenceManifest;
   verificationProjectRevisionId?: string;
+  requiredChecks: string[];
 }
 
 export interface DeveloperReconciliation {
@@ -93,9 +94,13 @@ export function developerReconciliationSummary(reconciliation: Pick<DeveloperRec
   if (reconciliation.outcome === "completed") {
     const summary = reconciliation.report?.summary ?? "Developer delivery reconciled";
     const localOnlySteps = reconciliation.report?.steps.filter((step) => step.status === "not_applicable_locally") ?? [];
-    return localOnlySteps.length
+    const localVerificationFailure = reconciliation.independentVerification?.outcome === "failed"
+      ? `Local verification ${reconciliation.independentVerification.commands.at(-1)?.command ?? "command"} FAILED — ${reconciliation.independentVerification.summary}`
+      : null;
+    const summaryWithLocalOnlySteps = localOnlySteps.length
       ? `${summary}\n\nNot verified locally: ${localOnlySteps.map((step) => `step ${step.number} — ${step.notes}`).join("; ")}`
       : summary;
+    return localVerificationFailure ? `${summaryWithLocalOnlySteps}\n\n${localVerificationFailure}` : summaryWithLocalOnlySteps;
   }
   return `Developer delivery could not be accepted: ${reconciliation.mismatches.join(", ") || "reconciliation failed"}.${reconciliation.independentVerification?.outcome === "failed" ? ` Independent verification: ${reconciliation.independentVerification.summary}` : ""}`;
 }
@@ -228,14 +233,18 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
   // Audit observations remain durable diagnostics; only required local checks and
   // unsafe worktree state decide whether delivery can continue.
   const requiredTestsFailed = !independentVerification || independentVerification.outcome !== "passed";
+  // When GitHub has required checks, they are the merge authority. Keep a
+  // failed local run in the durable evidence and surface it to review, but do
+  // not prevent the delivery from reaching that authority.
+  const localVerificationIsAdvisory = requiredTestsFailed && rawInput.requiredChecks.length > 0;
   const blockingMismatch = ["developer-made-no-change", "dirty-final-tree", "branch-mismatch", "non-completed-step"].find((code) => uniqueMismatches.includes(code));
   const result: Omit<DeveloperReconciliation, "sha256"> = {
     kind: "developer-reconciliation",
     policyVersion: 2,
     executionId: rawInput.executionId,
     companyId: rawInput.companyId,
-    outcome: requiredTestsFailed || blockingMismatch ? "blocked" : "completed",
-    failureCode: requiredTestsFailed ? "required-local-tests-failed" : blockingMismatch ?? null,
+    outcome: !localVerificationIsAdvisory && (requiredTestsFailed || blockingMismatch) ? "blocked" : "completed",
+    failureCode: !localVerificationIsAdvisory && requiredTestsFailed ? "required-local-tests-failed" : blockingMismatch ?? null,
     mismatches: uniqueMismatches,
     report,
     authorization: rawInput.authorization,

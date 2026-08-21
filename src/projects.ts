@@ -1030,6 +1030,20 @@ export class ProjectService {
         // working project offline or make an operator perform a second acceptance
         // action before the next activity can use the new settings.
         db.prepare("UPDATE forge_projects SET name = ?, repository_path = ?, worktree_root = ?, repository_identity = ?, base_branch = ?, target_branch = ?, setup_command = ?, verification_command = ?, required_checks_json = ?, role_defaults_json = ?, updated_at = ? WHERE id = ?").run(normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, id);
+        // Keep the legacy revisions table as an append-only audit trail.  Its
+        // latest row mirrors the live project record; no separate acceptance
+        // transition is required to make a saved configuration effective.
+        if (existing.status === "active" && existing.base_sha && existing.target_sha) {
+          const snapshot = { ...normalized, baseSha: existing.base_sha, targetSha: existing.target_sha };
+          const identity = configIdentity(snapshot);
+          const prior = db.prepare("SELECT id FROM forge_project_revisions WHERE project_id = ? AND identity = ?").get(id, identity) as { id: string } | undefined;
+          const revisionId = prior?.id ?? identifier("project-revision");
+          if (!prior) {
+            const revision = Number((db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM forge_project_revisions WHERE project_id = ?").get(id) as { revision: number }).revision) + 1;
+            db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, state, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?)").run(revisionId, id, revision, identity, JSON.stringify(snapshot), snapshot.baseSha, snapshot.targetSha, actorUserId, now);
+          }
+          db.prepare("UPDATE forge_projects SET active_revision_id = ? WHERE id = ?").run(revisionId, id);
+        }
       } else {
         db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NULL, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, now);
       }

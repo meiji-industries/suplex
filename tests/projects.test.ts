@@ -232,7 +232,7 @@ test("clones and activates a GitHub repository under the configured Forge roots"
   }
 });
 
-test("activates a validated project and records an immutable normalized revision", async () => {
+test("keeps an active project active while saving configuration history", async () => {
   const value = await fixture();
   try {
     const draft = await value.projects.createProject(value.adminId, value.companyId, input(value));
@@ -244,13 +244,11 @@ test("activates a validated project and records an immutable normalized revision
     expect(active.baseSha).toBe("a".repeat(40));
     expect(active.targetSha).toBe("b".repeat(40));
     const unchanged = await value.projects.updateProject(value.adminId, draft.id, input(value));
-    expect(unchanged.status).toBe("draft");
+    expect(unchanged.status).toBe("active");
     expect(unchanged.configurationRevision).toBe(1);
-    const reactivated = await value.projects.activateProject(value.adminId, draft.id);
-    expect(reactivated.configurationRevision).toBe(1);
     const changed = await value.projects.updateProject(value.adminId, draft.id, input(value, { targetBranch: "release" }));
-    expect(changed.configurationRevision).toBe(1);
-    await value.projects.activateProject(value.adminId, draft.id);
+    expect(changed.status).toBe("active");
+    expect(changed.configurationRevision).toBe(2);
     const revisions = value.database.authQuery((db) => db.prepare("SELECT revision, identity, normalized_json FROM forge_project_revisions WHERE project_id = ? ORDER BY revision").all(draft.id) as Array<{ revision: number; identity: string; normalized_json: string }>);
     expect(revisions).toHaveLength(2);
     expect(revisions[0]?.normalized_json).not.toContain("token");

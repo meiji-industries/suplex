@@ -197,6 +197,34 @@ test("a stuck cancellation can be safely reissued", async () => {
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("cancelling succeeds when the Temporal workflow is no longer running", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Closed workflow", description: "body", idempotencyKey: "closed-workflow-cancel", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    const blocked = IssueWorkflowStateSchema.parse({ ...initial, phase: "ci_repair_required", revision: 1, owner: "human", allowedCommands: ["repair_ci", "cancel_issue"], pendingAction: "CI repair required", lastEventId: `${initial.workflowId}:1` });
+    projectState(value.database, blocked);
+    value.workflow.execute = async () => {
+      const error = new Error("Workflow execution not found");
+      error.name = "WorkflowNotFoundError";
+      throw error;
+    };
+    const now = "2026-08-12T00:00:00.000Z";
+    value.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_capacity_requests (id, logical_turn_key, company_id, task_id, workflow_id, project_revision_id, workflow_revision, operation, role, profile_id, provider, model, reasoning_level, service_priority, lane_key, requested_capacity, status, requested_at, deadline_at, acquired_at, updated_at) VALUES ('capacity-closed', 'closed-workflow-turn', ?, ?, ?, ?, 1, 'developer_execution', 'builder', ?, 'codex', 'gpt-5.6', 'medium', 'standard', ?, 1, 'active', ?, ?, ?, ?)").run(value.companyId, created.task.id, created.task.workflowId, created.task.projectRevisionId, value.profileId, `codex:${value.profileId}`, now, now, now, now);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, ?, ?, ?, 1, 1, 'running', 'work/closed', ?, ?, ?, ?)").run(`developer_${"c".repeat(24)}`, created.task.id, value.companyId, created.task.workflowId, value.root, "c".repeat(40), now, now);
+      db.prepare("INSERT INTO forge_developer_execution_leases (execution_id, company_id, task_id, workflow_id, attempt, turn_kind, lease_token_hash, execution_root, canonical_worktree_path, worktree_identity_hash, status, heartbeat_at, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 'implementation', ?, ?, ?, ?, 'running', ?, ?, ?)").run(`developer_${"c".repeat(24)}`, value.companyId, created.task.id, created.task.workflowId, "d".repeat(64), join(value.root, "runtime"), value.root, "closed-workflow", now, now, now);
+    });
+
+    await expect(value.tasks.executeCommand(value.adminId, created.task.id, "cancel_issue", { expectedRevision: 1 })).resolves.toMatchObject({ phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Issue cancelled", revision: 2 });
+    const projection = value.database.authQuery((db) => db.prepare("SELECT phase, revision, owner, allowed_commands_json, pending_action, event_hash FROM forge_issue_projections WHERE task_id = ?").get(created.task.id) as { phase: string; revision: number; owner: string; allowed_commands_json: string; pending_action: string; event_hash: string });
+    const snapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 2").get(created.task.id) as { state_json: string });
+    expect(projection).toMatchObject({ phase: "cancelled", revision: 2, owner: "human", allowed_commands_json: "[]", pending_action: "Issue cancelled", event_hash: projectionStateHash(IssueWorkflowStateSchema.parse(JSON.parse(snapshot.state_json))) });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_capacity_requests WHERE id = 'capacity-closed'").get())).toEqual({ status: "cancelled" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_execution_leases WHERE task_id = ?").get(created.task.id))).toEqual({ status: "terminated" });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("a Developer retry returns after the retry update is accepted", async () => {
   const value = await fixture();
   try {

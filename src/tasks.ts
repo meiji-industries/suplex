@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
+import { WorkflowNotFoundError } from "@temporalio/client";
 
 import type { AuthUser } from "./auth.js";
 import { AuthFailure, AuthService } from "./auth.js";
@@ -49,6 +50,19 @@ export class TaskFailure extends Error {
     this.statusCode = statusCode;
     this.current = current;
   }
+}
+
+function workflowIsNoLongerRunning(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof WorkflowNotFoundError || (current instanceof Error && current.name === "WorkflowNotFoundError")) return true;
+    const message = current instanceof Error ? current.message : "";
+    if (/workflow (execution )?(not found|not running|already completed|terminated)|workflow.*closed/i.test(message)) return true;
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return false;
 }
 
 
@@ -1315,6 +1329,31 @@ export class TaskService {
     return this.getTask(actorUserId, taskId);
   }
 
+  private cancelProjectionAfterWorkflowEnded(task: ForgeTask): void {
+    const snapshot = this.database.authQuery((db) => db.prepare(`SELECT state_json, run_id AS runId
+      FROM forge_workflow_snapshots
+      WHERE task_id = ? AND workflow_id = ?
+      ORDER BY revision DESC LIMIT 1`).get(task.id, task.workflowId) as { state_json: string; runId: string | null } | undefined);
+    if (!snapshot) throw new TaskFailure("Issue cancellation could not be reconciled", [finding("workflow-not-running", "workflow", "The workflow ended before Forge recorded a cancellable state")], 409, task);
+    let stored: unknown;
+    try { stored = JSON.parse(snapshot.state_json); } catch {
+      throw new TaskFailure("Issue cancellation could not be reconciled", [finding("projection-invalid", "workflow", "The last workflow state cannot be read")], 409, task);
+    }
+    const state = IssueWorkflowStateSchema.parse(stored);
+    if (state.revision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
+    const next = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Issue cancelled", blocker: null, capacity: null, capacityBlocker: null, activeOperation: null, stateChangedAt: this.now().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    this.database.projectIssueEvent({ schemaVersion: 1, runId: snapshot.runId ?? state.workflowId, eventId: next.lastEventId, state: next });
+    const now = this.now().toISOString();
+    this.database.authTransaction((db) => {
+      db.prepare(`UPDATE forge_capacity_requests
+        SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, ?), released_at = COALESCE(released_at, ?), terminal_reason = 'cancelled', skip_reason = 'workflow_not_running', updated_at = ?
+        WHERE task_id = ? AND workflow_id = ? AND status IN ('queued', 'active', 'rate_limited', 'ownership_ambiguous')`).run(now, now, now, task.id, task.workflowId);
+      db.prepare(`UPDATE forge_developer_execution_leases
+        SET status = 'terminated', updated_at = ?
+        WHERE task_id = ? AND workflow_id = ? AND status IN ('reserved', 'supervisor_starting', 'running', 'result_ready', 'cancel_requested', 'cancelling', 'ownership_ambiguous')`).run(now, task.id, task.workflowId);
+    });
+  }
+
   async executeCommand(actorUserId: string, taskId: string, command: IssueCommand, payload: TaskCommandPayload): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
     const descriptor = issueCommands[command];
@@ -1352,9 +1391,14 @@ export class TaskService {
       if (command === "start_planning") await this.waitForProjection(taskId, expectedRevision + 1);
       return this.getTask(actorUserId, taskId);
     } catch (error) {
+      if (command === "cancel_issue" && workflowIsNoLongerRunning(error)) {
+        this.cancelProjectionAfterWorkflowEnded(task);
+        this.recordTaskCommand(task, actorUserId, command, task.revision + 1);
+        return this.getTask(actorUserId, taskId);
+      }
       const stale = error instanceof Error && /stale workflow revision/i.test(error.message);
       const message = stale ? "Task changed before this action was accepted" : command === "start_planning" ? "Planning command could not be accepted" : command === "record_delivery_decision" ? "Delivery decision could not be accepted" : descriptor.family === "start" ? "Plan action could not be accepted" : "Task action could not be accepted";
-      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409, this.getTask(actorUserId, taskId));
+      throw new TaskFailure(message, [finding(stale ? "stale-revision" : "workflow-update-rejected", stale ? "expectedRevision" : "workflow", message)], 409, this.getTask(actorUserId, taskId));
     }
   }
 

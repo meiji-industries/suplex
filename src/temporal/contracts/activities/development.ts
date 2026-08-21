@@ -137,7 +137,6 @@ export interface DeveloperSupervisorActivityIdentity {
 export type DeveloperTurnActivityOutcome<T> =
   | { status: "completed"; result: T; resultHash: string }
   | { status: "interrupted"; developerExecutionId: string; reasonCode: string; summary: string; lastHeartbeatAt: string | null }
-  | { status: "ownership_ambiguous"; developerExecutionId: string; reasonCode: string; summary: string; lastHeartbeatAt: string | null }
   | { status: "failed"; developerExecutionId: string; reasonCode: string; summary: string; evidenceArtifactId: string | null };
 
 export type SupervisedDeveloperExecutionActivityInput = Omit<DeveloperExecutionActivityInput, "executionId"> & DeveloperSupervisorActivityIdentity;
@@ -147,16 +146,9 @@ export type DeveloperCancellationResult =
   | { status: "cancelled" }
   | { status: "cancelled_confirmed"; executionId: string; exitCode: number | null; exitSignal: string | null; evidenceArtifactId: string | null }
   | { status: "completed_before_cancellation"; executionId: string; result: unknown; resultHash: string }
-  | { status: "interrupted" | "ownership_ambiguous"; executionId: string; reasonCode: string; summary: string }
+  | { status: "interrupted"; executionId: string; reasonCode: string; summary: string }
   | { status: "termination_failed"; executionId: string; reasonCode: string; summary: string; evidenceArtifactId: string | null };
 
-export interface DeveloperOwnershipObservation {
-  executionId: string;
-  status: "active" | "result_ready" | "interrupted" | "ownership_ambiguous";
-  reasonCode: string | null;
-  summary: string;
-  lastHeartbeatAt: string | null;
-}
 
 export interface DeveloperCancellationActivityInput {
   taskId: string;
@@ -224,7 +216,6 @@ export type WorkflowDeveloperRepairActivityInput = Omit<DeveloperRepairActivityI
 export interface DevelopmentActivities {
   findActiveDeveloperExecution(input: { taskId: string; companyId: string; workflowId: string }): Promise<{ executionId: string; sessionRef: string } | null>;
   cancelDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<DeveloperCancellationResult>;
-  observeDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<DeveloperOwnershipObservation>;
   reconcileDeveloperDeliveryEvidence(input: { taskId: string; companyId: string; workflowId: string; developerExecutionId: string }): Promise<WorkflowDeveloperExecutionResult | null>;
   runDeveloperExecution(input: DeveloperExecutionActivityInput): Promise<WorkflowDeveloperExecutionResult>;
   runDeveloperExecutionSupervised(input: SupervisedDeveloperExecutionActivityInput): Promise<DeveloperTurnActivityOutcome<WorkflowDeveloperExecutionResult>>;

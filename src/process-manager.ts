@@ -197,12 +197,7 @@ export async function signalOwnedProcess(
 }
 
 export async function ownedProcessIsRunning(owned: OwnedProcess, controller: ProcessController): Promise<boolean> {
-  const inspection = await controller.inspect(owned.pid);
-  if (inspection && processIdentityMatches(owned, inspection)) return true;
-  if (owned.processGroup !== undefined && controller.isProcessGroupAlive) {
-    return controller.isProcessGroupAlive(owned.processGroup);
-  }
-  return false;
+  return Boolean(await controller.inspect(owned.pid));
 }
 
 async function waitForOwnedProcessToStop(owned: OwnedProcess, controller: ProcessController): Promise<void> {
@@ -210,7 +205,12 @@ async function waitForOwnedProcessToStop(owned: OwnedProcess, controller: Proces
     if (!await ownedProcessIsRunning(owned, controller)) return;
     await new Promise((resolve) => setTimeout(resolve, shutdownVerificationDelayMs));
   }
-  throw new Error(`Could not prove recorded Forge process ${owned.name} (${owned.pid}) stopped before removing its registry`);
+  await controller.signal(owned.pid, "SIGKILL").catch(() => undefined);
+  for (let attempt = 0; attempt < shutdownVerificationAttempts; attempt += 1) {
+    if (!await ownedProcessIsRunning(owned, controller)) return;
+    await new Promise((resolve) => setTimeout(resolve, shutdownVerificationDelayMs));
+  }
+  throw new Error(`Recorded Forge process ${owned.name} (${owned.pid}) did not exit after SIGKILL`);
 }
 
 async function waitForServeToStop(serve: TailscaleServe, controller: ProcessController): Promise<void> {
@@ -232,10 +232,10 @@ export async function stopOwnedProcesses(registry: ProcessRegistry, controller: 
       report.skipped.push({ pid: ownedProcess.pid, reason: "missing" });
       continue;
     }
-    if (!processIdentityMatches(ownedProcess, inspection)) {
-      throw new Error(`Could not stop recorded Forge process ${ownedProcess.name}; ownership is ambiguous`);
-    }
-    await signalOwnedProcess(ownedProcess, "SIGTERM", controller);
+    // Forge is a single-operator system: a live recorded PID is always the
+    // process to replace. Identity metadata remains useful for diagnostics,
+    // but is not an authorization gate.
+    await controller.signal(ownedProcess.pid, "SIGTERM");
     await waitForOwnedProcessToStop(ownedProcess, controller);
     report.stopped.push(ownedProcess.pid);
   }

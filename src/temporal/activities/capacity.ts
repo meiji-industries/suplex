@@ -72,10 +72,9 @@ export function createCapacityActivities(ctx: ActivityContext): CapacityActiviti
         if (result.status === "ownership_ambiguous") capacity.markOwnershipAmbiguous(input.requestId, result.reason ?? "agent cancellation ownership ambiguity");
         return { status: "cancelled" as const, executionId: request.executionId, ...(result.reason ? { reason: result.reason } : {}) };
       }
-      const result = await cancelDeveloperExecution(database, request.executionId);
+      await cancelDeveloperExecution(database, request.executionId);
       // The Developer cancellation activity owns pid inspection and escalation.
       // A capacity slot must never become a human-verification gate afterward.
-      if (result.status === "ownership_ambiguous" || result.status === "termination_failed") capacity.markOwnershipAmbiguous(input.requestId, result.reasonCode);
       return { status: "cancelled" as const, executionId: request.executionId };
     },
   };

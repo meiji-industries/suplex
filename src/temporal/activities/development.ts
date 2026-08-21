@@ -88,26 +88,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
     },
     async cancelDeveloperExecution(input) {
       const result = await cancelDeveloperExecution(database, input.executionId);
-      if (result.status === "ownership_ambiguous") {
-        const attention = await putAttentionEvidence(input, "unsafe_recovery", "developer_ownership_ambiguous", result.summary);
-        return { ...result, attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 };
-      }
       return result;
-    },
-    async observeDeveloperExecution(input) {
-      const leases = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot);
-      const lease = leases.get(input.executionId);
-      const outcome = (await reconcileDeveloperExecutions(database)).find((entry) => entry.executionId === input.executionId);
-      // The reconciler only sweeps active leases. A lease that already reached a
-      // terminal status must report that recorded fact, otherwise
-      // verify_developer_ownership reports "cannot prove ownership" forever and
-      // the task can never reach retry_development.
-      if (!outcome && lease && leases.readClaim(input.executionId)) return { executionId: input.executionId, status: "result_ready", reasonCode: "stored-delivery-result", summary: "The Developer result is durably available.", lastHeartbeatAt: lease.heartbeatAt };
-      if (!outcome && (lease?.status === "interrupted" || lease?.status === "terminated" || lease?.status === "failed")) return { executionId: input.executionId, status: "interrupted", reasonCode: `developer-lease-${lease.status}`, summary: "The recorded Developer process is no longer running.", lastHeartbeatAt: lease.heartbeatAt };
-      if (!outcome) return { executionId: input.executionId, status: "interrupted", reasonCode: "developer-process-missing", summary: "The recorded Developer process is no longer running.", lastHeartbeatAt: lease?.heartbeatAt ?? null };
-      if (outcome.status === "recovered") return { executionId: input.executionId, status: "result_ready", reasonCode: outcome.reason ?? null, summary: "The Developer result is durably available.", lastHeartbeatAt: lease?.heartbeatAt ?? null };
-      if (outcome.status === "active") return { executionId: input.executionId, status: "active", reasonCode: null, summary: "Forge confirmed the recorded Developer supervisor and child.", lastHeartbeatAt: lease?.heartbeatAt ?? null };
-      return { executionId: input.executionId, status: "interrupted", reasonCode: outcome.reason ?? null, summary: "The recorded Developer process is no longer running.", lastHeartbeatAt: lease?.heartbeatAt ?? null };
     },
   };
 }

@@ -38,6 +38,7 @@ export const developmentCommands = {
     note: "none",
     idempotency: "none",
   }),
+  // Deprecated persisted update name. No workflow handler or UI action uses it.
   verify_developer_ownership: defineIssueCommand({
     name: "verify_developer_ownership",
     slug: "verify-developer-ownership",

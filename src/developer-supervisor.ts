@@ -7,7 +7,7 @@ import { createInterface } from "node:readline";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { compareProcessIdentity, defaultProcessController, type OwnedProcess, type ProcessController, type ProcessInspection } from "./process-manager.js";
+import { defaultProcessController, type ProcessController, type ProcessInspection } from "./process-manager.js";
 import { DeveloperSupervisorHeartbeatSchema, DeveloperSupervisorInvocationSchema, DeveloperSupervisorRequestSchema, DeveloperSupervisorResponseSchema, DeveloperSupervisorSnapshotSchema, sha256, withSupervisorResultHash, type DeveloperSupervisorIdentity, type DeveloperSupervisorInvocation, type DeveloperSupervisorRequest, type DeveloperSupervisorResponse, type DeveloperSupervisorResult } from "./developer-supervisor-protocol.js";
 import { redact } from "./logging.js";
 
@@ -25,9 +25,6 @@ function identity(inspection: ProcessInspection): DeveloperSupervisorIdentity {
   return { pid: inspection.pid, processGroup: inspection.processGroup, startTime: inspection.startTime, executable: inspection.executable, argv: inspection.argv, ownerUid: inspection.ownerUid ?? null };
 }
 
-function owned(value: DeveloperSupervisorIdentity): OwnedProcess {
-  return { name: "developer", pid: value.pid, command: value.argv.join(" "), startedAt: value.startTime, processGroup: value.processGroup, startTime: value.startTime, executable: value.executable, argv: value.argv, ...(value.ownerUid !== null ? { ownerUid: value.ownerUid } : {}) };
-}
 
 async function rejectSymlinks(root: string, target: string): Promise<void> {
   const absoluteRoot = resolve(root);
@@ -135,11 +132,11 @@ async function writeHeartbeat(state: SupervisorState): Promise<void> {
   await atomicWriteJson(join(state.executionRoot, "heartbeat.json"), DeveloperSupervisorHeartbeatSchema.parse({ version: 1, executionId: state.executionId, status: state.status, heartbeatAt: state.heartbeatAt }));
 }
 
-type ProcessExitObservation = "running" | "exited" | "ownership_ambiguous";
+type ProcessExitObservation = "running" | "exited";
 
 export async function observeOwnedProcessExit(controller: ProcessController, child: DeveloperSupervisorIdentity): Promise<ProcessExitObservation> {
   const leader = await controller.inspect(child.pid);
-  if (leader) return compareProcessIdentity(owned(child), leader).kind === "exact_match" ? "running" : "ownership_ambiguous";
+  if (leader) return "running";
   if (controller.isProcessGroupAlive && await controller.isProcessGroupAlive(child.processGroup)) return "running";
   return "exited";
 }
@@ -154,31 +151,29 @@ async function waitForGroupExit(state: SupervisorState, graceMs: number): Promis
   return "timed_out";
 }
 
-type CancellationOutcome = "confirmed" | "ownership_ambiguous" | "termination_failed";
+type CancellationOutcome = "confirmed" | "termination_failed";
 
 async function finishCancellation(state: SupervisorState, termGraceMs: number, killGraceMs: number): Promise<CancellationOutcome> {
   const current = await state.controller.inspect(state.child.pid);
-  if (!current || compareProcessIdentity(owned(state.child), current).kind !== "exact_match") return "ownership_ambiguous";
+  if (!current) return "confirmed";
   await writeSnapshot(state);
   try { await state.controller.signalGroup?.(state.child.processGroup, "SIGTERM"); }
   catch { return "termination_failed"; }
   state.termSentAt = new Date().toISOString();
   await writeSnapshot(state);
   const afterTerm = await waitForGroupExit(state, termGraceMs);
-  if (afterTerm === "ownership_ambiguous") return "ownership_ambiguous";
   if (afterTerm === "exited") {
     state.confirmedExitAt = new Date().toISOString();
     await writeSnapshot(state);
     return "confirmed";
   }
   const beforeKill = await state.controller.inspect(state.child.pid);
-  if (beforeKill && compareProcessIdentity(owned(state.child), beforeKill).kind !== "exact_match") return "ownership_ambiguous";
+  if (!beforeKill) return "confirmed";
   state.killSentAt = new Date().toISOString();
   try { await state.controller.signalGroup?.(state.child.processGroup, "SIGKILL"); }
   catch { return "termination_failed"; }
   await writeSnapshot(state);
   const afterKill = await waitForGroupExit(state, killGraceMs);
-  if (afterKill === "ownership_ambiguous") return "ownership_ambiguous";
   if (afterKill !== "exited") return "termination_failed";
   state.confirmedExitAt = new Date().toISOString();
   await writeSnapshot(state);
@@ -195,11 +190,6 @@ async function cancelChild(state: SupervisorState, termGraceMs: number, killGrac
   const task = finishCancellation(state, termGraceMs, killGraceMs);
   state.cancellationTask = task;
   const outcome = await task.finally(() => { state.cancellationTask = null; });
-  if (outcome === "ownership_ambiguous") {
-    state.status = "failed";
-    await writeSnapshot(state);
-    return { version: 1, status: "ownership_ambiguous", reasonCode: "developer-child-identity-changed", summary: "Forge stopped cancellation because the Developer process identity changed." };
-  }
   if (outcome === "termination_failed") {
     state.status = "failed";
     await writeSnapshot(state);
@@ -211,7 +201,7 @@ async function cancelChild(state: SupervisorState, termGraceMs: number, killGrac
 }
 
 async function handleSocketRequest(state: SupervisorState, request: DeveloperSupervisorRequest, token: string): Promise<DeveloperSupervisorResponse | null> {
-  if (request.executionId !== state.executionId || !tokenMatches(request.leaseToken, token)) return { version: 1, status: "ownership_ambiguous", reasonCode: "developer-supervisor-request-identity-mismatch", summary: "Forge cannot prove ownership of the previous Developer process." };
+  if (request.executionId !== state.executionId || !tokenMatches(request.leaseToken, token)) return null;
   if (request.command === "status") {
     return DeveloperSupervisorResponseSchema.parse({ version: 1, status: state.status, supervisor: state.supervisor, child: state.child, heartbeatAt: state.heartbeatAt, ...(state.termSentAt ? { termSentAt: state.termSentAt } : {}), ...(state.killSentAt ? { killSentAt: state.killSentAt } : {}), ...(state.confirmedExitAt ? { confirmedExitAt: state.confirmedExitAt } : {}) });
   }

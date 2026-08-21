@@ -194,7 +194,7 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
   const repairInstruction = task.deliveryReview?.findings.find((finding) => finding.severity === "blocking" && finding.disposition === "open")?.repairInstruction ?? task.deliveryReview?.summary;
   const supplementalCommand = task.commands.find((command) => command.name === "request_supplemental_review");
   const hasVisibleActions = Boolean(supplementalCommand) || canRevise || canContinue || task.allowedCommands.some((command) => !["cancel_issue", "approve_plan", "reject_plan", "request_plan_revision", "respond_plan_blocker", "resolve_decision_blocker"].includes(command));
-  const recoveryOwnsActions = Boolean(task.developerRecovery && task.allowedCommands.some((command) => ["retry_development", "cancel_development", "verify_developer_ownership"].includes(command)));
+  const recoveryOwnsActions = Boolean(task.developerRecovery && task.allowedCommands.some((command) => ["retry_development", "cancel_development"].includes(command)));
   const isBlocked = BLOCKED_PHASES.has(task.phase);
   const presentationPhase = taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands });
   const awaitingDeliveryReview = canReviewDelivery && presentationPhase === "reviewing_delivery";

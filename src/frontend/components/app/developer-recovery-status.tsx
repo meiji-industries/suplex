@@ -15,7 +15,7 @@ const labels: Record<DeveloperRecoveryView["status"], string> = {
   reconnecting: "Reconnecting",
   result_pending_claim: "Finishing",
   interrupted: "Interrupted",
-  ownership_ambiguous: "Ownership ambiguous",
+  ownership_ambiguous: "Interrupted",
   cancellation_requested: "Cancellation requested",
   cancelling: "Cancelling",
   cancelled: "Cancelled",
@@ -28,9 +28,9 @@ export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, bus
   const interrupted = recovery.status === "interrupted";
   const failed = recovery.status === "failed";
   const attention = ambiguous || interrupted || failed;
-  const description = ambiguous ? "Forge cannot prove ownership of the previous Builder process. Inspect the host process and worktree, stop it outside Forge if necessary, then recheck ownership." : attention ? recovery.summary : null;
-  const recoveryCommands = ambiguous ? allowedCommands.filter((command) => command === "verify_developer_ownership") : allowedCommands;
-  const hasActions = recoveryCommands.includes("retry_development") || recoveryCommands.includes("cancel_development") || (isAdmin && recoveryCommands.includes("verify_developer_ownership"));
+  const description = attention ? recovery.summary : null;
+  const recoveryCommands = allowedCommands;
+  const hasActions = recoveryCommands.includes("retry_development") || recoveryCommands.includes("cancel_development");
   if (recovery.status === "active" && !hasActions) return null;
   return <Card data-developer-recovery role="alert" size="sm">
       <Collapsible.Root defaultOpen className="flex flex-col gap-(--card-spacing)">

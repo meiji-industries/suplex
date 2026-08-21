@@ -355,7 +355,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
         if (!deliveryArtifactId || !recovered.result.evidenceArtifactId) throw new Error("A supervised Developer result requires durable result and evidence artifacts");
         const claim = leases.claim({ executionId: input.developerTurnExecutionId, resultHash: recovered.resultHash, activityResultJson: JSON.stringify(recovered.result), deliveryArtifactId, evidenceArtifactId: recovered.result.evidenceArtifactId });
         if (claim.conflict) {
-          return { status: "ownership_ambiguous", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: leases.get(input.developerTurnExecutionId)?.heartbeatAt ?? null };
+          return { status: "interrupted", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: leases.get(input.developerTurnExecutionId)?.heartbeatAt ?? null };
         }
         return { status: "completed", result: JSON.parse(claim.claim.activityResultJson) as T, resultHash: claim.claim.resultHash };
       }
@@ -372,14 +372,12 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       if (!deliveryArtifactId || !result.evidenceArtifactId) throw new Error("A supervised Developer result requires durable result and evidence artifacts");
       const claim = leases.claim({ executionId: input.developerTurnExecutionId, resultHash: terminal?.resultHash ?? persistedResultHash!, activityResultJson: JSON.stringify(result), deliveryArtifactId, evidenceArtifactId: result.evidenceArtifactId });
       if (claim.conflict) {
-        return { status: "ownership_ambiguous", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: terminal?.lastHeartbeatAt ?? null };
+        return { status: "interrupted", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: terminal?.lastHeartbeatAt ?? null };
       }
       return { status: "completed", result: JSON.parse(claim.claim.activityResultJson) as T, resultHash: claim.claim.resultHash };
     } catch (error) {
       if (error instanceof SupervisedDeveloperTerminalError) {
-        const status = error.result.terminal === "interrupted" ? "interrupted" as const : "ownership_ambiguous" as const;
-        if (status === "ownership_ambiguous" && input.capacityRequestId) capacity.markOwnershipAmbiguous(input.capacityRequestId, "Developer supervisor ownership could not be confirmed");
-        return { status, developerExecutionId: input.developerTurnExecutionId, reasonCode: status === "interrupted" ? "developer-worker-lost" : "developer-ownership-ambiguous", summary: status === "interrupted" ? "The Developer process ended before Forge could claim a result." : "Forge cannot prove ownership of the previous Developer process.", lastHeartbeatAt: error.result.lastHeartbeatAt };
+        return { status: "interrupted", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-worker-lost", summary: "The Developer process ended before Forge could claim a result.", lastHeartbeatAt: error.result.lastHeartbeatAt };
       }
       if (error instanceof AgentFailure) {
         const evidence = database.authQuery((db) => (db.prepare("SELECT evidence_artifact_id AS evidenceArtifactId FROM forge_developer_executions WHERE id = ?").get(input.developerTurnExecutionId) as { evidenceArtifactId: string | null } | undefined)?.evidenceArtifactId ?? null);

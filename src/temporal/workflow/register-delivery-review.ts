@@ -173,7 +173,7 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
     if (outcome.status !== "completed") {
       await ctx.withStateMutation(() => {
         if (ctx.state.activeOperation?.commandId !== command.commandId) return;
-        const allowedCommands = ctx.addRevisionCommand(outcome.status === "ownership_ambiguous" ? ["verify_developer_ownership", "cancel_issue"] : ["repair_delivery", "cancel_issue"]);
+        const allowedCommands = ctx.addRevisionCommand(["repair_delivery", "cancel_issue"]);
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands, pendingAction: outcome.summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields(outcome.status, outcome.reasonCode, outcome.summary, "lastHeartbeatAt" in outcome ? outcome.lastHeartbeatAt : null), developerEvidenceArtifactId: outcome.status === "failed" ? outcome.evidenceArtifactId : ctx.state.developerEvidenceArtifactId, activeOperation: null });
       });
       await ctx.project();

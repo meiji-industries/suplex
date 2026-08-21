@@ -80,7 +80,6 @@ export type DeveloperSupervisorRequest = z.infer<typeof DeveloperSupervisorReque
 
 export const DeveloperSupervisorResponseSchema = z.discriminatedUnion("status", [
   z.object({ version: z.literal(1), status: z.enum(["starting", "running", "result_ready", "cancelling", "terminated", "failed"]), supervisor: processIdentity, child: processIdentity.nullable(), heartbeatAt: z.string().datetime(), resultHash: z.string().regex(/^[a-f0-9]{64}$/).optional(), exitCode: z.number().int().nullable().optional(), exitSignal: z.string().max(32).nullable().optional(), termSentAt: z.string().datetime().nullable().optional(), killSentAt: z.string().datetime().nullable().optional(), confirmedExitAt: z.string().datetime().nullable().optional() }).strict(),
-  z.object({ version: z.literal(1), status: z.literal("ownership_ambiguous"), reasonCode: z.string().min(1).max(100), summary: z.string().min(1).max(500) }).strict(),
   z.object({ version: z.literal(1), status: z.literal("termination_failed"), reasonCode: z.string().min(1).max(100), summary: z.string().min(1).max(500) }).strict(),
 ]);
 

@@ -29,7 +29,7 @@ export interface DeveloperProcessController {
 
 export interface DeveloperRecoveryOutcome {
   executionId: string;
-  status: "active" | "recovered" | "interrupted" | "ownership_ambiguous";
+  status: "active" | "recovered" | "interrupted";
   reason?: string;
 }
 
@@ -49,6 +49,8 @@ function heartbeatExpired(heartbeatAt: string | null): boolean {
 
 export const DeveloperRecoveryObservationSchema = z.object({
   executionId: z.string().regex(/^developer_[a-f0-9]{24}$/),
+  // Kept solely to read pre-v1 persisted observations. New recovery never
+  // emits this legacy value.
   status: z.enum(["active", "result_ready", "interrupted", "ownership_ambiguous"]),
   reasonCode: z.string().max(100).nullable(),
   summary: z.string().max(500),
@@ -200,7 +202,8 @@ export async function reconcileDeveloperExecutions(database: ForgeDatabase, cont
       continue;
     }
     if (!lease.supervisor || !lease.child) {
-      outcomes.push({ executionId: lease.executionId, status: "ownership_ambiguous", reason: "ownership-missing" });
+      markExecutionTerminal(database, lease.executionId, "interrupted", "worker-restart", "The recorded Developer process is unavailable; Forge released the turn for retry.");
+      outcomes.push({ executionId: lease.executionId, status: "interrupted", reason: "process-metadata-missing" });
       continue;
     }
     const supervisorInspection = await controller.inspect(lease.supervisor.pid);
@@ -213,10 +216,11 @@ export async function reconcileDeveloperExecutions(database: ForgeDatabase, cont
       continue;
     }
     if (diskState.kind === "gone") {
-      outcomes.push({ executionId: lease.executionId, status: "ownership_ambiguous", reason: "process-recently-unavailable" });
+      markExecutionTerminal(database, lease.executionId, "interrupted", "worker-restart", "The recorded Developer process is unavailable; Forge released the turn for retry.");
+      outcomes.push({ executionId: lease.executionId, status: "interrupted", reason: "process-missing" });
       continue;
     }
-    outcomes.push(supervisorComparison.kind === "exact_match" ? { executionId: lease.executionId, status: "active" } : { executionId: lease.executionId, status: "ownership_ambiguous", reason: `supervisor-${supervisorComparison.kind}` });
+    outcomes.push({ executionId: lease.executionId, status: "active", ...(supervisorComparison.kind === "exact_match" ? {} : { reason: `supervisor-${supervisorComparison.kind}` }) });
   }
   return outcomes;
 }
@@ -227,13 +231,13 @@ export async function reconcileDeveloperExecutions(database: ForgeDatabase, cont
  */
 export async function cancelDeveloperExecution(database: ForgeDatabase, executionId: string, controller: DeveloperProcessController = legacyController): Promise<DeveloperCancellationResult> {
   const lease = database.authQuery((db) => db.prepare("SELECT * FROM forge_developer_execution_leases WHERE execution_id = ?").get(executionId) as Record<string, unknown> | undefined);
-  if (!lease) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-lease-missing", summary: "Forge cannot prove ownership of the previous Developer process." };
+  if (!lease) return { status: "interrupted", executionId, reasonCode: "developer-lease-missing", summary: "The recorded Developer process is no longer running." };
   const repository = new DeveloperExecutionLeaseRepository(database, dirname(dirname(String(lease.execution_root))));
   const current = repository.get(executionId);
-  if (!current) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-lease-missing", summary: "Forge cannot prove ownership of the previous Developer process." };
+  if (!current) return { status: "interrupted", executionId, reasonCode: "developer-lease-missing", summary: "The recorded Developer process is no longer running." };
   const claim = repository.readClaim(executionId);
   if (claim) {
-    try { return { status: "completed_before_cancellation", executionId, result: JSON.parse(claim.activityResultJson) as never, resultHash: claim.resultHash }; } catch { return { status: "ownership_ambiguous", executionId, reasonCode: "developer-claim-invalid", summary: "Forge cannot validate the completed Developer result." }; }
+    try { return { status: "completed_before_cancellation", executionId, result: JSON.parse(claim.activityResultJson) as never, resultHash: claim.resultHash }; } catch { return { status: "interrupted", executionId, reasonCode: "developer-claim-invalid", summary: "The recorded Developer result is invalid." }; }
   }
   if (current.status === "interrupted") {
     markExecutionTerminal(database, executionId, "interrupted", "developer-child-missing", "The recorded Developer process is no longer running.");
@@ -243,27 +247,30 @@ export async function cancelDeveloperExecution(database: ForgeDatabase, executio
     markExecutionTerminal(database, executionId, "cancelled", null, null);
     return { status: "cancelled_confirmed", executionId, exitCode: current.exitCode, exitSignal: current.exitSignal, evidenceArtifactId: null };
   }
-  if (!current.supervisor || !current.child) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-ownership-incomplete", summary: "Forge cannot prove ownership of the previous Developer process." };
+  if (!current.supervisor || !current.child) return { status: "interrupted", executionId, reasonCode: "developer-process-metadata-missing", summary: "The recorded Developer process is no longer running." };
   const inspection = await controller.inspect(current.child.pid);
   if (!inspection) {
-    if (controller.isProcessGroupAlive && await controller.isProcessGroupAlive(current.child.processGroup)) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-child-group-live", summary: "Forge cannot prove ownership of the previous Developer process." };
+    if (controller.isProcessGroupAlive && await controller.isProcessGroupAlive(current.child.processGroup)) {
+      await controller.signalGroup(current.child.processGroup, "SIGTERM").catch(() => undefined);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      if (await controller.isProcessGroupAlive(current.child.processGroup)) await controller.signalGroup(current.child.processGroup, "SIGKILL").catch(() => undefined);
+    }
     markExecutionTerminal(database, executionId, "interrupted", "developer-child-missing", "The recorded Developer process is no longer running.");
     return { status: "interrupted", executionId, reasonCode: "developer-child-missing", summary: "The recorded Developer process is no longer running." };
   }
   const supervisorInspection = await controller.inspect(current.supervisor.pid);
-  if (!supervisorInspection) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-supervisor-missing", summary: "Forge cannot prove ownership of the previous Developer process." };
+  if (!supervisorInspection) return { status: "interrupted", executionId, reasonCode: "developer-supervisor-missing", summary: "The recorded Developer supervisor is no longer running." };
   const supervisorComparison = compareProcessIdentity({ name: "developer-supervisor", pid: current.supervisor.pid, command: current.supervisor.argv.join(" "), startedAt: current.supervisor.startTime, processGroup: current.supervisor.processGroup, startTime: current.supervisor.startTime, executable: current.supervisor.executable, argv: current.supervisor.argv, ...(current.supervisor.ownerUid !== null ? { ownerUid: current.supervisor.ownerUid } : {}) }, toInspection(supervisorInspection));
-  if (supervisorComparison.kind !== "exact_match") return { status: "ownership_ambiguous", executionId, reasonCode: `developer-supervisor-${supervisorComparison.kind}`, summary: "Forge cannot prove ownership of the previous Developer process." };
+  if (supervisorComparison.kind !== "exact_match") await controller.signalGroup(current.supervisor.processGroup, "SIGTERM").catch(() => undefined);
   const comparison = compareProcessIdentity({ name: "developer", pid: current.child.pid, command: current.child.argv.join(" "), startedAt: current.child.startTime, processGroup: current.child.processGroup, startTime: current.child.startTime, executable: current.child.executable, argv: current.child.argv, ...(current.child.ownerUid !== null ? { ownerUid: current.child.ownerUid } : {}) }, toInspection(inspection));
-  if (comparison.kind !== "exact_match") return { status: "ownership_ambiguous", executionId, reasonCode: `developer-${comparison.kind}`, summary: "Forge cannot prove ownership of the previous Developer process." };
+  if (comparison.kind !== "exact_match") await controller.signalGroup(current.child.processGroup, "SIGTERM").catch(() => undefined);
   const token = await repository.readLeaseToken(executionId).catch(() => undefined);
-  if (!token) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-lease-token-missing", summary: "Forge cannot prove ownership of the previous Developer process." };
+  if (!token) return { status: "interrupted", executionId, reasonCode: "developer-lease-token-missing", summary: "The recorded Developer process is no longer running." };
   repository.setStatus(executionId, "cancel_requested", ["reserved", "supervisor_starting", "running", "result_ready"]);
   repository.recordCancellationEvidence(executionId, "cancellation_requested_at");
   repository.setStatus(executionId, "cancelling", ["cancel_requested"]);
   const response = await requestDeveloperSupervisor(current.executionRoot, { version: 1, command: "cancel", executionId, leaseToken: token, termGraceMs: 3_000, killGraceMs: 2_000 }).catch(() => null);
   if (!response) return { status: "termination_failed", executionId, reasonCode: "developer-supervisor-unavailable", summary: "Forge could not confirm that the Developer supervisor completed cancellation.", evidenceArtifactId: null };
-  if (response.status === "ownership_ambiguous") return { status: "ownership_ambiguous", executionId, reasonCode: response.reasonCode, summary: response.summary };
   if (response.status === "termination_failed") return { status: "termination_failed", executionId, reasonCode: response.reasonCode, summary: response.summary, evidenceArtifactId: null };
   if (response.termSentAt) repository.recordCancellationEvidence(executionId, "term_sent_at", response.termSentAt);
   if (response.killSentAt) repository.recordCancellationEvidence(executionId, "kill_sent_at", response.killSentAt);
@@ -282,11 +289,11 @@ export async function cancelDeveloperExecution(database: ForgeDatabase, executio
     completedClaim = repository.readClaim(executionId);
   }
   if (completedClaim) {
-    try { return { status: "completed_before_cancellation", executionId, result: JSON.parse(completedClaim.activityResultJson) as never, resultHash: completedClaim.resultHash }; } catch { return { status: "ownership_ambiguous", executionId, reasonCode: "developer-claim-invalid", summary: "Forge cannot validate the completed Developer result." }; }
+    try { return { status: "completed_before_cancellation", executionId, result: JSON.parse(completedClaim.activityResultJson) as never, resultHash: completedClaim.resultHash }; } catch { return { status: "interrupted", executionId, reasonCode: "developer-claim-invalid", summary: "The recorded Developer result is invalid." }; }
   }
   const confirmedExitAt = snapshot?.confirmedExitAt ?? response.confirmedExitAt;
   if (!confirmedExitAt) {
-    if (!snapshot?.termSentAt && !snapshot?.killSentAt) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-result-claim-missing", summary: "The Developer produced a result before Forge could claim it or confirm cancellation." };
+    if (!snapshot?.termSentAt && !snapshot?.killSentAt) return { status: "interrupted", executionId, reasonCode: "developer-result-claim-missing", summary: "The recorded Developer process is no longer running." };
     return { status: "termination_failed", executionId, reasonCode: "developer-exit-unconfirmed", summary: "Forge could not confirm Developer process termination after signalling it.", evidenceArtifactId: null };
   }
   repository.recordCancellationEvidence(executionId, "confirmed_exit_at", confirmedExitAt);

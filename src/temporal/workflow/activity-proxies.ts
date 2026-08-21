@@ -75,11 +75,6 @@ export const { cancelDeveloperExecution } = proxyActivities<IssueActivities>({
 
 export const { findActiveDeveloperExecution } = proxyActivities<IssueActivities>({ startToCloseTimeout: "1 minute", retry: { maximumAttempts: 3, initialInterval: "1 second", maximumInterval: "5 seconds" } });
 
-export const { observeDeveloperExecution } = proxyActivities<IssueActivities>({
-  startToCloseTimeout: "1 minute",
-  retry: { maximumAttempts: 1 },
-});
-
 export const { reconcileDeveloperDeliveryEvidence } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
   scheduleToCloseTimeout: "2 minutes",

@@ -42,7 +42,7 @@ export interface DeveloperTurnRunResult {
   exitSignal: string | null;
   lines: string[];
   outputTruncated: boolean;
-  terminal: "result" | "interrupted" | "ownership_ambiguous";
+  terminal: "result" | "interrupted";
   lastHeartbeatAt: string | null;
   claim?: DeveloperResultClaim;
 }
@@ -193,7 +193,6 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
         lastHeartbeat = response.heartbeatAt;
         await heartbeat(current, repo, 0);
       }
-      if (response && response.status === "ownership_ambiguous") return { executionId: lease.executionId, resultHash: "", exitCode: null, exitSignal: null, lines: input.onLine ? [] : await readEvents(root), outputTruncated: false, terminal: "ownership_ambiguous", lastHeartbeatAt: lastHeartbeat };
       if (!response) {
         // The result file is the durable completion authority. Re-read it
         // after a failed socket request: the supervisor may have exited in
@@ -223,7 +222,7 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
           await activitySleep(250);
           continue;
         }
-        if (diskState.kind === "running") return { executionId: lease.executionId, resultHash: "", exitCode: null, exitSignal: null, lines: input.onLine ? [] : await readEvents(root), outputTruncated: false, terminal: "ownership_ambiguous", lastHeartbeatAt: latest?.heartbeatAt ?? lastHeartbeat };
+        if (diskState.kind === "running") continue;
         if (latest?.child) {
           // A short-lived child can exit and close the control socket just
           // before the supervisor's atomic result rename becomes visible.
@@ -258,7 +257,7 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
       ...(controller.isProcessGroupAlive ? { isProcessGroupAlive: controller.isProcessGroupAlive } : {}),
     };
     const cancellation = await cancelDeveloperExecution(input.database, input.executionId, cancellationController).catch((cancellationError) => ({ status: "termination_failed" as const, executionId: input.executionId, reasonCode: "developer-cancellation-error", summary: cancellationError instanceof Error ? cancellationError.message : "Developer cancellation could not be confirmed", evidenceArtifactId: null }));
-    if (cancellation.status === "ownership_ambiguous" || cancellation.status === "termination_failed") {
+    if (cancellation.status === "termination_failed") {
       throw ApplicationFailure.nonRetryable(cancellation.summary, cancellation.reasonCode, { executionId: input.executionId });
     }
     throw error;

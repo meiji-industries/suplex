@@ -511,7 +511,7 @@ export interface ForgeTask {
     lastHeartbeatAt: string | null;
     currentOwner: "forge" | "operator";
     evidenceArtifactId: string | null;
-    nextAction: { command: "retry_development" | "cancel_development" | "verify_developer_ownership" | "cancel_issue"; label: string; requiresConfirmation: boolean } | null;
+    nextAction: { command: "retry_development" | "cancel_development" | "cancel_issue"; label: string; requiresConfirmation: boolean } | null;
   };
   leadOutput?: {
     kind: "plan" | "decision_blocker";
@@ -2074,15 +2074,15 @@ export class TaskService {
     const projectedCommands = IssueCommandSchema.array().safeParse(rawAllowedCommands).success ? IssueCommandSchema.array().parse(rawAllowedCommands) : [];
     const allowedCommands = derivedAllowedCommands(row.phase, projectedCommands, workflowState.planRevision, planHistory.some((plan) => plan.kind === "plan"));
     const recoveryStatus = developerExecution?.leaseStatus === "result_ready" ? "result_pending_claim" : snapshotState?.success ? snapshotState.data.developerRecoveryStatus : undefined;
-    const nextRecoveryCommand = recoveryStatus ? (["verify_developer_ownership", "retry_development", "cancel_development", "cancel_issue"] as const).find((command) => allowedCommands.includes(command)) : undefined;
+    const nextRecoveryCommand = recoveryStatus ? (["retry_development", "cancel_development", "cancel_issue"] as const).find((command) => allowedCommands.includes(command)) : undefined;
     const developerRecovery = recoveryStatus && snapshotState?.success ? {
       status: recoveryStatus,
       reasonCode: snapshotState.data.developerRecoveryReasonCode ?? null,
       summary: developerExecution?.leaseStatus === "result_ready" ? "Developer finished. Forge is recording the result." : snapshotState.data.developerRecoverySummary ?? null,
       lastHeartbeatAt: snapshotState.data.developerLastHeartbeatAt ?? null,
-      currentOwner: recoveryStatus === "ownership_ambiguous" ? "operator" as const : "forge" as const,
+      currentOwner: "forge" as const,
       evidenceArtifactId: snapshotState.data.developerEvidenceArtifactId ?? developerExecution?.evidenceArtifactId ?? null,
-      nextAction: nextRecoveryCommand ? { command: nextRecoveryCommand, label: nextRecoveryCommand === "verify_developer_ownership" ? "Recheck ownership" : nextRecoveryCommand === "retry_development" ? "Retry development" : nextRecoveryCommand === "cancel_development" ? "Cancel development" : "Cancel issue", requiresConfirmation: nextRecoveryCommand !== "verify_developer_ownership" } : null,
+      nextAction: nextRecoveryCommand ? { command: nextRecoveryCommand, label: nextRecoveryCommand === "retry_development" ? "Retry development" : nextRecoveryCommand === "cancel_development" ? "Cancel development" : "Cancel issue", requiresConfirmation: true } : null,
     } : undefined;
     const planAuthorization = this.database.authQuery((db) => db.prepare("SELECT id, plan_sha256 FROM forge_plan_authorizations WHERE task_id = ? AND company_id = ? ORDER BY plan_revision DESC LIMIT 1").get(row.id, row.company_id) as { id: string; plan_sha256: string } | undefined);
     const decision = this.database.authQuery((db) => db.prepare("SELECT artifact_id FROM forge_delivery_decisions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { artifact_id: string } | undefined);

@@ -173,7 +173,6 @@ function createSharedActivities(context: ReplayScenarioActivityContext): Partial
     async cancelDeveloperExecution(activityInput) {
       return { status: "cancelled_confirmed" as const, executionId: activityInput.executionId, exitCode: null, exitSignal: "SIGTERM", evidenceArtifactId: null };
     },
-    async observeDeveloperExecution(activityInput) { return { executionId: activityInput.executionId, status: "active" as const, reasonCode: null, summary: "Controlled Developer is active.", lastHeartbeatAt: null }; },
     async publishRelease(activityInput) {
       return { outcome: "completed" as const, releaseId: `release-${scenario}`, repository: "example/forge", branchName: activityInput.branchName, baseBranch: "main", headSha: activityInput.subjectCommit, headTree: activityInput.subjectTree, pullRequestNumber: 1, pullRequestUrl: "https://example.test/pull/1", isDraft: true as const, reused: false, attempt: 1, targetBaseSha: activityInput.targetBaseSha };
     },

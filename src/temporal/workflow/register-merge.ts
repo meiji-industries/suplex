@@ -95,7 +95,7 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
           // treated as interrupted. The first loss is retried immediately; later
           // losses leave the normal retry command available without a dead-end
           // ownership-verification gate.
-          const interrupted = outcome.status === "interrupted" || outcome.status === "ownership_ambiguous";
+          const interrupted = outcome.status === "interrupted";
           autoRetry = interrupted && developerAttempt === 1 && ctx.patched("forge-merge-conflict-auto-retry-v1");
           const recoveryStatus = interrupted ? "interrupted" : outcome.status;
           ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: autoRetry ? "lead" : "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: autoRetry ? "Developer conflict-resolution process ended; Forge is starting the one automatic retry." : outcome.summary, ...ctx.recoveryFields(recoveryStatus, outcome.reasonCode, outcome.summary, "lastHeartbeatAt" in outcome ? outcome.lastHeartbeatAt : null), developerEvidenceArtifactId: outcome.status === "failed" ? outcome.evidenceArtifactId : ctx.state.developerEvidenceArtifactId, activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });

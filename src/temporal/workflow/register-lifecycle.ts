@@ -4,7 +4,7 @@ import { TERMINAL_PHASES } from "../../issue-phases.js";
 import { assertPayloadWithinLimit } from "../policy.js";
 import { ContinueWorkCommandSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, StartPlanningInputSchema } from "../issue-contracts.js";
 import { issueUpdates } from "../issue-updates.js";
-import { acceptDelivery, cancelCapacity, cancelCapacityExecution, cancelDeveloperExecution, createSuccessor, finalizeCapacity, inspectCapacity, observeDeveloperExecution, recordDeliveryDecision } from "./activity-proxies.js";
+import { acceptDelivery, cancelCapacity, cancelCapacityExecution, cancelDeveloperExecution, createSuccessor, finalizeCapacity, inspectCapacity, recordDeliveryDecision } from "./activity-proxies.js";
 import type { IssueWorkflowContext } from "./context.js";
 
 export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
@@ -64,7 +64,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
         const summary = "summary" in cancellation ? cancellation.summary : "Forge could not confirm Developer termination.";
         ownershipAmbiguous = true;
         if (!unconditionalCancellation) {
-          ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["verify_developer_ownership", "cancel_issue"]), pendingAction: summary, ...ctx.recoveryFields("ownership_ambiguous", "reasonCode" in cancellation ? cancellation.reasonCode : "developer-termination-unconfirmed", summary, ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+          ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: summary, ...ctx.recoveryFields("interrupted", "reasonCode" in cancellation ? cancellation.reasonCode : "developer-termination-unconfirmed", summary, ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
           await ctx.project();
           return ctx.state;
         }
@@ -117,9 +117,8 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
           return;
         }
         const cancelled = result.status === "cancelled" || result.status === "cancelled_confirmed";
-        const interrupted = result.status === "interrupted";
-        const ambiguous = result.status === "ownership_ambiguous" || result.status === "termination_failed";
-        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(cancelled || interrupted ? ["retry_development", "cancel_issue"] : ambiguous ? ["verify_developer_ownership", "cancel_issue"] : ["retry_development", "cancel_issue"]), pendingAction: cancelled ? "Developer turn cancelled; preserved work is available for retry" : interrupted ? result.summary : ambiguous ? result.summary : "Developer completed before cancellation; retry is disabled until the result is reconciled", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerOutcome: null, ...ctx.recoveryFields(cancelled ? "cancelled" : interrupted ? "interrupted" : ambiguous ? "ownership_ambiguous" : "result_pending_claim", "reasonCode" in result ? result.reasonCode : null, cancelled ? "Developer termination was confirmed; the worktree was preserved." : "summary" in result ? result.summary : "The Developer result won the cancellation race.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
+        const terminal = result.status === "termination_failed" ? "interrupted" : result.status;
+        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: cancelled ? "Developer turn cancelled; preserved work is available for retry" : "summary" in result ? result.summary : "Developer process is ready for retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerOutcome: null, ...ctx.recoveryFields(cancelled ? "cancelled" : terminal === "interrupted" ? "interrupted" : "result_pending_claim", "reasonCode" in result ? result.reasonCode : null, cancelled ? "Developer termination was confirmed; the worktree was preserved." : "summary" in result ? result.summary : "The Developer result won the cancellation race.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
         if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
       });
       await ctx.project();
@@ -162,9 +161,8 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
         return;
       }
       const cancelled = result.status === "cancelled" || result.status === "cancelled_confirmed";
-      const interrupted = result.status === "interrupted";
-      const ambiguous = result.status === "ownership_ambiguous" || result.status === "termination_failed";
-      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(cancelled || interrupted ? ["retry_development", "cancel_issue"] : ambiguous ? ["verify_developer_ownership", "cancel_issue"] : ["retry_development", "cancel_issue"]), pendingAction: cancelled ? "Developer turn cancelled; preserved work is available for retry" : interrupted ? result.summary : ambiguous ? result.summary : "Developer completed before cancellation; retry is disabled until the result is reconciled", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerOutcome: null, ...ctx.recoveryFields(cancelled ? "cancelled" : interrupted ? "interrupted" : ambiguous ? "ownership_ambiguous" : "result_pending_claim", "reasonCode" in result ? result.reasonCode : null, cancelled ? "Developer termination was confirmed; the worktree was preserved." : "summary" in result ? result.summary : "The Developer result won the cancellation race.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
+        const terminal = result.status === "termination_failed" ? "interrupted" : result.status;
+        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: cancelled ? "Developer turn cancelled; preserved work is available for retry" : "summary" in result ? result.summary : "Developer process is ready for retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerOutcome: null, ...ctx.recoveryFields(cancelled ? "cancelled" : terminal === "interrupted" ? "interrupted" : "result_pending_claim", "reasonCode" in result ? result.reasonCode : null, cancelled ? "Developer termination was confirmed; the worktree was preserved." : "summary" in result ? result.summary : "The Developer result won the cancellation race.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
       if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
     });
     let capacityStateProjected = false;
@@ -199,26 +197,6 @@ export function registerLifecycleHandlersContinuation(ctx: IssueWorkflowContext)
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (!["done", "cancelled", "failed"].includes(ctx.state.phase)) throw new Error("Continue work is only available after a terminal issue state");
     if (!ctx.state.allowedCommands.includes("continue_work")) throw new Error("Continue work is not available in the current phase");
-  } });
-  setHandler(issueUpdates.verify_developer_ownership, ctx.guarded(async (rawInput) => {
-    const command = StartPlanningInputSchema.parse(rawInput);
-    if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
-    const executionId = ctx.state.developerExecutionId!;
-    await ctx.withStateMutation(() => {
-      if (ctx.state.revision !== command.expectedRevision || ctx.state.developerRecoveryStatus !== "ownership_ambiguous") throw new Error("Developer ownership verification was superseded by another command");
-      ctx.markCommandProcessed(command.commandId);
-    });
-    const observation = await observeDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId });
-    await ctx.withStateMutation(() => {
-      const allowedCommands = observation.status === "active" ? ["cancel_development", "cancel_issue"] as const : observation.status === "interrupted" ? ["retry_development", "cancel_issue"] as const : observation.status === "result_ready" ? ["retry_development", "cancel_issue"] as const : ["verify_developer_ownership", "cancel_issue"] as const;
-      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: observation.status === "active" ? "development" : "delivery_blocked", owner: observation.status === "active" ? "lead" : "human", allowedCommands, pendingAction: observation.summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields(observation.status === "result_ready" ? "result_pending_claim" : observation.status, observation.reasonCode, observation.summary, observation.lastHeartbeatAt) });
-    });
-    await ctx.project();
-    return ctx.state;
-  }), { validator(rawInput) {
-    const command = StartPlanningInputSchema.parse(rawInput);
-    if (ctx.commandAlreadyProcessed(command.commandId)) return;
-    if (command.expectedRevision !== ctx.state.revision || ctx.state.developerRecoveryStatus !== "ownership_ambiguous" || !ctx.state.developerExecutionId) throw new Error("Developer ownership verification is not available");
   } });
   // Escape hatch: re-persist the projection from the workflow's current in-memory state.
   // No revision check, no phase restriction — it must work even when the DB projection

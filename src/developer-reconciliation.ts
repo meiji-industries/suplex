@@ -28,6 +28,8 @@ export const IndependentVerificationSchema = z.object({
 
 export type IndependentVerification = z.infer<typeof IndependentVerificationSchema>;
 
+const StoredDeveloperDeliverySchema = DeveloperDeliverySchema.partial();
+
 export interface DeveloperGitObservation {
   branch: string;
   head: string;
@@ -57,6 +59,8 @@ export interface DeveloperReconciliationInput {
   manifest: EvidenceManifest;
   verificationProjectRevisionId?: string;
   requiredChecks: string[];
+  /** A stored result is rechecked only for delivery commits and a clean worktree. */
+  existingResult?: boolean;
 }
 
 export interface DeveloperReconciliation {
@@ -198,19 +202,25 @@ export async function collectDeveloperGitObservation(repositoryPath: string, sta
 
 export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInput): DeveloperReconciliation {
   const independentVerification = normalizeVerification(rawInput.independentVerification);
-  const parsed = DeveloperDeliverySchema.safeParse(rawInput.report);
+  const strictReport = DeveloperDeliverySchema.safeParse(rawInput.report);
+  const parsed = rawInput.existingResult ? StoredDeveloperDeliverySchema.safeParse(rawInput.report) : strictReport;
   const mismatches: string[] = [];
   if (!parsed.success) mismatches.push("raw-report-schema-invalid");
-  const report = parsed.success ? parsed.data : null;
-  if (rawInput.git.branch !== rawInput.neutralBranch) mismatches.push("branch-mismatch");
-  if (rawInput.git.status) mismatches.push("dirty-final-tree");
-  if (rawInput.processExitCode !== 0) mismatches.push(rawInput.processExitCode === null ? "process-exit-unknown" : "process-exit-nonzero");
-  if (!rawInput.developerSessionId) mismatches.push("missing-session");
-  if (!rawInput.leadSessionId) mismatches.push("missing-lead-session");
-  else if (rawInput.developerSessionId === rawInput.leadSessionId) mismatches.push("session-identity-conflict");
-  if (!independentVerification || independentVerification.outcome !== "passed") mismatches.push("independent-verification-failed");
+  const report = strictReport.success ? strictReport.data : null;
+  if (rawInput.existingResult) {
+    if (rawInput.git.commitCount === 0) mismatches.push("developer-made-no-change");
+    if (rawInput.git.status) mismatches.push("dirty-final-tree");
+  } else {
+    if (rawInput.git.branch !== rawInput.neutralBranch) mismatches.push("branch-mismatch");
+    if (rawInput.git.status) mismatches.push("dirty-final-tree");
+    if (rawInput.processExitCode !== 0) mismatches.push(rawInput.processExitCode === null ? "process-exit-unknown" : "process-exit-nonzero");
+    if (!rawInput.developerSessionId) mismatches.push("missing-session");
+    if (!rawInput.leadSessionId) mismatches.push("missing-lead-session");
+    else if (rawInput.developerSessionId === rawInput.leadSessionId) mismatches.push("session-identity-conflict");
+    if (!independentVerification || independentVerification.outcome !== "passed") mismatches.push("independent-verification-failed");
+  }
 
-  if (report) {
+  if (report && !rawInput.existingResult) {
     const expectedSteps = rawInput.manifest.verificationCommands.map((step) => step.stepNumber).sort((a, b) => a - b);
     const reportedSteps = report.steps.map((step) => step.number).sort((a, b) => a - b);
     if (new Set(expectedSteps).size !== expectedSteps.length) mismatches.push("duplicate-authorized-step");
@@ -225,14 +235,14 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
   }
 
   const uniqueMismatches = [...new Set(mismatches)];
-  const noChangeDelivery = rawInput.manifest.verificationCommands.length > 0
+  const noChangeDelivery = !rawInput.existingResult && rawInput.manifest.verificationCommands.length > 0
     && rawInput.git.status === ""
     && rawInput.git.head.toLowerCase() === rawInput.startingSha.toLowerCase()
     && rawInput.git.changedPaths.length === 0;
   if (noChangeDelivery && !uniqueMismatches.includes("developer-made-no-change")) uniqueMismatches.push("developer-made-no-change");
   // Audit observations remain durable diagnostics; only required local checks and
   // unsafe worktree state decide whether delivery can continue.
-  const requiredTestsFailed = !independentVerification || independentVerification.outcome !== "passed";
+  const requiredTestsFailed = !rawInput.existingResult && (!independentVerification || independentVerification.outcome !== "passed");
   // When GitHub has required checks, they are the merge authority. Keep a
   // failed local run in the durable evidence and surface it to review, but do
   // not prevent the delivery from reaching that authority.

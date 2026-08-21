@@ -19,6 +19,19 @@ test("accepts a valid delivery without receipt input", () => {
   expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
 });
 
+test("rechecks an existing clean delivery commit without stale execution comparisons", () => {
+  const result = reconcileDeveloperDelivery(input({
+    existingResult: true,
+    independentVerification: null,
+    report: { kind: "delivery", summary: "legacy delivery" },
+    git: { ...git, branch: "renamed-branch" },
+    processExitCode: 1,
+    developerSessionId: null,
+    leadSessionId: null,
+  }));
+  expect(result).toMatchObject({ outcome: "completed", failureCode: null, mismatches: [] });
+});
+
 test("accepts a delivery when unrelated provider state changes", () => {
   const result = reconcileDeveloperDelivery(input({ providerAfterSha256: "f".repeat(64) }));
   expect(result).toMatchObject({ outcome: "completed", failureCode: null });

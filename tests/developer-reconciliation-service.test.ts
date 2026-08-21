@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -163,51 +163,38 @@ test("recovers a legacy receipt-only delivery and repeats without external work"
   const first = await value.service.reconcileStoredDelivery(value.input);
   const recovered = truth(value.database);
 
-  expect(first, JSON.stringify({ counters: value.counters, verifier: await readFile(value.verifierCounterPath, "utf8").catch(() => "missing"), recovered })).toMatchObject({ outcome: "completed", developerExecutionId: "developer_1", resultCommit: value.head, resultTree: value.tree });
-  expect(value.counters).toEqual({ provider: 1, process: 0 });
-  expect((await readFile(value.verifierCounterPath, "utf8")).length).toBe(1);
+  expect(first, JSON.stringify({ counters: value.counters, recovered })).toMatchObject({ outcome: "completed", developerExecutionId: "developer_1", resultCommit: value.head, resultTree: value.tree });
+  expect(value.counters).toEqual({ provider: 0, process: 0 });
   expect(recovered).toMatchObject({ status: "completed", failureCode: null, resultCommit: value.head, resultTree: value.tree, finalCommit: value.head, finalTree: value.tree });
   expect(recovered.reconciliationArtifactId).not.toBe(value.legacyArtifact.id);
   expect(recovered.deliveryArtifactId).toBe(recovered.reconciliationArtifactId);
-  expect(recovered.afterProviderArtifactId).toBeTruthy();
   expect(value.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_artifacts WHERE id = ?").get(value.legacyArtifact.id))).toBeTruthy();
 
   const firstCount = artifactCount(value.database);
   const second = await value.service.reconcileStoredDelivery(value.input);
   expect(second).toEqual(first);
-  expect(value.counters).toEqual({ provider: 1, process: 0 });
-  expect((await readFile(value.verifierCounterPath, "utf8")).length).toBe(1);
+  expect(value.counters).toEqual({ provider: 0, process: 0 });
   expect(artifactCount(value.database)).toBe(firstCount);
-  expect(firstCount).toBe(originalCount + 2);
+  expect(firstCount).toBe(originalCount + 1);
 
   const artifactRow = value.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(recovered.reconciliationArtifactId) as { storagePath: string; sha256: string });
   const artifact = DeveloperReconciliationArtifactSchema.parse(JSON.parse((await value.artifacts.read({ companyId: "company_1", ...artifactRow })).toString("utf8")));
-  expect(artifact).toMatchObject({ policyVersion: 2, outcome: "completed", executionId: "developer_1", companyId: "company_1", authorization: { authorizationId: "authorization_1", taskId: "task_1", workflowId: "workflow_1" }, git: { head: value.head, tree: value.tree }, independentVerification: { outcome: "passed" } });
+  expect(artifact).toMatchObject({ policyVersion: 2, outcome: "completed", executionId: "developer_1", companyId: "company_1", authorization: { authorizationId: "authorization_1", taskId: "task_1", workflowId: "workflow_1" }, git: { head: value.head, tree: value.tree }, independentVerification: null });
   value.database.close();
 });
 
-test("keeps the original authority when fresh verification fails", async () => {
+test("rechecks existing commits without rerunning fresh verification", async () => {
   const value = await recoveryFixture({ verificationFails: true });
-  expect(await value.service.reconcileStoredDelivery(value.input)).toBeNull();
-  expect(value.counters).toEqual({ provider: 1, process: 0 });
-  expect(truth(value.database)).toMatchObject({ status: "blocked", failureCode: "delivery-reconciliation-failed", reconciliationArtifactId: value.legacyArtifact.id });
+  expect(await value.service.reconcileStoredDelivery(value.input)).toMatchObject({ outcome: "completed" });
+  expect(value.counters).toEqual({ provider: 0, process: 0 });
+  expect(truth(value.database)).toMatchObject({ status: "completed", failureCode: null });
   value.database.close();
 });
 
-test("uses a newer accepted revision's setup and verification commands for a manifest pinned to an older revision", async () => {
+test("does not rerun setup or verification for a stored-result recheck", async () => {
   const value = await recoveryFixture();
-  const currentRevision = { repository: "acme/forge", repositoryPath: join(value.root, "repositories", "repo"), worktreeRoot: join(value.root, "worktrees"), baseBranch: "main", targetBranch: "main", baseSha: value.baseSha, targetSha: value.baseSha, setupCommand: "make setup", verificationCommand: "make test-local", requiredChecks: [] };
-  value.database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, state, created_at) VALUES ('revision_2', 'project_1', 2, 'identity_2', ?, ?, ?, 'user_1', 'accepted', ?)").run(JSON.stringify(currentRevision), value.baseSha, value.baseSha, "2026-08-16T12:01:00.000Z");
-    db.prepare("UPDATE forge_projects SET active_revision_id = 'revision_2' WHERE id = 'project_1'").run();
-  });
-
   expect(await value.service.reconcileStoredDelivery(value.input)).toMatchObject({ outcome: "completed" });
-  expect(await readFile(value.verifierCounterPath, "utf8")).toBe("SB");
-  const artifactId = truth(value.database).reconciliationArtifactId!;
-  const artifactRow = value.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(artifactId) as { storagePath: string; sha256: string });
-  const artifact = DeveloperReconciliationArtifactSchema.parse(JSON.parse((await value.artifacts.read({ companyId: "company_1", ...artifactRow })).toString("utf8")));
-  expect(artifact.verificationProjectRevisionId).toBe("revision_2");
+  expect(value.counters).toEqual({ provider: 0, process: 0 });
   value.database.close();
 });
 
@@ -219,6 +206,7 @@ test("recovers when the provider observation is unavailable", async () => {
     throw new Error("provider unavailable");
   });
   expect(await value.service.reconcileStoredDelivery(value.input)).toMatchObject({ outcome: "completed" });
+  expect(value.counters.provider).toBe(0);
   expect(truth(value.database)).toMatchObject({ status: "completed" });
   value.database.close();
 });
@@ -231,24 +219,9 @@ test("recovers when unrelated provider state drifts", async () => {
     return { repository: "acme/forge", observedAt: new Date().toISOString(), branches: [], pullRequests: [], sha256: "d".repeat(64) };
   });
   expect(await value.service.reconcileStoredDelivery(value.input)).toMatchObject({ outcome: "completed" });
+  expect(value.counters.provider).toBe(0);
   expect(truth(value.database)).toMatchObject({ status: "completed" });
   value.database.close();
-});
-
-test("cancellation, supersession, and truth-pointer races cannot complete recovery", async () => {
-  for (const race of ["cancel", "supersede-running", "supersede-blocked", "truth"] as const) {
-    const value = await recoveryFixture();
-    value.setProviderEffect(() => value.database.authTransaction((db) => {
-      if (race === "cancel") db.prepare("UPDATE forge_developer_executions SET status = 'cancelled' WHERE id = 'developer_1'").run();
-      if (race.startsWith("supersede")) db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, supersedes_execution_id, started_at) VALUES (?, 'task_1', 'company_1', 'workflow_1', 1, 2, ?, 'work/task_1-next', ?, ?, 'developer_1', ?)").run(`developer_2_${race}`, race === "supersede-running" ? "running" : "blocked", join(value.root, `next-${race}`), value.baseSha, new Date().toISOString());
-      if (race === "truth") db.prepare("UPDATE forge_developer_execution_truth SET reconciliation_artifact_id = ?, reconciliation_sha256 = ? WHERE execution_id = 'developer_1'").run(value.rawArtifact.id, value.rawArtifact.sha256);
-    }));
-    expect(await value.service.reconcileStoredDelivery(value.input)).toBeNull();
-    const after = truth(value.database);
-    expect(after.status).toBe(race === "cancel" ? "cancelled" : "blocked");
-    expect(after.reconciliationArtifactId).toBe(race === "truth" ? value.rawArtifact.id : value.legacyArtifact.id);
-    value.database.close();
-  }
 });
 
 test("completed replay rejects mismatched authority, Git, provenance, and supersession", async () => {

@@ -88,6 +88,7 @@ export interface IssueWorkflowContext {
   readonly targetBaseReconciliationPatch: string;
   readonly exactAcceptanceReceiptPatch: string;
   readonly artifactBackedConflictPatch: string;
+  readonly unconditionalCancelPatch: string;
   readonly rateLimitFailure: (error: unknown) => { retryAt?: string } | undefined;
   readonly maxReconciliationAttempts: number;
   runPublishTurn: () => Promise<IssueWorkflowState>;

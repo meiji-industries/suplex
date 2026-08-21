@@ -1320,11 +1320,11 @@ export class TaskService {
     const descriptor = issueCommands[command];
     if (descriptor.family === "bespoke") throw new TaskFailure("This command requires its dedicated action", [finding("workflow-unavailable", "workflow", "The durable issue workflow is unavailable")], 503, task);
     const expectedRevision = payload.expectedRevision;
-    if (!Number.isInteger(expectedRevision) || expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
+    if (!Number.isInteger(expectedRevision) || (command !== "cancel_issue" && expectedRevision !== task.revision)) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
     const retryingCancellation = command === "cancel_development" && task.developerRecovery?.status === "cancellation_requested";
     const canContinuePastReview = command === "record_delivery_decision" && (task.phase === "repair_required" || (task.phase === "delivery_blocked" && task.allowedCommands.includes("repair_delivery")));
     const retryingLegacyConflictPlan = command === "resolve_merge_conflict" && task.phase === "merge_conflict_required" && task.pendingAction === "Lead conflict-resolution planning failed; inspect the recorded evidence";
-    if (!task.allowedCommands.includes(command) && !retryingCancellation && !canContinuePastReview && !retryingLegacyConflictPlan) {
+    if (command !== "cancel_issue" && !task.allowedCommands.includes(command) && !retryingCancellation && !canContinuePastReview && !retryingLegacyConflictPlan) {
       const message = command === "start_planning" ? "Planning cannot start from the current state" : command === "record_delivery_decision" ? "A delivery decision is not available" : descriptor.family === "start" ? "Plan action is not available" : "Task action is not available";
       throw new TaskFailure(message, [finding("illegal-command", "phase", message)], 409, task);
     }
@@ -1344,7 +1344,10 @@ export class TaskService {
         ? await this.workflow.acceptPlanning(task.workflowId, { expectedRevision, actorUserId })
         : (command === "start_development" || command === "retry_development") && this.workflow.acceptDevelopment
           ? await this.workflow.acceptDevelopment(task.workflowId, input as StartPlanningInput, command)
-        : await this.workflow.execute(command, task.workflowId, input);
+          : await this.workflow.execute(command, task.workflowId, input);
+      if (command !== "cancel_issue" && state.revision <= expectedRevision) {
+        throw new Error("Stale workflow revision");
+      }
       this.recordTaskCommand(task, actorUserId, command, state.revision);
       if (command === "start_planning") await this.waitForProjection(taskId, expectedRevision + 1);
       return this.getTask(actorUserId, taskId);

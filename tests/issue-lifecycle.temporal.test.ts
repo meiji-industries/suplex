@@ -233,7 +233,7 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
   }
 }, 120_000);
 
-test("cancel_issue is available while planning is in flight and wins over a late Lead result", async () => {
+test("cancel_issue cancels a Lead activity despite a stale revision and late result", async () => {
   const harness = createTemporalHarness();
   await harness.start();
   const { config, database, state } = harness;
@@ -259,7 +259,9 @@ test("cancel_issue is available while planning is in flight and wins over a late
     expect(planning).toMatchObject({ phase: "planning", owner: "lead" });
     expect(planning.allowedCommands).toContain("cancel_issue");
 
-    const cancelled = await executeIssueCommand(config, started.workflowId, "cancel_issue", { expectedRevision: planning.revision, actorUserId: "issue-admin" });
+    const staleRevision = planning.revision - 1;
+    expect(staleRevision).toBeGreaterThanOrEqual(0);
+    const cancelled = await executeIssueCommand(config, started.workflowId, "cancel_issue", { expectedRevision: staleRevision, actorUserId: "issue-admin" });
     expect(cancelled).toMatchObject({ phase: "cancelled", owner: "human" });
 
     // Release the held Lead turn now that cancellation was requested: its stale result must

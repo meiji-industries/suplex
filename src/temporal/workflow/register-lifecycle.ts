@@ -55,7 +55,8 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     if (!ctx.exactPlanAuthorityEnabled && ctx.captureInitialProjectionState) await condition(() => ctx.initialProjectionComplete);
     if (ctx.initialProjectionBarrierEnabled) await ctx.initialProjection;
     const command = PlanCommandInputSchema.parse(rawInput);
-    if (command.expectedRevision !== ctx.state.revision || TERMINAL_PHASES.has(ctx.state.phase)) throw new Error("Issue cancellation is not available in the current phase");
+    const unconditionalCancellation = ctx.patched(ctx.unconditionalCancelPatch);
+    if ((!unconditionalCancellation && command.expectedRevision !== ctx.state.revision) || TERMINAL_PHASES.has(ctx.state.phase)) throw new Error("Issue cancellation is not available in the current phase");
     if (ctx.state.phase === "planning" && ctx.planningScope) {
       ctx.planningScope.cancel();
       await ctx.planningPromise?.catch(() => undefined);
@@ -66,26 +67,28 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     if (ctx.state.developerExecutionId && ["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling", "ownership_ambiguous"].includes(ctx.state.developerRecoveryStatus ?? "")) {
       const cancellation = await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId: ctx.state.developerExecutionId });
       if (cancellation.status === "completed_before_cancellation") {
-        if (ctx.applyCompletedDeveloperResult(cancellation.result, "Developer result claimed before issue cancellation.")) {
+        if (!unconditionalCancellation && ctx.applyCompletedDeveloperResult(cancellation.result, "Developer result claimed before issue cancellation.")) {
           await ctx.project();
           return ctx.state;
         }
         const result = cancellation.result as { developerExecutionId?: unknown; outcome?: unknown } | undefined;
-        if (result?.outcome !== "blocked" || result.developerExecutionId !== ctx.state.developerExecutionId || !ctx.patched(ctx.cancelBlockedDeveloperResultPatch)) throw new Error("Completed Developer result is invalid");
+        if (!unconditionalCancellation && (result?.outcome !== "blocked" || result.developerExecutionId !== ctx.state.developerExecutionId || !ctx.patched(ctx.cancelBlockedDeveloperResultPatch))) throw new Error("Completed Developer result is invalid");
       }
       if (cancellation.status !== "completed_before_cancellation" && !["cancelled", "cancelled_confirmed", "interrupted"].includes(cancellation.status)) {
         const summary = "summary" in cancellation ? cancellation.summary : "Forge could not confirm Developer termination.";
         ownershipAmbiguous = true;
-        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["verify_developer_ownership", "cancel_issue"]), pendingAction: summary, ...ctx.recoveryFields("ownership_ambiguous", "reasonCode" in cancellation ? cancellation.reasonCode : "developer-termination-unconfirmed", summary, ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
-        await ctx.project();
-        return ctx.state;
+        if (!unconditionalCancellation) {
+          ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["verify_developer_ownership", "cancel_issue"]), pendingAction: summary, ...ctx.recoveryFields("ownership_ambiguous", "reasonCode" in cancellation ? cancellation.reasonCode : "developer-termination-unconfirmed", summary, ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+          await ctx.project();
+          return ctx.state;
+        }
       }
       if (ctx.state.capacity) await settleCancelledCapacity(ctx.state.developerExecutionId);
     } else {
       const cancellation = await cancelCurrentCapacity();
       if (cancellation.executionId) await settleCancelledCapacity(cancellation.executionId);
       ownershipAmbiguous = cancellation.status === "ownership_ambiguous";
-      if (ownershipAmbiguous) await preserveAmbiguousCapacity();
+      if (ownershipAmbiguous && !unconditionalCancellation) await preserveAmbiguousCapacity();
     }
     let acceptanceStatus = ctx.state.acceptanceStatus;
     let acceptanceReasonArtifactId = ctx.state.acceptanceReasonArtifactId;

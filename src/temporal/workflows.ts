@@ -102,6 +102,7 @@ const exhaustedActivityRecoveryPatch = "forge-exhausted-activity-recovery-v1";
 const capacityFinalizationOwnershipPatch = "forge-capacity-finalization-ownership-v1";
 const guardedHandlersPatch = "forge-guarded-handlers-v1";
 const autoChainLeadPhasesPatch = "forge-auto-chain-lead-phases-v1";
+const unconditionalCancelPatch = "forge-unconditional-cancel-v1";
 
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
@@ -333,6 +334,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     targetBaseReconciliationPatch,
     exactAcceptanceReceiptPatch,
     artifactBackedConflictPatch,
+    unconditionalCancelPatch,
     rateLimitFailure,
     maxReconciliationAttempts: MAX_RECONCILIATION_ATTEMPTS,
     runPublishTurn: async () => { throw new Error("Publish runtime is not initialized"); },

@@ -124,6 +124,12 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     expect(capacityResponse.json()).toMatchObject({ capacity: { profileId: profile.id, agentName: "Planner", status: "queued", position: 1, reason: null, requestedAt: queued.requestedAt, retryAt: null } });
     expect(JSON.stringify(capacityResponse.json().capacity)).not.toMatch(/requestId|laneKey|execution|session|wrapper|process|worktree|command|artifact/i);
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie, origin }, payload: { expectedRevision: 9 } })).statusCode).toBe(409);
+    const acceptedPlanningUpdate = workflow.acceptPlanning!;
+    workflow.acceptPlanning = async (workflowId) => workflow.query(workflowId);
+    const silentlyDropped = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie, origin }, payload: { expectedRevision: 0 } });
+    expect(silentlyDropped.statusCode).toBe(409);
+    expect(silentlyDropped.json()).toMatchObject({ current: { id: task.id, revision: 0 } });
+    workflow.acceptPlanning = acceptedPlanningUpdate;
     const started = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie, origin }, payload: { expectedRevision: 0 } });
     expect(started.statusCode).toBe(200);
     expect(acceptedPlanning).toBe(1);

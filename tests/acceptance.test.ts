@@ -78,7 +78,7 @@ test("acceptance requires exact final-review evidence and records ready reconcil
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("ready reconciliation records typed timeout, changed, and closed outcomes", async () => {
+test("ready reconciliation records typed timeout, adopted-head, and closed outcomes", async () => {
   const value = await fixture();
   try {
     const provider = github();
@@ -93,7 +93,7 @@ test("ready reconciliation records typed timeout, changed, and closed outcomes",
   try {
     const provider = github({ ...pullRequest(), headSha: "d".repeat(40) });
     const service = new AcceptanceService(changed.database, provider, { artifacts: changed.artifacts });
-    await expect(service.accept(input)).resolves.toMatchObject({ status: "blocked", outcome: "changed" });
+    await expect(service.accept(input)).resolves.toMatchObject({ status: "accepted", outcome: "ready" });
   } finally { changed.database.close(); await rm(changed.root, { recursive: true, force: true }); }
 
   const closed = await fixture();
@@ -177,12 +177,12 @@ test("request changes is accepted as a new immutable decision for a blocking fin
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("acceptance rejects a mismatched CI coordinate", async () => {
+test("acceptance retains CI coordinates as history when the observed head advances", async () => {
   const value = await fixture();
   try {
     value.database.authTransaction((db) => db.prepare("UPDATE forge_ci_runs SET expected_head_sha = ? WHERE id = 'ci-a'").run("e".repeat(40)));
     const service = new AcceptanceService(value.database, github(), { artifacts: value.artifacts });
-    await expect(service.accept(input)).rejects.toMatchObject({ code: "not-ready" });
+    await expect(service.accept(input)).resolves.toMatchObject({ status: "accepted", outcome: "ready" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

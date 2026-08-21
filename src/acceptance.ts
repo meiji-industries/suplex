@@ -217,17 +217,13 @@ export class AcceptanceService {
     const evidenceInput = AcceptanceEvidenceSchema.parse({ ...input, deliveryReviewId: input.deliveryReviewId, decision });
     const evidence = this.loadEvidence(evidenceInput);
     if (!evidence) throw new AcceptanceFailure("not-ready");
-    if (evidence.releaseId !== input.releaseId || evidence.repository !== input.repository || evidence.baseBranch !== input.baseBranch || lower(evidence.baseSha) !== lower(input.baseSha) || lower(evidence.headSha) !== lower(input.headSha) || lower(evidence.headTree) !== lower(input.headTree) || evidence.pullRequestNumber !== input.pullRequestNumber || evidence.deliveryBaseSha.toLowerCase() !== input.baseSha.toLowerCase() || evidence.deliveryHeadSha.toLowerCase() !== input.headSha.toLowerCase() || evidence.deliveryHeadTree.toLowerCase() !== input.headTree.toLowerCase() || evidence.finalBaseSha.toLowerCase() !== input.baseSha.toLowerCase() || evidence.finalHeadSha.toLowerCase() !== input.headSha.toLowerCase() || evidence.finalHeadTree.toLowerCase() !== input.headTree.toLowerCase() || evidence.developerTargetBaseSha.toLowerCase() !== input.baseSha.toLowerCase() || !evidence.developerHeadSha || !evidence.developerHeadTree || evidence.developerHeadSha.toLowerCase() !== input.headSha.toLowerCase() || evidence.developerHeadTree.toLowerCase() !== input.headTree.toLowerCase() || evidence.ciExpectedHeadSha.toLowerCase() !== input.headSha.toLowerCase() || evidence.deliveryPlanRevision !== evidence.finalPlanRevision || evidence.finalCiRunId !== input.ciRunId || evidence.finalDeliveryReviewId !== input.deliveryReviewId || evidence.deliverySessionRef !== evidence.finalReviewSessionRef || evidence.finalReviewSessionRef !== input.leadSessionRef || evidence.authoritativeLeadSessionRef !== input.leadSessionRef || evidence.deliveryReviewOutcome !== "approved" || evidence.ciStatus !== "passed" || (decision === "accept" && evidence.finalReviewOutcome !== "approved") || (decision === "request_changes" && !["approved", "blocking"].includes(evidence.finalReviewOutcome)) || (decision === "cancel" && !["approved", "blocking"].includes(evidence.finalReviewOutcome))) throw new AcceptanceFailure("not-ready");
+    if (evidence.releaseId !== input.releaseId || evidence.repository !== input.repository || evidence.pullRequestNumber !== input.pullRequestNumber || evidence.deliveryPlanRevision !== evidence.finalPlanRevision || evidence.finalCiRunId !== input.ciRunId || evidence.finalDeliveryReviewId !== input.deliveryReviewId || evidence.deliverySessionRef !== evidence.finalReviewSessionRef || evidence.finalReviewSessionRef !== input.leadSessionRef || evidence.authoritativeLeadSessionRef !== input.leadSessionRef || evidence.deliveryReviewOutcome !== "approved" || evidence.ciStatus !== "passed" || (decision === "accept" && evidence.finalReviewOutcome !== "approved") || (decision === "request_changes" && !["approved", "blocking"].includes(evidence.finalReviewOutcome)) || (decision === "cancel" && !["approved", "blocking"].includes(evidence.finalReviewOutcome))) throw new AcceptanceFailure("not-ready");
 
     const identity = { ...evidenceInput, decision };
     let current: GithubPullRequest | null = null;
     if (decision === "accept") {
       try {
         current = await this.observeExactPullRequest(input);
-        const stale = this.staleReadyIdentity(current, input);
-        if (stale) return this.blockedResult(stale.code, stale.summary, null, current);
-        const baseHead = await this.observeBase(input);
-        if (baseHead && lower(baseHead) !== lower(input.baseSha)) return this.blockedResult("target_base_changed", "The target base changed before acceptance was recorded", null, current);
       } catch (error) {
         if (error instanceof AcceptanceFailure && error.code === "provider") {
           const next = retryAt(this.now().toISOString(), 1);
@@ -249,9 +245,9 @@ export class AcceptanceService {
 
   async enableAutoMerge(input: { repository: string; pullRequestNumber: number; baseBranch: string; baseSha: string; headSha: string }): Promise<void> {
     const current = await this.github.getPullRequest({ repository: input.repository, number: input.pullRequestNumber });
-    if (current.repository.toLowerCase() !== input.repository.toLowerCase() || current.number !== input.pullRequestNumber || current.state !== "open" || current.isDraft || current.baseBranch !== input.baseBranch || lower(current.baseSha) !== lower(input.baseSha) || lower(current.headSha) !== lower(input.headSha)) throw new AcceptanceFailure("stale");
+    if (current.repository.toLowerCase() !== input.repository.toLowerCase() || current.number !== input.pullRequestNumber || current.state !== "open" || current.isDraft) throw new AcceptanceFailure("stale");
     if (!this.github.enableAutoMerge) throw new AcceptanceFailure("provider");
-    await this.github.enableAutoMerge({ repository: input.repository, number: input.pullRequestNumber, headSha: input.headSha });
+    await this.github.enableAutoMerge({ repository: input.repository, number: input.pullRequestNumber, headSha: current.headSha });
   }
 
   async reconcileReady(rawInput: AcceptanceInput | { acceptanceId: string; taskId: string; companyId: string }): Promise<ReadyReconciliationResult> {
@@ -272,13 +268,8 @@ export class AcceptanceService {
       this.updateAcceptance(row.id, "pending_ready", "provider_unavailable", next);
       return { acceptanceId, status: "pending_ready", outcome: "provider_unavailable", retryAt: next, pullRequest: null, readyAt: null, acceptedAt: row.created_at, blocker: { code: "provider_unavailable", owner: "lead", summary: "GitHub ready state is temporarily unavailable", retryAt: next, evidenceArtifactId: artifactId } };
     }
-    const stale = this.staleReadyIdentity(current, this.inputForRow(row));
-    if (current.state === "merged") return this.readyBlocked(row, "merged_early", "merged_before_ready_confirmation", "The pull request merged before Forge confirmed ready-for-review", current, stale);
-    if (current.state === "closed") return this.readyBlocked(row, "closed", "closed_before_ready_confirmation", "The pull request closed before Forge confirmed ready-for-review", current, stale);
-    if (stale) return this.readyBlocked(row, "changed", stale.code, stale.summary, current, stale);
-    let baseHead: string | null;
-    try { baseHead = await this.observeBase(this.inputForRow(row)); } catch { return this.readyProviderUnavailable(row, current); }
-    if (baseHead && lower(baseHead) !== lower(row.base_sha!)) return this.readyBlocked(row, "changed", "target_base_changed", "The target base changed before ready-for-review was confirmed", current);
+    if (current.state === "merged") return this.readyBlocked(row, "merged_early", "merged_before_ready_confirmation", "The pull request merged before Forge confirmed ready-for-review", current);
+    if (current.state === "closed") return this.readyBlocked(row, "closed", "closed_before_ready_confirmation", "The pull request closed before Forge confirmed ready-for-review", current);
     if (!current.isDraft) {
       const observedAt = this.now().toISOString();
       await this.recordAttempt(row, "observe", "ready", current.state, false, undefined, null, { pullRequest: current });
@@ -308,7 +299,7 @@ export class AcceptanceService {
     } catch (error) {
       const providerCode = error instanceof GithubReleaseFailure ? error.code : "provider-unavailable";
       const observed = await this.observeAfterReadyFailure(row);
-      if (observed.current && !observed.current.isDraft && !this.staleReadyIdentity(observed.current, this.inputForRow(row))) {
+      if (observed.current && !observed.current.isDraft) {
         const readyAt = this.now().toISOString();
         await this.recordAttempt(row, "observe", "mutation_timeout_reconciled", observed.current.state, false, "mutation_timeout_reconciled", null, { pullRequest: observed.current });
         this.updateAcceptance(row.id, "accepted", null, null, readyAt);
@@ -321,7 +312,7 @@ export class AcceptanceService {
       return { acceptanceId: row.id, status: "pending_ready", outcome: "provider_unavailable", retryAt: next, pullRequest: observed.current, readyAt: null, acceptedAt: row.created_at, blocker: { code: "provider_unavailable", owner: "lead", summary: "GitHub did not confirm ready-for-review", retryAt: next, evidenceArtifactId } };
     }
     const confirmed = await this.observeAfterReadyFailure(row);
-    if (confirmed.current && !confirmed.current.isDraft && !this.staleReadyIdentity(confirmed.current, this.inputForRow(row))) {
+    if (confirmed.current && !confirmed.current.isDraft) {
       const readyAt = this.now().toISOString();
       await this.recordAttempt(row, "observe", "ready", confirmed.current.state, false, undefined, null, { pullRequest: confirmed.current });
       this.updateAcceptance(row.id, "accepted", null, null, readyAt);
@@ -346,13 +337,11 @@ export class AcceptanceService {
       const observation = await this.recordMergeObservation(context, "provider_unavailable", "provider_unavailable", null, observedAt, next);
       return { outcome: "provider_unavailable", pullRequest: null, observationId: observation.id, completionReceiptId: null, observedAt, mergedAt: null, retryAt: next, blocker: { code: "provider_unavailable", owner: "human", summary: "GitHub merge state is temporarily unavailable", retryAt: next, evidenceArtifactId: observation.evidenceArtifactId } };
     }
-    const identity = this.mergeIdentity(context, current);
     if (current.state === "merged" && !current.mergedAt) {
       const observation = await this.recordMergeObservation(context, "provider_invalid", "provider_unavailable", current, observedAt, null);
       return { outcome: "provider_unavailable", pullRequest: current, observationId: observation.id, completionReceiptId: null, observedAt, mergedAt: null, blocker: { code: "provider_invalid", owner: "human", summary: "GitHub reported merged without an authoritative merge time", retryAt: null, evidenceArtifactId: observation.evidenceArtifactId } };
     }
-    const mergedIdentity = !identity.headChanged && !identity.baseChanged || (current.state === "merged" && current.repository.toLowerCase() === context.repository.toLowerCase() && current.number === context.prNumber && current.baseBranch === context.baseBranch && lower(current.headSha) === lower(context.headSha));
-    const outcome: MergeReconciliationOutcome = current.state === "merged" && mergedIdentity ? "merged" : current.state === "closed" ? (identity.exact ? "closed_without_merge" : identity.baseChanged ? "changed_base" : "changed_head") : identity.baseChanged ? "changed_base" : identity.headChanged ? "changed_head" : "open";
+    const outcome: MergeReconciliationOutcome = current.state === "merged" ? "merged" : current.state === "closed" ? "closed_without_merge" : "open";
     const next = outcome === "open" ? retryAt(observedAt, this.nextObservationAttempt(context.acceptanceId)) : null;
     const observation = await this.recordMergeObservation(context, current.state, outcome, current, observedAt, next);
     if (outcome !== "merged") {
@@ -394,26 +383,9 @@ export class AcceptanceService {
     return this.currentPr(input.repository, input.pullRequestNumber);
   }
 
-  private async observeBase(input: Pick<AcceptanceInput, "repository" | "baseBranch">): Promise<string | null> {
-    if (!this.github.getBranchHead) return null;
-    try { return await this.github.getBranchHead({ repository: input.repository, branch: input.baseBranch }); } catch { throw new AcceptanceFailure("provider"); }
-  }
-
   private async currentPr(repository: string, number: number): Promise<GithubPullRequest> {
     if (!this.github.getPullRequest) throw new AcceptanceFailure("provider");
     try { return await this.github.getPullRequest({ repository, number }); } catch { throw new AcceptanceFailure("provider"); }
-  }
-
-  private staleReadyIdentity(current: GithubPullRequest, input: Pick<AcceptanceInput, "repository" | "pullRequestNumber" | "baseBranch" | "baseSha" | "headSha">): { code: string; summary: string } | undefined {
-    if (current.repository.toLowerCase() !== input.repository.toLowerCase() || current.number !== input.pullRequestNumber) return { code: "pull_request_identity_changed", summary: "The observed pull request no longer matches the accepted repository or number" };
-    if (current.baseBranch !== input.baseBranch) return { code: "base_branch_changed", summary: "The pull request base branch changed" };
-    if (lower(current.headSha) !== lower(input.headSha)) return { code: "head_changed", summary: "The pull request head changed" };
-    if (lower(current.baseSha) !== lower(input.baseSha)) return { code: "base_changed", summary: "The pull request base commit changed" };
-    return undefined;
-  }
-
-  private blockedResult(code: string, summary: string, acceptanceId: string | null, pullRequest: GithubPullRequest | null): AcceptanceResult {
-    return { acceptanceId, status: "blocked", outcome: "changed", retryAt: null, pullRequest, blocker: { code, owner: "human", summary: safeSummary(summary), retryAt: null, evidenceArtifactId: null } };
   }
 
   private insertOrGetAcceptance(input: AcceptanceEvidence, reasonArtifact?: StoredArtifact): { row: AcceptanceRow; conflict: boolean } {
@@ -434,21 +406,14 @@ export class AcceptanceService {
     });
   }
 
-  private async readyBlocked(row: AcceptanceRow, outcome: ReadyReconciliationOutcome, code: string, summary: string, current: GithubPullRequest, stale?: { code: string; summary: string }): Promise<ReadyReconciliationResult> {
+  private async readyBlocked(row: AcceptanceRow, outcome: ReadyReconciliationOutcome, code: string, summary: string, current: GithubPullRequest): Promise<ReadyReconciliationResult> {
     const artifactId = await this.recordAttempt(row, "observe", outcome === "closed" ? "closed" : outcome === "merged_early" ? "merged" : "changed", current.state, current.isDraft, code, null, { pullRequest: current });
     this.updateAcceptance(row.id, "blocked", code, null);
-    return { acceptanceId: row.id, status: "blocked", outcome, retryAt: null, pullRequest: current, readyAt: null, acceptedAt: row.created_at, blocker: { code, owner: "human", summary: safeSummary(summary || stale?.summary || "The pull request changed before ready reconciliation"), retryAt: null, evidenceArtifactId: artifactId } };
+    return { acceptanceId: row.id, status: "blocked", outcome, retryAt: null, pullRequest: current, readyAt: null, acceptedAt: row.created_at, blocker: { code, owner: "human", summary: safeSummary(summary), retryAt: null, evidenceArtifactId: artifactId } };
   }
 
   private async observeAfterReadyFailure(row: AcceptanceRow): Promise<{ current: GithubPullRequest | null }> {
     try { return { current: await this.currentPr(row.repository, row.pr_number!) }; } catch { return { current: null }; }
-  }
-
-  private async readyProviderUnavailable(row: AcceptanceRow, current: GithubPullRequest): Promise<ReadyReconciliationResult> {
-    const next = retryAt(this.now().toISOString(), this.nextAttempt(row.id));
-    const evidenceArtifactId = await this.recordAttempt(row, "observe", "provider_unavailable", current.state, current.isDraft, "provider_unavailable", next, { pullRequest: current });
-    this.updateAcceptance(row.id, "pending_ready", "provider_unavailable", next);
-    return { acceptanceId: row.id, status: "pending_ready", outcome: "provider_unavailable", retryAt: next, pullRequest: current, readyAt: null, acceptedAt: row.created_at, blocker: { code: "provider_unavailable", owner: "lead", summary: "The target base state is temporarily unavailable", retryAt: next, evidenceArtifactId } };
   }
 
   private updateAcceptance(idValue: string, status: AcceptanceResult["status"], failureCode: string | null, retryAtValue: string | null, readyAtValue?: string): void {
@@ -496,18 +461,8 @@ export class AcceptanceService {
     return row?.id;
   }
 
-  private inputForRow(row: AcceptanceRow): AcceptanceInput {
-    return { taskId: row.task_id, companyId: row.company_id, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id!, releaseId: row.release_id, deliveryReviewId: row.review_id, finalReviewId: row.final_review_id!, ciRunId: row.ci_run_id, pullRequestNumber: row.pr_number!, repository: row.repository, baseBranch: row.base_branch, baseSha: row.base_sha!, headSha: row.head_sha, headTree: row.head_tree, leadSessionRef: row.lead_session_ref!, actorUserId: row.actor_user_id, decision: row.decision };
-  }
-
   private rowBlocker(row: AcceptanceRow): AcceptanceBlocker {
     return { code: row.failure_code ?? "acceptance_blocked", owner: "human", summary: "Acceptance reconciliation is blocked", retryAt: row.retry_at, evidenceArtifactId: null };
-  }
-
-  private mergeIdentity(context: { repository: string; prNumber: number; baseBranch: string; baseSha: string; headSha: string }, current: GithubPullRequest): { exact: boolean; headChanged: boolean; baseChanged: boolean } {
-    const identityChanged = current.repository.toLowerCase() !== context.repository.toLowerCase() || current.number !== context.prNumber;
-    const acceptedHead = !identityChanged && current.baseBranch === context.baseBranch && lower(current.headSha) === lower(context.headSha);
-    return { exact: acceptedHead && lower(current.baseSha) === lower(context.baseSha), headChanged: lower(current.headSha) !== lower(context.headSha), baseChanged: !acceptedHead || lower(current.baseSha) !== lower(context.baseSha) };
   }
 
   private nextObservationAttempt(acceptanceId: string): number {

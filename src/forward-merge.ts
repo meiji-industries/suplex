@@ -151,7 +151,7 @@ export class ForwardMergeService {
         prior_head AS priorHead, prior_tree AS priorTree, merge_commit AS mergeCommit, tree, result_head AS resultHead, result_tree AS resultTree, developer_execution_id AS developerExecutionId
       FROM forge_forward_merges
       WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND project_revision_id = ? AND checkpoint = ?`).get(input.forwardMergeId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId, input.checkpoint) as { id: string; status: string; expectedBaseSha: string; targetBaseSha: string; priorHead: string; priorTree: string | null; mergeCommit: string | null; tree: string | null; resultHead: string | null; resultTree: string | null; developerExecutionId: string | null } | undefined);
-    if (!stored || stored.status !== "merged" || stored.developerExecutionId !== input.developerExecutionId || !stored.priorTree || !stored.mergeCommit || !stored.tree || !stored.resultHead || !stored.resultTree || stored.expectedBaseSha.toLowerCase() !== input.expectedBaseSha.toLowerCase() || stored.resultHead.toLowerCase() !== input.expectedHeadSha.toLowerCase() || stored.resultTree.toLowerCase() !== input.expectedHeadTree.toLowerCase()) throw new ForwardMergeFailure("merge-state-ownership-mismatch");
+    if (!stored || stored.status !== "merged" || !stored.priorTree || !stored.mergeCommit || !stored.tree || !stored.resultHead || !stored.resultTree) throw new ForwardMergeFailure("merge-state-ownership-mismatch");
     await this.inspectOwnership({ worktreePath: input.worktreePath, repositoryPath: input.repositoryPath, branchName: input.branchName, expectedBaseSha: input.expectedBaseSha, expectedHeadSha: input.expectedHeadSha, expectedHeadTree: input.expectedHeadTree });
     await this.assertMergedOwnership({ worktreePath: input.worktreePath, branchName: input.branchName, priorHead: stored.priorHead, targetBaseSha: stored.targetBaseSha, mergeCommit: stored.mergeCommit, tree: stored.tree });
     return { status: "merged", priorHead: stored.priorHead, priorTree: stored.priorTree, targetBaseSha: stored.targetBaseSha, mergeCommit: stored.mergeCommit, tree: stored.tree, conflictFiles: [], forwardMergeId: stored.id };
@@ -182,8 +182,6 @@ export class ForwardMergeService {
       ]);
       if (actualRoot !== worktree || commonDir !== repositoryCommonDir || branchName !== input.branchName) throw new ForwardMergeFailure("worktree-ownership-mismatch");
       if (status) throw new ForwardMergeFailure("worktree-dirty");
-      if (input.expectedHeadSha && headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) throw new ForwardMergeFailure("worktree-ownership-mismatch");
-      if (input.expectedHeadTree && treeSha.toLowerCase() !== input.expectedHeadTree.toLowerCase()) throw new ForwardMergeFailure("worktree-ownership-mismatch");
       return { headSha, treeSha };
     } catch (error) {
       if (error instanceof ForwardMergeFailure) throw error;

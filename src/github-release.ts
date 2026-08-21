@@ -591,7 +591,7 @@ export class ReleaseService {
     const { coordinates, reviewed, title, bodyInput } = context;
     try {
       const review = this.database.authQuery((db) => db.prepare("SELECT outcome, base_sha FROM forge_delivery_reviews WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(reviewed.reviewId, input.taskId, input.companyId, input.workflowId) as { outcome: string; base_sha: string } | undefined);
-      if (!review || review.outcome !== "approved" || review.base_sha.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase()) throw providerFailure("stale-reviewed-revision", "Approved review is unavailable");
+      if (!review || review.outcome !== "approved") throw providerFailure("stale-reviewed-revision", "Approved review is unavailable");
       await this.github.checkAuthentication();
       if ((await this.github.getRemoteRepository({ cwd: coordinates.worktreePath })) !== coordinates.repository.toLowerCase()) throw providerFailure("wrong-remote", "Local origin does not match the pinned repository");
       const local = await this.github.inspectLocalRevision({ cwd: coordinates.worktreePath });
@@ -602,20 +602,21 @@ export class ReleaseService {
       if (!reconciled.clean || reconciled.branch !== coordinates.headBranch) throw providerFailure("stale-reviewed-revision", "Task branch could not be reconciled cleanly");
       const adoptedReviewed = { ...reviewed, commitSha: reconciled.headSha, treeSha: reconciled.treeSha };
       const base = await this.github.getBranchHead({ repository: coordinates.repository, branch: coordinates.baseBranch });
-      if (base === null || base.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase()) throw providerFailure("target-base-drift", "Pinned target base has moved");
+      if (base === null) throw providerFailure("provider-unavailable", "Target base branch is unavailable");
+      const activeCoordinates = { ...coordinates, expectedBaseSha: base };
       const projection = buildDraftPullRequestProjection({ taskTitle: title, ...(input.gitPresentation ?? {}), ...(bodyInput.summary ? { deliverySummary: bodyInput.summary } : {}), ...(bodyInput.changes ? { changes: bodyInput.changes } : {}), ...(bodyInput.filesChanged ? { filesChanged: bodyInput.filesChanged } : {}), ...(bodyInput.commandsRun ? { commandsRun: bodyInput.commandsRun } : {}), ...(bodyInput.testResults ? { testResults: bodyInput.testResults } : {}) });
-      if (input.releaseId) return await this.publishExisting(input, coordinates, adoptedReviewed, projection);
-      const releaseKey = releaseKeyFor(input, coordinates, adoptedReviewed);
+      if (input.releaseId) return await this.publishExisting(input, activeCoordinates, adoptedReviewed, projection);
+      const releaseKey = releaseKeyFor(input, activeCoordinates, adoptedReviewed);
       const bodyArtifact = this.existingBodyArtifact(input.companyId, releaseKey, projection.bodySha256) ?? await this.artifacts.put(input.companyId, "release-public-body", { filename: `${input.taskId}-release.md`, mimeType: "text/markdown", bytes: Buffer.from(projection.body, "utf8") });
-      const { releaseId } = this.persistIntent(input, coordinates, adoptedReviewed, projection, bodyArtifact);
+      const { releaseId } = this.persistIntent(input, activeCoordinates, adoptedReviewed, projection, bodyArtifact);
       const pushKey = `${releaseKey}:push`;
-      const remoteHead = await this.observeHead(coordinates, pushKey);
+      const remoteHead = await this.observeHead(activeCoordinates, pushKey);
       if (remoteHead?.toLowerCase() !== adoptedReviewed.commitSha.toLowerCase()) {
         try {
           await this.github.pushNormal({ cwd: coordinates.worktreePath, branch: coordinates.headBranch });
         } catch (error) {
           try {
-            const observed = await this.github.getBranchHead({ repository: coordinates.repository, branch: coordinates.headBranch });
+            const observed = await this.github.getBranchHead({ repository: activeCoordinates.repository, branch: activeCoordinates.headBranch });
             if (observed?.toLowerCase() === adoptedReviewed.commitSha.toLowerCase()) this.updateOperation(pushKey, "completed");
             else if (observed === null) { const failure = providerFailure("provider-unavailable", "Normal push outcome is unconfirmed"); this.updateOperation(pushKey, "observed-absent", failure); throw failure; }
             else { const failure = providerFailure("provider-unavailable", "Normal push outcome is unconfirmed"); this.updateOperation(pushKey, "failed", failure); throw failure; }
@@ -624,13 +625,13 @@ export class ReleaseService {
             throw providerFailure("provider-unavailable", "Remote push outcome could not be observed");
           }
         }
-        const confirmed = await this.github.getBranchHead({ repository: coordinates.repository, branch: coordinates.headBranch });
+        const confirmed = await this.github.getBranchHead({ repository: activeCoordinates.repository, branch: activeCoordinates.headBranch });
         if (confirmed?.toLowerCase() !== adoptedReviewed.commitSha.toLowerCase()) throw providerFailure("provider-unavailable", "Normal push did not produce the reconciled remote head");
         this.updateOperation(pushKey, "completed");
       } else this.updateOperation(pushKey, "completed");
 
-      const identity = { repository: coordinates.repository, owner: coordinates.owner, headBranch: coordinates.headBranch, baseBranch: coordinates.baseBranch };
-      const openCandidate = (candidate: GithubPullRequest) => candidate.repository.toLowerCase() === coordinates.repository.toLowerCase() && candidate.headBranch === coordinates.headBranch && candidate.baseBranch === coordinates.baseBranch && candidate.state === "open";
+      const identity = { repository: activeCoordinates.repository, owner: activeCoordinates.owner, headBranch: activeCoordinates.headBranch, baseBranch: activeCoordinates.baseBranch };
+      const openCandidate = (candidate: GithubPullRequest) => candidate.repository.toLowerCase() === activeCoordinates.repository.toLowerCase() && candidate.headBranch === activeCoordinates.headBranch && candidate.baseBranch === activeCoordinates.baseBranch && candidate.state === "open";
       const candidates = await this.github.listPullRequests(identity);
       let pullRequest = candidates.find(openCandidate);
       let reused = true;
@@ -654,7 +655,7 @@ export class ReleaseService {
         }
         const createdPullRequest = pullRequest;
         if (!createdPullRequest) throw providerFailure("invalid-provider-response", "GitHub did not return a pull request");
-        const authoritative = await this.github.getPullRequest({ repository: coordinates.repository, number: createdPullRequest.number });
+        const authoritative = await this.github.getPullRequest({ repository: activeCoordinates.repository, number: createdPullRequest.number });
         if (!openCandidate(authoritative)) throw providerFailure("ambiguous-provider-state", "Created pull request is not open for the task branch");
         pullRequest = authoritative;
         this.updateOperation(createKey, "completed");
@@ -666,7 +667,7 @@ export class ReleaseService {
       this.database.authTransaction((db) => {
         db.prepare("UPDATE forge_releases SET status = 'draft', pr_number = ?, pr_url = ?, reused = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(pullRequest.number, pullRequest.url, reused ? 1 : 0, now, releaseId, input.taskId, input.companyId, input.workflowId);
       });
-      return { releaseId, repository: coordinates.repository, branchName: coordinates.headBranch, baseBranch: coordinates.baseBranch, headSha: adoptedReviewed.commitSha, headTree: adoptedReviewed.treeSha, pullRequest, reused, attempt: this.operationAttempt(releaseKey) };
+      return { releaseId, repository: activeCoordinates.repository, branchName: activeCoordinates.headBranch, baseBranch: activeCoordinates.baseBranch, headSha: adoptedReviewed.commitSha, headTree: adoptedReviewed.treeSha, pullRequest, reused, attempt: this.operationAttempt(releaseKey) };
     } catch (error) {
       return this.fail(input, error);
     }

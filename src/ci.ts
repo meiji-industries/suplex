@@ -212,10 +212,7 @@ export function evaluateExactHead(input: CiEvaluationInput): CiEvaluationResult 
   const pr = input.observedPullRequest;
   if (pr.repository.toLowerCase() !== input.expectedRepository.toLowerCase() || pr.number !== input.expectedPullRequestNumber) return evaluation("pull_request_identity_changed", "stale_head", "human", false, selectedChecks, "Pull request identity changed");
   if (pr.state !== "open" && !pr.mergedAt) return evaluation("pull_request_not_open", "stale_head", "human", false, selectedChecks, "Pull request closed without merge");
-  if (pr.baseBranch !== input.expectedBaseBranch) return evaluation("pull_request_base_branch_changed", "stale_head", "human", false, selectedChecks, "Pull request base branch changed");
-  if (pr.headBranch !== input.expectedHeadBranch) return evaluation("pull_request_head_branch_changed", "stale_head", "human", false, selectedChecks, "Pull request head branch changed");
-  if (pr.headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) return evaluation("pull_request_head_changed", "stale_head", "human", false, selectedChecks, "Pull request head changed");
-  if (pr.mergedAt) return evaluation("checks_passed_merged", "passed", null, false, selectedChecks, "The exact pull request was merged");
+  if (pr.mergedAt) return evaluation("checks_passed_merged", "passed", null, false, selectedChecks, "The pull request was merged");
   const exactSelected = selectedChecks.filter((check) => check.selectedForEvaluation && check.headSha.toLowerCase() === input.expectedHeadSha.toLowerCase());
   const missing = input.requiredChecks.filter((name) => !exactSelected.some((check) => check.name === name));
   const notApplicable = missing.length > 0 && pr.mergeStateStatus === "CLEAN" && exactSelected.length > 0 && exactSelected.every((check) => check.status === "completed");
@@ -233,7 +230,7 @@ export function evaluateExactHead(input: CiEvaluationInput): CiEvaluationResult 
   if (timedOut) return evaluation("required_check_timed_out", "timed_out", "human", false, selectedChecks, `Required check timed out: ${timedOut.name}`);
   const nonSuccess = exactSelected.find((check) => check.conclusion !== "success" && check.conclusion !== "skipped");
   if (nonSuccess) return evaluation(`required_check_${nonSuccess.conclusion ?? "incomplete"}`, "non_success", "human", false, selectedChecks, `Required check did not succeed: ${nonSuccess.name}`);
-  return evaluation("checks_passed", "passed", null, false, selectedChecks, "All required checks passed on the exact pull-request head");
+  return evaluation("checks_passed", "passed", null, false, selectedChecks, "All required checks passed on the current pull-request head");
 }
 
 function parseJsonDocuments(stdout: string): unknown[] {

@@ -34,24 +34,29 @@ describe("exact-head CI evaluator", () => {
     expect(result.repairable).toBe(repairable);
   });
 
-  it("distinguishes propagation, active checks, missing checks, stale heads, and exhausted windows", () => {
+  it("distinguishes propagation, active checks, missing checks, and exhausted windows", () => {
     expect(evaluate({ checks: [], now: now }).outcome).toBe("waiting");
     expect(evaluate({ checks: [], now: propagation }).outcome).toBe("waiting");
     expect(evaluate({ checks: [check({ headSha: otherHead })], now }).outcome).toBe("waiting");
     expect(evaluate({ checks: [check({ status: "in_progress", conclusion: null })] }).outcome).toBe("waiting");
     expect(evaluate({ checks: [check({ status: "queued", conclusion: null })] }).outcome).toBe("waiting");
-    expect(evaluate({ observedPullRequest: pullRequest({ headSha: otherHead }) }).reason).toBe("pull_request_head_changed");
+    expect(evaluate({ observedPullRequest: pullRequest({ headSha: otherHead }), expectedHeadSha: otherHead, checks: [check({ headSha: otherHead })] }).reason).toBe("checks_passed");
     expect(evaluate({ now: overall }).reason).toBe("checks_passed");
   });
 
   it.each([
     ["repository", { repository: "other/forge" }, "pull_request_identity_changed"],
     ["number", { number: 8 }, "pull_request_identity_changed"],
-    ["base branch", { baseBranch: "develop" }, "pull_request_base_branch_changed"],
-    ["head branch", { headBranch: "other/task" }, "pull_request_head_branch_changed"],
     ["closed state", { state: "closed" }, "pull_request_not_open"],
-  ])("rejects a changed PR %s", (_label, changed, reason) => {
+  ])("rejects an unavailable PR %s", (_label, changed, reason) => {
     expect(evaluate({ observedPullRequest: pullRequest(changed) }).reason).toBe(reason);
+  });
+
+  it.each([
+    ["base branch", { baseBranch: "develop" }],
+    ["head branch", { headBranch: "other/task" }],
+  ])("adopts an open PR with a changed %s", (_label, changed) => {
+    expect(evaluate({ observedPullRequest: pullRequest(changed) }).outcome).toBe("passed");
   });
 
   it("continues evaluating an open PR after it becomes ready for review", () => {

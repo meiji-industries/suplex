@@ -11,9 +11,9 @@ export function registerGovernanceHandlers(ctx: IssueWorkflowContext): void {
     assertPayloadWithinLimit("decision blocker resolution command", rawInput);
     const command = rawInput;
     const blockedRevision = ctx.state.revision;
-    const resolution = await recordDecisionBlockerResolution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, actorUserId: command.actorUserId, blockerOutputArtifactId: ctx.state.blockerArtifactId!, blockerOutputSha256: ctx.state.blockerArtifactSha256!, answerArtifactId: command.answerArtifactId, answerSha256: command.answerSha256 });
+    const resolution = await recordDecisionBlockerResolution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, actorUserId: command.actorUserId, blockerOutputArtifactId: ctx.state.blockerArtifactId!, answerArtifactId: command.answerArtifactId });
     if (ctx.state.phase !== "blocked" || ctx.state.revision !== blockedRevision) return ctx.state;
-    const next = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: blockedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead decision resolution", lastEventId: `${ctx.state.workflowId}:${blockedRevision + 1}`, blockerResolutionId: resolution.resolutionId, leadResumeInstructionArtifactId: command.answerArtifactId, leadResumeInstructionSha256: command.answerSha256 });
+    const next = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: blockedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead decision resolution", lastEventId: `${ctx.state.workflowId}:${blockedRevision + 1}`, blockerResolutionId: resolution.resolutionId, leadResumeInstructionArtifactId: command.answerArtifactId });
     ctx.state = next;
     if (!ctx.decisionResolutionProjectionEnabled()) await ctx.project();
     if (ctx.state.phase !== "planning" || ctx.state.revision !== next.revision) return ctx.state;
@@ -21,7 +21,7 @@ export function registerGovernanceHandlers(ctx: IssueWorkflowContext): void {
     try {
       const scope = new CancellationScope();
       ctx.planningScope = scope;
-      ctx.planningPromise = scope.run(() => runLeadPlanning({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: next.revision, resume: { leadSessionRef: next.leadSessionRef!, reason: "decision_resolution", instructionArtifactId: command.answerArtifactId, instructionSha256: command.answerSha256 } }));
+      ctx.planningPromise = scope.run(() => runLeadPlanning({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: next.revision, resume: { leadSessionRef: next.leadSessionRef!, reason: "decision_resolution", instructionArtifactId: command.answerArtifactId } }));
       leadResult = await ctx.planningPromise;
       ctx.planningPromise = undefined;
       ctx.planningScope = undefined;
@@ -49,7 +49,7 @@ export function registerGovernanceHandlers(ctx: IssueWorkflowContext): void {
     const command = rawInput;
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (ctx.state.phase !== "blocked" || ctx.state.blockedCategory !== "human_decision" || !ctx.state.allowedCommands.includes("resolve_decision_blocker")) throw new Error("Decision blocker resolution is not available in the current phase");
-    if (!ctx.state.leadSessionRef || !ctx.state.blockerArtifactId || !ctx.state.blockerArtifactSha256) throw new Error("The Lead blocker evidence is unavailable");
+    if (!ctx.state.leadSessionRef || !ctx.state.blockerArtifactId) throw new Error("The Lead blocker evidence is unavailable");
   }});
 
 }

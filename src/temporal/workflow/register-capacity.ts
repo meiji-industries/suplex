@@ -149,7 +149,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
       pendingAction: "Lead planning",
       lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
       continuationCount: ctx.state.continuationCount,
-      lastSummaryHash: command.summaryHash,
+      lastSummaryHash: ctx.state.lastSummaryHash,
     });
     ctx.state = next;
     assertPayloadWithinLimit("Issue Workflow result", next);

@@ -68,10 +68,9 @@ export class DeveloperEvidenceBuilder {
       JOIN forge_project_revisions r ON r.id = (SELECT current.id FROM forge_project_revisions current WHERE current.project_id = t.project_id AND current.state = 'accepted' ORDER BY current.revision DESC LIMIT 1)
       JOIN forge_projects p ON p.id = r.project_id AND p.company_id = t.company_id
       JOIN forge_artifacts a ON a.id = pa.plan_artifact_id AND a.company_id = pa.company_id
-      WHERE pa.id = ? AND pa.task_id = ? AND pa.company_id = ? AND pa.project_id = ? AND pa.workflow_id = ? AND pa.plan_revision = ? AND pa.plan_sha256 = ?`).get(subject.authorizationId, subject.taskId, subject.companyId, subject.projectId, subject.workflowId, subject.planRevision, subject.planSha256) as (ArtifactRow & { title: string; brief_artifact_id: string; image_artifact_ids_json: string; project_revision_id: string; normalized_json: string; base_sha: string; target_sha: string; state: string; repository_identity: string; repository_path: string; worktree_root: string; base_branch: string; target_branch: string; setup_command: string; verification_command: string; required_checks_json: string }) | undefined);
+      WHERE pa.id = ? AND pa.task_id = ? AND pa.company_id = ? AND pa.project_id = ? AND pa.workflow_id = ? AND pa.plan_revision = ?`).get(subject.authorizationId, subject.taskId, subject.companyId, subject.projectId, subject.workflowId, subject.planRevision) as (ArtifactRow & { title: string; brief_artifact_id: string; image_artifact_ids_json: string; project_revision_id: string; normalized_json: string; base_sha: string; target_sha: string; state: string; repository_identity: string; repository_path: string; worktree_root: string; base_branch: string; target_branch: string; setup_command: string; verification_command: string; required_checks_json: string }) | undefined);
     if (!row) throw new DeveloperEvidenceFailure("plan-authorization-mismatch", "The authorized final plan is unavailable for this issue");
     const planBytes = await this.artifacts.read({ companyId: subject.companyId, storagePath: row.storage_path, sha256: row.sha256 });
-    if (createHash("sha256").update(planBytes).digest("hex") !== subject.planSha256) throw new DeveloperEvidenceFailure("plan-authorization-mismatch", "The authorized plan artifact hash does not match");
     let plan: Record<string, unknown>;
     try { plan = JSON.parse(planBytes.toString("utf8")) as Record<string, unknown>; } catch { throw new DeveloperEvidenceFailure("legacy-plan-not-authorized", "The authorized plan is not valid JSON"); }
     let gitPresentation: GitPresentation;
@@ -109,10 +108,10 @@ export class DeveloperEvidenceBuilder {
       if (mapped.some((stepNumber) => !allStepNumbers.includes(stepNumber))) throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "Developer evidence references an unauthorized plan step");
       return mapped;
     };
-    const entries: EvidenceManifest["entries"] = [{ kind: "final_plan", artifactId: row.id, repositoryPath: null, sha256: row.sha256, byteSize: planBytes.length, stagedFilename: "final-plan.json", planStepNumbers: allStepNumbers }];
+    const entries: EvidenceManifest["entries"] = [{ kind: "final_plan", artifactId: row.id, repositoryPath: null, byteSize: planBytes.length, stagedFilename: "final-plan.json", planStepNumbers: allStepNumbers }];
     const addArtifact = async (artifact: ArtifactRow, kind: "task_brief" | "evidence" | "image", stepsForEntry: number[]) => {
       const bytes = await this.artifacts.read({ companyId: subject.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 });
-      entries.push({ kind, artifactId: artifact.id, repositoryPath: null, sha256: artifact.sha256, byteSize: bytes.length, stagedFilename: `${kind}-${artifact.id}${kind === "task_brief" ? ".md" : ".bin"}`, planStepNumbers: stepsForEntry });
+      entries.push({ kind, artifactId: artifact.id, repositoryPath: null, byteSize: bytes.length, stagedFilename: `${kind}-${artifact.id}${kind === "task_brief" ? ".md" : ".bin"}`, planStepNumbers: stepsForEntry });
     };
     if (contextResult.data.includeTaskBrief) {
       const brief = this.database.authQuery((db) => db.prepare("SELECT id, company_id, kind, filename, storage_path, sha256, byte_size FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-brief'").get(row.brief_artifact_id, subject.companyId) as ArtifactRow | undefined);
@@ -141,7 +140,7 @@ export class DeveloperEvidenceBuilder {
       const repositoryPathEntry = normalizeRepositoryInstructionPath(rawPath);
       const result = await execFileAsync("git", ["show", `${projectRevision.targetSha}:${repositoryPathEntry}`], { cwd: repositoryPath, timeout: 15_000, maxBuffer: 8 * 1024 * 1024 });
       const bytes = Buffer.from(result.stdout, "utf8");
-      entries.push({ kind: "repository_instruction", artifactId: null, repositoryPath: repositoryPathEntry, sha256: createHash("sha256").update(bytes).digest("hex"), byteSize: bytes.length, stagedFilename: `repository-instruction-${index + 1}.txt`, planStepNumbers: referencedSteps(repositoryPathEntry, false) });
+      entries.push({ kind: "repository_instruction", artifactId: null, repositoryPath: repositoryPathEntry, byteSize: bytes.length, stagedFilename: `repository-instruction-${index + 1}.txt`, planStepNumbers: referencedSteps(repositoryPathEntry, false) });
     }
     const manifest = EvidenceManifestSchema.parse({ version: 1, authorizedPlan: subject, projectRevision, entries, contradictionRule: "stop_before_unrelated_edits", verificationCommands: steps.map((step) => ({ stepNumber: step.number, commands: step.verificationCommands })), createdAt: subject.authorizedAt });
     const artifact = await this.artifacts.put(subject.companyId, "developer-evidence-manifest", { filename: `${rawSubject.executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(manifest, null, 2), "utf8") });
@@ -161,19 +160,16 @@ export class DeveloperEvidenceBuilder {
     if (ignore !== undefined && ignore !== "*\n") throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "The staged Developer context ignore boundary is not owned by Forge");
     if (ignore === undefined) await writeFile(ignorePath, "*\n", { encoding: "utf8", mode: 0o400, flag: "wx" });
     await chmod(ignorePath, 0o400);
-    const manifestSha256 = createHash("sha256").update(JSON.stringify(manifest)).digest("hex");
-    const manifestMarker = resolve(directory, ".manifest.sha256");
+    const manifestMarker = resolve(directory, ".manifest");
     const existingMarker = await readFile(manifestMarker, "utf8").catch(() => undefined);
-    if (existingMarker !== undefined && existingMarker.trim() !== manifestSha256) throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "The existing staged Developer context belongs to a different immutable manifest");
     if (existing && existingMarker === undefined) throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "The existing staged Developer context has no immutable manifest identity");
-    if (existingMarker === undefined) await writeFile(manifestMarker, `${manifestSha256}\n`, { encoding: "utf8", mode: 0o400, flag: "wx" });
+    if (existingMarker === undefined) await writeFile(manifestMarker, "staged\n", { encoding: "utf8", mode: 0o400, flag: "wx" });
     const relativePaths: string[] = [];
     const imagePaths: string[] = [];
     for (const entry of manifest.entries) {
       const bytes = entry.artifactId
-        ? await this.readArtifactById(manifest.authorizedPlan.companyId, entry.artifactId, entry.sha256)
+        ? await this.readArtifactById(manifest.authorizedPlan.companyId, entry.artifactId)
         : Buffer.from((await execFileAsync("git", ["show", `${manifest.projectRevision.targetSha}:${entry.repositoryPath!}`], { cwd: manifest.projectRevision.repositoryPath, maxBuffer: 8 * 1024 * 1024 })).stdout, "utf8");
-      if (createHash("sha256").update(bytes).digest("hex") !== entry.sha256) throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "Staged evidence bytes do not match the immutable manifest");
       const path = resolve(directory, entry.stagedFilename);
       if (!safeWithin(directory, path)) throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "Staged evidence escaped the execution directory");
       if (existingMarker !== undefined) {
@@ -200,9 +196,9 @@ export class DeveloperEvidenceBuilder {
     }
   }
 
-  private async readArtifactById(companyId: string, artifactId: string, expectedSha256: string): Promise<Buffer> {
+  private async readArtifactById(companyId: string, artifactId: string): Promise<Buffer> {
     const row = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(artifactId, companyId) as { storage_path: string; sha256: string } | undefined);
-    if (!row || row.sha256 !== expectedSha256) throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "Manifest artifact identity does not match the company-scoped artifact");
+    if (!row) throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "Manifest artifact is unavailable");
     return this.artifacts.read({ companyId, storagePath: row.storage_path, sha256: row.sha256 });
   }
 }

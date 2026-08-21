@@ -12,7 +12,6 @@ export interface PlanDecisionActivityInput {
   /** Plan identity for the recorded row; the workflow supplies it from its own state, never the caller. */
   subject?: PlanDecisionSubject;
   noteStagingRef?: string;
-  noteSha256?: string;
   idempotencyKey?: string;
 }
 
@@ -22,10 +21,8 @@ export interface PlanBlockerResponseActivityInput {
   workflowId: string;
   actorUserId: string;
   blockerArtifactId: string;
-  blockerArtifactSha256: string;
   expectedWorkflowRevision: number;
   answerStagingRef: string;
-  answerSha256: string;
   idempotencyKey: string;
 }
 
@@ -44,7 +41,7 @@ export interface AuthorizeFinalPlanActivityResult {
   authorizationId: string;
   planRevision: number;
   planArtifactId: string;
-  planArtifactSha256: string;
+  planArtifactSha256?: string;
   authorizationKind: "routine_auto" | "human_approval";
   approvalDecisionId: string | null;
   authorizedAt: string;
@@ -56,9 +53,7 @@ export interface DecisionBlockerResolutionActivityInput {
   workflowId: string;
   actorUserId: string;
   blockerOutputArtifactId: string;
-  blockerOutputSha256: string;
   answerArtifactId: string;
-  answerSha256: string;
 }
 
 export interface DecisionBlockerResolutionActivityResult {
@@ -67,7 +62,7 @@ export interface DecisionBlockerResolutionActivityResult {
 
 export interface GovernanceActivities {
   recordDecisionBlockerResolution(input: DecisionBlockerResolutionActivityInput): Promise<DecisionBlockerResolutionActivityResult>;
-  recordPlanDecision(input: PlanDecisionActivityInput): Promise<{ decisionId: string; duplicate?: boolean; noteArtifactId?: string; noteArtifactSha256?: string | undefined }>;
+  recordPlanDecision(input: PlanDecisionActivityInput): Promise<{ decisionId: string; duplicate?: boolean; noteArtifactId?: string }>;
   authorizeFinalPlan(input: AuthorizeFinalPlanActivityInput): Promise<AuthorizeFinalPlanActivityResult>;
-  recordPlanBlockerResponse(input: PlanBlockerResponseActivityInput): Promise<{ responseId: string; duplicate?: boolean; answerArtifactId?: string; answerArtifactSha256?: string }>;
+  recordPlanBlockerResponse(input: PlanBlockerResponseActivityInput): Promise<{ responseId: string; duplicate?: boolean; answerArtifactId?: string }>;
 }

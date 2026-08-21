@@ -23,11 +23,11 @@ export const PlanSubjectSchema = z.object({
   outputRevision: z.number().int().nonnegative(),
   finalVersion: z.union([z.literal(1), z.literal(2)]),
   artifactId: GovernanceIdSchema,
-  artifactSha256: Sha256Schema,
+  artifactSha256: Sha256Schema.optional(),
   leadSessionRef: GovernanceIdSchema,
   leadExecutionId: GovernanceIdSchema,
   evidenceManifestArtifactId: GovernanceIdSchema,
-  evidenceManifestSha256: Sha256Schema,
+  evidenceManifestSha256: Sha256Schema.optional(),
 }).strict();
 
 export type PlanSubject = z.infer<typeof PlanSubjectSchema>;
@@ -35,7 +35,7 @@ export type PlanSubject = z.infer<typeof PlanSubjectSchema>;
 export const MaterialityEvidenceSubjectSchema = z.object({
   categories: z.array(PlanMaterialCategorySchema).max(6),
   artifactId: GovernanceIdSchema,
-  artifactSha256: Sha256Schema,
+  artifactSha256: Sha256Schema.optional(),
 }).strict().superRefine((value, context) => {
   const unique = new Set(value.categories);
   if (unique.size !== value.categories.length) context.addIssue({ code: "custom", path: ["categories"], message: "Materiality categories must be unique" });
@@ -66,7 +66,7 @@ export const SupplementalReviewSubjectSchema = z.object({
   originalPlan: PlanSubjectSchema,
   reviewerProfileId: GovernanceIdSchema,
   evidenceManifestArtifactId: GovernanceIdSchema,
-  evidenceManifestSha256: Sha256Schema,
+  evidenceManifestSha256: Sha256Schema.optional(),
 }).strict();
 
 export type SupplementalReviewSubject = z.infer<typeof SupplementalReviewSubjectSchema>;
@@ -76,11 +76,11 @@ export const PlanBlockerSubjectSchema = z.object({
   issueId: GovernanceIdSchema,
   workflowId: GovernanceIdSchema,
   artifactId: GovernanceIdSchema,
-  artifactSha256: Sha256Schema,
+  artifactSha256: Sha256Schema.optional(),
   leadSessionRef: GovernanceIdSchema,
   leadExecutionId: GovernanceIdSchema,
   evidenceManifestArtifactId: GovernanceIdSchema,
-  evidenceManifestSha256: Sha256Schema,
+  evidenceManifestSha256: Sha256Schema.optional(),
   category: z.literal("human_decision"),
   resumePhase: z.literal("planning"),
 }).strict();

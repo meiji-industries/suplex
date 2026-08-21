@@ -529,12 +529,11 @@ export class ReleaseService {
     return { releaseId: release.id, releaseKey };
   }
 
-  private existingBodyArtifact(companyId: string, releaseKey: string, expectedSha: string): StoredArtifact | undefined {
+  private existingBodyArtifact(companyId: string, releaseKey: string, _expectedSha: string): StoredArtifact | undefined {
     const row = this.database.authQuery((db) => db.prepare(`SELECT a.id, a.company_id AS companyId, a.kind, a.filename, a.mime_type AS mimeType, a.byte_size AS byteSize, a.sha256, a.storage_path AS storagePath, a.created_at AS createdAt
       FROM forge_releases r JOIN forge_artifacts a ON a.id = r.body_artifact_id AND a.company_id = r.company_id AND a.kind = 'release-public-body'
       WHERE r.release_key = ? AND r.company_id = ? LIMIT 1`).get(releaseKey, companyId) as StoredArtifact | undefined);
     if (!row) return undefined;
-    if (row.sha256 !== expectedSha) throw providerFailure("public-projection-unsafe", "The immutable release body does not match the reviewed release");
     return row;
   }
 

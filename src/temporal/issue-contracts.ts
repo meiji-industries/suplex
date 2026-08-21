@@ -26,7 +26,7 @@ export const IssueWorkflowInputSchema = z.object({
   issueId: durableId,
   projectRevisionId: durableId,
   briefArtifactId: durableId,
-  briefSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  briefSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   imageArtifactIds: z.array(durableId).max(32),
   // A compact identity marker lets a start retry prove it refers to the same
   // creation request without putting task content in Temporal history.
@@ -91,7 +91,6 @@ export const WorkflowPlanDecisionCommandSchema = z.object({
   decision: z.enum(["approve", "request_revision"]),
   subject: PlanDecisionSubjectSchema,
   noteStagingRef: durableId,
-  noteSha256: z.string().regex(/^[a-f0-9]{64}$/),
   idempotencyKey: DecisionIdempotencyKeySchema,
 }).strict();
 
@@ -100,7 +99,6 @@ export const WorkflowPlanBlockerResponseCommandSchema = z.object({
   subject: PlanBlockerSubjectSchema,
   expectedWorkflowRevision: z.number().int().nonnegative(),
   answerStagingRef: durableId,
-  answerSha256: z.string().regex(/^[a-f0-9]{64}$/),
   idempotencyKey: DecisionIdempotencyKeySchema,
 }).strict();
 

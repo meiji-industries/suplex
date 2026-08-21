@@ -67,19 +67,18 @@ export interface RecordDecisionInput {
   subject?: PlanDecisionSubject;
   planRevision: number;
   noteArtifactId: string;
-  noteArtifactSha256: string;
   idempotencyKey?: string;
 }
 
 export class PlanGovernanceRepository {
   constructor(private readonly database: ForgeDatabase) {}
 
-  findDecisionByIdempotency(workflowId: string, idempotencyKey: string): { decisionId: string; decision: string; noteArtifactId: string; noteArtifactSha256: string | null } | undefined {
-    return this.database.authQuery((db) => db.prepare("SELECT id AS decisionId, decision, note_artifact_id AS noteArtifactId, note_artifact_sha256 AS noteArtifactSha256 FROM forge_plan_decisions WHERE workflow_id = ? AND idempotency_key = ?").get(workflowId, idempotencyKey)) as { decisionId: string; decision: string; noteArtifactId: string; noteArtifactSha256: string | null } | undefined;
+  findDecisionByIdempotency(workflowId: string, idempotencyKey: string): { decisionId: string; decision: string; noteArtifactId: string } | undefined {
+    return this.database.authQuery((db) => db.prepare("SELECT id AS decisionId, decision, note_artifact_id AS noteArtifactId FROM forge_plan_decisions WHERE workflow_id = ? AND idempotency_key = ?").get(workflowId, idempotencyKey)) as { decisionId: string; decision: string; noteArtifactId: string } | undefined;
   }
 
-  findBlockerResponseByIdempotency(workflowId: string, idempotencyKey: string): { responseId: string; answerArtifactId: string; answerArtifactSha256: string } | undefined {
-    return this.database.authQuery((db) => db.prepare("SELECT id AS responseId, answer_artifact_id AS answerArtifactId, answer_artifact_sha256 AS answerArtifactSha256 FROM forge_plan_blocker_responses WHERE workflow_id = ? AND idempotency_key = ?").get(workflowId, idempotencyKey)) as { responseId: string; answerArtifactId: string; answerArtifactSha256: string } | undefined;
+  findBlockerResponseByIdempotency(workflowId: string, idempotencyKey: string): { responseId: string; answerArtifactId: string } | undefined {
+    return this.database.authQuery((db) => db.prepare("SELECT id AS responseId, answer_artifact_id AS answerArtifactId FROM forge_plan_blocker_responses WHERE workflow_id = ? AND idempotency_key = ?").get(workflowId, idempotencyKey)) as { responseId: string; answerArtifactId: string } | undefined;
   }
 
   appendPlanVersion(input: AppendPlanVersionInput): PlanSubject {
@@ -113,41 +112,38 @@ export class PlanGovernanceRepository {
   }
 
   /** Idempotency is (workflow_id, idempotency_key): the same key always returns the row it first wrote. */
-  recordDecisionIdempotently(input: RecordDecisionInput): { decisionId: string; duplicate: boolean; noteArtifactId: string; noteArtifactSha256: string } {
+  recordDecisionIdempotently(input: RecordDecisionInput): { decisionId: string; duplicate: boolean; noteArtifactId: string } {
     const plan = input.subject?.plan;
     let decisionId = id("decision");
     let duplicate = false;
     let noteArtifactId = input.noteArtifactId;
-    let noteArtifactSha256 = input.noteArtifactSha256;
     this.database.authTransaction((db) => {
-      const existing = input.idempotencyKey ? db.prepare("SELECT id, note_artifact_id AS noteArtifactId, note_artifact_sha256 AS noteArtifactSha256 FROM forge_plan_decisions WHERE workflow_id = ? AND idempotency_key = ?").get(input.workflowId, input.idempotencyKey) as { id: string; noteArtifactId: string; noteArtifactSha256: string | null } | undefined : undefined;
+      const existing = input.idempotencyKey ? db.prepare("SELECT id, note_artifact_id AS noteArtifactId FROM forge_plan_decisions WHERE workflow_id = ? AND idempotency_key = ?").get(input.workflowId, input.idempotencyKey) as { id: string; noteArtifactId: string } | undefined : undefined;
       if (existing) {
         decisionId = existing.id;
         noteArtifactId = existing.noteArtifactId;
-        noteArtifactSha256 = existing.noteArtifactSha256 ?? input.noteArtifactSha256;
         duplicate = true;
         return;
       }
       const task = db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(input.taskId, input.companyId, input.workflowId);
       if (!task) throw new PlanGovernanceConflict();
       db.prepare(`INSERT INTO forge_plan_decisions (id, task_id, company_id, workflow_id, plan_revision, decision, actor_user_id, note_artifact_id, created_at, original_plan_revision, final_version, plan_output_id, plan_artifact_id, plan_artifact_sha256, materiality_evidence_artifact_id, materiality_evidence_sha256, expected_workflow_revision, idempotency_key, note_artifact_sha256)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(decisionId, input.taskId, input.companyId, input.workflowId, plan?.outputRevision ?? input.planRevision, input.decision, input.actorUserId, input.noteArtifactId, new Date().toISOString(), plan?.originalPlanRevision ?? null, plan?.finalVersion ?? null, plan?.outputId ?? null, plan?.artifactId ?? null, plan?.artifactSha256 ?? null, input.subject?.materiality.artifactId ?? null, input.subject?.materiality.artifactSha256 ?? null, input.subject?.expectedWorkflowRevision ?? null, input.idempotencyKey ?? null, input.noteArtifactSha256);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(decisionId, input.taskId, input.companyId, input.workflowId, plan?.outputRevision ?? input.planRevision, input.decision, input.actorUserId, input.noteArtifactId, new Date().toISOString(), plan?.originalPlanRevision ?? null, plan?.finalVersion ?? null, plan?.outputId ?? null, plan?.artifactId ?? null, null, input.subject?.materiality.artifactId ?? null, null, input.subject?.expectedWorkflowRevision ?? null, input.idempotencyKey ?? null, null);
     });
-    return { decisionId, duplicate, noteArtifactId, noteArtifactSha256 };
+    return { decisionId, duplicate, noteArtifactId };
   }
 
-  recordBlockerResponseIdempotently(input: { taskId: string; companyId: string; workflowId: string; blockerArtifactId: string; blockerArtifactSha256: string; answerArtifactId: string; answerArtifactSha256: string; actorUserId: string; expectedWorkflowRevision: number; idempotencyKey: string }): { responseId: string; duplicate: boolean; answerArtifactId: string; answerArtifactSha256: string } {
+  recordBlockerResponseIdempotently(input: { taskId: string; companyId: string; workflowId: string; blockerArtifactId: string; answerArtifactId: string; actorUserId: string; expectedWorkflowRevision: number; idempotencyKey: string }): { responseId: string; duplicate: boolean; answerArtifactId: string } {
     artifact(this.database, input.companyId, input.answerArtifactId);
     let responseId = id("blocker_response");
     let answerArtifactId = input.answerArtifactId;
-    let answerArtifactSha256 = input.answerArtifactSha256;
     let duplicate = false;
     this.database.authTransaction((db) => {
-      const existing = db.prepare("SELECT id, answer_artifact_id AS answerArtifactId, answer_artifact_sha256 AS answerArtifactSha256 FROM forge_plan_blocker_responses WHERE workflow_id = ? AND idempotency_key = ?").get(input.workflowId, input.idempotencyKey) as { id: string; answerArtifactId: string; answerArtifactSha256: string } | undefined;
-      if (existing) { responseId = existing.id; answerArtifactId = existing.answerArtifactId; answerArtifactSha256 = existing.answerArtifactSha256; duplicate = true; return; }
-      // subject_hash is a legacy NOT NULL column; the blocker artifact digest fills it and nothing reads it.
-      db.prepare("INSERT INTO forge_plan_blocker_responses (id, task_id, company_id, workflow_id, blocker_artifact_id, blocker_artifact_sha256, answer_artifact_id, answer_artifact_sha256, actor_user_id, expected_workflow_revision, idempotency_key, subject_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(responseId, input.taskId, input.companyId, input.workflowId, input.blockerArtifactId, input.blockerArtifactSha256, input.answerArtifactId, input.answerArtifactSha256, input.actorUserId, input.expectedWorkflowRevision, input.idempotencyKey, input.blockerArtifactSha256, new Date().toISOString());
+      const existing = db.prepare("SELECT id, answer_artifact_id AS answerArtifactId FROM forge_plan_blocker_responses WHERE workflow_id = ? AND idempotency_key = ?").get(input.workflowId, input.idempotencyKey) as { id: string; answerArtifactId: string } | undefined;
+      if (existing) { responseId = existing.id; answerArtifactId = existing.answerArtifactId; duplicate = true; return; }
+      // subject_hash is a legacy NOT NULL column; use the stable artifact identity.
+      db.prepare("INSERT INTO forge_plan_blocker_responses (id, task_id, company_id, workflow_id, blocker_artifact_id, blocker_artifact_sha256, answer_artifact_id, answer_artifact_sha256, actor_user_id, expected_workflow_revision, idempotency_key, subject_hash, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?)").run(responseId, input.taskId, input.companyId, input.workflowId, input.blockerArtifactId, input.answerArtifactId, input.actorUserId, input.expectedWorkflowRevision, input.idempotencyKey, input.blockerArtifactId, new Date().toISOString());
     });
-    return { responseId, duplicate, answerArtifactId, answerArtifactSha256 };
+    return { responseId, duplicate, answerArtifactId };
   }
 }

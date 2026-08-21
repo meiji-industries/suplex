@@ -42,7 +42,8 @@ export const AuthorizedPlanSubjectSchema = z.object({
   workflowId: id,
   planRevision: z.number().int().positive(),
   planArtifactId: id,
-  planSha256: sha256,
+  // Historical authorization data; the plan artifact ID is the live reference.
+  planSha256: sha256.optional(),
   authorizationKind: z.enum(["routine_auto", "human_approval"]),
   approvalDecisionId: id.nullable(),
   authorizedAt: z.string().datetime(),
@@ -76,7 +77,7 @@ export const EvidenceManifestEntrySchema = z.object({
   kind: z.enum(["final_plan", "task_brief", "evidence", "image", "repository_instruction"]),
   artifactId: id.nullable(),
   repositoryPath: relativeRepositoryPath.nullable(),
-  sha256,
+  sha256: sha256.optional(),
   byteSize: z.number().int().nonnegative().max(8 * 1024 * 1024),
   stagedFilename: z.string().min(1).max(160).regex(/^[A-Za-z0-9._-]+$/),
   planStepNumbers: z.array(z.number().int().positive()).max(64),

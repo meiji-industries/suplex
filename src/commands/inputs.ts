@@ -10,7 +10,6 @@ export const StartPlanningInputSchema = z.object({
   actorUserId: durableId,
   commandId: durableId.optional().default("legacy-command"),
   planAuthorizationId: durableId.optional(),
-  planArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   reconcileOnly: z.literal(true).optional(),
 });
 
@@ -18,7 +17,6 @@ export const ResolveDecisionBlockerInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   actorUserId: durableId,
   answerArtifactId: durableId,
-  answerSha256: z.string().regex(/^[a-f0-9]{64}$/),
 }).strict();
 
 export type ResolveDecisionBlockerInput = z.infer<typeof ResolveDecisionBlockerInputSchema>;
@@ -26,7 +24,6 @@ export type ResolveDecisionBlockerInput = z.infer<typeof ResolveDecisionBlockerI
 export const RecordProgressInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   actorUserId: durableId,
-  summaryHash: z.string().regex(/^[a-f0-9]{64}$/),
   commandId: durableId.optional().default("legacy-command"),
 });
 
@@ -40,12 +37,9 @@ export const PlanCommandInputSchema = z.object({
   decision: z.enum(["accept", "request_changes", "cancel"]).optional(),
   idempotencyKey: DecisionIdempotencyKeySchema.optional(),
   noteStagingRef: durableId.optional(),
-  noteSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   expectedWorkflowRevision: z.number().int().nonnegative().optional(),
   answerStagingRef: durableId.optional(),
-  answerSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   planAuthorizationId: durableId.optional(),
-  planArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
 });
 
 const RevisionCommandBaseSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000) }).strict();

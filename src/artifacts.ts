@@ -360,10 +360,13 @@ export class ArtifactStore {
     return artifact;
   }
 
-  async readStaged(companyId: string, ref: string, sha256: string): Promise<Buffer> {
+  async readStaged(companyId: string, ref: string): Promise<Buffer> {
     const validatedCompanyId = CompanyIdSchema.parse(companyId);
     if (!/^staging_[a-f0-9]{32}$/.test(ref)) throw new ArtifactFailure("invalid-staging-ref", "Staged artifact reference is invalid");
-    return this.read({ companyId: validatedCompanyId, storagePath: join(validatedCompanyId, "staging", `${ref}.bin`), sha256 });
+    const storagePath = join(validatedCompanyId, "staging", `${ref}.bin`);
+    const absolutePath = safeStoragePath(this.root, storagePath);
+    await rejectSymlinkComponents(this.root, absolutePath);
+    return readFile(absolutePath);
   }
 
   async discardStaged(staged: Pick<StagedArtifact, "companyId" | "storagePath">): Promise<void> {

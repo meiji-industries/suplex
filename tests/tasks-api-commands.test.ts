@@ -194,7 +194,7 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     expect(tasks.getTask((enrolled.json() as { user: { id: string } }).user.id, task.id).ci).toBeDefined();
     const projected = await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } });
     expect(projected.statusCode, projected.body).toBe(200);
-    expect(projected.json()).toMatchObject({ ci: { runId: "ci-api", policy: { projectRevisionId: active.activeRevisionId, requiredChecks: ["Tests / unit"], acceptedConclusions: ["success"] }, attempts: [{ id: "ci-attempt-api", checks: [{ providerCheckId: "1", selectedForEvaluation: true }] }] } });
+    expect(projected.json()).toMatchObject({ ci: { runId: "ci-api", owner: "integrator", policy: { projectRevisionId: active.activeRevisionId, requiredChecks: ["Tests / unit"], acceptedConclusions: ["success"] }, attempts: [{ id: "ci-attempt-api", owner: "integrator", checks: [{ providerCheckId: "1", selectedForEvaluation: true }] }] } });
     expect(projected.body).not.toMatch(/session_ref|worktree_path|provider response body|raw logs/i);
 
     const targetBaseSha = await git(["rev-parse", "HEAD"], repositoryPath);

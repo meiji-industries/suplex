@@ -1,0 +1,15 @@
+{
+  "kind": "delivery",
+  "summary": "Current production vacuum-cycle kiosk implementation is present and focused validation passes. Broad validation is blocked by an unrelated process-flow query-count failure and local dev server startup did not progress beyond Vite.",
+  "steps": [
+    { "number": 1, "status": "completed", "filesChanged": ["src/services/reports/vacuum_cycle_report_service.py", "tests/services/reports/test_vacuum_cycle_report_service.py"], "notes": "Production-only deterministic current-cycle selection is implemented; focused suite passed (50 tests)." },
+    { "number": 2, "status": "completed", "filesChanged": ["routes/dashboards.py", "src/services/dashboards/__init__.py", "src/services/dashboards/current_vacuum_cycle_service.py", "templates/dashboards/tv/current_vacuum_cycle.html", "static/js/current_vacuum_cycle.js", "frontend/tests/currentVacuumCycleDashboard.test.ts", "tests/routes/test_dashboards.py", "tests/services/dashboards/test_current_vacuum_cycle_service.py"], "notes": "Kiosk route, cursor-based payload, TV template, Chart.js runtime, and focused tests are implemented. Route suite (56 tests), runtime test, and frontend check passed." },
+    { "number": 3, "status": "completed", "filesChanged": ["pi-config.json", "tests/routes/test_dashboards.py"], "notes": "tv-pi06 points to the new URL exactly; JSON assertion and thin deployment suite passed (32 tests)." },
+    { "number": 4, "status": "incomplete", "filesChanged": [], "notes": "lint-local, test-db-free, and frontend-check passed. Full make test has one unrelated reproducible failure: tests/routes/test_process_flow.py::test_index_and_edit_query_counts_are_bounded reports 39 queries against an existing limit of 38. mise run doctor reports missing optional 1Password CLI; mise run dev reached Vite but did not start the application server, preventing browser inspection. No deployment or device action was attempted." }
+  ],
+  "authorizedStepsNotCompleted": [4],
+  "resultCommit": "72e53ec9ff9066e800b4ff921af1c407ada70dd1",
+  "resultTree": "4a9a3d663220300d15dc5c536c65ff489bfa332e",
+  "dirtyState": "clean",
+  "blocker": "Repository-wide validation is blocked by an unrelated reproducible process-flow query-count failure, and the local dev command did not start the application server for visual inspection."
+}

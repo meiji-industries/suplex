@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+
 import { expect, test } from "vitest";
 
 import { developerReconciliationSummary, independentVerificationResults, isLegacyReceiptOnlyRecovery, reconcileDeveloperDelivery } from "../src/developer-reconciliation.js";
@@ -7,6 +9,7 @@ const report = { kind: "delivery" as const, summary: "Delivered", steps: [{ numb
 const authorization = { authorizationId: "authorization_1", taskId: "task_1", companyId: "company_1", projectId: "project_1", workflowId: "workflow_1", planRevision: 1, planArtifactId: "artifact_plan", planSha256: "d".repeat(64), authorizationKind: "routine_auto" as const, approvalDecisionId: null, authorizedAt: "2026-08-11T00:00:00.000Z" };
 const manifest = { version: 1 as const, authorizedPlan: authorization, projectRevision: { projectRevisionId: "revision_1", projectId: "project_1", companyId: "company_1", repositoryIdentity: "owner/repo", repositoryPath: "/repo", worktreeRoot: "/worktrees", baseBranch: "main", targetBranch: "main", baseSha: "a".repeat(40), targetSha: "a".repeat(40), setupVerificationPolicySha256: "e".repeat(64) }, entries: [{ kind: "final_plan" as const, artifactId: "artifact_plan", repositoryPath: null, sha256: authorization.planSha256, byteSize: 1, stagedFilename: "final-plan.json", planStepNumbers: [1] }], contradictionRule: "stop_before_unrelated_edits" as const, verificationCommands: [{ stepNumber: 1, commands: ["pnpm test"] }], createdAt: "2026-08-11T00:00:00.000Z" };
 const independentVerification = { outcome: "passed" as const, summary: "Pinned setup and verification passed", commands: [{ command: "pnpm test", argv: ["pnpm", "test"], exitCode: 0, signal: null, timedOut: false, stdout: "", stderr: "" }] };
+const honestPartialReport = JSON.parse(readFileSync(new URL("./fixtures/developer-reconciliation-honest-partial-delivery.json", import.meta.url), "utf8"));
 
 function input(overrides: Partial<Parameters<typeof reconcileDeveloperDelivery>[0]> = {}) {
   return { executionId: "developer_1", companyId: "company_1", report, independentVerification, git, startingSha: "a".repeat(40), neutralBranch: git.branch, providerBeforeSha256: "d".repeat(64), providerAfterSha256: "d".repeat(64), processExitCode: 0, developerSessionId: "raw-developer", leadSessionId: "raw-lead", authorization, manifest, requiredChecks: [], ...overrides };
@@ -122,6 +125,30 @@ test("accepts an honest partial report and surfaces the Developer blocker", () =
   expect(developerReconciliationSummary(result)).toBe("Developer could not complete step 1: Local environment lacks the 1Password CLI and a reachable Docker daemon.");
 });
 
+test("accepts the exact environmental partial delivery when required GitHub checks are the gate", () => {
+  const paths = honestPartialReport.steps.flatMap((step: { filesChanged: string[] }) => step.filesChanged);
+  const environmentalManifest = { ...manifest, verificationCommands: honestPartialReport.steps.map((step: { number: number }) => ({ stepNumber: step.number, commands: ["pnpm test"] })) };
+  const result = reconcileDeveloperDelivery(input({
+    report: honestPartialReport,
+    manifest: environmentalManifest,
+    git: { ...git, head: honestPartialReport.resultCommit, tree: honestPartialReport.resultTree, changedPaths: paths },
+    requiredChecks: ["Tests / DB-backed"],
+    independentVerification: { ...independentVerification, outcome: "failed", code: "verification_failed" },
+  }));
+  expect(result).toMatchObject({ outcome: "completed", failureCode: null });
+  expect(result.report?.steps.find((step) => step.number === 4)?.status).toBe("not_applicable_locally");
+  expect(result.mismatches).not.toContain("non-completed-step");
+  expect(developerReconciliationSummary(result)).toContain("Not verified locally: step 4 — lint-local, test-db-free, and frontend-check passed.");
+});
+
+test("keeps a genuine code-incomplete delivery blocked even when GitHub checks are required", () => {
+  const result = reconcileDeveloperDelivery(input({
+    report: { ...report, steps: [{ ...report.steps[0], status: "incomplete" as const, notes: "The implementation is not finished." }], authorizedStepsNotCompleted: [1], blocker: "The implementation is not finished." },
+    requiredChecks: ["Tests / DB-backed"],
+  }));
+  expect(result).toMatchObject({ outcome: "blocked", failureCode: "non-completed-step" });
+});
+
 test("accepts external-environment steps and includes their notes in the delivery summary", () => {
   const external = { ...report, steps: [{ ...report.steps[0], status: "not_applicable_locally" as const, notes: "Requires production kiosk hardware." }] };
   const result = reconcileDeveloperDelivery(input({ report: external }));
@@ -130,10 +157,10 @@ test("accepts external-environment steps and includes their notes in the deliver
   expect(developerReconciliationSummary(result)).toBe("Delivered\n\nNot verified locally: step 1 — Requires production kiosk hardware.");
 });
 
-test("keeps an invalid delivery report as a diagnostic when required tests pass", () => {
+test("stops at a report schema error instead of cascading derived delivery failures", () => {
   const result = reconcileDeveloperDelivery(input({ report: { kind: "delivery", summary: "missing facts" } }));
-  expect(result).toMatchObject({ outcome: "completed", failureCode: null });
-  expect(result.mismatches).toContain("raw-report-schema-invalid");
+  expect(result).toMatchObject({ outcome: "blocked", failureCode: "raw-report-schema-invalid" });
+  expect(result.mismatches).toEqual(["raw-report-schema-invalid:steps"]);
 });
 
 test("projects verification results only from a new reconciliation artifact", () => {
@@ -181,7 +208,7 @@ test("isolates final-state reconciliation gates", () => {
     ["session collision", { leadSessionId: "raw-developer" }, "session-identity-conflict"],
     ["duplicate step", { report: { ...report, steps: [...report.steps, report.steps[0]!] } }, "duplicate-plan-step"],
     ["incomplete bookkeeping", { report: { ...report, authorizedStepsNotCompleted: [1] } }, "incomplete-step-mismatch"],
-    ["malformed report", { report: {} }, "raw-report-schema-invalid"],
+    ["malformed report", { report: {} }, "raw-report-schema-invalid:kind"],
     ["verifier failed", { independentVerification: { ...independentVerification, outcome: "failed" } }, "independent-verification-failed"],
     ["verifier timed out", { independentVerification: { ...independentVerification, outcome: "failed", code: "verification_timed_out", commands: [{ ...independentVerification.commands[0], timedOut: true, exitCode: null }] } }, "independent-verification-failed"],
     ["verifier evidence bound", { independentVerification: { ...independentVerification, outcome: "failed", code: "verification_evidence_too_large" } }, "independent-verification-failed"],

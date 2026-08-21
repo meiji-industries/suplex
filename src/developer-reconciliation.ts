@@ -109,6 +109,33 @@ export function developerReconciliationSummary(reconciliation: Pick<DeveloperRec
   return `Developer delivery could not be accepted: ${reconciliation.mismatches.join(", ") || "reconciliation failed"}.${reconciliation.independentVerification?.outcome === "failed" ? ` Independent verification: ${reconciliation.independentVerification.summary}` : ""}`;
 }
 
+function rawReportSchemaMismatch(error: z.ZodError): string {
+  const path = error.issues[0]?.path.join(".");
+  return path ? `raw-report-schema-invalid:${path}` : "raw-report-schema-invalid";
+}
+
+/**
+ * A Builder can finish all code work but be unable to run an environmental
+ * verification locally. CI remains the authority when required checks exist.
+ */
+function normalizeEnvironmentalPartialDelivery(report: DeveloperDelivery, requiredChecks: string[]): DeveloperDelivery {
+  const incomplete = report.steps.filter((step) => step.status !== "completed" && step.status !== "not_applicable_locally");
+  const environmentalCause = /(deploy(?:ment)?|physical (?:device|hardware)|production access|external service|unrelated (?:pre-existing |reproducible )?test fail|local (?:dev )?server.*(?:cannot|could not|did not).*(?:start|run)|environment)/i;
+  if (
+    requiredChecks.length === 0
+    || incomplete.length === 0
+    || incomplete.some((step) => step.status !== "incomplete")
+    || !report.blocker?.trim()
+    || incomplete.some((step) => !environmentalCause.test(`${step.notes}\n${report.blocker}`))
+  ) return report;
+  return {
+    ...report,
+    steps: report.steps.map((step) => step.status === "incomplete" ? { ...step, status: "not_applicable_locally" } : step),
+    authorizedStepsNotCompleted: [],
+    blocker: null,
+  };
+}
+
 const GitObservationSchema = z.object({
   branch: z.string(),
   head: z.string(),
@@ -204,9 +231,29 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
   const independentVerification = normalizeVerification(rawInput.independentVerification);
   const strictReport = DeveloperDeliverySchema.safeParse(rawInput.report);
   const parsed = rawInput.existingResult ? StoredDeveloperDeliverySchema.safeParse(rawInput.report) : strictReport;
+  if (!parsed.success) {
+    const mismatches = [rawReportSchemaMismatch(parsed.error)];
+    const result: Omit<DeveloperReconciliation, "sha256"> = {
+      kind: "developer-reconciliation",
+      policyVersion: 2,
+      executionId: rawInput.executionId,
+      companyId: rawInput.companyId,
+      outcome: "blocked",
+      failureCode: "raw-report-schema-invalid",
+      mismatches,
+      report: null,
+      authorization: rawInput.authorization,
+      manifest: rawInput.manifest,
+      ...(rawInput.verificationProjectRevisionId ? { verificationProjectRevisionId: rawInput.verificationProjectRevisionId } : {}),
+      independentVerification,
+      git: rawInput.git,
+      provider: { beforeSha256: rawInput.providerBeforeSha256, afterSha256: rawInput.providerAfterSha256 },
+      observations: { startingSha: rawInput.startingSha, neutralBranch: rawInput.neutralBranch, processExitCode: rawInput.processExitCode, developerSessionId: rawInput.developerSessionId, leadSessionId: rawInput.leadSessionId },
+    };
+    return { ...result, sha256: createHash("sha256").update(JSON.stringify(result)).digest("hex") };
+  }
   const mismatches: string[] = [];
-  if (!parsed.success) mismatches.push("raw-report-schema-invalid");
-  const report = strictReport.success ? strictReport.data : null;
+  const report = strictReport.success ? normalizeEnvironmentalPartialDelivery(strictReport.data, rawInput.requiredChecks) : null;
   if (rawInput.existingResult) {
     if (rawInput.git.commitCount === 0) mismatches.push("developer-made-no-change");
     if (rawInput.git.status) mismatches.push("dirty-final-tree");
@@ -235,10 +282,9 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
   }
 
   const uniqueMismatches = [...new Set(mismatches)];
-  const noChangeDelivery = !rawInput.existingResult && rawInput.manifest.verificationCommands.length > 0
-    && rawInput.git.status === ""
-    && rawInput.git.head.toLowerCase() === rawInput.startingSha.toLowerCase()
-    && rawInput.git.changedPaths.length === 0;
+  // `git rev-list <base>..HEAD` is the sole new-commit authority. Do not
+  // infer delivery absence from reported hashes, parents, or changed paths.
+  const noChangeDelivery = !rawInput.existingResult && rawInput.git.commitCount === 0;
   if (noChangeDelivery && !uniqueMismatches.includes("developer-made-no-change")) uniqueMismatches.push("developer-made-no-change");
   // Audit observations remain durable diagnostics; only required local checks and
   // unsafe worktree state decide whether delivery can continue.

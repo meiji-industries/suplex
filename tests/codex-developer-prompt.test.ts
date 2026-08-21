@@ -9,7 +9,7 @@ test("fresh Developer prompt states the current base and plan-intent rules", () 
   expect(prompt).toContain(`Current target base SHA: ${startingSha}.`);
   expect(prompt).toContain("The plan describes intent and scope, not an exact file manifest.");
   expect(prompt).toContain("Only report incomplete when the intent itself cannot be achieved.");
-  expect(prompt).toContain("If a step requires deployment, physical devices, production access or external services, do not attempt it; mark it `not_applicable_locally` with a one-line note and continue with the remaining steps.");
+  expect(prompt).toContain("If a step requires deployment, physical devices, production access, external services, an unrelated pre-existing test failure, or a local server that cannot start, mark it `not_applicable_locally` with a one-line reason and continue with the remaining steps.");
   expect(prompt).toContain("Create one or more ordinary local commits for the authorized work when new commits are required");
   expect(prompt).not.toContain("git merge-base --is-ancestor");
 });

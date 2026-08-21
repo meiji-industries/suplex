@@ -282,7 +282,7 @@ function safeBlockSummary(code: import("./temporal/issue-contracts.js").Delivery
     "evidence-too-large": "Lead review evidence exceeded the local artifact limit; retry with bounded output.",
     "subject-changed": "The exact delivery subject changed before review; produce a fresh delivery.",
     "repair-incomplete": "The repair did not address every open blocking finding.",
-    "repair-scope": "The repair exceeded the supplied blocking-finding scope.",
+    "repair-scope": "The Developer reported that the repair is blocked.",
     "worktree-unsafe": "The Developer worktree is not the exact clean reviewed revision.",
     "repair-cap-exhausted": "The configured repair-cycle limit has been reached.",
   };

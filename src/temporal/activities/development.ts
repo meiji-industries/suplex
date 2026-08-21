@@ -53,7 +53,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
       if (input.reviewArtifact) {
         const review = DeliveryReviewSchema.parse(JSON.parse((await verifiedArtifactBytes(database, artifacts, input.companyId, input.reviewArtifact, "delivery-review")).toString("utf8")));
         if (typeof review.repairPlan !== "string") throw new Error("Delivery review artifact is not repairable");
-        blockingFindings = review.findings;
+        blockingFindings = review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
         if (artifactRepairPlan && artifactRepairPlan !== review.repairPlan) throw new Error("Repair plan artifact does not match the authoritative delivery review");
         repairPlan = review.repairPlan;
       }
@@ -74,7 +74,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
         if (input.reviewArtifact) {
           const review = DeliveryReviewSchema.parse(JSON.parse((await verifiedArtifactBytes(database, artifacts, input.companyId, input.reviewArtifact, "delivery-review")).toString("utf8")));
           if (typeof review.repairPlan !== "string") throw new Error("Delivery review artifact is not repairable");
-          blockingFindings = review.findings;
+          blockingFindings = review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
           repairPlan = review.repairPlan;
         }
         if (!blockingFindings || !repairPlan) throw new Error("Delivery review repair evidence is unavailable");

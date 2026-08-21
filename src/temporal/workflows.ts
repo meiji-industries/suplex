@@ -373,7 +373,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   registerLifecycleHandlersContinuation(workflowContext);
   registerPlanningHandlersReject(workflowContext);
   registerCapacityHandlers(workflowContext);
-  if (patched("forge-capacity-ownership-clear-v1") && !patched("forge-no-ownership-v2") && (state.capacityBlocker as { category?: string } | null)?.category === "ownership_ambiguous" && state.capacity) {
+  if (patched("forge-capacity-ownership-clear-v1") && (state.capacityBlocker as { category?: string } | null)?.category === "ownership_ambiguous" && state.capacity) {
     const request = await inspectCapacity({ requestId: state.capacity.requestId });
     if (["released", "cancelled", "stale", "exhausted"].includes(request.status)) {
       state = { ...state, capacity: null, capacityBlocker: null, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer retry is available", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` };

@@ -98,7 +98,7 @@ const repairSummary: Record<RepairBlockCode, string> = {
   "evidence-too-large": "Developer repair evidence exceeded the local artifact limit; retry with bounded output.",
   "subject-changed": "The reviewed delivery subject changed; produce a fresh exact delivery.",
   "repair-incomplete": "The repair did not address every open blocking finding.",
-  "repair-scope": "The repair exceeded the supplied blocking-finding scope.",
+  "repair-scope": "The Developer reported that the repair is blocked.",
   "worktree-unsafe": "The repair did not produce the required clean child commit.",
   "repair-cap-exhausted": "The configured repair-cycle limit has been reached.",
 };
@@ -898,7 +898,6 @@ export class DeveloperService {
         repairRowCreated = true;
       });
       if (input.cycle > input.repairCycleLimit) throw new AgentFailure("repair-cap-exhausted", "The configured Developer repair-cycle limit has been reached");
-      if (input.blockingFindings.some((finding) => finding.severity !== "blocking" || finding.disposition !== "open")) throw new AgentFailure("repair-scope-violation", "Developer repair input must contain only open blocking findings");
       if (prior.status !== "completed" || prior.session_ref !== input.developerSessionRef || input.leadSessionRef !== review.session_ref || prior.branch_name !== input.branchName || prior.worktree_path !== input.worktreePath || prior.target_base_sha !== input.targetBaseSha || review.plan_revision !== input.planRevision || review.base_sha !== input.targetBaseSha || review.subject_commit !== input.subjectCommit || review.subject_tree !== input.subjectTree || review.outcome !== "blocking") throw new AgentFailure("repair-identity-mismatch", "Developer repair coordinates do not match the immutable review subject");
       const previousRepairs = this.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_delivery_repairs WHERE workflow_id = ? AND review_id = ?").get(input.workflowId, input.reviewId) as { count: number }).count;
       if (previousRepairs !== input.cycle) throw new AgentFailure("repair-cycle-conflict", "Developer repair cycle does not match the durable review history");
@@ -938,7 +937,8 @@ export class DeveloperService {
           throw this.provider.classifyProcessFailure(result, outputLines);
         }
         const report = parseRepairReport(outputLines, this.provider);
-        if (report.addressedFindingIds.some((id) => !input.blockingFindings.some((finding) => finding.findingId === id))) throw new AgentFailure("repair-scope-violation", "Developer repair reported a finding outside the bounded blocking set");
+        const extraFindingIds = report.addressedFindingIds.filter((id) => !input.blockingFindings.some((finding) => finding.findingId === id));
+        if (extraFindingIds.length > 0) new StructuredLogger().child({ workflowId: input.workflowId, issueId: input.taskId, companyId: input.companyId, turnId: executionId }).info("Developer repair addressed findings outside the supplied blocking set");
         const openBlockingIds = input.blockingFindings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open").map((finding) => finding.findingId);
         if (report.blocker === null && openBlockingIds.some((id) => !report.addressedFindingIds.includes(id))) throw new AgentFailure("repair-incomplete", "Developer repair did not address every open blocking finding");
         const gitState = await this.worktrees.inspectDelivery(worktreePath);

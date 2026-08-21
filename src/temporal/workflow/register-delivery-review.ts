@@ -162,10 +162,11 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
           : (activityProxies.runDeveloperRepair({ ...repairInput, ...(capacityRequestId ? { capacityRequestId } : {}) }) as unknown as Promise<contracts.WorkflowDeveloperRepairResult | LegacyDeveloperRepairResult>).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),
         (value) => value.status === "completed" ? value.result.developerExecutionId : value.developerExecutionId,
       );
-    } catch {
+    } catch (error) {
       let evidenceArtifactId: string | null = null;
       try { evidenceArtifactId = (await activityProxies.recordDeliveryBlocker({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, operation: "repair" })).artifactId; } catch { /* Keep the fixed state transition if blocker recording itself is unavailable. */ }
-      ctx.state = stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, ctx.repairCycleLimit, evidenceArtifactId);
+      const summary = error instanceof Error ? error.message : "The repair infrastructure did not complete; retry the repair.";
+      ctx.state = stateTransitions.repairInfrastructureBlockedState(ctx.state, cycle, ctx.repairCycleLimit, evidenceArtifactId, summary);
       await ctx.project();
       void command;
       return ctx.state;
@@ -173,7 +174,7 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
     if (outcome.status !== "completed") {
       await ctx.withStateMutation(() => {
         if (ctx.state.activeOperation?.commandId !== command.commandId) return;
-        const allowedCommands = ctx.addRevisionCommand(["repair_delivery", "cancel_issue"]);
+        const allowedCommands = ctx.addRevisionCommand(["repair_delivery", "retry_development", "cancel_issue"]);
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands, pendingAction: outcome.summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields(outcome.status, outcome.reasonCode, outcome.summary, "lastHeartbeatAt" in outcome ? outcome.lastHeartbeatAt : null), developerEvidenceArtifactId: outcome.status === "failed" ? outcome.evidenceArtifactId : ctx.state.developerEvidenceArtifactId, activeOperation: null });
       });
       await ctx.project();

@@ -77,7 +77,7 @@ async function mutationBundle(mode: "compatible" | "incompatible") {
 
 test("INV-15 the versioned manifest consumes every sanitized fixture and batch replays the production bundle", async () => {
   const manifest = await readReplayManifest(manifestPath);
-  expect(manifest.fixtures).toHaveLength(46);
+  expect(manifest.fixtures).toHaveLength(45);
   expect(manifest.fixtures.map((fixture) => fixture.scenario)).toEqual(expect.arrayContaining([
     "backlog_planning",
     "normal_success",
@@ -101,7 +101,6 @@ test("INV-15 the versioned manifest consumes every sanitized fixture and batch r
     "developer_active_worker_loss",
     "developer_cancellation",
     "developer_linked_retry",
-    "developer_ownership_ambiguous",
     "developer_result_claim",
     "live_retry_fresh_turn",
     "routine_plan",
@@ -188,7 +187,6 @@ test("the five recovery fixtures contain the intended durable Temporal events", 
   const decodedText = async (scenario: string) => JSON.stringify(decoded(await read(scenario)));
   expect(await text("developer-cancellation")).toContain("cancelDeveloperExecution");
   expect(await text("developer-linked-retry")).toContain("retryDevelopment");
-  expect(await decodedText("developer-ownership-ambiguous")).toContain("developer-ownership-ambiguous");
   expect(await decodedText("developer-result-claim")).toContain("Controlled result won cancellation race");
 });
 

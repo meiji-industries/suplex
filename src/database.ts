@@ -420,6 +420,15 @@ export class ForgeDatabase {
     if (!task || task.company_id !== parsed.companyId || task.project_id !== parsed.projectId || task.workflow_id !== parsed.workflowId) {
       throw new ProjectionIntegrityFailure("Projection event identity does not match its task", { taskId: parsed.issueId, revision: parsed.revision, eventId: parsed.lastEventId }, "projection_identity_conflict");
     }
+    // A Temporal reset abandons its run and re-derives revisions the abandoned run already projected.
+    // Rows a superseded run wrote are stale, not corruption: drop them from the divergence point on so
+    // the authoritative run can rewrite them. Same-run reuse still fails closed below.
+    const superseded = database.prepare("SELECT 1 AS present FROM forge_issue_timeline WHERE workflow_id = ? AND revision = ? AND run_id <> ? AND event_hash <> ? LIMIT 1").get(parsed.workflowId, parsed.revision, runId, stateHash) as { present: number } | undefined;
+    if (superseded) {
+      database.prepare("DELETE FROM forge_issue_timeline WHERE workflow_id = ? AND revision >= ?").run(parsed.workflowId, parsed.revision);
+      database.prepare("DELETE FROM forge_workflow_snapshots WHERE task_id = ? AND revision >= ?").run(parsed.issueId, parsed.revision);
+      database.prepare("DELETE FROM forge_issue_projections WHERE task_id = ? AND revision >= ?").run(parsed.issueId, parsed.revision);
+    }
     const eventById = database.prepare("SELECT workflow_id, revision, event_hash FROM forge_issue_timeline WHERE id = ?").get(parsed.lastEventId) as { workflow_id: string; revision: number; event_hash: string } | undefined;
     const eventByRevision = database.prepare("SELECT id, event_hash FROM forge_issue_timeline WHERE workflow_id = ? AND revision = ?").get(parsed.workflowId, parsed.revision) as { id: string; event_hash: string } | undefined;
     if (eventById && (eventById.workflow_id !== parsed.workflowId || eventById.revision !== parsed.revision || (eventById.event_hash && eventById.event_hash !== stateHash))) {

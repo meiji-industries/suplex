@@ -108,3 +108,32 @@ test("workflow's first projection accepts the creation row when only stateChange
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("a reset workflow's new run supersedes the abandoned run's projected revisions", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-projection-reset-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    database.projectIssueEvent(createEvent(0, "backlog", "workflow-integrity:0"));
+    database.projectIssueEvent(createEvent(1, "planning", "workflow-integrity:1"));
+
+    // `temporal workflow reset` starts a new run that re-derives revision 1 with different state.
+    const afterReset = createEvent(1, "planning", "workflow-integrity:1");
+    afterReset.state.pendingAction = "Lead planning after the reset";
+    const resetEvent = IssueProjectionEventSchema.parse({ ...afterReset, runId: "run-after-reset" });
+    expect(() => database.projectIssueEvent(resetEvent)).not.toThrow();
+    database.observeIssueProjection(resetEvent);
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase, pending_action, last_run_id FROM forge_issue_projections WHERE task_id = ?").get("task-integrity")))
+      .toEqual({ revision: 1, phase: "planning", pending_action: "Lead planning after the reset", last_run_id: "run-after-reset" });
+    expect(database.authQuery((db) => db.prepare("SELECT run_id FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all("task-integrity")))
+      .toEqual([{ run_id: "run-integrity" }, { run_id: "run-after-reset" }]);
+
+    // The same run reusing a revision with different state is still corruption.
+    const sameRun = createEvent(1, "planning", "workflow-integrity:1");
+    sameRun.state.pendingAction = "Conflicting same-run state";
+    expect(() => database.projectIssueEvent(IssueProjectionEventSchema.parse({ ...sameRun, runId: "run-after-reset" }))).toThrow();
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});

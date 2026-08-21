@@ -1,7 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { WorkflowNotFoundError } from "@temporalio/client";
 
 import type { AuthUser } from "./auth.js";
 import { AuthFailure, AuthService } from "./auth.js";
@@ -20,6 +19,7 @@ import { issueCommands } from "./commands/registry.js";
 import { createInitialIssueWorkflowState, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "./temporal/issue-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { taskCommandDescriptors, type TaskCommandDescriptor } from "./task-commands.js";
+import { TERMINAL_PHASES } from "./issue-phases.js";
 import { MaterialityEvidenceArtifactSchema, PlanSubjectSchema, deterministicMaterialCategories, type MaterialityEvidenceSubject, type PlanBlockerSubject, type PlanMaterialCategory, type PlanSubject } from "./plan-governance.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { developerVerificationProjection } from "./developer-task-projection.js";
@@ -52,14 +52,14 @@ export class TaskFailure extends Error {
   }
 }
 
-function workflowIsNoLongerRunning(error: unknown): boolean {
+function workflowCancellationFailureIsTransient(error: unknown): boolean {
   const seen = new Set<unknown>();
   let current = error;
   while (current && typeof current === "object" && !seen.has(current)) {
     seen.add(current);
-    if (current instanceof WorkflowNotFoundError || (current instanceof Error && current.name === "WorkflowNotFoundError")) return true;
+    const name = current instanceof Error ? current.name : "";
     const message = current instanceof Error ? current.message : "";
-    if (/workflow (execution )?(not found|not running|already completed|terminated)|workflow.*closed/i.test(message)) return true;
+    if (/timeout|deadline|network|connection|unavailable|resource exhausted|temporar/i.test(`${name} ${message}`)) return true;
     current = "cause" in current ? current.cause : undefined;
   }
   return false;
@@ -1391,7 +1391,7 @@ export class TaskService {
       if (command === "start_planning") await this.waitForProjection(taskId, expectedRevision + 1);
       return this.getTask(actorUserId, taskId);
     } catch (error) {
-      if (command === "cancel_issue" && workflowIsNoLongerRunning(error)) {
+      if (command === "cancel_issue" && !workflowCancellationFailureIsTransient(error)) {
         this.cancelProjectionAfterWorkflowEnded(task);
         this.recordTaskCommand(task, actorUserId, command, task.revision + 1);
         return this.getTask(actorUserId, taskId);
@@ -2020,7 +2020,10 @@ export class TaskService {
     const workflowSnapshot = this.database.authQuery((db) => db.prepare("SELECT state_json AS stateJson FROM forge_workflow_snapshots WHERE task_id = ? AND revision = ?").get(row.id, row.projection_revision) as { stateJson: string } | undefined);
     const snapshotState = workflowSnapshot ? IssueWorkflowStateSchema.safeParse(json<unknown>(workflowSnapshot.stateJson, null)) : undefined;
     const rawAllowedCommands = json<unknown[]>(row.allowed_commands_json, []);
-    const allowedCommands = IssueCommandSchema.array().safeParse(rawAllowedCommands).success ? IssueCommandSchema.array().parse(rawAllowedCommands) : [];
+    const projectedCommands = IssueCommandSchema.array().safeParse(rawAllowedCommands).success ? IssueCommandSchema.array().parse(rawAllowedCommands) : [];
+    const allowedCommands: IssueCommand[] = !TERMINAL_PHASES.has(row.phase) && !projectedCommands.includes("cancel_issue")
+      ? [...projectedCommands, "cancel_issue"]
+      : projectedCommands;
     const recoveryStatus = developerExecution?.leaseStatus === "result_ready" ? "result_pending_claim" : snapshotState?.success ? snapshotState.data.developerRecoveryStatus : undefined;
     const nextRecoveryCommand = recoveryStatus ? (["verify_developer_ownership", "retry_development", "cancel_development", "cancel_issue"] as const).find((command) => allowedCommands.includes(command)) : undefined;
     const developerRecovery = recoveryStatus && snapshotState?.success ? {

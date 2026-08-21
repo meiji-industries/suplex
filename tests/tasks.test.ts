@@ -225,6 +225,31 @@ test("cancelling succeeds when the Temporal workflow is no longer running", asyn
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("cancelling falls back to the projection when Temporal rejects the update", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Rejected cancellation", description: "body", idempotencyKey: "rejected-workflow-cancel", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    const blocked = IssueWorkflowStateSchema.parse({ ...initial, phase: "ci_repair_required", revision: 1, owner: "human", allowedCommands: [], pendingAction: "CI repair required", lastEventId: `${initial.workflowId}:1` });
+    projectState(value.database, blocked);
+    value.workflow.execute = async () => { throw new Error("Issue cancellation is not available in the current phase"); };
+
+    await expect(value.tasks.executeCommand(value.adminId, created.task.id, "cancel_issue", { expectedRevision: 1 })).resolves.toMatchObject({ phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Issue cancelled", revision: 2 });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("non-terminal projections always expose cancellation", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Hidden cancellation", description: "body", idempotencyKey: "hidden-cancel-command", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    const blocked = IssueWorkflowStateSchema.parse({ ...initial, phase: "merge_conflict_reviewing", revision: 1, owner: "human", allowedCommands: [], pendingAction: "Review merge conflict", lastEventId: `${initial.workflowId}:1` });
+    projectState(value.database, blocked);
+
+    expect(value.tasks.getTask(value.adminId, created.task.id)).toMatchObject({ allowedCommands: ["cancel_issue"], commands: [expect.objectContaining({ name: "cancel_issue", expectedRevision: 1 })] });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("a Developer retry returns after the retry update is accepted", async () => {
   const value = await fixture();
   try {

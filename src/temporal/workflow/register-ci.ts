@@ -81,7 +81,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
         await ctx.project();
         return runExactCiRepairTurn();
       } catch {
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["request_delivery_changes", "cancel_issue"]), pendingAction: "Lead CI repair planning failed; inspect the recorded evidence", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["reconcile_ci", "request_delivery_changes", "cancel_issue"]), pendingAction: "Lead CI repair planning failed; inspect the recorded evidence", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       }
       await ctx.project();
     } else if (!(result.owner === "system" && result.retryAt)) {

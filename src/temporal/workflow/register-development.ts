@@ -41,6 +41,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
       if (recovered) await ctx.project();
       return ctx.state;
     }
+    let autoRetry = false;
     const applied = await ctx.withStateMutation(() => {
       if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;
       if (outcome.status === "completed") {
@@ -48,8 +49,9 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
         const typedBlockedState = result.outcome === "blocked" && ctx.patched(ctx.developerBlockedRecoveryStatePatch);
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ctx.addRevisionCommand(["review_delivery", "cancel_issue"]) : ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: result.outcome === "completed" ? "Lead delivery review" : "Delivery reconciliation blocked; automatic recheck is enabled", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, targetBaseSha: result.targetBaseSha, currentStep: result.currentStep, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.dirtyState, deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.deliverySummary, developerOutcome: result.outcome, ...ctx.recoveryFields(typedBlockedState ? "failed" : "active", typedBlockedState ? result.failureCode ?? null : null, typedBlockedState ? result.deliverySummary : "Developer result claimed.", null), activeOperation: null, blocker: result.outcome === "blocked" ? stateTransitions.humanBlocker(result.failureCode === "delivery-reconciliation-failed" ? "unsafe_recovery" : "agent_exhausted", result.deliverySummary, [{ command: "retry_development", label: "Recheck or retry Developer", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.attentionEvidenceArtifactId, result.attentionEvidenceSha256, "attention-evidence")) : null, stateChangedAt: new Date().toISOString() });
       } else {
-        const allowedCommands = ctx.addRevisionCommand(["retry_development", "cancel_issue"]);
-        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands, pendingAction: outcome.summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: outcome.developerExecutionId, developerOutcome: null, ...ctx.recoveryFields(outcome.status, outcome.reasonCode, outcome.summary, "lastHeartbeatAt" in outcome ? outcome.lastHeartbeatAt : null), developerEvidenceArtifactId: outcome.status === "failed" ? outcome.evidenceArtifactId : ctx.state.developerEvidenceArtifactId, activeOperation: null });
+        autoRetry = outcome.status === "interrupted" && developerAttempt === 1 && ctx.patched("forge-developer-auto-retry-v1");
+        const allowedCommands = autoRetry ? ctx.addRevisionCommand(["start_development", "cancel_issue"]) : ctx.addRevisionCommand(["retry_development", "cancel_issue"]);
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: autoRetry ? "ready_for_development" : "delivery_blocked", owner: autoRetry ? "lead" : "human", allowedCommands, pendingAction: autoRetry ? "Developer process ended; Forge is starting the one automatic retry." : outcome.summary, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: outcome.developerExecutionId, developerOutcome: null, ...ctx.recoveryFields(outcome.status, outcome.reasonCode, outcome.summary, "lastHeartbeatAt" in outcome ? outcome.lastHeartbeatAt : null), developerEvidenceArtifactId: outcome.status === "failed" ? outcome.evidenceArtifactId : ctx.state.developerEvidenceArtifactId, activeOperation: null });
       }
       if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
       return true;
@@ -58,6 +60,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
     // command's own result is still being handed back to the caller.
     const settled = ctx.state;
     if (applied) await ctx.project();
+    if (applied && autoRetry) return startDevelopment(ctx, { ...command, expectedRevision: ctx.state.revision, commandId: `${ctx.state.workflowId}:auto-retry-development:${ctx.state.revision}` });
     void command;
     return settled;
 }

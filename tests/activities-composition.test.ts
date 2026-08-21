@@ -127,6 +127,9 @@ test("a retry finalizes a result_ready supervisor result while its execution row
     const token = "result-ready-token";
     await writeFile(join(executionRoot, "lease-token"), token, { mode: 0o600 });
     const lease = leases.reserve({ executionId, companyId: "company_1", taskId: "task_1", workflowId: "workflow_1", attempt: 1, turnKind: "implementation", canonicalWorktreePath: join(root, "worktree"), worktreeIdentityHash: "w".repeat(64), leaseToken: token }).lease;
+    leases.markSupervisorStarting(executionId);
+    leases.setSupervisorIdentity(executionId, { pid: 99_001, processGroup: 99_001, startTime: "gone", executable: "node", argv: ["node"], ownerUid: null });
+    leases.setChildIdentity(executionId, { pid: 99_002, processGroup: 99_002, startTime: "gone", executable: "node", argv: ["node"], ownerUid: null });
     await mkdir(join(root, "worktree"), { recursive: true });
     const output = Buffer.from("completed\n");
     await writeFile(join(executionRoot, "events.jsonl"), output);
@@ -140,6 +143,7 @@ test("a retry finalizes a result_ready supervisor result while its execution row
     });
     expect(outcome).toMatchObject({ status: "completed", resultHash: supervisorResult.resultHash });
     expect(database.authQuery((db) => db.prepare("SELECT status, finished_at AS finishedAt FROM forge_developer_executions WHERE id = ?").get(executionId))).toMatchObject({ status: "completed", finishedAt: now });
+    expect(database.authQuery((db) => db.prepare("SELECT failure_code AS failureCode FROM forge_developer_executions WHERE id = ?").get(executionId))).toEqual({ failureCode: null });
     expect(leases.readClaim(executionId)?.resultHash).toBe(supervisorResult.resultHash);
   } finally { database.close(); await rm(root, { recursive: true, force: true }); }
 });

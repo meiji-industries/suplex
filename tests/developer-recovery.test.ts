@@ -113,7 +113,7 @@ test("INV-09 restore recovery is projection-read-only and invalidates local proc
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("an interrupted reconcile releases the lease so the next attempt can reserve the same worktree", async () => {
+test("a gone Developer with no result is interrupted and releases the lease for the automatic retry", async () => {
   const value = await fixture();
   try {
     const id = `developer_${"e".repeat(24)}`;

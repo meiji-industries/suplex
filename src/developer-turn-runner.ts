@@ -5,11 +5,11 @@ import { open, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { ForgeConfig } from "./config.js";
-import { compareProcessIdentity, defaultProcessController, type ProcessController } from "./process-manager.js";
+import { defaultProcessController, type ProcessController } from "./process-manager.js";
 import { DeveloperExecutionLeaseRepository, deriveDeveloperExecutionId, type DeveloperExecutionLease, type DeveloperResultClaim, type DeveloperTurnKind } from "./developer-execution-leases.js";
 import { requestDeveloperSupervisor, spawnDeveloperSupervisor } from "./developer-supervisor.js";
 import { DeveloperSupervisorInvocationSchema, DeveloperSupervisorSnapshotSchema, validateSupervisorResult, type DeveloperSupervisorIdentity, type DeveloperSupervisorInvocation, type DeveloperSupervisorResponse } from "./developer-supervisor-protocol.js";
-import { cancelDeveloperExecution } from "./developer-recovery.js";
+import { cancelDeveloperExecution, inspectDeveloperExecution } from "./developer-recovery.js";
 
 export interface DeveloperTurnRunInput {
   database: import("./database.js").ForgeDatabase;
@@ -212,9 +212,15 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
           await activitySleep(250);
           continue;
         }
+        const diskState = latest ? await inspectDeveloperExecution(latest, controller) : { kind: "gone" as const };
+        if (diskState.kind === "result_ready") {
+          // Result publication can be visible just before its contents are
+          // readable. Keep polling disk instead of treating the child as gone.
+          await activitySleep(250);
+          continue;
+        }
+        if (diskState.kind === "running") return { executionId: lease.executionId, resultHash: "", exitCode: null, exitSignal: null, lines: input.onLine ? [] : await readEvents(root), outputTruncated: false, terminal: "ownership_ambiguous", lastHeartbeatAt: latest?.heartbeatAt ?? lastHeartbeat };
         if (latest?.child) {
-          const child = await controller.inspect(latest.child.pid);
-          if (child && compareProcessIdentity({ name: "developer", pid: latest.child.pid, command: latest.child.argv.join(" "), startedAt: latest.child.startTime, processGroup: latest.child.processGroup, startTime: latest.child.startTime, executable: latest.child.executable, argv: latest.child.argv, ...(latest.child.ownerUid !== null ? { ownerUid: latest.child.ownerUid } : {}) }, child).kind === "exact_match") return { executionId: lease.executionId, resultHash: "", exitCode: null, exitSignal: null, lines: input.onLine ? [] : await readEvents(root), outputTruncated: false, terminal: "ownership_ambiguous", lastHeartbeatAt: latest.heartbeatAt };
           // A short-lived child can exit and close the control socket just
           // before the supervisor's atomic result rename becomes visible.
           // Keep polling that bounded finalization window instead of falsely

@@ -69,13 +69,42 @@ function toInspection(value: DeveloperProcessInspection): ProcessInspection {
   return { pid: value.pid, processGroup: value.processGroupId, startTime: value.processStartIdentity.includes(":") ? value.processStartIdentity.slice(value.processStartIdentity.indexOf(":") + 1) : value.processStartIdentity, command: value.command, executable: value.executable ?? value.argv?.[0] ?? value.command.split(/\s+/)[0] ?? "", argv: value.argv ?? value.command.split(/\s+/).filter(Boolean), ...(value.ownerUid !== undefined ? { ownerUid: value.ownerUid } : {}) };
 }
 
-async function readResult(lease: DeveloperExecutionLease): Promise<DeveloperSupervisorResult | undefined> {
+export async function readDeveloperSupervisorResult(lease: DeveloperExecutionLease): Promise<DeveloperSupervisorResult | undefined> {
   const handle = await open(join(lease.executionRoot, lease.resultPath), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0)).catch(() => undefined);
   if (!handle) return undefined;
   try {
     const result = validateSupervisorResult(JSON.parse(await handle.readFile("utf8")));
     return result.executionId === lease.executionId && result.leaseTokenHash === lease.leaseTokenHash ? result : undefined;
   } catch { return undefined; } finally { await handle.close(); }
+}
+
+export type DeveloperExecutionDiskState =
+  | { kind: "result_ready"; result?: DeveloperSupervisorResult }
+  | { kind: "running" }
+  | { kind: "gone" };
+
+type DeveloperDiskProcessController = { inspect(pid: number): Promise<DeveloperProcessInspection | ProcessInspection | undefined> };
+
+function normalizeInspection(value: DeveloperProcessInspection | ProcessInspection): ProcessInspection {
+  return "processGroupId" in value ? toInspection(value) : value;
+}
+
+/** The supervisor directory is the completion authority, ahead of child PID liveness. */
+export async function inspectDeveloperExecution(lease: DeveloperExecutionLease, controller: DeveloperDiskProcessController): Promise<DeveloperExecutionDiskState> {
+  const result = await readDeveloperSupervisorResult(lease);
+  if (result) return { kind: "result_ready", result };
+  const snapshot = await open(join(lease.executionRoot, "supervisor.json"), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
+    .then(async (handle) => { try { return DeveloperSupervisorSnapshotSchema.parse(JSON.parse(await handle.readFile("utf8"))); } finally { await handle.close(); } })
+    .catch(() => undefined);
+  if (snapshot?.status === "result_ready") return { kind: "result_ready" };
+  // A durable supervisor failure is terminal evidence too; no PID probe is
+  // needed before the workflow takes its one automatic retry.
+  if (snapshot?.status === "failed") return { kind: "gone" };
+  if (!lease.child) return { kind: "gone" };
+  const inspection = await controller.inspect(lease.child.pid);
+  if (!inspection) return { kind: "gone" };
+  const comparison = compareProcessIdentity({ name: "developer", pid: lease.child.pid, command: lease.child.argv.join(" "), startedAt: lease.child.startTime, processGroup: lease.child.processGroup, startTime: lease.child.startTime, executable: lease.child.executable, argv: lease.child.argv, ...(lease.child.ownerUid !== null ? { ownerUid: lease.child.ownerUid } : {}) }, normalizeInspection(inspection));
+  return comparison.kind === "exact_match" ? { kind: "running" } : { kind: "gone" };
 }
 
 function resultHashFromClaim(database: ForgeDatabase, executionId: string): string | undefined {
@@ -152,7 +181,8 @@ export async function reconcileDeveloperExecutions(database: ForgeDatabase, cont
     // A turn that finished just before the restart has a durable result but no
     // claim yet. Its child is legitimately gone; marking it interrupted here
     // would discard a completed turn instead of letting the Activity claim it.
-    if (lease.resultHash || await readResult(lease)) {
+    const diskState = await inspectDeveloperExecution(lease, controller);
+    if (lease.resultHash || diskState.kind === "result_ready") {
       outcomes.push({ executionId: lease.executionId, status: "recovered", reason: "stored-supervisor-result" });
       continue;
     }
@@ -162,8 +192,7 @@ export async function reconcileDeveloperExecutions(database: ForgeDatabase, cont
     }
     const supervisorInspection = await controller.inspect(lease.supervisor.pid);
     const supervisorComparison = supervisorInspection ? compareProcessIdentity({ name: "developer-supervisor", pid: lease.supervisor.pid, command: lease.supervisor.argv.join(" "), startedAt: lease.supervisor.startTime, processGroup: lease.supervisor.processGroup, startTime: lease.supervisor.startTime, executable: lease.supervisor.executable, argv: lease.supervisor.argv, ...(lease.supervisor.ownerUid !== null ? { ownerUid: lease.supervisor.ownerUid } : {}) }, toInspection(supervisorInspection)) : { kind: "not_running" as const };
-    const inspection = await controller.inspect(lease.child.pid);
-    if (!inspection && heartbeatExpired(lease.heartbeatAt)) {
+    if (diskState.kind === "gone" && heartbeatExpired(lease.heartbeatAt)) {
       // Release the lease too: the active-worktree unique index otherwise keeps
       // blocking every retry on this worktree with "lease was not created".
       new DeveloperExecutionLeaseRepository(database, "").setStatus(lease.executionId, "interrupted", ["reserved", "supervisor_starting", "running", "result_ready", "cancel_requested", "cancelling"]);
@@ -171,12 +200,11 @@ export async function reconcileDeveloperExecutions(database: ForgeDatabase, cont
       outcomes.push({ executionId: lease.executionId, status: "interrupted", reason: supervisorComparison.kind === "exact_match" ? "process-missing" : "supervisor-and-process-missing" });
       continue;
     }
-    if (!inspection) {
+    if (diskState.kind === "gone") {
       outcomes.push({ executionId: lease.executionId, status: "ownership_ambiguous", reason: "process-recently-unavailable" });
       continue;
     }
-    const comparison = compareProcessIdentity({ name: "developer", pid: lease.child.pid, command: lease.child.argv.join(" "), startedAt: lease.child.startTime, processGroup: lease.child.processGroup, startTime: lease.child.startTime, executable: lease.child.executable, argv: lease.child.argv, ...(lease.child.ownerUid !== null ? { ownerUid: lease.child.ownerUid } : {}) }, toInspection(inspection));
-    outcomes.push(comparison.kind === "exact_match" && supervisorComparison.kind === "exact_match" ? { executionId: lease.executionId, status: "active" } : { executionId: lease.executionId, status: "ownership_ambiguous", reason: comparison.kind === "exact_match" ? `supervisor-${supervisorComparison.kind}` : comparison.kind });
+    outcomes.push(supervisorComparison.kind === "exact_match" ? { executionId: lease.executionId, status: "active" } : { executionId: lease.executionId, status: "ownership_ambiguous", reason: `supervisor-${supervisorComparison.kind}` });
   }
   return outcomes;
 }
@@ -230,7 +258,7 @@ export async function cancelDeveloperExecution(database: ForgeDatabase, executio
   if (response.killSentAt) repository.recordCancellationEvidence(executionId, "kill_sent_at", response.killSentAt);
   let result: DeveloperSupervisorResult | undefined;
   for (let attempt = 0; attempt < 50 && !result; attempt += 1) {
-    result = await readResult(current);
+    result = await readDeveloperSupervisorResult(current);
     if (!result) await new Promise((resolve) => setTimeout(resolve, 100));
   }
   if (!result) return { status: "termination_failed", executionId, reasonCode: "developer-result-missing-after-cancel", summary: "Forge could not confirm the cancelled Developer result.", evidenceArtifactId: null };

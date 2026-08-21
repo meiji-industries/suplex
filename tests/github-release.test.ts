@@ -108,9 +108,19 @@ test("uses the supported gh command to mark a draft pull request ready", async (
 });
 
 test("enables protected auto-merge for the exact reviewed commit", async () => {
-  const value = runnerFor([{ stdout: "✓ Pull request acme/forge#7 will be automatically merged when all requirements are met\n", stderr: "" }]);
+  const value = runnerFor([
+    { stdout: JSON.stringify({ allow_squash_merge: false, allow_merge_commit: true, allow_rebase_merge: true }), stderr: "" },
+    { stdout: "✓ Pull request acme/forge#7 will be automatically merged when all requirements are met\n", stderr: "" },
+  ]);
   await createGithubReleasePort({ runner: value.runner }).enableAutoMerge!({ repository: "acme/forge", number: 7, headSha });
-  expect(value.calls.map(({ command, args }) => [command, ...args])).toEqual([["gh", "pr", "merge", "7", "--repo", "acme/forge", "--auto", "--merge", "--match-head-commit", headSha]]);
+  expect(value.calls.map(({ command, args }) => [command, ...args])).toEqual([["gh", "api", "repos/acme/forge"], ["gh", "pr", "merge", "7", "--repo", "acme/forge", "--auto", "--merge", "--match-head-commit", headSha]]);
+
+  const squashOnly = runnerFor([
+    { stdout: JSON.stringify({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }), stderr: "" },
+    { stdout: "✓ Pull request acme/forge#7 will be automatically merged when all requirements are met\n", stderr: "" },
+  ]);
+  await createGithubReleasePort({ runner: squashOnly.runner }).enableAutoMerge!({ repository: "acme/forge", number: 7, headSha });
+  expect(squashOnly.calls[1]!.args).toContain("--squash");
 });
 
 test("rejects malformed provider identities and redacts provider failure summaries", async () => {

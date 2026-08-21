@@ -330,7 +330,10 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       try { await runGh(["pr", "ready", String(input.number), "--repo", input.repository]); } catch (error) { throw classifyCommandFailure(error, "mark ready for review"); }
     },
     async enableAutoMerge(input) {
-      try { await runGh(["pr", "merge", String(input.number), "--repo", input.repository, "--auto", "--merge", "--match-head-commit", input.headSha]); } catch (error) { throw classifyCommandFailure(error, "enable auto-merge"); }
+      // Use a merge method the repository allows; GitHub rejects disallowed ones outright.
+      const repo = await api(["api", `repos/${input.repository}`], "repository settings") as { allow_squash_merge?: boolean; allow_merge_commit?: boolean; allow_rebase_merge?: boolean };
+      const method = repo.allow_squash_merge !== false ? "--squash" : repo.allow_merge_commit !== false ? "--merge" : "--rebase";
+      try { await runGh(["pr", "merge", String(input.number), "--repo", input.repository, "--auto", method, "--match-head-commit", input.headSha]); } catch (error) { throw classifyCommandFailure(error, "enable auto-merge"); }
     },
   } as GithubReleasePort & GithubAcceptancePort;
 }

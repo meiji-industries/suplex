@@ -6,6 +6,16 @@ import { issueUpdates } from "../issue-updates.js";
 import type { AcceptDeliveryActivityInput } from "../issue-contracts.js";
 import type { IssueWorkflowContext } from "./context.js";
 export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
+  const validateFinalReview = (rawInput: contracts.StartPlanningInput): contracts.StartPlanningInput => {
+    const command = contracts.StartPlanningInputSchema.parse(rawInput);
+    if (command.expectedRevision !== ctx.state.revision || (ctx.state.phase !== "final_review" && !(ctx.state.phase === "delivery_blocked" && ctx.state.finalReviewFailureCode === "final_review_unavailable"))) throw new Error("Final review is not available in the current phase");
+    return command;
+  };
+  const validateReconcileAcceptance = (rawInput: contracts.StartPlanningInput): contracts.StartPlanningInput => {
+    const command = contracts.StartPlanningInputSchema.parse(rawInput);
+    if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "ready_reconciliation" || !ctx.state.acceptanceId) throw new Error("Acceptance reconciliation is not available in the current phase");
+    return command;
+  };
   let accept: (rawInput: contracts.PlanCommandInput, decision: "accept" | "request_changes") => Promise<contracts.IssueWorkflowState>;
   const runFinalReviewTurn = async (): Promise<contracts.IssueWorkflowState> => {
     if (!ctx.state.releaseId || !ctx.state.deliveryReviewId || !ctx.state.ciRunId || !ctx.state.leadSessionRef || !ctx.state.leadOutputArtifactId || !ctx.state.developerExecutionId || !ctx.state.deliveryArtifactId || !ctx.state.developerEvidenceArtifactId || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree) throw new Error("Exact release, pull request, delivery review, CI, Lead, and Developer evidence is required for final review");
@@ -71,10 +81,9 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
     return ctx.state;
   };
   setHandler(issueUpdates.final_review, ctx.guarded(async (rawInput) => {
-    const command = contracts.StartPlanningInputSchema.parse(rawInput);
-    if (command.expectedRevision !== ctx.state.revision || (ctx.state.phase !== "final_review" && !(ctx.state.phase === "delivery_blocked" && ctx.state.finalReviewFailureCode === "final_review_unavailable"))) throw new Error("Final review is not available in the current phase");
+    validateFinalReview(rawInput);
     return ctx.runFinalReviewTurn();
-  }));
+  }, "final_review"), { validator(rawInput) { validateFinalReview(rawInput); } });
   accept = async (rawInput: contracts.PlanCommandInput, decision: "accept" | "request_changes"): Promise<contracts.IssueWorkflowState> => {
     const command = contracts.PlanCommandInputSchema.parse(rawInput);
     const exactAcceptanceReceipts = ctx.patched(ctx.exactAcceptanceReceiptPatch);
@@ -156,10 +165,9 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
   setHandler(issueUpdates.accept_delivery, ctx.guarded((rawInput) => accept(rawInput, "accept"), "accept_delivery"));
   setHandler(issueUpdates.request_delivery_changes, ctx.guarded((rawInput) => accept(rawInput, "request_changes"), "request_delivery_changes"));
   setHandler(issueUpdates.reconcile_acceptance, ctx.guarded(async (rawInput) => {
-    const command = contracts.StartPlanningInputSchema.parse(rawInput);
-    if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "ready_reconciliation" || !ctx.state.acceptanceId) throw new Error("Acceptance reconciliation is not available in the current phase");
+    validateReconcileAcceptance(rawInput);
     return reconcileAcceptanceTurn();
-  }, "reconcile_acceptance"));
+  }, "reconcile_acceptance"), { validator(rawInput) { validateReconcileAcceptance(rawInput); } });
   ctx.runFinalReviewTurn = runFinalReviewTurn;
   ctx.reconcileAcceptanceTurn = reconcileAcceptanceTurn;
   ctx.retryAcceptDelivery = (command) => accept(command, "accept");

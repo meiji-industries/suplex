@@ -128,9 +128,13 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
 }
 
 export function registerMergeReconciliationHandler(ctx: IssueWorkflowContext): void {
-  setHandler(issueUpdates.reconcile_merge, ctx.guarded(async (rawInput) => {
+  const validateReconcileMerge = (rawInput: contracts.StartPlanningInput): contracts.StartPlanningInput => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "manual_merge") throw new Error("Merge reconciliation is not available in the current phase");
+    return command;
+  };
+  setHandler(issueUpdates.reconcile_merge, ctx.guarded(async (rawInput) => {
+    validateReconcileMerge(rawInput);
     return ctx.reconcileMergeTurn();
-  }, "reconcile_merge"));
+  }, "reconcile_merge"), { validator(rawInput) { validateReconcileMerge(rawInput); } });
 }

@@ -1,4 +1,4 @@
-import { ActivityFailure, ApplicationFailure, isCancellation, sleep } from "@temporalio/workflow";
+import { ActivityFailure, ApplicationFailure, isCancellation, log, sleep } from "@temporalio/workflow";
 
 import type { CapacityOperation, CapacityRole } from "../../capacity-contracts.js";
 import {
@@ -353,7 +353,20 @@ export function createGuarded(
       return await fn(...args);
     } catch (error) {
       const state = store.get();
-      if (!options.enabled || state === before || isCancellation(error)) throw error;
+      if (isCancellation(error)) throw error;
+      // Update handlers run while replaying every accepted update in history.
+      // A plain Error is a programming/precondition failure, not an update
+      // rejection; letting it escape fails the Workflow Task and wedges the
+      // entire run. New commands must reject in validators, while an accepted
+      // legacy command safely reports the state it reached.
+      if (!(error instanceof ApplicationFailure)) {
+        log.warn("Ignoring non-ApplicationFailure from update handler", {
+          command: command ?? "unknown",
+          reason: error instanceof Error ? error.message.slice(0, 256) : String(error).slice(0, 256),
+        });
+        return state as R;
+      }
+      if (!options.enabled || state === before) throw error;
       const failure = permanentActivityFailure(error, true);
       const summary = failure?.summary ?? "The command failed; retry is available";
       const revision = state.revision + 1;

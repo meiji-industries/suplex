@@ -13,6 +13,11 @@ const CI_RERUN_POLL_DELAY_MS = 60_000;
 const shouldUpdateFromBaseBeforeCiRepair = (result: { outcome: string; repairable: boolean; owner: string | null }, baseUpdateCount: number): boolean => result.outcome === "failed" && result.repairable && result.owner === "lead" && baseUpdateCount < 2;
 
 export function registerCiHandlers(ctx: IssueWorkflowContext): void {
+  const validateReconcileCi = (rawInput: contracts.StartPlanningInput): contracts.StartPlanningInput => {
+    const command = contracts.StartPlanningInputSchema.parse(rawInput);
+    if (command.expectedRevision !== ctx.state.revision || !["ci_waiting", "delivery_blocked"].includes(ctx.state.phase) || !ctx.state.allowedCommands.includes("reconcile_ci")) throw new Error("CI reconciliation is not available in the current phase");
+    return command;
+  };
   const runExactCiRepairTurn = async (): Promise<contracts.IssueWorkflowState> => {
     if (!ctx.state.ciRepairPlanId || !ctx.state.ciRepairPlanArtifactId || !ctx.state.ciRepairPlanEvidenceArtifactId || !ctx.state.ciAttemptId || !ctx.state.ciRunId || !ctx.state.expectedHeadSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName) throw new Error("The exact CI repair plan and prior Developer delivery are required");
     const ciRunId = ctx.state.ciRunId;
@@ -136,14 +141,13 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     return ctx.state;
   };
   setHandler(issueUpdates.reconcile_ci, ctx.guarded(async (rawInput) => {
-    const command = contracts.StartPlanningInputSchema.parse(rawInput);
-    if (command.expectedRevision !== ctx.state.revision || !["ci_waiting", "delivery_blocked"].includes(ctx.state.phase) || !ctx.state.allowedCommands.includes("reconcile_ci")) throw new Error("CI reconciliation is not available in the current phase");
+    validateReconcileCi(rawInput);
     if (ctx.state.phase === "delivery_blocked") {
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: "Retrying CI reconciliation", blocker: null, ciNextPollAt: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
     }
     return reconcileCiTurn();
-  }));
+  }, "reconcile_ci"), { validator(rawInput) { validateReconcileCi(rawInput); } });
   setHandler(issueUpdates.repair_ci, ctx.guarded(async (rawInput) => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "ci_repair_required") throw new Error("CI repair is not available in the current phase");

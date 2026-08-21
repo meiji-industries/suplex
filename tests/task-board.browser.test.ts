@@ -35,10 +35,10 @@ test("the task board shows its workflow lanes on desktop and narrow viewports", 
   const company = auth.createCompany("admin-1", "Browser Board Company");
   auth.setCompanyIssueCode("admin-1", company.id, "brd");
   const profile = projects.createProfile("admin-1", { name: "Browser board profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const analyst = projects.createAgent("admin-1", { name: "Analyst", role: "analyst", profileId: profile.id });
-  const implementer = projects.createAgent("admin-1", { name: "Implementer", role: "implementer", profileId: profile.id });
+  const planner = projects.createAgent("admin-1", { name: "Planner", role: "planner", profileId: profile.id });
+  const builder = projects.createAgent("admin-1", { name: "Builder", role: "builder", profileId: profile.id });
   const reviewer = projects.createAgent("admin-1", { name: "Reviewer", role: "reviewer", profileId: profile.id });
-  const project = await projects.createProject("admin-1", company.id, { name: "Browser board project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id } });
+  const project = await projects.createProject("admin-1", company.id, { name: "Browser board project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, builder: builder.id, reviewer: reviewer.id } });
   const active = await projects.activateProject("admin-1", project.id);
   const workflow = createWorkflowPortFake({ companyId: company.id, projectId: active.id, projectRevisionId: active.activeRevisionId!, projectState: (state) => { database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state })); return state; } });
   const tasks = new TaskService(database, auth, projects, config, { workflow });
@@ -69,7 +69,7 @@ test("the task board shows its workflow lanes on desktop and narrow viewports", 
         db.prepare("UPDATE forge_tasks SET successor_task_id = ? WHERE id = ?").run(successor.task.id, taskId);
         db.prepare("UPDATE forge_tasks SET predecessor_task_id = ? WHERE id = ?").run(taskId, successor.task.id);
         const finishedAt = new Date(Date.now() - 60_000).toISOString();
-        db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, profile_id, started_at, finished_at) SELECT 'browser-board-agent', id, company_id, workflow_id, 'analyst', 'completed', 1, ?, ?, ? FROM forge_tasks WHERE id = ?").run(profile.id, new Date(Date.now() - 120_000).toISOString(), finishedAt, taskId);
+        db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, profile_id, started_at, finished_at) SELECT 'browser-board-agent', id, company_id, workflow_id, 'planner', 'completed', 1, ?, ?, ? FROM forge_tasks WHERE id = ?").run(profile.id, new Date(Date.now() - 120_000).toISOString(), finishedAt, taskId);
       });
       database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'planning' WHERE task_id = ?").run(taskId));
       database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'blocked' WHERE task_id = ?").run(successor.task.id));

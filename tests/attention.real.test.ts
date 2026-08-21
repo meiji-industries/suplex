@@ -112,8 +112,8 @@ test.skipIf(!runRealJourney)("real Codex/GitHub attention decision produces a sa
     workerRun = worker.run();
     api = await createForgeServer(config);
 
-    const started = await startIssueWorkflow(config, { companyId: "real-company", projectId: "real-project", issueId: "real-decision", projectRevisionId: "real-revision", briefArtifactId: brief.id, briefSha256: brief.sha256, imageArtifactIds: [], roleProfiles: { analyst: "real-profile" }, supplementalReview: false });
-    const quietStarted = await startIssueWorkflow(config, { companyId: "real-company", projectId: "real-project", issueId: "real-quiet", projectRevisionId: "real-revision", briefArtifactId: quietBrief.id, briefSha256: quietBrief.sha256, imageArtifactIds: [], roleProfiles: { analyst: "real-profile" }, supplementalReview: false });
+    const started = await startIssueWorkflow(config, { companyId: "real-company", projectId: "real-project", issueId: "real-decision", projectRevisionId: "real-revision", briefArtifactId: brief.id, briefSha256: brief.sha256, imageArtifactIds: [], roleProfiles: { planner: "real-profile" }, supplementalReview: false });
+    const quietStarted = await startIssueWorkflow(config, { companyId: "real-company", projectId: "real-project", issueId: "real-quiet", projectRevisionId: "real-revision", briefArtifactId: quietBrief.id, briefSha256: quietBrief.sha256, imageArtifactIds: [], roleProfiles: { planner: "real-profile" }, supplementalReview: false });
     const [planned, quietPlanned] = await Promise.all([
       executeIssueCommand(config, started.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "real-admin" }),
       executeIssueCommand(config, quietStarted.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "real-admin" }),

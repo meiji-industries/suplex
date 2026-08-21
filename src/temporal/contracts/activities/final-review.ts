@@ -7,7 +7,7 @@ export interface FinalReviewActivityInput {
   projectId: string;
   projectRevisionId: string;
   briefArtifactId: string;
-  roleProfiles: { analyst?: string | undefined; implementer?: string | undefined; reviewer?: string | undefined };
+  roleProfiles: { planner?: string | undefined; builder?: string | undefined; reviewer?: string | undefined; integrator?: string | undefined };
   releaseId: string;
   deliveryReviewId: string;
   ciRunId: string;

@@ -54,7 +54,7 @@ import {
   type WorkflowDeveloperExecutionResult,
   type WorkflowDeveloperRepairResult,
 } from "../issue-contracts.js";
-import { PlanGovernanceConflict, PlanGovernanceRepository, hashPlanBlockerSubject, hashPlanDecisionSubject } from "../../plan-governance-repository.js";
+import { PlanGovernanceConflict, PlanGovernanceRepository } from "../../plan-governance-repository.js";
 import { StructuredLogger, activityLogContext } from "../../logging.js";
 import { CapacityFailure, CapacityManager } from "../../capacity.js";
 import { CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema } from "../../capacity-contracts.js";
@@ -79,6 +79,12 @@ class SupervisedDeveloperTerminalError extends Error {
 export function asNonRetryableApplicationFailure(error: unknown): ApplicationFailure | undefined {
   if (error instanceof ProjectionIntegrityFailure) {
     return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message, taskId: error.taskId, revision: error.revision });
+  }
+  if (error instanceof PlanGovernanceConflict) {
+    return ApplicationFailure.nonRetryable(error.message, error.code);
+  }
+  if (error instanceof Error && error.name === "SqliteError" && /UNIQUE constraint failed/.test(error.message)) {
+    return ApplicationFailure.nonRetryable(error.message, "sqlite-unique-constraint");
   }
   if (!(error instanceof AgentFailure) || !error.nonRetryable) return undefined;
   return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
@@ -189,7 +195,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   const release = new ReleaseService(database, artifacts, githubRelease);
   const ci = new CiService(database, options.ciProvider ?? createGithubCiProvider(), artifacts);
   const acceptance = new AcceptanceService(database, githubRelease, { artifacts });
-  const legacyForwardMerge = new ForwardMergeService(database);
+  const legacyForwardMerge = new ForwardMergeService(database, undefined, artifacts);
   const capacity = new CapacityManager(database, config);
   const activityWorktrees = new Map<string, string>();
   const activityWorktreesByBranch = new Map<string, string>();
@@ -419,8 +425,6 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     normalizeSafeSummary,
     PlanGovernanceConflict,
     PlanGovernanceRepository,
-    hashPlanBlockerSubject,
-    hashPlanDecisionSubject,
     StructuredLogger,
     activityLogContext,
     CapacityFailure,

@@ -6,10 +6,7 @@ import * as stateTransitions from "./state-transitions.js";
 import { developerExecutionId } from "../deterministic-id.js";
 import { issueUpdates } from "../issue-updates.js";
 import type { IssueWorkflowContext } from "./context.js";
-export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
-  setHandler(issueUpdates.start_development, async (rawInput) => {
-    assertPayloadWithinLimit("start development command", rawInput);
-    const command = contracts.StartPlanningInputSchema.parse(rawInput);
+export async function startDevelopment(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
     if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
@@ -26,7 +23,7 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
     let outcome: Awaited<ReturnType<typeof activityProxies.runDeveloperExecutionSupervised>> | { status: "completed"; result: Awaited<ReturnType<typeof activityProxies.runDeveloperExecution>>; resultHash: string };
     try {
       outcome = await ctx.acquireExternalTurn(
-        { operation: "developer_execution", role: "implementer", profileId: ctx.input.roleProfiles.implementer },
+        { operation: "developer_execution", role: "builder", profileId: ctx.input.roleProfiles.builder },
         (capacityRequestId) => ctx.supervisedDeveloperTurns
           ? activityProxies.runDeveloperExecutionSupervised({ ...legacyInput, developerTurnExecutionId: executionId, developerAttempt, turnKind: "implementation", ...(capacityRequestId ? { capacityRequestId } : {}) })
           : activityProxies.runDeveloperExecution({ ...legacyInput, executionId, ...(capacityRequestId ? { capacityRequestId } : {}) }).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),
@@ -57,10 +54,19 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
       if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
       return true;
     });
+    // Snapshot before projecting: the auto-chain can claim the next phase while this
+    // command's own result is still being handed back to the caller.
+    const settled = ctx.state;
     if (applied) await ctx.project();
     void command;
-    return ctx.state;
-  }, { validator(rawInput) {
+    return settled;
+}
+
+export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
+  setHandler(issueUpdates.start_development, ctx.guarded(async (rawInput) => {
+    assertPayloadWithinLimit("start development command", rawInput);
+    return startDevelopment(ctx, contracts.StartPlanningInputSchema.parse(rawInput));
+  }), { validator(rawInput) {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (ctx.commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
@@ -70,7 +76,7 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
     if (ctx.isolatedDeveloperExecutionEnabled && ctx.state.finalPlanSubject && (command.planAuthorizationId !== ctx.state.planAuthorizationId || command.planArtifactSha256 !== ctx.state.planArtifactSha256)) throw new Error("The start command does not match the authorized final plan");
     if (ctx.exactPlanAuthorityEnabled && ctx.state.planMaterial && (ctx.state.finalPlanSubject || ctx.state.materialityEvidence) && (!ctx.state.finalPlanSubject || !ctx.state.materialityEvidence || !ctx.state.planDecisionReceipt || ctx.state.planDecisionReceipt.decision !== "approve")) throw new Error("An approved exact final Lead plan is required before development");
   } });
-  setHandler(issueUpdates.retry_development, async (rawInput) => {
+  setHandler(issueUpdates.retry_development, ctx.guarded(async (rawInput) => {
     assertPayloadWithinLimit("retry development command", rawInput);
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
@@ -102,7 +108,7 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
     const authorization = ctx.state.planAuthorizationId && ctx.state.planArtifactSha256 && ctx.state.planAuthorizationKind && ctx.state.planAuthorizedAt ? { authorizationId: ctx.state.planAuthorizationId, taskId: ctx.input.issueId, companyId: ctx.input.companyId, projectId: ctx.input.projectId, workflowId: ctx.input.workflowId, planRevision, planArtifactId: ctx.state.leadOutputArtifactId!, planSha256: ctx.state.planArtifactSha256, authorizationKind: ctx.state.planAuthorizationKind, approvalDecisionId: ctx.state.planAuthorizationKind === "human_approval" ? ctx.state.decisionId ?? null : null, authorizedAt: ctx.state.planAuthorizedAt } : undefined;
     const legacyInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, ...(ctx.state.revisionRequestId ? { revisionRequestId: ctx.state.revisionRequestId } : {}), supersedesExecutionId, reuseWorktree: true, ...(ctx.state.finalPlanSubject ? { finalPlanSubject: ctx.state.finalPlanSubject } : {}), ...(ctx.state.materialityEvidence ? { materialityEvidence: ctx.state.materialityEvidence } : {}), ...(ctx.state.planDecisionReceipt ? { approvalDecisionId: ctx.state.planDecisionReceipt.decisionId } : {}), ...(authorization ? { authorization } : {}) };
     const outcome = await ctx.acquireExternalTurn(
-      { operation: "developer_execution", role: "implementer", profileId: ctx.input.roleProfiles.implementer, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
+      { operation: "developer_execution", role: "builder", profileId: ctx.input.roleProfiles.builder, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
       (capacityRequestId) => ctx.supervisedDeveloperTurns
         ? activityProxies.runDeveloperExecutionSupervised({ ...legacyInput, developerTurnExecutionId: executionId, developerAttempt, turnKind: "implementation", ...(capacityRequestId ? { capacityRequestId } : {}) })
         : activityProxies.runDeveloperExecution({ ...legacyInput, executionId, ...(capacityRequestId ? { capacityRequestId } : {}) }).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),
@@ -124,7 +130,7 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
     if (applied) await ctx.project();
     void command;
     return ctx.state;
-  }, { validator(rawInput) {
+  }), { validator(rawInput) {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (ctx.commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");

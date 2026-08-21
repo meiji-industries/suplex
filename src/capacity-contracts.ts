@@ -18,10 +18,11 @@ export const CapacityOperationSchema = z.enum([
 ]);
 export type CapacityOperation = z.infer<typeof CapacityOperationSchema>;
 
-export const CapacityRoleSchema = z.enum(["analyst", "implementer", "reviewer"]);
+export const CapacityRoleSchema = z.enum(["planner", "builder", "reviewer", "integrator"]);
 export type CapacityRole = z.infer<typeof CapacityRoleSchema>;
 
-const PersistedCapacityRoleSchema = z.preprocess((value) => value === "lead" ? "analyst" : value === "developer" ? "implementer" : value, CapacityRoleSchema);
+const legacyRoles: Record<string, string> = { lead: "planner", analyst: "planner", developer: "builder", implementer: "builder" };
+const PersistedCapacityRoleSchema = z.preprocess((value) => typeof value === "string" ? legacyRoles[value] ?? value : value, CapacityRoleSchema);
 
 export const CapacityRequestStatusSchema = z.enum(["queued", "active", "rate_limited", "released", "cancelled", "stale", "ownership_ambiguous", "exhausted"]);
 export type CapacityRequestStatus = z.infer<typeof CapacityRequestStatusSchema>;

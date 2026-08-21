@@ -35,10 +35,10 @@ export const IssueWorkflowInputSchema = z.object({
   roleProfiles: z.preprocess((value) => {
     if (value && typeof value === "object" && !Array.isArray(value)) {
       const v = value as Record<string, unknown>;
-      return { analyst: v.analyst ?? v.lead, implementer: v.implementer ?? v.developer, reviewer: v.reviewer };
+      return { planner: v.planner ?? v.analyst ?? v.lead, builder: v.builder ?? v.implementer ?? v.developer, reviewer: v.reviewer, integrator: v.integrator };
     }
     return value;
-  }, z.object({ analyst: durableId.optional(), implementer: durableId.optional(), reviewer: durableId.optional() })),
+  }, z.object({ planner: durableId.optional(), builder: durableId.optional(), reviewer: durableId.optional(), integrator: durableId.optional() })),
   supplementalReview: z.boolean(),
   repairCycleLimit: z.number().int().min(0).max(5).default(2),
   autoApprovePlan: z.boolean().optional(),

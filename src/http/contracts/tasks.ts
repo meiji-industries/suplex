@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { PlanMaterialCategorySchema, PublicPlanBlockerSubjectSchema, PublicPlanDecisionSubjectSchema, PublicPlanSubjectSchema, PublicSupplementalReviewSubjectSchema } from "../../plan-governance.js";
+import { PlanMaterialCategorySchema, PublicPlanBlockerSubjectSchema, PublicPlanSubjectSchema } from "../../plan-governance.js";
 import { PersistedLeadOutputSchema, SupplementalReviewSchema } from "../../codex-lead.js";
 import { IssueCommandSlugSchema, IssueCommandSchema } from "../../commands/registry.js";
 import { IssuePhaseSchema } from "../../temporal/issue-contracts.js";
@@ -28,14 +28,14 @@ const ReviewLineageResponseSchema = z.object({ currentReview: ReviewResponseSche
 export { ContinueWorkBodySchema } from "../../commands/definitions/lifecycle.js";
 export { PlanRevisionBodySchema } from "../../commands/definitions/planning.js";
 const TaskPhaseSchema = IssuePhaseSchema;
-const RoleAgentsSchema = z.object({ analyst: z.string().optional(), implementer: z.string().optional(), reviewer: z.string().optional() });
+const RoleAgentsSchema = z.object({ planner: z.string().optional(), builder: z.string().optional(), reviewer: z.string().optional(), integrator: z.string().optional() });
 const TaskImageResponseSchema = z.object({ artifactId: z.string(), filename: z.string(), mimeType: z.string(), byteSize: z.number() });
 const TimelineResponseSchema = z.object({ id: z.string(), revision: z.number(), eventType: z.string(), metadata: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])), createdAt: z.string() });
 const ActivityUserActorSchema = z.object({ kind: z.literal("user").optional(), id: z.string(), displayName: z.string(), username: z.string(), avatarSeed: z.string() });
 const ActivityAgentActorSchema = z.object({ kind: z.literal("agent"), id: z.string(), displayName: z.string(), avatarSeed: z.string() });
 const ActivityActorSchema = z.union([ActivityUserActorSchema, ActivityAgentActorSchema]);
 const ActivityResponseSchema = TimelineResponseSchema.extend({ kind: z.enum(["workflow", "member"]), actor: ActivityActorSchema.optional() });
-const AgentInvocationResponseSchema = z.object({ id: z.string(), role: z.enum(["analyst", "reviewer", "implementer"]), status: z.string(), attempt: z.number(), sessionPresent: z.boolean(), sessionRef: z.string().nullable(), startedAt: z.string(), finishedAt: z.string().nullable(), failureCode: z.string().nullable(), failureSummary: z.string().nullable(), evidenceArtifactId: z.string().nullable(), agentId: z.string().nullable().optional(), agentName: z.string().nullable().optional(), avatarSeed: z.string().nullable().optional(), profileId: z.string().nullable().optional(), profileName: z.string().nullable().optional(), model: z.string().nullable().optional(), reasoningLevel: z.string().nullable().optional(), servicePriority: z.string().nullable().optional() }).strict();
+const AgentInvocationResponseSchema = z.object({ id: z.string(), role: z.enum(["planner", "reviewer", "builder", "integrator"]), status: z.string(), attempt: z.number(), sessionPresent: z.boolean(), sessionRef: z.string().nullable(), startedAt: z.string(), finishedAt: z.string().nullable(), failureCode: z.string().nullable(), failureSummary: z.string().nullable(), evidenceArtifactId: z.string().nullable(), agentId: z.string().nullable().optional(), agentName: z.string().nullable().optional(), avatarSeed: z.string().nullable().optional(), profileId: z.string().nullable().optional(), profileName: z.string().nullable().optional(), model: z.string().nullable().optional(), reasoningLevel: z.string().nullable().optional(), servicePriority: z.string().nullable().optional() }).strict();
 const TaskLinkResponseSchema = z.object({ id: z.string(), title: z.string(), phase: TaskPhaseSchema, issueKey: z.string().nullable() }).strict();
 const PlanHistoryResponseSchema = z.object({ revision: z.number(), kind: z.enum(["plan", "decision_blocker"]), summary: z.string(), executionId: z.string(), outputArtifactId: z.string(), evidenceArtifactId: z.string(), createdAt: z.string() }).strict();
 const PlanDecisionHistoryResponseSchema = z.object({ id: z.string(), planRevision: z.number(), decision: z.string(), noteArtifactId: z.string(), createdAt: z.string() }).strict();
@@ -72,13 +72,13 @@ const DeliveryGateSchema = z.object({
   deployment: z.object({ status: z.literal("unknown"), summary: z.literal("Out of scope") }),
 });
 const TaskCommandEndpointSchema = IssueCommandSlugSchema;
-const TaskCommandDescriptorSchema = z.object({ name: IssueCommandSchema, label: z.string().min(1), endpoint: TaskCommandEndpointSchema, method: z.literal("POST"), expectedRevision: z.number().int().nonnegative(), note: z.enum(["required", "none"]), idempotency: z.enum(["required", "none"]), subject: z.union([z.object({ kind: z.literal("plan_decision"), value: PublicPlanDecisionSubjectSchema }), z.object({ kind: z.literal("supplemental_review"), value: PublicSupplementalReviewSubjectSchema }), z.object({ kind: z.literal("plan_blocker"), value: PublicPlanBlockerSubjectSchema })]).optional() });
+const TaskCommandDescriptorSchema = z.object({ name: IssueCommandSchema, label: z.string().min(1), endpoint: TaskCommandEndpointSchema, method: z.literal("POST"), expectedRevision: z.number().int().nonnegative(), note: z.enum(["required", "none"]), idempotency: z.enum(["required", "none"]) });
 const PlanArtifactViewSchema = z.object({ subject: PublicPlanSubjectSchema, summary: z.string(), content: PersistedLeadOutputSchema, createdAt: z.string(), status: z.enum(["current", "superseded"]) });
 const MaterialityViewSchema = z.object({ categories: z.array(PlanMaterialCategorySchema), evidenceArtifactId: z.string(), evidenceArtifactSha256: z.string(), evidence: z.array(z.object({ category: PlanMaterialCategorySchema, source: z.enum(["lead", "deterministic"]), refs: z.array(z.string()), rationale: z.string() })) });
 const SupplementalReviewViewSchema = z.object({ reviewId: z.string(), reviewerProfile: z.object({ id: z.string(), name: z.string() }), opinion: SupplementalReviewSchema.shape.opinion, summary: z.string(), concerns: z.array(z.string()), requiredChanges: z.array(z.string()), artifactId: z.string(), artifactSha256: z.string(), leadResponse: z.object({ text: z.string(), artifactId: z.string(), artifactSha256: z.string() }), createdAt: z.string() });
-const PlanDecisionViewSchema = z.object({ decisionId: z.string(), decision: z.enum(["approve", "request_revision", "reject"]), actor: z.object({ id: z.string(), displayName: z.string() }), note: z.string(), noteArtifactId: z.string(), noteArtifactSha256: z.string(), subject: PublicPlanDecisionSubjectSchema, createdAt: z.string() });
+const PlanDecisionViewSchema = z.object({ decisionId: z.string(), decision: z.enum(["approve", "request_revision", "reject"]), actor: z.object({ id: z.string(), displayName: z.string() }), note: z.string(), noteArtifactId: z.string(), noteArtifactSha256: z.string(), createdAt: z.string() });
 const PlanBlockerViewSchema = z.object({ subject: PublicPlanBlockerSubjectSchema, summary: z.string(), evidence: z.string(), header: z.string(), question: z.string(), options: z.array(z.object({ label: z.string(), description: z.string() }).strict()).max(3), nextAction: z.string(), createdAt: z.string() });
-const GovernanceResponseSchema = z.object({ originalPlan: PlanArtifactViewSchema.optional(), finalPlan: PlanArtifactViewSchema.optional(), previousPlans: z.array(PlanArtifactViewSchema).optional(), materiality: MaterialityViewSchema.optional(), supplementalReview: SupplementalReviewViewSchema.optional(), decision: PlanDecisionViewSchema.optional(), blocker: PlanBlockerViewSchema.optional(), originalPlanSubject: PublicPlanSubjectSchema.nullable().optional(), finalPlanSubject: PublicPlanSubjectSchema.nullable().optional(), materialityEvidence: z.object({ categories: z.array(PlanMaterialCategorySchema), artifactId: z.string(), artifactSha256: z.string() }).nullable().optional(), supplementalReviewSubject: PublicSupplementalReviewSubjectSchema.nullable().optional(), planBlockerSubject: PublicPlanBlockerSubjectSchema.nullable().optional(), planDecisionReceipt: z.object({ idempotencyKey: z.string(), decisionId: z.string(), decision: z.enum(["approve", "request_revision"]), subjectHash: z.string() }).nullable().optional(), planBlockerResponseReceipt: z.object({ idempotencyKey: z.string(), responseId: z.string(), blockerSubjectHash: z.string() }).nullable().optional() });
+const GovernanceResponseSchema = z.object({ originalPlan: PlanArtifactViewSchema.optional(), finalPlan: PlanArtifactViewSchema.optional(), previousPlans: z.array(PlanArtifactViewSchema).optional(), materiality: MaterialityViewSchema.optional(), supplementalReview: SupplementalReviewViewSchema.optional(), decision: PlanDecisionViewSchema.optional(), blocker: PlanBlockerViewSchema.optional() });
 
 export const TaskImageBodySchema = z.object({ filename: z.string(), mimeType: z.string(), base64: z.string() });
 export const TaskBodySchema = z.object({
@@ -92,7 +92,7 @@ export const TaskBodySchema = z.object({
   autoApprovePlan: z.boolean().default(false),
   pullRequestMode: z.enum(["draft", "ready", "auto_merge"]).default("draft"),
 });
-export const TaskAgentsBodySchema = z.object({ analyst: z.string().optional(), implementer: z.string().optional(), reviewer: z.string().optional() }).strict();
+export const TaskAgentsBodySchema = z.object({ planner: z.string().optional(), builder: z.string().optional(), reviewer: z.string().optional(), integrator: z.string().optional() }).strict();
 export const TaskDetailsBodySchema = z.object({
   title: z.string().optional(),
   description: z.string().optional(),

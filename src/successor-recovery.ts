@@ -37,7 +37,7 @@ export async function reconcileSuccessorIntents(database: ForgeDatabase, config:
         briefSha256: task.briefSha256,
         imageArtifactIds: JSON.parse(task.imageIdsJson) as string[],
         requestHash: task.requestHash ?? undefined,
-        roleProfiles: database.authQuery((db) => resolveAgentProfiles(db, JSON.parse(task.roleAgentsJson) as { analyst?: string; implementer?: string; reviewer?: string })),
+        roleProfiles: database.authQuery((db) => resolveAgentProfiles(db, JSON.parse(task.roleAgentsJson) as { planner?: string; builder?: string; reviewer?: string })),
         supplementalReview: task.supplementalReview === 1,
         repairCycleLimit: config.deliveryRepairCycleLimit,
       });

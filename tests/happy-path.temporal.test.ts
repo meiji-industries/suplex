@@ -194,7 +194,7 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
 
     // One answer is the only other thing a member does. Auto-approve carries it to a delivery.
     const delivered = await handle.executeUpdate(respondPlanBlockerUpdate, {
-      args: [{ expectedRevision: blocked.revision, expectedWorkflowRevision: blocked.revision, actorUserId, blockerSubject, answerStagingRef: "staging-happy-answer", answerSha256: sha256, idempotencyKey: "happy-blocker-answer" }],
+      args: [{ expectedRevision: blocked.revision, expectedWorkflowRevision: blocked.revision, actorUserId, answerStagingRef: "staging-happy-answer", answerSha256: sha256, idempotencyKey: "happy-blocker-answer" }],
       updateId: "happy-blocker-response",
     });
     expect(delivered).toMatchObject({ phase: "delivery_ready", developerOutcome: "completed", developerExecutionId: "developer-execution-happy", planMaterial: true, decisionId: "decision-happy" });

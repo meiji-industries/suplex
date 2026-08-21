@@ -10,6 +10,8 @@ import {
   type IssueBlockerAction,
   type IssueWorkflowState,
 } from "../issue-contracts.js";
+import type { CapacityRole } from "../../capacity-contracts.js";
+import type { IssueWorkflowContext } from "./context.js";
 
 type CompletedReview = Extract<DeliveryReviewActivityResult, { outcome: "completed" }>;
 type CompletedRepair = Omit<Extract<DeveloperRepairActivityResult, { outcome: "completed" }>, "worktreePath"> & { worktreePath?: string };
@@ -149,4 +151,12 @@ export function repairedDeliveryAwaitingFreshReviewState(state: IssueWorkflowSta
 
 export function reviewApprovedState(state: IssueWorkflowState, result: CompletedReview): IssueWorkflowState {
   return repairRequiredState(state, result, state.repairCycle ?? 0);
+}
+
+// The Integrator owns getting the Builder's branch merged: publish, CI repair, merge
+// conflicts, final review. Gated so replayed histories keep their original role/profile.
+export const optionalRolesPatch = "forge-optional-roles-v1";
+export function integratorTurn(ctx: IssueWorkflowContext, legacyRole: "planner" | "builder"): { role: CapacityRole; profileId: string | undefined } {
+  if (!ctx.patched(optionalRolesPatch)) return { role: legacyRole, profileId: ctx.input.roleProfiles[legacyRole] };
+  return { role: "integrator", profileId: ctx.input.roleProfiles.integrator ?? ctx.input.roleProfiles[legacyRole] };
 }

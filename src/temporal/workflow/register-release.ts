@@ -1,6 +1,7 @@
 import { ApplicationFailure, setHandler } from "@temporalio/workflow";
 import * as contracts from "../issue-contracts.js";
 import * as activityProxies from "./activity-proxies.js";
+import * as stateTransitions from "./state-transitions.js";
 import * as releaseFailures from "../../release-failures.js";
 import { issueUpdates } from "../issue-updates.js";
 import type { IssueWorkflowContext } from "./context.js";
@@ -33,11 +34,11 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
     if (result.outcome === "base-drift-conflict") {
       const legacyConflict = !ctx.patched(ctx.artifactBackedConflictPatch);
       if (!legacyConflict && !result.mergeConflictEvidence) throw ApplicationFailure.nonRetryable("Merge-conflict evidence is missing", "merge_conflict_evidence_missing");
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_reviewing", owner: "lead", allowedCommands: [], pendingAction: "Lead conflict-resolution plan", targetBaseSha: result.targetBaseSha ?? ctx.state.targetBaseSha, forwardMergeId: result.forwardMergeId ?? null, forwardMergePriorHead: result.priorHead ?? ctx.state.resultCommit, forwardMergeTargetBaseSha: result.targetBaseSha ?? ctx.state.targetBaseSha, ...(result.mergeConflictEvidence ? { mergeConflictEvidence: result.mergeConflictEvidence } : {}), ...(legacyConflict ? { forwardMergeConflictFiles: result.conflictFiles ?? [], forwardMergeConflictDiff: result.conflictDiff ?? null } : {}), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_reviewing", owner: "lead", allowedCommands: [], pendingAction: "Lead conflict-resolution plan", targetBaseSha: result.targetBaseSha ?? ctx.state.targetBaseSha, forwardMergeId: result.forwardMergeId ?? null, forwardMergePriorHead: result.priorHead ?? ctx.state.resultCommit, forwardMergePriorTree: result.priorTree ?? ctx.state.resultTree, forwardMergeTargetBaseSha: result.targetBaseSha ?? ctx.state.targetBaseSha, ...(result.conflictArtifact ? { forwardMergeConflictArtifact: result.conflictArtifact } : {}), ...(result.conflictFileCount ? { forwardMergeConflictFileCount: result.conflictFileCount } : {}), ...(result.mergeConflictEvidence ? { mergeConflictEvidence: result.mergeConflictEvidence } : {}), ...(legacyConflict ? { forwardMergeConflictFiles: result.conflictFiles ?? [], forwardMergeConflictDiff: result.conflictDiff ?? null } : {}), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       try {
         const plan = await ctx.acquireExternalTurn<contracts.MergeConflictPlanActivityResult>(
-          { operation: "merge_conflict_plan", role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
+          { operation: "merge_conflict_plan", ...stateTransitions.integratorTurn(ctx, "planner"), sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
           (capacityRequestId) => {
             const legacyPlanInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, branchName: ctx.state.branchName!, priorHead: ctx.state.forwardMergePriorHead!, targetBaseSha: ctx.state.forwardMergeTargetBaseSha!, ...(ctx.state.mergeConflictEvidence ? { conflictEvidence: ctx.state.mergeConflictEvidence } : { conflictFiles: ctx.state.forwardMergeConflictFiles ?? [], conflictDiff: ctx.state.forwardMergeConflictDiff ?? "" }), ...(ctx.state.forwardMergeId ? { forwardMergeId: ctx.state.forwardMergeId } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) } as unknown as Parameters<typeof activityProxies.planMergeConflict>[0];
             return activityProxies.planMergeConflict(legacyPlanInput);
@@ -62,10 +63,10 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
     await ctx.project();
     return ctx.state;
   };
-  setHandler(issueUpdates.publish_draft, async (rawInput) => {
+  setHandler(issueUpdates.publish_draft, ctx.guarded(async (rawInput) => {
     contracts.StartPlanningInputSchema.parse(rawInput);
     return runPublishTurn();
-  }, { validator(rawInput) { const command = contracts.StartPlanningInputSchema.parse(rawInput); if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision"); if (!(ctx.state.phase === "delivery_reviewed" || (ctx.state.phase === "delivery_blocked" && ctx.state.releaseStatus === "blocked" && ctx.state.allowedCommands.includes("publish_draft"))) || !ctx.state.deliveryReviewId) throw new Error("Draft publication is not available in the current phase"); } });
+  }), { validator(rawInput) { const command = contracts.StartPlanningInputSchema.parse(rawInput); if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision"); if (!(ctx.state.phase === "delivery_reviewed" || (ctx.state.phase === "delivery_blocked" && ctx.state.releaseStatus === "blocked" && ctx.state.allowedCommands.includes("publish_draft"))) || !ctx.state.deliveryReviewId) throw new Error("Draft publication is not available in the current phase"); } });
 
   ctx.runPublishTurn = runPublishTurn;
 }

@@ -47,14 +47,14 @@ test("recovery actions render in the shared card footer", () => {
 test("keeps actionable Developer recovery summaries", () => {
   const html = renderToStaticMarkup(createElement(DeveloperRecoveryStatus, {
     taskId: "task-1",
-    recovery: { status: "failed", reasonCode: "developer-failed", summary: "The Implementer process exited before returning a result.", lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: null, nextAction: null },
+    recovery: { status: "failed", reasonCode: "developer-failed", summary: "The Builder process exited before returning a result.", lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: null, nextAction: null },
     allowedCommands: ["retry_development"],
     busy: false,
     isAdmin: true,
     onAction: async () => undefined,
   }));
 
-  expect(html).toContain("The Implementer process exited before returning a result.");
+  expect(html).toContain("The Builder process exited before returning a result.");
 });
 
 test("claimed Developer recovery does not hide delivery review actions", () => {
@@ -65,7 +65,7 @@ test("claimed Developer recovery does not hide delivery review actions", () => {
     pendingAction: "Lead delivery review",
     projection: { status: "current" },
     developerExecution: { branchName: "work/readme-joke", worktreePath: "/tmp/forge/worktrees/task-1", resultCommit: "a".repeat(40), verificationResults: ["Server tests passed.", "Browser check unavailable."] },
-    agentInvocations: [{ role: "implementer", status: "completed", agentName: "Marin", avatarSeed: "marin" }],
+    agentInvocations: [{ role: "builder", status: "completed", agentName: "Marin", avatarSeed: "marin" }],
     developerRecovery: { status: "active" },
   } as unknown as ApiTask;
   const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {

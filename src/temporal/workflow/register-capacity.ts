@@ -12,7 +12,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
   const resumeCapacityOperation = async (operation: capacityContracts.CapacityOperation): Promise<contracts.IssueWorkflowState> => {
     if (operation === "lead_planning") {
       const result = await ctx.acquireExternalTurn<contracts.LeadPlanningResult>(
-        { operation, role: "analyst", profileId: ctx.input.roleProfiles.analyst },
+        { operation, role: "planner", profileId: ctx.input.roleProfiles.planner },
         (capacityRequestId) => activityProxies.runLeadPlanning({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision, ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (value) => value.leadExecutionId,
       );
@@ -22,7 +22,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
     }
     if (operation === "developer_execution") {
       const result = await ctx.acquireExternalTurn<contracts.WorkflowDeveloperExecutionResult>(
-        { operation, role: "implementer", profileId: ctx.input.roleProfiles.implementer, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
+        { operation, role: "builder", profileId: ctx.input.roleProfiles.builder, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
         (capacityRequestId) => activityProxies.runDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supersedesExecutionId: ctx.state.developerExecutionId ?? undefined, reuseWorktree: Boolean(ctx.state.worktreePath), ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (value) => value.developerExecutionId,
       );
@@ -38,7 +38,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
         (result) => result.executionId,
       );
       const consolidated = await ctx.acquireExternalTurn<contracts.LeadPlanningResult>(
-        { operation: "lead_consolidation", role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef },
+        { operation: "lead_consolidation", role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: ctx.state.leadSessionRef },
         (capacityRequestId) => activityProxies.consolidateLeadPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision + 1, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supplementalReviewArtifactId: review.reviewArtifactId, ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (result) => result.leadExecutionId,
       );
@@ -49,7 +49,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
     if (operation === "lead_consolidation") {
       if (ctx.state.phase !== "approval" || !ctx.state.planMaterial || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef || !ctx.state.supplementalReviewArtifactId) throw new Error("Lead consolidation prerequisites changed; request supplemental review again");
       const consolidated = await ctx.acquireExternalTurn<contracts.LeadPlanningResult>(
-        { operation, role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef },
+        { operation, role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: ctx.state.leadSessionRef },
         (capacityRequestId) => activityProxies.consolidateLeadPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision + 1, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supplementalReviewArtifactId: ctx.state.supplementalReviewArtifactId!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (result) => result.leadExecutionId,
       );
@@ -58,9 +58,9 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (operation === "delivery_review") {
-      if (ctx.state.phase !== "reviewing_delivery" || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.worktreePath || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.deliveryArtifactId || !ctx.state.developerEvidenceArtifactId || !ctx.state.leadSessionRef || !ctx.state.leadOutputArtifactId || !ctx.input.roleProfiles.analyst) throw new Error("Delivery review prerequisites changed; start delivery review again");
+      if (ctx.state.phase !== "reviewing_delivery" || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.worktreePath || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.deliveryArtifactId || !ctx.state.developerEvidenceArtifactId || !ctx.state.leadSessionRef || !ctx.state.leadOutputArtifactId || !ctx.input.roleProfiles.planner) throw new Error("Delivery review prerequisites changed; start delivery review again");
       const result = await ctx.acquireExternalTurn<WorkflowDeliveryReviewResult>(
-        { operation, role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
+        { operation, role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
         (capacityRequestId) => activityProxies.reviewDelivery({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, worktreePath: ctx.state.worktreePath!, branchName: ctx.state.branchName!, subject: { planRevision: ctx.state.planRevision ?? ctx.state.revision, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, developerExecutionId: ctx.state.developerExecutionId!, deliveryArtifactId: ctx.state.deliveryArtifactId!, developerEvidenceArtifactId: ctx.state.developerEvidenceArtifactId!, leadSessionRef: ctx.state.leadSessionRef!, developerSessionRef: ctx.state.developerSessionRef! }, supersedesReviewId: ctx.state.targetBaseOutcome === "revalidated" ? null : ctx.state.deliveryReviewSupersedesId ?? null, ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (review) => review.outcome === "completed" ? review.review.leadExecutionId : review.executionId,
       );
@@ -70,11 +70,11 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
     }
     if (operation === "developer_repair") {
       const cycle = (ctx.state.repairCycle ?? 0) + 1;
-      if (ctx.state.phase !== "repair_required" || cycle > ctx.repairCycleLimit || !ctx.state.deliveryReviewId || (!ctx.state.deliveryReviewArtifact && (!ctx.state.deliveryRepairPlan || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open"))) || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.leadSessionRef || !ctx.input.roleProfiles.implementer) throw new Error("Developer repair prerequisites changed; start delivery repair again");
+      if (ctx.state.phase !== "repair_required" || cycle > ctx.repairCycleLimit || !ctx.state.deliveryReviewId || (!ctx.state.deliveryReviewArtifact && (!ctx.state.deliveryRepairPlan || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open"))) || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.leadSessionRef || !ctx.input.roleProfiles.builder) throw new Error("Developer repair prerequisites changed; start delivery repair again");
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: `Developer repair cycle ${cycle}`, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       const result = await ctx.acquireExternalTurn<contracts.WorkflowDeveloperRepairResult>(
-        { operation, role: "implementer", profileId: ctx.input.roleProfiles.implementer, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
+        { operation, role: "builder", profileId: ctx.input.roleProfiles.builder, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
         (capacityRequestId) => activityProxies.runDeveloperRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, leadSessionRef: ctx.state.leadSessionRef!, developerSessionRef: ctx.state.developerSessionRef!, developerExecutionId: ctx.state.developerExecutionId!, reviewId: ctx.state.deliveryReviewId!, repairAuthority: ctx.state.deliveryRepairAuthority ?? "delivery_review", cycle, repairCycleLimit: ctx.repairCycleLimit, ...(ctx.state.worktreePath ? { worktreePath: ctx.state.worktreePath } : {}), branchName: ctx.state.branchName!, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, ...(ctx.state.deliveryReviewArtifact ? { reviewArtifact: ctx.state.deliveryReviewArtifact } : ctx.state.deliveryRepairPlanArtifactId && ctx.state.deliveryRepairPlanSha256 ? { repairPlanArtifactId: ctx.state.deliveryRepairPlanArtifactId, repairPlanSha256: ctx.state.deliveryRepairPlanSha256 } : { blockingFindings: ctx.state.deliveryBlockingFindings ?? [], repairPlan: ctx.state.deliveryRepairPlan! }), ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (repair) => repair.developerExecutionId,
       );
@@ -83,10 +83,10 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (operation === "merge_conflict_plan") {
-      if (ctx.state.phase !== "merge_conflict_reviewing" || !ctx.state.leadSessionRef || !ctx.state.leadOutputArtifactId || !ctx.state.worktreePath || !ctx.state.branchName || !ctx.state.forwardMergeId || !ctx.state.forwardMergePriorHead || !ctx.state.forwardMergeTargetBaseSha || !ctx.state.forwardMergeConflictArtifact || typeof ctx.state.forwardMergeConflictFileCount !== "number" || !ctx.input.roleProfiles.analyst) throw new Error("Conflict-plan prerequisites changed; publish the draft again to revalidate the merge");
+      if (ctx.state.phase !== "merge_conflict_reviewing" || !ctx.state.leadSessionRef || !ctx.state.leadOutputArtifactId || !ctx.state.worktreePath || !ctx.state.branchName || !ctx.state.forwardMergeId || !ctx.state.forwardMergePriorHead || !ctx.state.forwardMergeTargetBaseSha || !ctx.state.forwardMergeConflictArtifact || typeof ctx.state.forwardMergeConflictFileCount !== "number" || !stateTransitions.integratorTurn(ctx, "planner").profileId) throw new Error("Conflict-plan prerequisites changed; publish the draft again to revalidate the merge");
       try {
         const plan = await ctx.acquireExternalTurn<contracts.MergeConflictPlanActivityResult>(
-          { operation, role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
+          { operation, ...stateTransitions.integratorTurn(ctx, "planner"), sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
           (capacityRequestId) => activityProxies.planMergeConflict({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, worktreePath: ctx.state.worktreePath!, branchName: ctx.state.branchName!, forwardMergeId: ctx.state.forwardMergeId!, priorHead: ctx.state.forwardMergePriorHead!, targetBaseSha: ctx.state.forwardMergeTargetBaseSha!, conflictArtifact: ctx.state.forwardMergeConflictArtifact!, conflictFileCount: ctx.state.forwardMergeConflictFileCount!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
           (result) => result.leadExecutionId,
         );
@@ -98,12 +98,12 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (operation === "merge_conflict_resolution") {
-      if (ctx.state.phase !== "merge_conflict_required" || !ctx.state.mergeResolutionPlanArtifactId || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.worktreePath || !ctx.state.branchName || !ctx.state.forwardMergeId || !ctx.state.forwardMergePriorHead || !ctx.state.forwardMergeTargetBaseSha || !ctx.state.forwardMergeConflictArtifact || typeof ctx.state.forwardMergeConflictFileCount !== "number" || !ctx.input.roleProfiles.implementer) throw new Error("Conflict-resolution prerequisites changed; revalidate the Lead plan and Developer worktree");
+      if (ctx.state.phase !== "merge_conflict_required" || !ctx.state.mergeResolutionPlanArtifactId || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.worktreePath || !ctx.state.branchName || !ctx.state.forwardMergeId || !ctx.state.forwardMergePriorHead || !ctx.state.forwardMergeTargetBaseSha || !ctx.state.forwardMergeConflictArtifact || typeof ctx.state.forwardMergeConflictFileCount !== "number" || !stateTransitions.integratorTurn(ctx, "builder").profileId) throw new Error("Conflict-resolution prerequisites changed; revalidate the Lead plan and Developer worktree");
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_resolving", owner: "lead", allowedCommands: [], pendingAction: "Developer resolving forward-merge conflicts", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       try {
         const result = await ctx.acquireExternalTurn<Awaited<ReturnType<typeof activityProxies.resolveMergeConflict>>>(
-          { operation, role: "implementer", profileId: ctx.input.roleProfiles.implementer, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
+          { operation, ...stateTransitions.integratorTurn(ctx, "builder"), sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
           (capacityRequestId) => activityProxies.resolveMergeConflict({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, planRevision: ctx.state.planRevision ?? ctx.state.revision, forwardMergeId: ctx.state.forwardMergeId!, developerExecutionId: ctx.state.developerExecutionId!, developerSessionRef: ctx.state.developerSessionRef!, worktreePath: ctx.state.worktreePath!, branchName: ctx.state.branchName!, priorHead: ctx.state.forwardMergePriorHead!, targetBaseSha: ctx.state.forwardMergeTargetBaseSha!, conflictArtifact: ctx.state.forwardMergeConflictArtifact!, conflictFileCount: ctx.state.forwardMergeConflictFileCount!, planArtifactId: ctx.state.mergeResolutionPlanArtifactId!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
           (resolution) => resolution.developerExecutionId,
         );
@@ -123,7 +123,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
     if (operation === "final_review") return ctx.runFinalReviewTurn();
     throw new Error(`Capacity retry for ${operation} requires the original phase command to revalidate its inputs`);
   };
-  setHandler(issueUpdates.retry_capacity, async (rawInput) => {
+  setHandler(issueUpdates.retry_capacity, ctx.guarded(async (rawInput) => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision || !ctx.state.capacityBlocker || !ctx.state.allowedCommands.includes("retry_capacity")) throw new Error("Capacity retry is not available in the current state");
     if (ctx.state.capacityBlocker.category === "ownership_ambiguous") await activityProxies.reconcileCapacityOwnership({});
@@ -138,8 +138,8 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
     await ctx.project();
     void command;
     return resumeCapacityOperation(operation);
-  });
-  setHandler(issueUpdates.record_progress, async (rawInput) => {
+  }));
+  setHandler(issueUpdates.record_progress, ctx.guarded(async (rawInput) => {
     assertPayloadWithinLimit("recordProgress command", rawInput);
     const command = contracts.RecordProgressInputSchema.parse(rawInput);
     const next = contracts.IssueWorkflowStateSchema.parse({
@@ -156,7 +156,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
     if (ctx.shouldContinueAsNew(next.revision)) ctx.continuationRequested = true;
     await ctx.project();
     return next;
-  }, {
+  }), {
     validator(rawInput) {
       const command = contracts.RecordProgressInputSchema.parse(rawInput);
       if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");

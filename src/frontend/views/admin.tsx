@@ -85,7 +85,7 @@ export function AdminView(): ReactElement {
   const [profileOpen, setProfileOpen] = useState(false);
   const [editingProfileId, setEditingProfileId] = useState<string | null>(null);
   const [agentName, setAgentName] = useState("");
-  const [agentRole, setAgentRole] = useState<"analyst" | "implementer" | "reviewer">("analyst");
+  const [agentRole, setAgentRole] = useState<"planner" | "builder" | "reviewer" | "integrator">("planner");
   const [agentAvatarSeed, setAgentAvatarSeed] = useState("");
   const [agentProfileId, setAgentProfileId] = useState("");
   const [agentOpen, setAgentOpen] = useState(false);
@@ -181,7 +181,7 @@ export function AdminView(): ReactElement {
       setProfileName(""); setProfileCapacity(""); setEditingProfileId(null); setProfileOpen(false); await reload();
     } catch { setError(editing ? "Unable to update profile" : "Unable to create profile"); }
   };
-  const openNewAgent = (): void => { setEditingAgentId(null); setAgentName(""); setAgentRole("analyst"); setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", "")); setAgentProfileId(profiles[0]?.id ?? ""); setAgentOpen(true); };
+  const openNewAgent = (): void => { setEditingAgentId(null); setAgentName(""); setAgentRole("planner"); setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", "")); setAgentProfileId(profiles[0]?.id ?? ""); setAgentOpen(true); };
   const openEditAgent = (agent: ApiAgent): void => { setEditingAgentId(agent.id); setAgentName(agent.name); setAgentRole(agent.role); setAgentAvatarSeed(agent.avatarSeed); setAgentProfileId(agent.profileId); setAgentOpen(true); };
   const saveAgent = async (): Promise<void> => {
     const editing = editingAgentId !== null;
@@ -643,7 +643,7 @@ export function AdminView(): ReactElement {
                   <FieldGroup>
                     <Field><FieldLabel>Avatar</FieldLabel><span className="flex items-center gap-3"><ProfileAvatar name={agentName || "Agent"} seed={agentAvatarSeed} /><Button type="button" variant="outline" size="sm" onClick={() => setAgentAvatarSeed(crypto.randomUUID().replaceAll("-", ""))}>Randomize</Button></span></Field>
                     <Field><FieldLabel htmlFor="agent-name">Agent name</FieldLabel><Input id="agent-name" autoFocus value={agentName} onChange={(event) => setAgentName(event.target.value)} /></Field>
-                    <Field><FieldLabel htmlFor="agent-role">Role</FieldLabel><Select value={agentRole} onValueChange={(value) => setAgentRole((value ?? "analyst") as typeof agentRole)}><SelectTrigger id="agent-role"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="analyst">Analyst</SelectItem><SelectItem value="implementer">Implementer</SelectItem><SelectItem value="reviewer">Reviewer</SelectItem></SelectContent></Select></Field>
+                    <Field><FieldLabel htmlFor="agent-role">Role</FieldLabel><Select value={agentRole} onValueChange={(value) => setAgentRole((value ?? "planner") as typeof agentRole)}><SelectTrigger id="agent-role"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="planner">Planner</SelectItem><SelectItem value="reviewer">Reviewer</SelectItem><SelectItem value="builder">Builder</SelectItem><SelectItem value="integrator">Integrator</SelectItem></SelectContent></Select></Field>
                     <Field><FieldLabel htmlFor="agent-profile">Execution profile</FieldLabel><Select value={agentProfileId || null} onValueChange={(value) => setAgentProfileId(value ?? "")}><SelectTrigger id="agent-profile"><SelectValue placeholder="Select a profile" /></SelectTrigger><SelectContent>{profiles.map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name}</SelectItem>)}</SelectContent></Select></Field>
                     <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!agentName.trim() || !agentProfileId}>{editingAgentId ? "Save changes" : "Create agent"}</Button></DialogFooter>
                   </FieldGroup>

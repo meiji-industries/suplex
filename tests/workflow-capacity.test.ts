@@ -41,7 +41,7 @@ function capacity(status: CapacityRequestSnapshot["status"], executionId: string
     projectRevisionId: "revision-test",
     workflowRevision: 1,
     operation: "lead_planning",
-    role: "analyst",
+    role: "planner",
     profileId: "profile-test",
     provider: "codex",
     model: "gpt-5.6-sol",
@@ -102,7 +102,7 @@ test("time-skipping Workflow wait is durable and quiet before admission", async 
   const startedAt = Date.now();
   try {
     const completed = await worker.runUntil(async () => {
-      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId: "workflow-capacity-test", args: [{ workflowId: "workflow-capacity-test", companyId: "company-test", projectId: "project-test", issueId: "issue-test", projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { analyst: "profile-test" }, supplementalReview: false }] });
+      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId: "workflow-capacity-test", args: [{ workflowId: "workflow-capacity-test", companyId: "company-test", projectId: "project-test", issueId: "issue-test", projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { planner: "profile-test" }, supplementalReview: false }] });
       const update = handle.executeUpdate(startPlanningUpdate, { args: [{ expectedRevision: 0, actorUserId: "user-test" }] });
       while (acquireCalls === 0) await new Promise((resolve) => setTimeout(resolve, 10));
       await environment.sleep(5_000);
@@ -137,7 +137,7 @@ test("queued cancellation wins the race and the waiting handler cannot overwrite
   try {
     const completed = await worker.runUntil(async () => {
       const workflowId = "workflow-capacity-queued-cancel";
-      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId, args: [{ workflowId, companyId: "company-test", projectId: "project-test", issueId: "issue-queued-cancel", projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { analyst: "profile-test" }, supplementalReview: false }] });
+      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId, args: [{ workflowId, companyId: "company-test", projectId: "project-test", issueId: "issue-queued-cancel", projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { planner: "profile-test" }, supplementalReview: false }] });
       const planning = handle.executeUpdate(startPlanningUpdate, { args: [{ expectedRevision: 0, actorUserId: "user-test" }] });
       let waiting = await handle.query(issueStateQuery);
       while (waiting.capacity?.status !== "queued") {
@@ -187,7 +187,7 @@ test("rate-limit reset durably requeues and reacquires the same logical turn", a
   try {
     const completed = await worker.runUntil(async () => {
       const workflowId = "workflow-capacity-rate-limit";
-      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId, args: [{ workflowId, companyId: "company-test", projectId: "project-test", issueId: "issue-rate-limit", projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { analyst: "profile-test" }, supplementalReview: false }] });
+      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId, args: [{ workflowId, companyId: "company-test", projectId: "project-test", issueId: "issue-rate-limit", projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { planner: "profile-test" }, supplementalReview: false }] });
       const state = await handle.executeUpdate(startPlanningUpdate, { args: [{ expectedRevision: 0, actorUserId: "user-test" }] });
       return { state, history: await handle.fetchHistory() };
     });
@@ -224,7 +224,7 @@ test("Activity retry preserves the capacity request for wrapper reattachment", a
   try {
     const completed = await worker.runUntil(async () => {
       const workflowId = "workflow-capacity-wrapper-retry";
-      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId, args: [{ workflowId, companyId: "company-test", projectId: "project-test", issueId: "issue-wrapper-retry", projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { analyst: "profile-test" }, supplementalReview: false }] });
+      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId, args: [{ workflowId, companyId: "company-test", projectId: "project-test", issueId: "issue-wrapper-retry", projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { planner: "profile-test" }, supplementalReview: false }] });
       const state = await handle.executeUpdate(startPlanningUpdate, { args: [{ expectedRevision: 0, actorUserId: "user-test" }] });
       return { state, history: await handle.fetchHistory() };
     });
@@ -256,7 +256,7 @@ test.each(["ownership_ambiguous", "released"] as const)("a failed turn does not 
   try {
     const state = await worker.runUntil(async () => {
       const workflowId = "workflow-capacity-ownership-race";
-      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId, args: [{ workflowId, companyId: "company-test", projectId: "project-test", issueId: "issue-ownership-race", projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { analyst: "profile-test" }, supplementalReview: false }] });
+      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId, args: [{ workflowId, companyId: "company-test", projectId: "project-test", issueId: "issue-ownership-race", projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { planner: "profile-test" }, supplementalReview: false }] });
       return handle.executeUpdate(startPlanningUpdate, { args: [{ expectedRevision: 0, actorUserId: "user-test" }] });
     });
     expect(finalizeCalls).toBe(0);
@@ -281,7 +281,7 @@ test.each([
   try {
     const completed = await worker.runUntil(async () => {
       const workflowId = `workflow-capacity-${status.replace("_", "-")}`;
-      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId, args: [{ workflowId, companyId: "company-test", projectId: "project-test", issueId: `issue-${status.replace("_", "-")}`, projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { analyst: "profile-test" }, supplementalReview: false }] });
+      const handle = await environment.client.workflow.start(issueWorkflow, { taskQueue, workflowId, args: [{ workflowId, companyId: "company-test", projectId: "project-test", issueId: `issue-${status.replace("_", "-")}`, projectRevisionId: "revision-test", briefArtifactId: "brief-test", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { planner: "profile-test" }, supplementalReview: false }] });
       const state = await handle.executeUpdate(startPlanningUpdate, { args: [{ expectedRevision: 0, actorUserId: "user-test" }] });
       return { state, history: await handle.fetchHistory() };
     });

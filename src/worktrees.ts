@@ -146,6 +146,17 @@ async function canonicalDirectory(raw: string, code: string): Promise<string> {
 export class WorktreeManager {
   constructor(private readonly git: GitAdapter = defaultGit) {}
 
+  // The base a task builds on must be the branch as it is now, not the snapshot pinned
+  // when the project revision was accepted.
+  async currentBaseSha(repositoryPath: string, baseBranch: string): Promise<string> {
+    if (!branchPattern.test(baseBranch)) throw new WorktreeFailure("unsafe-branch", "Base branch is not a safe Git ref");
+    const canonical = await canonicalDirectory(repositoryPath, "repository-unavailable");
+    await this.git.run(["fetch", "--no-tags", "origin", `refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], canonical);
+    const sha = await this.git.run(["rev-parse", "--verify", `refs/remotes/origin/${baseBranch}`], canonical);
+    if (!shaPattern.test(sha)) throw new WorktreeFailure("base-commit-mismatch", "Fetched base branch did not resolve to a commit");
+    return sha;
+  }
+
   async create(input: WorktreeInput): Promise<WorktreeRecord> {
     if (!taskIdPattern.test(input.taskId)) throw new WorktreeFailure("unsafe-task-id", "Issue identity is not safe for a worktree coordinate");
     if (!shaPattern.test(input.targetBaseSha)) throw new WorktreeFailure("invalid-base-commit", "Target-base revision is not a canonical commit hash");

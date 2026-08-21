@@ -14,7 +14,7 @@ import { ForgeDatabase } from "./database.js";
 const execFileAsync = promisify(execFile);
 
 export type ProjectStatus = "draft" | "active" | "paused" | "needs-reactivation" | "archived";
-export type ProjectRole = "analyst" | "implementer" | "reviewer";
+export type ProjectRole = "planner" | "builder" | "reviewer" | "integrator";
 export type RoleAssignments = Partial<Record<ProjectRole, string | undefined>>;
 export type ReasoningLevel = "low" | "medium" | "high" | "xhigh";
 export type ServicePriority = "standard" | "priority" | "fast";
@@ -649,7 +649,7 @@ export class ProjectService {
     const name = input.name.trim();
     const profileId = input.profileId.trim();
     if (!namePattern.test(name)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-name", "name", "Agent name is invalid")]);
-    if (!(["analyst", "implementer", "reviewer"] as ProjectRole[]).includes(input.role)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-role", "role", "Agent role is invalid")]);
+    if (!(["planner", "builder", "reviewer", "integrator"] as ProjectRole[]).includes(input.role)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-role", "role", "Agent role is invalid")]);
     const profile = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_profiles WHERE id = ?").get(profileId) as { id: string } | undefined);
     if (!profile) throw new ProjectFailure("Agent configuration is invalid", [finding("profile-unavailable", "profileId", "Agent profile is unavailable")]);
     if (input.avatarSeed !== undefined && !avatarSeedPattern.test(input.avatarSeed)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-avatar", "avatarSeed", "Avatar seed is invalid")]);
@@ -696,10 +696,10 @@ export class ProjectService {
     const params = companyId ? [companyId, companyId, companyId, companyId] : user.role === "admin" ? [] : [actorUserId, actorUserId, actorUserId, actorUserId];
     return this.database.authQuery((db) => (db.prepare(`SELECT a.*,
       (SELECT COUNT(*) FROM forge_agent_executions e JOIN forge_tasks t ON t.id = e.task_id WHERE e.status IN ('starting', 'running', 'cancelling') AND json_extract(t.role_agents_json, '$.' || e.role) = a.id${scope})
-      + (SELECT COUNT(*) FROM forge_developer_executions d JOIN forge_tasks t ON t.id = d.task_id WHERE d.status IN ('starting', 'running', 'cancelling') AND json_extract(t.role_agents_json, '$.implementer') = a.id${scope}) AS active_count,
+      + (SELECT COUNT(*) FROM forge_developer_executions d JOIN forge_tasks t ON t.id = d.task_id WHERE d.status IN ('starting', 'running', 'cancelling') AND json_extract(t.role_agents_json, '$.builder') = a.id${scope}) AS active_count,
       COALESCE(NULLIF(MAX(
         COALESCE((SELECT MAX(COALESCE(e.heartbeat_at, e.finished_at, e.started_at)) FROM forge_agent_executions e JOIN forge_tasks t ON t.id = e.task_id WHERE json_extract(t.role_agents_json, '$.' || e.role) = a.id${scope}), ''),
-        COALESCE((SELECT MAX(COALESCE(d.heartbeat_at, d.finished_at, d.started_at)) FROM forge_developer_executions d JOIN forge_tasks t ON t.id = d.task_id WHERE json_extract(t.role_agents_json, '$.implementer') = a.id${scope}), '')
+        COALESCE((SELECT MAX(COALESCE(d.heartbeat_at, d.finished_at, d.started_at)) FROM forge_developer_executions d JOIN forge_tasks t ON t.id = d.task_id WHERE json_extract(t.role_agents_json, '$.builder') = a.id${scope}), '')
       ), ''), a.created_at) AS last_seen_at
       FROM forge_agents a WHERE a.kind = 'internal' ORDER BY active_count DESC, a.name COLLATE NOCASE, a.id`).all(...params) as AgentRow[]).map(publicAgent));
   }
@@ -805,9 +805,10 @@ export class ProjectService {
     } catch {}
     const agents = this.listAgents(actorUserId);
     const roleDefaults = Object.fromEntries(([
-      ["analyst", agents.find((agent) => agent.role === "analyst")?.id],
-      ["implementer", agents.find((agent) => agent.role === "implementer")?.id],
+      ["planner", agents.find((agent) => agent.role === "planner")?.id],
+      ["builder", agents.find((agent) => agent.role === "builder")?.id],
       ["reviewer", agents.find((agent) => agent.role === "reviewer")?.id],
+      ["integrator", agents.find((agent) => agent.role === "integrator")?.id],
     ] as const).filter((entry) => Boolean(entry[1]))) as RoleAssignments;
     const draft = await this.mutateProject(actorUserId, companyId, {
       name: coordinate.name,
@@ -843,9 +844,9 @@ export class ProjectService {
     const local = await this.localRepositoryPromise;
     const agents = this.database.authQuery((db) => db.prepare("SELECT id, role FROM forge_agents WHERE kind = 'internal'").all() as Array<{ id: string; role: ProjectRole }>);
     const agentRoles = new Map(agents.map((agent) => [agent.id, agent.role]));
-    for (const role of ["analyst", "implementer", "reviewer"] as const) {
+    for (const role of ["planner", "builder", "reviewer", "integrator"] as const) {
       const agentId = project.roleDefaults[role];
-      if (!agentId) findings.push(finding("missing-default", `roleDefaults.${role}`, `An ${role} agent default is required`));
+      if (!agentId) { if (role === "builder") findings.push(finding("missing-default", `roleDefaults.${role}`, "A builder agent default is required")); }
       else if (agentRoles.get(agentId) !== role) findings.push(finding("agent-ineligible", `roleDefaults.${role}`, "Role defaults must reference an agent with the matching role"));
     }
     if (!repositoryPattern.test(project.repository ?? "")) findings.push(finding("repository-identity", "repository", "Repository must use owner/name identity without credentials"));
@@ -970,9 +971,9 @@ export class ProjectService {
     const normalized = normalizedInput(input, { repositoryPath: repository.path ?? resolve(input.repositoryPath), worktreeRoot: worktree.path ?? resolve(input.worktreeRoot) });
     const agentRows = this.database.authQuery((db) => db.prepare("SELECT id, role FROM forge_agents WHERE kind = 'internal'").all() as Array<{ id: string; role: ProjectRole }>);
     const agentRoles = new Map(agentRows.map((agent) => [agent.id, agent.role]));
-    for (const role of ["analyst", "implementer", "reviewer"] as const) {
+    for (const role of ["planner", "builder", "reviewer", "integrator"] as const) {
       const agentId = normalized.roleDefaults[role];
-      if (!allowIncompleteDraft && !agentId) findings.push(finding("missing-default", `roleDefaults.${role}`, `An ${role} agent default is required`));
+      if (!allowIncompleteDraft && !agentId && role === "builder") findings.push(finding("missing-default", `roleDefaults.${role}`, "A builder agent default is required"));
       else if (agentId && agentRoles.get(agentId) !== role) findings.push(finding("agent-ineligible", `roleDefaults.${role}`, "Role defaults must reference an agent with the matching role"));
     }
     if (findings.length) throw new ProjectFailure("Project configuration is invalid", findings, 422);

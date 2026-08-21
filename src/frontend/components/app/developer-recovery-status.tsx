@@ -28,7 +28,7 @@ export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, bus
   const interrupted = recovery.status === "interrupted";
   const failed = recovery.status === "failed";
   const attention = ambiguous || interrupted || failed;
-  const description = ambiguous ? "Forge cannot prove ownership of the previous Implementer process. Inspect the host process and worktree, stop it outside Forge if necessary, then recheck ownership." : attention ? recovery.summary : null;
+  const description = ambiguous ? "Forge cannot prove ownership of the previous Builder process. Inspect the host process and worktree, stop it outside Forge if necessary, then recheck ownership." : attention ? recovery.summary : null;
   const recoveryCommands = ambiguous ? allowedCommands.filter((command) => command === "verify_developer_ownership") : allowedCommands;
   const hasActions = recoveryCommands.includes("retry_development") || recoveryCommands.includes("cancel_development") || (isAdmin && recoveryCommands.includes("verify_developer_ownership"));
   if (recovery.status === "active" && !hasActions) return null;

@@ -23,7 +23,7 @@ function reviewRow(taskId: string, review: Review, current: boolean, repository?
     <li className="min-w-0 space-y-2 py-2" key={`review:${review.id}`}>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <Badge variant={review.outcome === "blocking" ? "destructive" : "secondary"}>{review.outcome}</Badge>
-        <span className="text-[11px] text-muted-foreground">Analyst review</span>
+        <span className="text-[11px] text-muted-foreground">Planner review</span>
         {current ? <Badge variant="outline">current</Badge> : null}
         {review.supersedesReviewId ? <span className="text-[11px] text-muted-foreground">supersedes {review.supersedesReviewId.slice(0, 12)}</span> : null}
         {review.successorReviewId ? <span className="text-[11px] text-muted-foreground">superseded by {review.successorReviewId.slice(0, 12)}</span> : null}
@@ -33,8 +33,8 @@ function reviewRow(taskId: string, review: Review, current: boolean, repository?
       <div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[11px]">
         {artifactLink(taskId, review.opinionArtifactId, "opinion")}
         {artifactLink(taskId, review.evidenceArtifactId, "evidence")}
-        <span className="text-muted-foreground">Analyst continued: {review.leadSessionContinued ? "yes" : "no"}</span>
-        <span className="text-muted-foreground">Implementer continued: {review.developerSessionContinued ? "yes" : "no"}</span>
+        <span className="text-muted-foreground">Planner continued: {review.leadSessionContinued ? "yes" : "no"}</span>
+        <span className="text-muted-foreground">Builder continued: {review.developerSessionContinued ? "yes" : "no"}</span>
       </div>
     </li>
   );
@@ -45,7 +45,7 @@ function reviewAttemptRow(taskId: string, attempt: ReviewAttempt): ReactElement 
     <li className="min-w-0 space-y-1 border-l pl-2 py-2 text-[11px]" key={`attempt:${attempt.id}`}>
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={attempt.status === "completed" ? "secondary" : attempt.status === "blocked" ? "destructive" : "outline"}>{attempt.status}</Badge>
-        <span className="text-muted-foreground">Analyst review attempt</span>
+        <span className="text-muted-foreground">Planner review attempt</span>
         {attempt.code ? <span className="text-muted-foreground">{attempt.code}</span> : null}
       </div>
       <p className="whitespace-pre-wrap break-words text-muted-foreground">{attempt.summary ?? "No blocker."}</p>
@@ -61,7 +61,7 @@ function repairRow(taskId: string, repair: RepairAttempt, repository?: string | 
     <li className="min-w-0 space-y-1 border-l pl-2 py-2 text-[11px]" key={`repair:${repair.id}`}>
       <div className="flex flex-wrap items-center gap-2">
         <Badge variant={repair.status === "completed" ? "secondary" : "destructive"}>cycle {repair.cycle} · {repair.status}</Badge>
-        <span className="text-muted-foreground">Implementer repair</span>
+        <span className="text-muted-foreground">Builder repair</span>
         {repair.code ? <span className="text-muted-foreground">{repair.code}</span> : null}
       </div>
       <p className="whitespace-pre-wrap break-words text-muted-foreground">{repair.summary ?? "Repair completed."}</p>

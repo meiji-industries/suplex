@@ -40,10 +40,10 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
   const company = auth.createCompany("admin-1", "Browser Tasks");
   auth.setCompanyIssueCode("admin-1", company.id, "task");
   const profile = projects.createProfile("admin-1", { name: "Browser task profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const analyst = projects.createAgent("admin-1", { name: "Analyst", role: "analyst", profileId: profile.id });
-  const implementer = projects.createAgent("admin-1", { name: "Implementer", role: "implementer", profileId: profile.id });
+  const planner = projects.createAgent("admin-1", { name: "Planner", role: "planner", profileId: profile.id });
+  const builder = projects.createAgent("admin-1", { name: "Builder", role: "builder", profileId: profile.id });
   const reviewer = projects.createAgent("admin-1", { name: "Reviewer", role: "reviewer", profileId: profile.id });
-  const project = await projects.createProject("admin-1", company.id, { name: "Browser task project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id } });
+  const project = await projects.createProject("admin-1", company.id, { name: "Browser task project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, builder: builder.id, reviewer: reviewer.id } });
   const activeProject = await projects.activateProject("admin-1", project.id);
   let plannedState: IssueWorkflowState | undefined;
   let finishPlanning = (): void => {};
@@ -59,7 +59,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
     const taskId = workflowId.split("-issue-")[1]!;
     plannedState = { ...plannedState!, revision: expectedRevision + 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${workflowId}:${expectedRevision + 1}` };
     projectState(plannedState);
-    database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, started_at) VALUES ('agent_browser', ?, ?, ?, 'analyst', 'running', 1, 'planning', ?, ?, ?, ?, ?)").run(taskId, company.id, workflowId, profile.id, profile.model, profile.reasoningLevel, profile.servicePriority, new Date().toISOString()));
+    database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, started_at) VALUES ('agent_browser', ?, ?, ?, 'planner', 'running', 1, 'planning', ?, ?, ?, ?, ?)").run(taskId, company.id, workflowId, profile.id, profile.model, profile.reasoningLevel, profile.servicePriority, new Date().toISOString()));
     return plannedState;
   };
   const completePlanning = async (workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> => {
@@ -190,12 +190,12 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await page.locator("[data-app-header]").textContent()).toContain("TASK-1 · Browser task");
       expect(await taskDetail.locator("[data-task-properties]").getByText("TASK-1", { exact: true }).isVisible()).toBe(true);
       expect(await taskDetail.getByRole("heading", { name: "Browser task", exact: true, level: 2 }).isVisible()).toBe(true);
-      const analystAgent = taskDetail.locator("#task-agent-analyst");
-      await analystAgent.getByText("Analyst", { exact: true }).waitFor();
-      expect((await analystAgent.boundingBox())?.height).toBe(24);
-      expect(await taskDetail.getByRole("combobox", { name: "Analyst", exact: true }).count()).toBe(0);
-      await analystAgent.click();
-      await page.getByRole("menuitem", { name: /Analyst.*Selected/ }).waitFor();
+      const plannerAgent = taskDetail.locator("#task-agent-planner");
+      await plannerAgent.getByText("Planner", { exact: true }).waitFor();
+      expect((await plannerAgent.boundingBox())?.height).toBe(24);
+      expect(await taskDetail.getByRole("combobox", { name: "Planner", exact: true }).count()).toBe(0);
+      await plannerAgent.click();
+      await page.getByRole("menuitem", { name: /Planner.*Selected/ }).waitFor();
       await page.keyboard.press("Escape");
       await page.getByRole("button", { name: "Task options", exact: true }).click();
       await page.getByRole("menuitem", { name: "Cancel task", exact: true }).waitFor();
@@ -305,11 +305,11 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       const planningObservedAt = new Date(Date.now() - 60_000).toISOString();
       await writeFile(planningSpoolPath, `${JSON.stringify({ type: "item.completed", observedAt: planningObservedAt, item: { id: "planning-browser-update", type: "agent_message", text: "Inspecting README structure." } })}\n`);
       await writeFile(join(config.runtimeRoot, "agent-turns", planningExecutionId, "status.json"), JSON.stringify({ updatedAt: planningObservedAt }));
-      database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, started_at, heartbeat_at, spool_relative_path) VALUES (?, ?, ?, ?, 'analyst', 'running', 1, 'planning', ?, ?, ?)").run(planningExecutionId, taskId, company.id, plannedState!.workflowId, new Date().toISOString(), new Date().toISOString(), `agent-turns/${planningExecutionId}/spool.ndjson`));
+      database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, started_at, heartbeat_at, spool_relative_path) VALUES (?, ?, ?, ?, 'planner', 'running', 1, 'planning', ?, ?, ?)").run(planningExecutionId, taskId, company.id, plannedState!.workflowId, new Date().toISOString(), new Date().toISOString(), `agent-turns/${planningExecutionId}/spool.ndjson`));
       const planningActivity = observerDetail.locator("[data-planning-activity]");
-      await planningActivity.getByText("Analyst activity", { exact: true }).waitFor();
+      await planningActivity.getByText("Planner activity", { exact: true }).waitFor();
       await planningActivity.getByText("Agent update: Inspecting README structure.", { exact: true }).waitFor();
-      await planningActivity.getByText("Last analyst event 1:00 ago", { exact: true }).waitFor();
+      await planningActivity.getByText("Last planner event 1:00 ago", { exact: true }).waitFor();
       expect(await planningRun.getByText("Browser task profile", { exact: false }).isVisible()).toBe(true);
       const progressDuringPlanning = observerDetail.locator("[data-task-progress]");
       expect(await progressDuringPlanning.locator("svg.animate-spin").count()).toBe(1);
@@ -352,7 +352,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await current.waitFor();
       await taskDetail.getByRole("tab", { name: /^Activity \d+$/ }).waitFor();
       expect(await taskDetail.locator("[data-task-activity-feed] [data-task-activity] [data-slot=\"timeline\"][data-orientation=\"vertical\"]").count()).toBe(1);
-      await taskDetail.locator("[data-task-activity-feed]").getByText("Analyst (Browser task profile)", { exact: true }).first().waitFor();
+      await taskDetail.locator("[data-task-activity-feed]").getByText("Planner (Browser task profile)", { exact: true }).first().waitFor();
       const firstActivityTime = taskDetail.locator("[data-task-activity] time").first();
       expect(await firstActivityTime.innerText()).toMatch(/ago$/);
       expect(await firstActivityTime.getAttribute("title")).not.toBeNull();

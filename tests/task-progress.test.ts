@@ -11,7 +11,7 @@ const base = { allowedCommands: ["cancel_development"], createdAt: "2026-08-13T0
 afterEach(() => vi.useRealTimers());
 
 test("agent avatars are square robots and human avatars are circular", () => {
-  const agentElement = ProfileAvatar({ name: "Analyst", seed: "agent-seed" });
+  const agentElement = ProfileAvatar({ name: "Planner", seed: "agent-seed" });
   const humanElement = ProfileAvatar({ name: "Adam", seed: "human-seed", collection: "pixel-art-neutral" });
   const agentImage = (agentElement.props as { children: Array<{ props: { src: string } }> }).children[0]!;
   const humanImage = (humanElement.props as { children: Array<{ props: { src: string } }> }).children[0]!;

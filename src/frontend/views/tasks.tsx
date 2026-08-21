@@ -53,8 +53,8 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
   projectId: string;
   onProjectChange: (projectId: string) => void;
   agents: ApiAgent[];
-  roleAgents: { analyst?: string | undefined; implementer?: string | undefined; reviewer?: string | undefined };
-  onRoleAgentChange: (role: "analyst" | "implementer" | "reviewer", agentId: string) => void;
+  roleAgents: { planner?: string | undefined; builder?: string | undefined; reviewer?: string | undefined; integrator?: string | undefined };
+  onRoleAgentChange: (role: "planner" | "builder" | "reviewer" | "integrator", agentId: string) => void;
   title: string;
   onTitleChange: (title: string) => void;
   description: string;
@@ -71,7 +71,7 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
   onSubmit: () => Promise<void>;
 }): ReactElement {
   const active = companyStatus === "active";
-  const agentRoles = ["analyst", "implementer", "reviewer"] as const;
+  const agentRoles = ["planner", "reviewer", "builder", "integrator"] as const;
   const pasteImages = (event: ClipboardEvent<HTMLFormElement>): void => {
     const files = Array.from(event.clipboardData.files);
     if (!files.length || busy) return;
@@ -107,7 +107,7 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
               <DropdownMenu>
                 <DropdownMenuTrigger render={<Button type="button" variant="outline" size="sm" className="rounded-full px-2.5" aria-label="Assignee"><UserRound className="size-3.5 text-muted-foreground" />Assignee</Button>} />
                 <DropdownMenuContent align="start" className="w-64">
-                  {agentRoles.flatMap((role) => agents.filter((agent) => agent.role === role).map((agent) => <DropdownMenuItem key={`${role}-${agent.id}`} onClick={() => onRoleAgentChange(role, agent.id)}><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><span className="min-w-0 flex-1 truncate">{agent.name}</span><span className="text-[11px] text-muted-foreground">{role}</span>{roleAgents[role] === agent.id ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>))}
+                  {agentRoles.flatMap((role) => [...(role === "builder" ? [] : [<DropdownMenuItem key={`${role}-none`} onClick={() => onRoleAgentChange(role, "")}><span className="min-w-0 flex-1 truncate text-muted-foreground">None</span><span className="text-[11px] text-muted-foreground">{role}</span>{roleAgents[role] ? null : <span aria-label="Selected">✓</span>}</DropdownMenuItem>]), ...agents.filter((agent) => agent.role === role).map((agent) => <DropdownMenuItem key={`${role}-${agent.id}`} onClick={() => onRoleAgentChange(role, agent.id)}><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><span className="min-w-0 flex-1 truncate">{agent.name}</span><span className="text-[11px] text-muted-foreground">{role}</span>{roleAgents[role] === agent.id ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)])}
                 </DropdownMenuContent>
               </DropdownMenu>
               <Select value={projectId || null} onValueChange={(value) => onProjectChange(value ?? "")}><SelectTrigger id="task-project" aria-label="Project" size="sm" className="w-auto min-w-0 rounded-full border-border bg-background px-2.5 shadow-none"><FolderKanban className="size-3.5 text-muted-foreground" /><SelectValue placeholder="Project">{(value) => projects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Project")}</SelectValue></SelectTrigger><SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select>
@@ -132,7 +132,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const planningUnavailable = workerFailure ? `${workerFailure.label} is unavailable. ${workerFailure.summary}` : "";
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [agents, setAgents] = useState<ApiAgent[]>([]);
-  const [roleAgentOverrides, setRoleAgentOverrides] = useState<{ analyst?: string; implementer?: string; reviewer?: string }>({});
+  const [roleAgentOverrides, setRoleAgentOverrides] = useState<{ planner?: string; builder?: string; reviewer?: string; integrator?: string }>({});
   const [tasks, setTasks] = useState<ApiTask[]>([]);
   const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [selectedState, setSelected] = useState<ApiTask>();
@@ -217,9 +217,10 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const availableProjects = visibleProjects.filter((project) => project.companyId === companyId && project.status === "active");
   const newTaskProject = availableProjects.find((project) => project.id === projectId);
   const newTaskRoleAgents = {
-    analyst: roleAgentOverrides.analyst ?? newTaskProject?.roleDefaults.analyst,
-    implementer: roleAgentOverrides.implementer ?? newTaskProject?.roleDefaults.implementer,
+    planner: roleAgentOverrides.planner ?? newTaskProject?.roleDefaults.planner,
+    builder: roleAgentOverrides.builder ?? newTaskProject?.roleDefaults.builder,
     reviewer: roleAgentOverrides.reviewer ?? newTaskProject?.roleDefaults.reviewer,
+    integrator: roleAgentOverrides.integrator ?? newTaskProject?.roleDefaults.integrator,
   };
   const activeCount = visibleTasks.filter((task) => activeTaskPhases.has(task.phase)).length;
   const backlogCount = visibleTasks.filter((task) => task.phase === "backlog").length;
@@ -262,7 +263,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     if (!selected) return;
     if (planningUnavailable) { setError(planningUnavailable); return; }
     setBusy(true); setError("");
-    const optimistic: ApiTask = { ...selected, phase: "planning", revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Analyst planning" };
+    const optimistic: ApiTask = { ...selected, phase: "planning", revision: selected.revision + 1, owner: "lead", allowedCommands: [], pendingAction: "Planner planning" };
     selectedRef.current = optimistic; setSelected(optimistic); setTasks((current) => current.map((task) => task.id === optimistic.id ? optimistic : task));
     try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); selectedRef.current = updated; setSelected(updated); setTasks((current) => current.map((task) => task.id === updated.id ? updated : task)); await reload(); }
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to start planning"); }

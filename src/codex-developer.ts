@@ -27,8 +27,6 @@ import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact }
 import { runPinnedVerification } from "./verification.js";
 import { parseAcceptedProjectRevision } from "./projects.js";
 import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
-import { PlanDecisionSubjectSchema, PlanSubjectSchema, samePlanSubject } from "./plan-governance.js";
-import { hashPlanDecisionSubject } from "./plan-governance-repository.js";
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
 
@@ -97,6 +95,7 @@ type MergeConflictResolutionInput = MergeConflictResolutionActivityInput;
 const ProjectRevisionSchema = z.object({
   repositoryPath: z.string().min(1),
   worktreeRoot: z.string().min(1),
+  baseBranch: z.string().min(1),
   targetBranch: z.string().min(1),
   baseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
   targetSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
@@ -319,29 +318,13 @@ export class DeveloperService {
   async run(rawInput: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<DeveloperExecutionResult> {
     const input = rawInput;
     if (input.authorization) return this.runAuthorized(input as DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity> & { authorization: NonNullable<DeveloperExecutionActivityInput["authorization"]> });
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256, io.id AS outputId, io.original_plan_revision AS originalPlanRevision, io.revision AS outputRevision, io.final_version AS finalVersion, io.output_artifact_id AS artifactId, io.artifact_sha256 AS artifactSha256, io.session_ref AS leadSessionRef, io.execution_id AS leadExecutionId, io.evidence_manifest_artifact_id AS evidenceManifestArtifactId, io.evidence_manifest_sha256 AS evidenceManifestSha256, io.legacy_unverified AS legacyUnverified
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256, io.id AS outputId, io.original_plan_revision AS originalPlanRevision, io.revision AS outputRevision, io.final_version AS finalVersion, io.output_artifact_id AS artifactId, io.artifact_sha256 AS artifactSha256, io.session_ref AS leadSessionRef, io.execution_id AS leadExecutionId, io.evidence_manifest_artifact_id AS evidenceManifestArtifactId, io.evidence_manifest_sha256 AS evidenceManifestSha256
       FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_issue_outputs io ON io.output_artifact_id = ? AND io.task_id = t.id AND io.workflow_id = t.workflow_id
       JOIN forge_artifacts pa ON pa.id = io.output_artifact_id JOIN forge_artifacts ea ON ea.id = io.evidence_artifact_id
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId) as DeveloperContext & { outputId?: string; originalPlanRevision?: number; outputRevision?: number; finalVersion?: number; artifactId?: string; artifactSha256?: string; leadSessionRef?: string; leadExecutionId?: string; evidenceManifestArtifactId?: string; evidenceManifestSha256?: string; legacyUnverified?: number } | undefined);
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId) as DeveloperContext & { outputId?: string; originalPlanRevision?: number; outputRevision?: number; finalVersion?: number; artifactId?: string; artifactSha256?: string; leadSessionRef?: string; leadExecutionId?: string; evidenceManifestArtifactId?: string; evidenceManifestSha256?: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Authorized Lead delivery evidence is unavailable");
-    if (!input.finalPlanSubject) throw new AgentFailure("plan-authority-missing", "Developer execution requires the exact verified final Lead plan subject");
-    if (input.finalPlanSubject) {
-      const persisted = PlanSubjectSchema.safeParse({ companyId: input.companyId, issueId: input.taskId, workflowId: input.workflowId, originalPlanRevision: context.originalPlanRevision, outputRevision: context.outputRevision, finalVersion: context.finalVersion, outputId: context.outputId, artifactId: context.artifactId, artifactSha256: context.artifactSha256, leadSessionRef: context.leadSessionRef, leadExecutionId: context.leadExecutionId, evidenceManifestArtifactId: context.evidenceManifestArtifactId, evidenceManifestSha256: context.evidenceManifestSha256 });
-      if (context.legacyUnverified !== 0 || !persisted.success || !samePlanSubject(persisted.data, input.finalPlanSubject)) throw new AgentFailure("plan-authority-conflict", "Developer execution requires the exact verified final Lead plan");
-      if (input.materialityEvidence?.categories.length) {
-        if (!input.approvalDecisionId) throw new AgentFailure("plan-approval-missing", "Material Developer execution requires an exact verified approval");
-        const finalPlanSubject = input.finalPlanSubject;
-        const materialityEvidence = input.materialityEvidence;
-        const approval = this.database.authQuery((db) => db.prepare(`SELECT expected_workflow_revision AS expectedWorkflowRevision, subject_hash AS subjectHash
-          FROM forge_plan_decisions
-          WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND decision = 'approve' AND legacy_unverified = 0
-            AND plan_output_id = ? AND plan_artifact_id = ? AND plan_artifact_sha256 = ?
-            AND materiality_evidence_artifact_id = ? AND materiality_evidence_sha256 = ?`).get(input.approvalDecisionId, input.taskId, input.companyId, input.workflowId, finalPlanSubject.outputId, finalPlanSubject.artifactId, finalPlanSubject.artifactSha256, materialityEvidence.artifactId, materialityEvidence.artifactSha256) as { expectedWorkflowRevision: number; subjectHash: string } | undefined);
-        const decisionSubject = approval && PlanDecisionSubjectSchema.safeParse({ plan: finalPlanSubject, materiality: materialityEvidence, expectedWorkflowRevision: approval.expectedWorkflowRevision });
-        if (!approval || !decisionSubject || !decisionSubject.success || hashPlanDecisionSubject(decisionSubject.data) !== approval.subjectHash) throw new AgentFailure("plan-approval-conflict", "Developer execution requires approval for the exact final plan and materiality evidence");
-      }
-    }
+    if (!input.finalPlanSubject) throw new AgentFailure("plan-authority-missing", "Developer execution requires the final Lead plan subject");
     const projectRevision = ProjectRevisionSchema.safeParse(JSON.parse(context.normalizedJson));
     if (!projectRevision.success) throw new AgentFailure("scoped-input-missing", "Pinned project execution configuration is unavailable");
     const repositoryPath = await scopedRepository(this.config.repositoryRoot, projectRevision.data.repositoryPath);
@@ -361,13 +344,16 @@ export class DeveloperService {
     const revisionAuthorization = input.revisionRequestId ? this.database.authQuery((db) => db.prepare(`SELECT id, disposition, status, authorized_plan_revision AS authorizedPlanRevision, worktree_path AS worktreePath, branch_name AS branchName, base_sha AS baseSha, head_sha AS headSha, tree_sha AS treeSha, exact_base_sha AS exactBaseSha
       FROM forge_plan_revision_requests WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { id: string; disposition: "reuse" | "new"; status: "accepted" | "authorized"; authorizedPlanRevision: number | null; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null } | undefined) : undefined;
     if (input.revisionRequestId && (!revisionAuthorization || revisionAuthorization.status !== "authorized" || revisionAuthorization.authorizedPlanRevision !== input.planRevision)) throw new AgentFailure("revision-not-authorized", "Developer execution is not authorized for this plan revision");
-    const targetBaseSha = prior?.target_base_sha ?? (revisionAuthorization?.disposition === "new" ? revisionAuthorization.exactBaseSha : revisionAuthorization?.baseSha) ?? projectRevision.data.targetSha;
+    const executionId = input.developerTurnExecutionId ?? input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
+    const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; planRevision: number; attempt: number; status: string; branchName: string; worktreePath: string; targetBaseSha: string; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
+    const pinnedBase = existing?.targetBaseSha ?? prior?.target_base_sha ?? (revisionAuthorization?.disposition === "new" ? revisionAuthorization.exactBaseSha : revisionAuthorization?.baseSha);
+    // Build on the base branch as it is right now: the project-revision snapshot goes stale
+    // the moment another task merges. A recorded execution base stays authoritative on retry.
+    const targetBaseSha = pinnedBase ?? await this.worktrees.currentBaseSha(repositoryPath, projectRevision.data.baseBranch).catch(() => projectRevision.data.targetSha);
     if (!/^[a-f0-9]{40,64}$/i.test(targetBaseSha)) throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain an exact target SHA");
     let branchName = prior?.branch_name ?? buildGitBranchName({ branchSlug: fallbackGitPresentation(context.title).branchSlug, taskId: input.taskId });
     const worktreeRoot = await scopedRepository(this.config.worktreeRoot, projectRevision.data.worktreeRoot);
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
-    const executionId = input.developerTurnExecutionId ?? input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
-    const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; planRevision: number; attempt: number; status: string; branchName: string; worktreePath: string; targetBaseSha: string; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
     if (existing && (existing.taskId !== input.taskId || existing.companyId !== input.companyId || existing.workflowId !== input.workflowId || existing.planRevision !== input.planRevision || existing.attempt !== attempt || existing.branchName !== branchName || existing.targetBaseSha !== targetBaseSha || existing.supersedesExecutionId !== (prior?.id ?? null) || !["starting", "running"].includes(existing.status))) throw new AgentFailure("developer-execution-identity-conflict", "The deterministic Developer execution ID is already bound to different coordinates", { nonRetryable: true });
     let worktree;
     try {

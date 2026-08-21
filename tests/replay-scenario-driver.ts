@@ -5,7 +5,7 @@ import { Worker } from "@temporalio/worker";
 import type { CapacityRequestSnapshot, WorkflowCapacityState } from "../src/capacity-contracts.js";
 import type { IssueActivities } from "../src/temporal/contracts/activities/index.js";
 import type { DurableArtifactReference, IssueWorkflowInput, IssueWorkflowState } from "../src/temporal/issue-contracts.js";
-import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, continueWorkUpdate, issueStateQuery, issueWorkflow, publishDraftUpdate, reconcileAcceptanceUpdate, reconcileMergeUpdate, repairDeliveryUpdate, requestDeliveryChangesUpdate, revisePlanUpdate, retryDevelopmentUpdate, reviewDeliveryUpdate, startDevelopmentUpdate, startPlanningUpdate } from "../src/temporal/workflows.js";
+import { acceptDeliveryUpdate, approvePlanUpdate, cancelDevelopmentUpdate, cancelIssueUpdate, continueWorkUpdate, issueStateQuery, issueWorkflow, reconcileAcceptanceUpdate, reconcileMergeUpdate, requestDeliveryChangesUpdate, revisePlanUpdate, retryDevelopmentUpdate, startDevelopmentUpdate, startPlanningUpdate } from "../src/temporal/workflows.js";
 import { buildProductionWorkflowBundle, temporalDataConverter } from "../src/temporal/workflow-bundle.js";
 import { createIssueActivitiesFake } from "./fakes/issue-activities.js";
 import { replayScenarios } from "./replay-scenarios/index.js";
@@ -109,6 +109,8 @@ function deferred<T = void>(): Deferred<T> {
   const promise = new Promise<T>((done) => { resolve = done; });
   return { promise, resolve: (value) => resolve(value as T) };
 }
+
+const HUMAN_OWNED_PHASES = new Set<IssueWorkflowState["phase"]>(["accepted", "merge_conflict_required", "delivery_blocked", "manual_merge", "ready_reconciliation", "done", "cancelled", "failed", "blocked"]);
 
 function command(expectedRevision: number, id: string) {
   return { expectedRevision, actorUserId: "fixture-user", commandId: id };
@@ -228,22 +230,23 @@ async function driveScenarioScript(handle: WorkflowHandle<typeof issueWorkflow>,
     }
     if (options.continueAsNew) state = await helpers.waitForState(handle, (candidate) => candidate.continuationCount === 2);
     const revisionBeforeRetry = state.revision;
-    const projectionCountBeforeRetry = helpers.projections.length;
     state = await handle.executeUpdate(cancelDevelopmentUpdate, { args: [cancelCommand], updateId: `${scenario}-cancel-transport-retry` });
-    if (state.revision !== revisionBeforeRetry || helpers.projections.length !== projectionCountBeforeRetry) throw new Error("A duplicate durable cancellation command mutated Workflow state");
+    // The duplicate must be a no-op. Lead-owned phases chain themselves, so the Workflow may
+    // legitimately have moved on by itself; what must never appear is a second cancellation.
+    if (helpers.projections.some((projected) => projected.revision > revisionBeforeRetry && projected.pendingAction === "Cancelling Developer turn")) throw new Error(`A duplicate durable cancellation command re-cancelled the Developer turn in ${scenario}`);
   } else {
     state = await development.result();
   }
   if (options.planRevision) {
+    state = await helpers.waitForState(handle, (candidate) => candidate.phase === "delivery_blocked");
     state = await handle.executeUpdate(revisePlanUpdate, { args: [{ expectedRevision: state.revision, actorUserId: "fixture-user", reason: "Revise the bounded fixture plan.", worktreeDisposition: "new", exactBaseSha: "9".repeat(40) }], updateId: `${scenario}-revise` });
     return handle.executeUpdate(startPlanningUpdate, { args: [helpers.command(state.revision, `${scenario}-replan`)], updateId: `${scenario}-replan` });
   }
   if (options.developerRetry) state = await handle.executeUpdate(retryDevelopmentUpdate, { args: [helpers.command(state.revision, `${scenario}-retry`)], updateId: `${scenario}-retry` });
   if (options.skipReview) return state;
-  state = await handle.executeUpdate(reviewDeliveryUpdate, { args: [helpers.command(state.revision, `${scenario}-review`)], updateId: `${scenario}-review` });
-  state = options.repair
-    ? await handle.executeUpdate(repairDeliveryUpdate, { args: [helpers.command(state.revision, `${scenario}-repair`)], updateId: `${scenario}-repair` })
-    : await handle.executeUpdate(publishDraftUpdate, { args: [helpers.command(state.revision, `${scenario}-publish`)], updateId: `${scenario}-publish` });
+  // Lead-owned phases (review, repair, publish, conflict resolution) chain themselves:
+  // the fixture only waits for the next state that genuinely belongs to a member.
+  state = await helpers.waitForState(handle, (candidate) => HUMAN_OWNED_PHASES.has(candidate.phase));
   if (options.acceptance) {
     state = await helpers.waitForState(handle, (candidate) => candidate.phase === "accepted");
     if (options.acceptance === "request-changes") state = await handle.executeUpdate(requestDeliveryChangesUpdate, { args: [{ ...helpers.command(state.revision, `${scenario}-request-changes`), note: "Controlled member repair request" }], updateId: `${scenario}-request-changes` });
@@ -280,7 +283,7 @@ async function driveScenario(definition: ReplayScenarioDefinitionUnion, input: {
   const worker = await Worker.create({ connection: input.connection, namespace: input.namespace, taskQueue: input.taskQueue, workflowBundle: input.workflowBundle, dataConverter: temporalDataConverter, activities: createIssueActivitiesFake({ ...shared, ...overrides }) });
   const workerRun = worker.run();
   try {
-    const workflowInput: IssueWorkflowInput = { workflowId, companyId: "fixture-company", projectId: "fixture-project", issueId: `fixture-issue-${definition.name}`, projectRevisionId: "fixture-project-revision", briefArtifactId: "fixture-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { analyst: "fixture-profile", implementer: "fixture-profile" }, supplementalReview: false, ...( "workflowInput" in definition ? definition.workflowInput : {}) };
+    const workflowInput: IssueWorkflowInput = { workflowId, companyId: "fixture-company", projectId: "fixture-project", issueId: `fixture-issue-${definition.name}`, projectRevisionId: "fixture-project-revision", briefArtifactId: "fixture-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: { planner: "fixture-profile", builder: "fixture-profile" }, supplementalReview: false, ...( "workflowInput" in definition ? definition.workflowInput : {}) };
     const handle = await input.client.start(issueWorkflow, { workflowId, taskQueue: input.taskQueue, args: [workflowInput] });
     const helpers: ReplayScenarioScriptHelpers = {
       scenario: definition.name,

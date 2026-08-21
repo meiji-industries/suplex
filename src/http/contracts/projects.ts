@@ -2,7 +2,7 @@ import { z } from "zod";
 
 import { AdminCapacityLaneSchema } from "../../capacity-contracts.js";
 
-const ProjectRoleDefaultsSchema = z.object({ analyst: z.string().optional(), implementer: z.string().optional(), reviewer: z.string().optional() });
+const ProjectRoleDefaultsSchema = z.object({ planner: z.string().optional(), builder: z.string().optional(), reviewer: z.string().optional(), integrator: z.string().optional() });
 
 const OptionalCapacitySchema = z.preprocess((value) => value === "" ? null : value, z.coerce.number().int().min(1).max(32).nullable().optional());
 
@@ -28,8 +28,8 @@ export const ProjectBodySchema = z.object({
   roleDefaults: ProjectRoleDefaultsSchema.default({}),
 }).strict();
 
-export const AgentBodySchema = z.object({ name: z.string().min(1), role: z.enum(["analyst", "implementer", "reviewer"]), avatarSeed: z.string().regex(/^[a-f0-9]{32}$/).optional(), profileId: z.string().min(1) }).strict();
-export const AgentResponseSchema = z.object({ id: z.string(), name: z.string(), role: z.enum(["analyst", "implementer", "reviewer"]), avatarSeed: z.string(), profileId: z.string(), activeCount: z.number().int().nonnegative(), lastSeenAt: z.string(), createdAt: z.string(), updatedAt: z.string() });
+export const AgentBodySchema = z.object({ name: z.string().min(1), role: z.enum(["planner", "builder", "reviewer", "integrator"]), avatarSeed: z.string().regex(/^[a-f0-9]{32}$/).optional(), profileId: z.string().min(1) }).strict();
+export const AgentResponseSchema = z.object({ id: z.string(), name: z.string(), role: z.enum(["planner", "builder", "reviewer", "integrator"]), avatarSeed: z.string(), profileId: z.string(), activeCount: z.number().int().nonnegative(), lastSeenAt: z.string(), createdAt: z.string(), updatedAt: z.string() });
 export const AgentListResponseSchema = z.object({ agents: z.array(AgentResponseSchema) });
 export const AgentListQuerySchema = z.object({ companyId: z.string().min(1).optional() });
 export type AgentResponse = z.infer<typeof AgentResponseSchema>;

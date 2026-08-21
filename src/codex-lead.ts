@@ -417,13 +417,13 @@ export class AgentService {
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
     const profile = this.executionProfile(input, undefined);
     if (profile && profile.provider !== this.provider.id) throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for delivery repair planning");
-    const active = this.activeCapacityExecution(input, "analyst");
+    const active = this.activeCapacityExecution(input, "planner");
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const evidenceLines: string[] = [];
     const outputLines: string[] = [];
     const startedAt = this.now().toISOString();
     if (!active) this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'analyst', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.leadSessionRef, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, input.leadSessionRef, worktreePath);
     });
     let output: z.infer<typeof DeliveryRepairLeadOutputSchema>;
@@ -495,7 +495,7 @@ export class AgentService {
     return this.database.authQuery((db) => db.prepare("SELECT id, name, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority, capacity FROM forge_profiles WHERE id = ?").get(profileId) as ProfileSettings | undefined);
   }
 
-  private activeCapacityExecution(input: { capacityRequestId?: string | undefined; taskId: string; companyId: string; workflowId: string }, role: "analyst" | "reviewer"): { id: string; sessionRef: string | null } | undefined {
+  private activeCapacityExecution(input: { capacityRequestId?: string | undefined; taskId: string; companyId: string; workflowId: string }, role: "planner" | "reviewer"): { id: string; sessionRef: string | null } | undefined {
     if (!input.capacityRequestId) return undefined;
     return this.database.authQuery((db) => db.prepare(`SELECT id, session_ref AS sessionRef
       FROM forge_agent_executions
@@ -518,7 +518,7 @@ export class AgentService {
     if (!row) throw new AgentFailure("scoped-input-missing", "Lead planning evidence is unavailable");
     const completed = await this.completedPlanningResult(input);
     if (completed) return completed;
-    const active = this.database.authQuery((db) => db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at, wrapper_pid, wrapper_process_group, wrapper_start_identity, process_pid, process_start_identity, spool_relative_path, status_relative_path, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND role = 'analyst' AND turn_key = ? AND status IN ('starting', 'running', 'cancelling', 'failed') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`) as (ActiveLeadExecution & { profile_id: string | null }) | undefined);
+    const active = this.database.authQuery((db) => db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at, wrapper_pid, wrapper_process_group, wrapper_start_identity, process_pid, process_start_identity, spool_relative_path, status_relative_path, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND role = 'planner' AND turn_key = ? AND status IN ('starting', 'running', 'cancelling', 'failed') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`) as (ActiveLeadExecution & { profile_id: string | null }) | undefined);
     const turnSupervisor = this.provider.createTurnSupervisor(this.processController);
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
     const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
@@ -547,19 +547,19 @@ export class AgentService {
       const placeholders = profileIds.map(() => "?").join(",");
       return db.prepare(`SELECT id, name, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority, capacity FROM forge_profiles WHERE id IN (${placeholders})`).all(...profileIds) as ProfileSettings[];
     });
-    const pinnedLead = this.executionProfile(input, input.roleProfiles.analyst);
+    const pinnedLead = this.executionProfile(input, input.roleProfiles.planner);
     if (pinnedLead) {
-      const index = profileSettings.findIndex((profile) => profile.id === input.roleProfiles.analyst);
+      const index = profileSettings.findIndex((profile) => profile.id === input.roleProfiles.planner);
       const existing = index >= 0 ? profileSettings[index] : undefined;
       if (existing) profileSettings[index] = { ...existing, model: pinnedLead.model, provider: pinnedLead.provider, reasoningLevel: pinnedLead.reasoningLevel, servicePriority: pinnedLead.servicePriority, capacity: pinnedLead.capacity };
     }
-    if (!input.roleProfiles.analyst) throw new AgentFailure("profile-unavailable", "Lead planning requires a configured Lead profile");
+    if (!input.roleProfiles.planner) throw new AgentFailure("profile-unavailable", "Lead planning requires a configured Lead profile");
     const resumeSessionRef = input.resume?.leadSessionRef ?? input.leadSessionRef ?? input.resumeLeadSessionRef;
-    const pinned = resumeSessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND company_id = ? AND role = 'analyst' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(resumeSessionRef, input.companyId) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
+    const pinned = resumeSessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND company_id = ? AND role = 'planner' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(resumeSessionRef, input.companyId) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const persisted = pinned ?? (active?.resolved_model && active.resolved_reasoning_level && active.resolved_service_priority ? { profileId: active.profile_id, model: active.resolved_model, reasoningLevel: active.resolved_reasoning_level, servicePriority: active.resolved_service_priority } : undefined);
     let leadProfile = persisted
-      ? { id: persisted.profileId ?? input.roleProfiles.analyst ?? "pinned-lead", name: "Pinned Lead", provider: this.provider.id, model: persisted.model, reasoningLevel: persisted.reasoningLevel, servicePriority: persisted.servicePriority, capacity: 0 }
-      : profileSettings.find((profile) => profile.id === input.roleProfiles.analyst);
+      ? { id: persisted.profileId ?? input.roleProfiles.planner ?? "pinned-lead", name: "Pinned Lead", provider: this.provider.id, model: persisted.model, reasoningLevel: persisted.reasoningLevel, servicePriority: persisted.servicePriority, capacity: 0 }
+      : profileSettings.find((profile) => profile.id === input.roleProfiles.planner);
     if (!leadProfile || leadProfile.provider !== this.provider.id) throw new AgentFailure("profile-unavailable", "The configured Lead profile is unavailable");
     const revisionRequest = input.revisionRequestId ? this.database.authQuery((db) => db.prepare(`SELECT r.disposition, r.worktree_path AS worktreePath, r.branch_name AS branchName, r.base_sha AS baseSha, r.head_sha AS headSha, r.tree_sha AS treeSha, r.exact_base_sha AS exactBaseSha, a.storage_path AS reasonPath, a.sha256 AS reasonSha
       FROM forge_plan_revision_requests r JOIN forge_artifacts a ON a.id = r.reason_artifact_id AND a.company_id = r.company_id AND a.kind = 'plan-revision-reason'
@@ -637,7 +637,7 @@ export class AgentService {
         }
       } else {
         this.database.authTransaction((db) => {
-          db.prepare(`INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'analyst', 'starting', 1, ?, ?, 'planning', ?, ?, ?, ?, ?, ?, 0)`).run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`, input.revision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, sessionRef ?? null, startedAt);
+          db.prepare(`INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?, 'planning', ?, ?, ?, ?, ?, ?, 0)`).run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`, input.revision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, sessionRef ?? null, startedAt);
           this.bindCapacityInTransaction(db, input, executionId, sessionRef);
         });
       }
@@ -811,13 +811,13 @@ export class AgentService {
       this.artifacts.read({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
     ]);
     const rawSessionId = await this.sessionStore.read(input.leadSessionRef);
-    const leadProfile = await this.resolveTurnProfile(input.roleProfiles?.analyst, input.leadSessionRef, "Lead");
+    const leadProfile = await this.resolveTurnProfile(input.roleProfiles?.planner, input.leadSessionRef, "Lead");
     const schemaPath = await this.ensureLeadSchema();
-    const active = this.activeCapacityExecution(input, "analyst");
+    const active = this.activeCapacityExecution(input, "planner");
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     if (!active) this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'analyst', 'starting', 1, ?, ?, 'merge-conflict-planning', ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:merge-conflict:${input.priorHead}:${input.targetBaseSha}:${input.capacityRequestId ?? executionId}`, input.planRevision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, input.leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?, 'merge-conflict-planning', ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:merge-conflict:${input.priorHead}:${input.targetBaseSha}:${input.capacityRequestId ?? executionId}`, input.planRevision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, input.leadSessionRef, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, input.leadSessionRef, worktreePath);
     });
     const evidenceLines: string[] = [];
@@ -885,7 +885,7 @@ export class AgentService {
     const evidence = await this.persistEvidence(input.companyId, executionId, [JSON.stringify({ type: "forge.review-preflight-blocked", code })]);
     this.database.authTransaction((db) => {
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, failure_code, failure_summary, evidence_artifact_id) VALUES (?, ?, ?, ?, 'analyst', 'blocked', 1, ?, ?, ?, ?, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.subject.leadSessionRef, startedAt, this.now().toISOString(), code, summary, evidence.id);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, failure_code, failure_summary, evidence_artifact_id) VALUES (?, ?, ?, ?, 'planner', 'blocked', 1, ?, ?, ?, ?, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.subject.leadSessionRef, startedAt, this.now().toISOString(), code, summary, evidence.id);
       db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id, lead_execution_id, lead_session_ref, developer_session_ref, status, correction_attempts, evidence_artifact_id, failure_code, failure_summary, supersedes_review_id, created_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'blocked', 0, ?, ?, ?, ?, ?, ?)").run(attemptId, input.taskId, input.companyId, input.workflowId, input.subject.planRevision, input.subject.targetBaseSha, input.subject.subjectCommit, input.subject.subjectTree, developerExecution.id, deliveryArtifact.id, developerEvidence.id, executionId, input.subject.leadSessionRef, input.subject.developerSessionRef, evidence.id, code, summary, input.supersedesReviewId, startedAt, this.now().toISOString());
     });
     return DeliveryReviewActivityResultSchema.parse({ outcome: "blocked", attemptId, code, summary, evidenceArtifactId: evidence.id, executionId, sessionRef: input.subject.leadSessionRef, correctionAttempts: 0, subject: input.subject });
@@ -921,7 +921,7 @@ export class AgentService {
     if (!rawSessionId) throw new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
     const executionId = `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'analyst', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.leadSessionRef, startedAt));
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.leadSessionRef, startedAt));
     const evidenceLines: string[] = [];
     const outputLines: string[] = [];
     const prompt = this.ciRepairPrompt(context.title, { ...input, requiredChecks, localVerification }, failedChecks);
@@ -1086,7 +1086,7 @@ export class AgentService {
     let leadProfile: Awaited<ReturnType<AgentService["resolveTurnProfile"]>>;
     let rawSessionId: string;
     try {
-      leadProfile = await this.resolveTurnProfile(input.roleProfiles.analyst, leadSessionRef, "Lead review");
+      leadProfile = await this.resolveTurnProfile(input.roleProfiles.planner, leadSessionRef, "Lead review");
       rawSessionId = await this.sessionStore.read(leadSessionRef);
       if (!rawSessionId) throw new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
     } catch (error) {
@@ -1095,13 +1095,13 @@ export class AgentService {
       throw failure;
     }
     const schemaPath = await this.ensureDeliveryReviewSchema();
-    const active = this.activeCapacityExecution(input, "analyst");
+    const active = this.activeCapacityExecution(input, "planner");
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     const activeAttempt = active && !isFinalReview ? this.database.authQuery((db) => db.prepare("SELECT id FROM forge_delivery_review_attempts WHERE lead_execution_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(executionId, input.taskId, input.companyId, input.workflowId) as { id: string } | undefined) : undefined;
     const attemptId = activeAttempt?.id ?? `review_attempt_${randomBytes(12).toString("hex")}`;
     if (!active) this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'analyst', 'starting', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:delivery-review:${subjectCommit}:${attemptId}`, input.planRevision, isFinalReview ? "final-delivery-review" : "delivery-review", leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:delivery-review:${subjectCommit}:${attemptId}`, input.planRevision, isFinalReview ? "final-delivery-review" : "delivery-review", leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, leadSessionRef, startedAt);
       if (!isFinalReview) db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id, lead_execution_id, lead_session_ref, developer_session_ref, status, correction_attempts, supersedes_review_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 0, ?, ?)").run(attemptId, input.taskId, input.companyId, input.workflowId, subject.planRevision, targetBaseSha, subjectCommit, subjectTree, subject.developerExecutionId, subject.deliveryArtifactId, subject.developerEvidenceArtifactId, executionId, leadSessionRef, context.developerSessionRef, input.supersedesReviewId, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, leadSessionRef, input.worktreePath);
     });
@@ -1317,7 +1317,7 @@ export class AgentService {
   }
 
   async consolidateLeadPlan(rawInput: ConsolidateLeadPlanActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<LeadPlanningResult> {
-    const lead = await this.resolveTurnProfile(rawInput.roleProfiles.analyst, rawInput.leadSessionRef, "Lead consolidation");
+    const lead = await this.resolveTurnProfile(rawInput.roleProfiles.planner, rawInput.leadSessionRef, "Lead consolidation");
     await this.sessionStore.read(rawInput.leadSessionRef);
     const draft = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.leadOutputArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
     const review = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.supplementalReviewArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
@@ -1326,11 +1326,11 @@ export class AgentService {
     const draftText = (await this.artifacts.read({ ...draft, companyId: rawInput.companyId })).toString("utf8");
     const reviewText = (await this.artifacts.read({ ...review, companyId: rawInput.companyId })).toString("utf8");
     const schemaPath = await this.ensureLeadSchema();
-    const active = this.activeCapacityExecution(rawInput, "analyst");
+    const active = this.activeCapacityExecution(rawInput, "planner");
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     if (!active) this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'analyst', 'starting', 1, ?, ?, 'lead-consolidation', ?, ?, ?, ?, ?, ?, 0)").run(executionId, rawInput.taskId, rawInput.companyId, rawInput.workflowId, `${rawInput.workflowId}:lead-consolidation:${rawInput.revision}`, rawInput.revision, lead.id, lead.model, lead.reasoningLevel, lead.servicePriority, rawInput.leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?, 'lead-consolidation', ?, ?, ?, ?, ?, ?, 0)").run(executionId, rawInput.taskId, rawInput.companyId, rawInput.workflowId, `${rawInput.workflowId}:lead-consolidation:${rawInput.revision}`, rawInput.revision, lead.id, lead.model, lead.reasoningLevel, lead.servicePriority, rawInput.leadSessionRef, startedAt);
       this.bindCapacityInTransaction(db, rawInput, executionId, rawInput.leadSessionRef, repositoryPath);
     });
     const lines: string[] = [];
@@ -1450,7 +1450,7 @@ export class AgentService {
   }
 
   private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string): Promise<{ id: string; model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }> {
-    const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND role = 'analyst' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(sessionRef) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
+    const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND role = 'planner' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(sessionRef) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const profile = pinned ? undefined : this.database.authQuery((db) => (profileId
       ? db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId)
       : db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE provider = ? ORDER BY id LIMIT 1").get(this.provider.id)) as { id: string; provider: string; model: string; reasoningLevel: string; servicePriority: string } | undefined);
@@ -1568,7 +1568,7 @@ export class AgentService {
       JOIN forge_issue_outputs o ON o.execution_id = e.id AND o.task_id = e.task_id AND o.company_id = e.company_id AND o.workflow_id = e.workflow_id AND o.revision = e.workflow_revision
       JOIN forge_artifacts output ON output.id = o.output_artifact_id AND output.company_id = e.company_id
       JOIN forge_artifacts evidence ON evidence.id = o.evidence_artifact_id AND evidence.company_id = e.company_id
-      WHERE e.id IS NOT NULL AND e.task_id = ? AND e.company_id = ? AND e.workflow_id = ? AND e.workflow_revision = ? AND e.turn_key = ? AND e.role = 'analyst' AND e.status = 'completed'
+      WHERE e.id IS NOT NULL AND e.task_id = ? AND e.company_id = ? AND e.workflow_id = ? AND e.workflow_revision = ? AND e.turn_key = ? AND e.role = 'planner' AND e.status = 'completed'
       ORDER BY e.finished_at DESC LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.revision, `${input.workflowId}:lead-planning:${input.revision}`) as {
         executionId: string;
         sessionRef: string;

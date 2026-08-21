@@ -41,7 +41,7 @@ function activeDuration(startedAt: string, now: number): string {
 }
 
 function activeAgent(phase: string, invocations: AgentInvocation[]): AgentInvocation | undefined {
-  const role = phase === "planning" ? "analyst" : ["ready_for_development", "development", "repair_required"].includes(phase) ? "implementer" : "reviewer";
+  const role = phase === "planning" ? "planner" : ["ready_for_development", "development", "repair_required"].includes(phase) ? "builder" : "reviewer";
   return [...invocations].reverse().find((invocation) => invocation.role === role && ["starting", "running", "cancelling"].includes(invocation.status));
 }
 

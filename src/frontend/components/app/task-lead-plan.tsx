@@ -49,7 +49,7 @@ export function TaskLeadPlan({
     ["Verification strategy", output.content.verificationStrategy],
   ].filter((item): item is [string, string] => item !== null && Boolean(item[1]));
   const [openSteps, setOpenSteps] = useState<string[]>([]);
-  const heading = <span className="font-semibold">Plan: {output.content.gitPresentation?.pullRequestTitle ?? "Analyst plan"}</span>;
+  const heading = <span className="font-semibold">Plan: {output.content.gitPresentation?.pullRequestTitle ?? "Planner plan"}</span>;
   const details = <>
     <p className="whitespace-pre-wrap text-[13px] leading-5">{output.summary}</p>
         <Timeline orientation="vertical" value={0} data-plan-steps>

@@ -215,7 +215,7 @@ export const LeadPlanningActivityInputSchema = z.object({
   projectRevisionId: durableId,
   briefArtifactId: durableId,
   imageArtifactIds: z.array(durableId).max(32),
-  roleProfiles: z.object({ analyst: durableId.optional(), implementer: durableId.optional(), reviewer: durableId.optional() }),
+  roleProfiles: z.object({ planner: durableId.optional(), builder: durableId.optional(), reviewer: durableId.optional(), integrator: durableId.optional() }),
   revision: z.number().int().nonnegative(),
   resume: LeadResumeDescriptorSchema.optional(),
   revisionRequestId: durableId.optional(),

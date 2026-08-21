@@ -97,19 +97,18 @@ type ProjectSettingsForm = {
   setupCommand: string;
   verificationCommand: string;
   requiredChecks: string;
-  analystAgent: string;
-  implementerAgent: string;
+  plannerAgent: string;
+  builderAgent: string;
   reviewerAgent: string;
+  integratorAgent: string;
 };
 
 type ActivationRequirement = { key: string; label: string; complete: boolean };
 
-function activationRequirements(input: { requiredChecks: string[]; analystAgent: string | undefined; implementerAgent: string | undefined; reviewerAgent: string | undefined }): ActivationRequirement[] {
+function activationRequirements(input: { requiredChecks: string[]; builderAgent: string | undefined }): ActivationRequirement[] {
   return [
     { key: "checks", label: "Add at least one required GitHub check", complete: input.requiredChecks.length > 0 },
-    { key: "analyst", label: "Choose an Analyst default", complete: Boolean(input.analystAgent) },
-    { key: "implementer", label: "Choose an Implementer default", complete: Boolean(input.implementerAgent) },
-    { key: "reviewer", label: "Choose a Reviewer default", complete: Boolean(input.reviewerAgent) },
+    { key: "builder", label: "Choose a Builder default", complete: Boolean(input.builderAgent) },
   ];
 }
 
@@ -121,9 +120,10 @@ function settingsForm(project: ApiProject): ProjectSettingsForm {
     setupCommand: project.setupCommand,
     verificationCommand: project.verificationCommand,
     requiredChecks: project.requiredChecks.join(", "),
-    analystAgent: project.roleDefaults.analyst ?? "",
-    implementerAgent: project.roleDefaults.implementer ?? "",
+    plannerAgent: project.roleDefaults.planner ?? "",
+    builderAgent: project.roleDefaults.builder ?? "",
     reviewerAgent: project.roleDefaults.reviewer ?? "",
+    integratorAgent: project.roleDefaults.integrator ?? "",
   };
 }
 
@@ -213,7 +213,7 @@ function ProjectSettingsDialog({
           setupCommand: form.setupCommand,
           verificationCommand: form.verificationCommand,
           requiredChecks: form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean),
-          roleDefaults: { analyst: form.analystAgent, implementer: form.implementerAgent, reviewer: form.reviewerAgent },
+          roleDefaults: { planner: form.plannerAgent, builder: form.builderAgent, reviewer: form.reviewerAgent, integrator: form.integratorAgent },
         }),
       });
       await onSaved();
@@ -228,9 +228,7 @@ function ProjectSettingsDialog({
 
   const requirements = form ? activationRequirements({
     requiredChecks: form.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean),
-    analystAgent: form.analystAgent,
-    implementerAgent: form.implementerAgent,
-    reviewerAgent: form.reviewerAgent,
+    builderAgent: form.builderAgent,
   }) : [];
   const missingRequirements = requirements.filter((requirement) => !requirement.complete);
   const selectedChecks = form?.requiredChecks.split(",").map((value) => value.trim()).filter(Boolean) ?? [];
@@ -258,8 +256,8 @@ function ProjectSettingsDialog({
               </FieldSet>
               <FieldSet>
                 <FieldLegend variant="label">Default agents</FieldLegend>
-                {(["analystAgent", "implementerAgent", "reviewerAgent"] as const).map((key) => {
-                  const role = key === "analystAgent" ? "analyst" : key === "implementerAgent" ? "implementer" : "reviewer";
+                {(["plannerAgent", "reviewerAgent", "builderAgent", "integratorAgent"] as const).map((key) => {
+                  const role = key === "plannerAgent" ? "planner" : key === "builderAgent" ? "builder" : key === "integratorAgent" ? "integrator" : "reviewer";
                   const options = agents.filter((agent) => agent.role === role);
                   const selected = options.find((agent) => agent.id === form[key]);
                   return <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{role.slice(0, 1).toUpperCase() + role.slice(1)} default</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><ProfileAvatar name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent><SelectItem value={null}>None</SelectItem>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select></Field>;
@@ -331,7 +329,7 @@ export function ProjectsView(): ReactElement {
           {currentCompany ? (
             <div className="grid gap-3">
               {visibleProjects.map((project) => {
-                const requirements = activationRequirements({ requiredChecks: project.requiredChecks, analystAgent: project.roleDefaults.analyst, implementerAgent: project.roleDefaults.implementer, reviewerAgent: project.roleDefaults.reviewer });
+                const requirements = activationRequirements({ requiredChecks: project.requiredChecks, builderAgent: project.roleDefaults.builder });
                 const missingRequirements = requirements.filter((requirement) => !requirement.complete);
                 const ready = missingRequirements.length === 0;
                 return (
@@ -341,7 +339,7 @@ export function ProjectsView(): ReactElement {
                       <CardTitle><div className="flex min-w-0 flex-wrap items-center gap-2"><span className="text-[13px]">{project.name}</span>{project.status === "draft" ? <Badge variant="secondary" data-status="draft"><span className="size-1.5 rounded-full bg-amber-500" />Draft</Badge> : <Badge variant="secondary" data-status={project.status}>{project.status}</Badge>}<span className="text-[11px] font-normal text-muted-foreground">revision {project.configurationRevision}</span></div></CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Revision hash {project.configurationIdentity ? `${project.configurationIdentity.slice(0, 8)}…` : "unaccepted"}</span><span>Base {project.baseBranch} · {project.baseSha ? <CommitSha sha={project.baseSha} repository={project.repository} abbreviated={`${project.baseSha.slice(0, 8)}…`} /> : "unaccepted"}</span><span>Target {project.targetBranch} · {project.targetSha ? <CommitSha sha={project.targetSha} repository={project.repository} abbreviated={`${project.targetSha.slice(0, 8)}…`} /> : "unaccepted"}</span><span>{project.requiredChecks.length} required checks</span><span>Defaults: Analyst {agents.find((agent) => agent.id === project.roleDefaults.analyst)?.name ?? "—"} · Implementer {agents.find((agent) => agent.id === project.roleDefaults.implementer)?.name ?? "—"} · Reviewer {agents.find((agent) => agent.id === project.roleDefaults.reviewer)?.name ?? "—"}</span>{project.status === "draft" && missingRequirements.length ? <span className="font-medium text-amber-700 sm:col-span-2">{missingRequirements.length} activation requirements missing: {missingRequirements.map((requirement) => requirement.label).join(" · ")}</span> : null}</div>
+                      <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Revision hash {project.configurationIdentity ? `${project.configurationIdentity.slice(0, 8)}…` : "unaccepted"}</span><span>Base {project.baseBranch} · {project.baseSha ? <CommitSha sha={project.baseSha} repository={project.repository} abbreviated={`${project.baseSha.slice(0, 8)}…`} /> : "unaccepted"}</span><span>Target {project.targetBranch} · {project.targetSha ? <CommitSha sha={project.targetSha} repository={project.repository} abbreviated={`${project.targetSha.slice(0, 8)}…`} /> : "unaccepted"}</span><span>{project.requiredChecks.length} required checks</span><span>Defaults: Planner {agents.find((agent) => agent.id === project.roleDefaults.planner)?.name ?? "—"} · Reviewer {agents.find((agent) => agent.id === project.roleDefaults.reviewer)?.name ?? "—"} · Builder {agents.find((agent) => agent.id === project.roleDefaults.builder)?.name ?? "—"} · Integrator {agents.find((agent) => agent.id === project.roleDefaults.integrator)?.name ?? "—"}</span>{project.status === "draft" && missingRequirements.length ? <span className="font-medium text-amber-700 sm:col-span-2">{missingRequirements.length} activation requirements missing: {missingRequirements.map((requirement) => requirement.label).join(" · ")}</span> : null}</div>
                     </CardContent>
                     <CardFooter className="border-t"><div className="flex w-full flex-wrap justify-end gap-1.5">{project.status === "draft" && ready ? <Button size="sm" onClick={() => void changeStatus(project.id, "activate")}>Activate</Button> : null}{project.status === "needs-reactivation" || project.status === "paused" ? <Button size="sm" onClick={() => void changeStatus(project.id, "reactivate")}>Reactivate</Button> : null}{project.status === "active" || project.status === "needs-reactivation" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "pause")}>Pause</Button> : null}{project.status !== "archived" ? <Button variant={project.status === "draft" && !ready ? "default" : "ghost"} size="sm" onClick={() => setSettingsProject(project)}>Configure</Button> : null}{project.status !== "archived" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "archive")}>Archive</Button> : null}<a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></CardFooter>
                     </Card>

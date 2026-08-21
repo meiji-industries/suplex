@@ -109,8 +109,8 @@ beforeEach(async () => {
   auth.setCompanyIssueCode(adminId, companyId, "hmc");
 
   const profile = projects.createProfile(adminId, { name: "Hermes test profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const analyst = projects.createAgent(adminId, { name: "Analyst", role: "analyst", profileId: profile.id });
-  const implementer = projects.createAgent(adminId, { name: "Implementer", role: "implementer", profileId: profile.id });
+  const planner = projects.createAgent(adminId, { name: "Planner", role: "planner", profileId: profile.id });
+  const builder = projects.createAgent(adminId, { name: "Builder", role: "builder", profileId: profile.id });
   const reviewer = projects.createAgent(adminId, { name: "Reviewer", role: "reviewer", profileId: profile.id });
 
   const project = await projects.createProject(adminId, companyId, {
@@ -123,7 +123,7 @@ beforeEach(async () => {
     setupCommand: "pnpm install",
     verificationCommand: "pnpm test",
     requiredChecks: ["Tests / unit"],
-    roleDefaults: { analyst: analyst.id, reviewer: reviewer.id, implementer: implementer.id },
+    roleDefaults: { planner: planner.id, reviewer: reviewer.id, builder: builder.id },
   });
   const active = await projects.activateProject(adminId, project.id);
   projectId = active.id;
@@ -138,7 +138,7 @@ beforeEach(async () => {
     setupCommand: "pnpm install",
     verificationCommand: "pnpm test",
     requiredChecks: ["Tests / unit"],
-    roleDefaults: { analyst: analyst.id, reviewer: reviewer.id, implementer: implementer.id },
+    roleDefaults: { planner: planner.id, reviewer: reviewer.id, builder: builder.id },
   });
   const activeOther = await projects.activateProject(adminId, otherProj.id);
   otherProjectId = activeOther.id;
@@ -154,7 +154,7 @@ beforeEach(async () => {
     setupCommand: "pnpm install",
     verificationCommand: "pnpm test",
     requiredChecks: ["Tests / unit"],
-    roleDefaults: { analyst: analyst.id, reviewer: reviewer.id, implementer: implementer.id },
+    roleDefaults: { planner: planner.id, reviewer: reviewer.id, builder: builder.id },
   });
   crossCompanyProjectId = (await projects.activateProject(adminId, crossProject.id)).id;
 

@@ -16,7 +16,7 @@ export function DevelopmentStatus({ execution, repository }: { execution: Develo
   const completed = execution.status === "completed";
   return (
     <section className="space-y-3" data-developer-status>
-      <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold">Implementer execution</h3><Badge variant={completed ? "secondary" : execution.status === "blocked" || execution.status === "failed" ? "destructive" : "outline"}>{execution.status}</Badge></div>
+      <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold">Builder execution</h3><Badge variant={completed ? "secondary" : execution.status === "blocked" || execution.status === "failed" ? "destructive" : "outline"}>{execution.status}</Badge></div>
       <div className="min-w-0 truncate text-xs text-muted-foreground">Attempt {execution.attempt} · <code title={execution.branchName}>{execution.branchName}</code></div>
       {execution.failureSummary ? <p className="text-xs text-destructive">{execution.failureSummary}</p> : null}
       <Collapsible.Root>

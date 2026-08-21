@@ -56,10 +56,10 @@ test("task API command dispatch preserves revision and evidence lineage", async 
   const projects = new ProjectService(database, auth, config, { localRepository, github });
   const company = auth.createCompany("admin-1", "API Company");
   const profile = projects.createProfile("admin-1", { name: "API profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const analyst = projects.createAgent("admin-1", { name: "Analyst", role: "analyst", profileId: profile.id });
-  const implementer = projects.createAgent("admin-1", { name: "Implementer", role: "implementer", profileId: profile.id });
+  const planner = projects.createAgent("admin-1", { name: "Planner", role: "planner", profileId: profile.id });
+  const builder = projects.createAgent("admin-1", { name: "Builder", role: "builder", profileId: profile.id });
   const reviewer = projects.createAgent("admin-1", { name: "Reviewer", role: "reviewer", profileId: profile.id });
-  const project = await projects.createProject("admin-1", company.id, { name: "API project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, reviewer: reviewer.id, implementer: implementer.id } });
+  const project = await projects.createProject("admin-1", company.id, { name: "API project", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, reviewer: reviewer.id, builder: builder.id } });
   const active = await projects.activateProject("admin-1", project.id);
   const workflow = createWorkflowPortFake({ companyId: company.id, projectId: active.id, projectRevisionId: active.activeRevisionId!, projectState: (state) => {
     database.projectIssueEvent(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: "run", eventId: state.lastEventId, state }));
@@ -121,19 +121,17 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     const capacity = new CapacityManager(database, config);
     const queued = capacity.request({ companyId: company.id, taskId: task.id, workflowId: task.workflowId, turnKind: "lead" });
     const capacityResponse = await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } });
-    expect(capacityResponse.json()).toMatchObject({ capacity: { profileId: profile.id, agentName: "Analyst", status: "queued", position: 1, reason: null, requestedAt: queued.requestedAt, retryAt: null } });
+    expect(capacityResponse.json()).toMatchObject({ capacity: { profileId: profile.id, agentName: "Planner", status: "queued", position: 1, reason: null, requestedAt: queued.requestedAt, retryAt: null } });
     expect(JSON.stringify(capacityResponse.json().capacity)).not.toMatch(/requestId|laneKey|execution|session|wrapper|process|worktree|command|artifact/i);
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie, origin }, payload: { expectedRevision: 9 } })).statusCode).toBe(409);
     const started = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/start-planning`, headers: { cookie, origin }, payload: { expectedRevision: 0 } });
     expect(started.statusCode).toBe(200);
     expect(acceptedPlanning).toBe(1);
     expect(started.json()).toMatchObject({ phase: "approval", owner: "human", revision: 1, planMaterial: true });
-    const planSubject = { companyId: company.id, issueId: task.id, workflowId: task.workflowId, originalPlanRevision: 1, outputId: "plan-output-api", outputRevision: 1, finalVersion: 1 as const, artifactId: "plan-artifact-api", artifactSha256: "1".repeat(64), leadExecutionId: "lead-execution-api", evidenceManifestArtifactId: "lead-manifest-api", evidenceManifestSha256: "2".repeat(64) };
-    const materiality = { categories: ["user_visible_behavior"], artifactId: "materiality-api", artifactSha256: "3".repeat(64) };
-    const reviewed = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/request-supplemental-review`, headers: { cookie, origin }, payload: { expectedRevision: 1, subject: { originalPlan: planSubject, reviewerProfileId: profile.id, evidenceManifestArtifactId: planSubject.evidenceManifestArtifactId, evidenceManifestSha256: planSubject.evidenceManifestSha256 }, idempotencyKey: "review-api-0001" } });
+    const reviewed = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/request-supplemental-review`, headers: { cookie, origin }, payload: { expectedRevision: 1, idempotencyKey: "review-api-0001" } });
     expect(reviewed.statusCode).toBe(200);
     expect(reviewed.json()).toMatchObject({ phase: "approval", revision: 2, supplementalReviewUsed: true });
-    const approvalPayload = { expectedRevision: 2, subject: { plan: planSubject, materiality, expectedWorkflowRevision: 2 }, note: "Self-approved", idempotencyKey: "approve-api-0001" };
+    const approvalPayload = { expectedRevision: 2, note: "Self-approved", idempotencyKey: "approve-api-0001" };
     const approved = await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: approvalPayload });
     expect(approved.statusCode).toBe(200);
     expect(approved.json()).toMatchObject({ phase: "ready_for_development", owner: "lead", revision: 4 });
@@ -148,7 +146,7 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     database.authQuery((db) => {
       const now = "2026-08-11T00:00:00.000Z";
       for (const artifact of [reviewEvidence, reviewOpinion, developerDelivery, developerEvidence, repairReport, repairEvidence, blockerEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_review_api', ?, ?, ?, 'analyst', 'completed', 1, 'session_lead_api', ?, ?, ?)").run(task.id, company.id, task.workflowId, now, now, reviewEvidence.id);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_review_api', ?, ?, ?, 'planner', 'completed', 1, 'session_lead_api', ?, ?, ?)").run(task.id, company.id, task.workflowId, now, now, reviewEvidence.id);
       db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, created_at) VALUES ('review_api', ?, ?, ?, 1, ?, ?, ?, 'agent_review_api', 'session_lead_api', 'approved', 'Approved API fixture.', ?, ?, ?)").run(task.id, company.id, task.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), reviewOpinion.id, reviewEvidence.id, now);
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_api', ?, ?, ?, 1, 1, 'completed', 'forge/issue/api-task', '/worktree/api-task', ?, 'session_developer_api', ?, ?, ?, ?, 'clean', ?, ?)").run(task.id, company.id, task.workflowId, "a".repeat(40), now, now, "b".repeat(40), "c".repeat(40), developerDelivery.id, developerEvidence.id);
       db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id, lead_execution_id, lead_session_ref, status, correction_attempts, evidence_artifact_id, completed_review_id, created_at, finished_at) VALUES ('attempt_api', ?, ?, ?, 1, ?, ?, ?, 'developer_api', ?, ?, 'agent_review_api', 'session_lead_api', 'completed', 0, ?, 'review_api', ?, ?)").run(task.id, company.id, task.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), developerDelivery.id, developerEvidence.id, reviewEvidence.id, now, now);

@@ -199,7 +199,7 @@ test("a dead agent process fails its execution and frees the ambiguous capacity 
     const capacity = new CapacityManager(value.database, value.config);
     const request = capacity.request(input("task-a", "workflow-task-a:1:developer_execution"));
     expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, process_pid, process_start_identity, started_at) VALUES ('agent-dead', 'task-a', 'company', 'workflow-task-a', 'analyst', 'running', 1, 424242, '424242:Fri 21 Aug 00:47:24 2026', ?)").run(now));
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, process_pid, process_start_identity, started_at) VALUES ('agent-dead', 'task-a', 'company', 'workflow-task-a', 'planner', 'running', 1, 424242, '424242:Fri 21 Aug 00:47:24 2026', ?)").run(now));
     capacity.bindExecution(request.id, { executionKind: "agent", executionId: "agent-dead", sessionRef: "session-dead" });
     capacity.markOwnershipAmbiguous(request.id, "operator killed the stack mid-turn");
 
@@ -220,7 +220,7 @@ test("a live agent process keeps its turn even without a recorded process group"
   const value = await fixture();
   const liveProcess = { inspect: async (pid: number) => ({ pid, processGroupId: pid, processStartIdentity: `${pid}:start`, command: "codex" }), signalGroup: async () => undefined };
   try {
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, process_pid, process_start_identity, wrapper_id, wrapper_path, wrapper_pid, wrapper_start_identity, started_at) VALUES ('agent-live-pid', 'task-a', 'company', 'workflow-task-a', 'analyst', 'running', 1, 4242, '4242:start', 'wrapper-live', '/tmp/wrapper-live', 4241, '4241:start', ?)").run(now));
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, process_pid, process_start_identity, wrapper_id, wrapper_path, wrapper_pid, wrapper_start_identity, started_at) VALUES ('agent-live-pid', 'task-a', 'company', 'workflow-task-a', 'planner', 'running', 1, 4242, '4242:start', 'wrapper-live', '/tmp/wrapper-live', 4241, '4241:start', ?)").run(now));
     expect(await reconcileAgentExecutions(value.database, liveProcess)).toEqual([{ executionId: "agent-live-pid", status: "active", reason: "live-process" }]);
     expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_agent_executions WHERE id = 'agent-live-pid'").get())).toMatchObject({ status: "running" });
   } finally {

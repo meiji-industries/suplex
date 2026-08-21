@@ -74,9 +74,9 @@ test("project API activates valid configuration, redacts typed failures, and pre
     const otherCompany = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin }, payload: { name: "Other Project Company" } })).json() as { id: string };
     const profile = (await app.inject({ method: "POST", url: "/api/admin/profiles", headers: { cookie: adminCookie, origin }, payload: { name: "API profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 } })).json() as { id: string; capacity: number; effectiveCapacity: number };
     expect(profile).toMatchObject({ capacity: 2, effectiveCapacity: 2 });
-    const createAgent = async (name: string, role: "analyst" | "implementer" | "reviewer") => (await app.inject({ method: "POST", url: "/api/admin/agents", headers: { cookie: adminCookie, origin }, payload: { name, role, profileId: profile.id } })).json() as { id: string };
-    const analyst = await createAgent("Analyst", "analyst");
-    const implementer = await createAgent("Implementer", "implementer");
+    const createAgent = async (name: string, role: "planner" | "builder" | "reviewer") => (await app.inject({ method: "POST", url: "/api/admin/agents", headers: { cookie: adminCookie, origin }, payload: { name, role, profileId: profile.id } })).json() as { id: string };
+    const planner = await createAgent("Planner", "planner");
+    const builder = await createAgent("Builder", "builder");
     const reviewer = await createAgent("Reviewer", "reviewer");
     const inheritedCapacity = await app.inject({ method: "PATCH", url: `/api/admin/profiles/${profile.id}/capacity`, headers: { cookie: adminCookie, origin }, payload: { capacity: null } });
     expect(inheritedCapacity.json()).toMatchObject({ capacity: null, effectiveCapacity: config.externalTurnCapacity });
@@ -95,7 +95,7 @@ test("project API activates valid configuration, redacts typed failures, and pre
     expect(invalidUrl.statusCode).toBe(422);
     expect(invalidUrl.json()).toMatchObject({ error: "GitHub repository URL is invalid", findings: [expect.objectContaining({ field: "repositoryUrl" })] });
     expect(JSON.stringify(invalidUrl.json())).not.toContain("token@");
-    const configuration = { name: "Direct GitHub", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id } };
+    const configuration = { name: "Direct GitHub", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, builder: builder.id, reviewer: reviewer.id } };
     const draft = await app.inject({ method: "POST", url: `/api/companies/${company.id}/projects`, headers: { cookie: adminCookie, origin }, payload: configuration });
     expect(draft.statusCode).toBe(201);
     const project = draft.json() as { id: string; status: string };

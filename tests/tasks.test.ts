@@ -11,7 +11,7 @@ import { ForgeDatabase, projectionStateHash } from "../src/database.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
 import { TaskService, type IssueWorkflowPort } from "../src/tasks.js";
-import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput } from "../src/temporal/issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "../src/temporal/issue-contracts.js";
 
 const localRepository: LocalRepositoryAdapter = { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } };
 const github: GithubAdapter = { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: `https://github.com/${input.nameWithOwner}` }; } };
@@ -33,10 +33,10 @@ async function fixture(): Promise<{ root: string; config: ForgeConfig; database:
   const projects = new ProjectService(database, auth, config, { localRepository, github });
   const company = auth.createCompany("admin-1", "Acme");
   const profile = projects.createProfile("admin-1", { name: "Default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const analyst = projects.createAgent("admin-1", { name: "Analyst", role: "analyst", profileId: profile.id });
-  const implementer = projects.createAgent("admin-1", { name: "Implementer", role: "implementer", profileId: profile.id });
+  const planner = projects.createAgent("admin-1", { name: "Planner", role: "planner", profileId: profile.id });
+  const builder = projects.createAgent("admin-1", { name: "Builder", role: "builder", profileId: profile.id });
   const reviewer = projects.createAgent("admin-1", { name: "Reviewer", role: "reviewer", profileId: profile.id });
-  const project = await projects.createProject("admin-1", company.id, { name: "Forge", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id } });
+  const project = await projects.createProject("admin-1", company.id, { name: "Forge", repositoryPath, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, builder: builder.id, reviewer: reviewer.id } });
   await projects.activateProject("admin-1", project.id);
   const stateByTask = new Map<string, IssueWorkflowState>();
   const workflowInputsByTask = new Map<string, IssueWorkflowInput>();
@@ -97,6 +97,9 @@ async function fixture(): Promise<{ root: string; config: ForgeConfig; database:
       return [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
     },
     async recordProgress(workflowId: string, _input: RecordProgressInput) {
+      return [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
+    },
+    async resyncProjection(workflowId: string, _input: StartPlanningInput) {
       return [...stateByTask.values()].find((state) => state.workflowId === workflowId)!;
     },
     async query(workflowId: string) {
@@ -169,7 +172,7 @@ test("Planning progress reuses the durable agent spool", async () => {
     const spoolRelativePath = `agent-turns/${executionId}/spool.ndjson`;
     await mkdir(join(value.config.runtimeRoot, "agent-turns", executionId), { recursive: true });
     await writeFile(join(value.config.runtimeRoot, spoolRelativePath), `${JSON.stringify({ type: "item.completed", item: { id: "planning-update", type: "agent_message", text: "Inspecting the README." } })}\n`);
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, started_at, heartbeat_at, spool_relative_path) VALUES (?, ?, ?, ?, 'analyst', 'running', 1, 'planning', ?, ?, ?)").run(executionId, created.task.id, value.companyId, created.task.workflowId, startedAt, startedAt, spoolRelativePath));
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, started_at, heartbeat_at, spool_relative_path) VALUES (?, ?, ?, ?, 'planner', 'running', 1, 'planning', ?, ?, ?)").run(executionId, created.task.id, value.companyId, created.task.workflowId, startedAt, startedAt, spoolRelativePath));
 
     const first = value.tasks.getPlanningProgress(value.adminId, created.task.id);
     expect(first).toMatchObject({ status: "running", execution: { id: executionId, status: "running" } });
@@ -295,7 +298,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     expect(first.task.description).toContain("Reproduce");
     expect(first.task.images).toHaveLength(1);
     expect(first.task.supplementalReview).toBe(true);
-    expect(first.task.roleAgents.analyst).toBeTruthy();
+    expect(first.task.roleAgents.planner).toBeTruthy();
     expect(events).toEqual([{ type: "invalidate", taskId: first.task.id, companyId: value.companyId, revision: 0, attentionChanged: false }]);
     const initialSnapshot = value.database.authQuery((db) => db.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(first.task.id) as { state_json: string });
     const initialState = JSON.parse(initialSnapshot.state_json) as IssueWorkflowState;
@@ -314,8 +317,8 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
       expect.objectContaining({ kind: "member", eventType: "member_action", revision: 1, actor: { id: "admin-1", displayName: "Admin", username: "user_v1_admin-1", avatarSeed: "user_v1_admin-1" }, metadata: expect.objectContaining({ command: "start_planning", actionLabel: "Start planning" }) }),
       expect.objectContaining({ kind: "workflow", eventType: "planning_started", revision: 1 }),
     ]);
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, profile_id, model, reasoning_level, service_priority, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'analyst', 'failed', 1, ?, 'gpt-5.6-sol', 'medium', 'standard', '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId, value.profileId));
-    expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "analyst", profileName: "Default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry." })]);
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, profile_id, model, reasoning_level, service_priority, started_at, finished_at, failure_code, failure_summary) VALUES ('agent-visible', ?, ?, ?, 'planner', 'failed', 1, ?, 'gpt-5.6-sol', 'medium', 'standard', '2026-08-11T01:00:00.000Z', '2026-08-11T01:00:02.000Z', 'model-unavailable', 'Select a supported model, then retry.')").run(first.task.id, first.task.companyId, first.task.workflowId, value.profileId));
+    expect(value.tasks.getTask(value.adminId, first.task.id).agentInvocations).toEqual([expect.objectContaining({ id: "agent-visible", role: "planner", profileName: "Default", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", status: "failed", attempt: 1, failureCode: "model-unavailable", failureSummary: "Select a supported model, then retry." })]);
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }

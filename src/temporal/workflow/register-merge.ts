@@ -1,6 +1,7 @@
 import { setHandler } from "@temporalio/workflow";
 import * as contracts from "../issue-contracts.js";
 import * as activityProxies from "./activity-proxies.js";
+import * as stateTransitions from "./state-transitions.js";
 import { applyTargetBaseRevalidation } from "../target-base.js";
 import { developerExecutionId } from "../deterministic-id.js";
 import { issueUpdates } from "../issue-updates.js";
@@ -34,8 +35,16 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
     await ctx.project();
     return ctx.state;
   };
-  setHandler(issueUpdates.resolve_merge_conflict, async (rawInput) => {
+  setHandler(issueUpdates.resolve_merge_conflict, ctx.guarded(async (rawInput) => resolveMergeConflict(ctx, contracts.StartPlanningInputSchema.parse(rawInput))), { validator(rawInput) {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
+    if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
+    if (ctx.state.phase !== "merge_conflict_required" || !ctx.state.allowedCommands.includes("resolve_merge_conflict")) throw new Error("Merge-conflict resolution is not available in the current phase");
+  } });
+
+  ctx.reconcileMergeTurn = reconcileMergeTurn;
+}
+
+export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
     if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "merge_conflict_required") throw new Error("Merge-conflict resolution is not available in the current phase");
     if (!ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.leadSessionRef || !ctx.state.leadOutputArtifactId || !ctx.state.branchName || !ctx.state.forwardMergeId || !ctx.state.forwardMergePriorHead || !ctx.state.forwardMergePriorTree || !ctx.state.forwardMergeTargetBaseSha || !ctx.state.forwardMergeConflictArtifact || typeof ctx.state.forwardMergeConflictFileCount !== "number" || !ctx.state.targetBaseSha) throw new Error("An owned Developer execution and forward-merge evidence are required");
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
@@ -46,7 +55,7 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
       await ctx.project();
       try {
         const plan = await ctx.acquireExternalTurn<contracts.MergeConflictPlanActivityResult>(
-          { operation: "merge_conflict_plan", role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
+          { operation: "merge_conflict_plan", ...stateTransitions.integratorTurn(ctx, "planner"), sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
           (capacityRequestId) => activityProxies.planMergeConflict({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, worktreePath: ctx.state.worktreePath!, branchName: ctx.state.branchName!, forwardMergeId: ctx.state.forwardMergeId!, priorHead: ctx.state.forwardMergePriorHead!, targetBaseSha: ctx.state.forwardMergeTargetBaseSha!, conflictArtifact: ctx.state.forwardMergeConflictArtifact!, conflictFileCount: ctx.state.forwardMergeConflictFileCount!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
           (result) => result.leadExecutionId,
         );
@@ -72,7 +81,7 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
     try {
       const mergeInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, planRevision, ...prior };
       const outcome = await ctx.acquireExternalTurn(
-        { operation: "merge_conflict_resolution", role: "implementer", profileId: ctx.input.roleProfiles.implementer, sessionRef: prior.developerSessionRef, worktreePath: ctx.state.worktreePath },
+        { operation: "merge_conflict_resolution", ...stateTransitions.integratorTurn(ctx, "builder"), sessionRef: prior.developerSessionRef, worktreePath: ctx.state.worktreePath },
         (capacityRequestId) => ctx.supervisedDeveloperTurns
           ? activityProxies.resolveMergeConflictSupervised({ ...mergeInput, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "merge_conflict_resolution", ...(capacityRequestId ? { capacityRequestId } : {}) })
           : activityProxies.resolveMergeConflict({ ...mergeInput, ...(capacityRequestId ? { capacityRequestId } : {}) }).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),
@@ -108,19 +117,12 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
     await ctx.project();
     void command;
     return ctx.state;
-  }, { validator(rawInput) {
-    const command = contracts.StartPlanningInputSchema.parse(rawInput);
-    if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    if (ctx.state.phase !== "merge_conflict_required" || !ctx.state.allowedCommands.includes("resolve_merge_conflict")) throw new Error("Merge-conflict resolution is not available in the current phase");
-  } });
-
-  ctx.reconcileMergeTurn = reconcileMergeTurn;
 }
 
 export function registerMergeReconciliationHandler(ctx: IssueWorkflowContext): void {
-  setHandler(issueUpdates.reconcile_merge, async (rawInput) => {
+  setHandler(issueUpdates.reconcile_merge, ctx.guarded(async (rawInput) => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "manual_merge") throw new Error("Merge reconciliation is not available in the current phase");
     return ctx.reconcileMergeTurn();
-  });
+  }));
 }

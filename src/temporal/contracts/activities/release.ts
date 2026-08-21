@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { ReleaseFailureCodeSchema } from "../../../release-failures.js";
-import { DurableArtifactReferenceSchema, sha, durableId } from "../primitives.js";
+import { ArtifactReferenceSchema, DurableArtifactReferenceSchema, sha, durableId } from "../primitives.js";
 
 export interface PublishReleaseActivityInput {
   taskId: string;
@@ -31,7 +31,7 @@ export const PublishReleaseActivityResultSchema = z.discriminatedUnion("outcome"
   PublishReleaseIdentitySchema.extend({ outcome: z.literal("completed"), releaseId: durableId, baseBranch: z.string().min(1).max(256), pullRequestNumber: z.number().int().positive(), pullRequestUrl: z.string().url().max(2_000), isDraft: z.boolean(), targetBaseSha: sha.optional() }),
   PublishReleaseIdentitySchema.extend({ outcome: z.literal("blocked"), releaseId: durableId.nullable(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.boolean(), code: ReleaseFailureCodeSchema, summary: z.string().max(500), retryAt: z.string().datetime().nullable(), evidenceArtifactId: durableId.nullable(), evidenceArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/).optional() }),
   PublishReleaseIdentitySchema.extend({ outcome: z.literal("base-drift-merged"), releaseId: z.null(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.literal(false), baseDriftMerged: z.literal(true), targetBaseSha: sha, priorHead: sha, forwardMergeId: durableId.optional(), mergeCommit: sha.optional(), tree: sha.optional() }),
-  PublishReleaseIdentitySchema.extend({ outcome: z.literal("base-drift-conflict"), releaseId: z.null(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.literal(false), baseDriftConflict: z.literal(true), targetBaseSha: sha, priorHead: sha, forwardMergeId: durableId.optional(), mergeConflictEvidence: DurableArtifactReferenceSchema.optional(), conflictFiles: z.array(z.string().max(1_000)).max(128).optional(), conflictDiff: z.string().max(80_000).optional() }),
+  PublishReleaseIdentitySchema.extend({ outcome: z.literal("base-drift-conflict"), releaseId: z.null(), pullRequestNumber: z.null(), pullRequestUrl: z.null(), isDraft: z.literal(false), baseDriftConflict: z.literal(true), targetBaseSha: sha, priorHead: sha, forwardMergeId: durableId.optional(), mergeConflictEvidence: DurableArtifactReferenceSchema.optional(), conflictFiles: z.array(z.string().max(1_000)).max(128).optional(), conflictDiff: z.string().max(80_000).optional(), priorTree: sha.optional(), conflictArtifact: ArtifactReferenceSchema.optional(), conflictFileCount: z.number().int().min(1).max(128).optional() }),
 ]);
 export type PublishReleaseActivityResult = z.infer<typeof PublishReleaseActivityResultSchema>;
 

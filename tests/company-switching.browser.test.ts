@@ -78,10 +78,10 @@ test("switching company never renders the previous company's projects under the 
   const alpha = auth.createCompany(admin.id, "Alpha Company");
   const beta = auth.createCompany(admin.id, "Beta Company");
   const profile = projects.createProfile(admin.id, { name: "Switch profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const analyst = projects.createAgent(admin.id, { name: "Analyst", role: "analyst", profileId: profile.id });
-  const implementer = projects.createAgent(admin.id, { name: "Implementer", role: "implementer", profileId: profile.id });
+  const planner = projects.createAgent(admin.id, { name: "Planner", role: "planner", profileId: profile.id });
+  const builder = projects.createAgent(admin.id, { name: "Builder", role: "builder", profileId: profile.id });
   const reviewer = projects.createAgent(admin.id, { name: "Reviewer", role: "reviewer", profileId: profile.id });
-  const projectInput = (name: string, repositoryPath: string, projectWorktreeRoot: string, repository: string) => ({ name, repositoryPath, worktreeRoot: projectWorktreeRoot, repository, baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id } });
+  const projectInput = (name: string, repositoryPath: string, projectWorktreeRoot: string, repository: string) => ({ name, repositoryPath, worktreeRoot: projectWorktreeRoot, repository, baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, builder: builder.id, reviewer: reviewer.id } });
   await projects.createProject(admin.id, alpha.id, projectInput("Alpha-only project", alphaRepository, alphaWorktrees, "acme/alpha"));
   await projects.createProject(admin.id, beta.id, projectInput("Beta-only project", betaRepository, betaWorktrees, "acme/beta"));
 
@@ -149,10 +149,10 @@ test("a scoped not-found after membership removal selects another authorized com
   const alpha = auth.createCompany(admin.id, "Alpha Company");
   const beta = auth.createCompany(admin.id, "Beta Company");
   const profile = projects.createProfile(admin.id, { name: "Reconcile profile", model: "gpt-5.6-sol", reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-  const analyst = projects.createAgent(admin.id, { name: "Analyst", role: "analyst", profileId: profile.id });
-  const implementer = projects.createAgent(admin.id, { name: "Implementer", role: "implementer", profileId: profile.id });
+  const planner = projects.createAgent(admin.id, { name: "Planner", role: "planner", profileId: profile.id });
+  const builder = projects.createAgent(admin.id, { name: "Builder", role: "builder", profileId: profile.id });
   const reviewer = projects.createAgent(admin.id, { name: "Reviewer", role: "reviewer", profileId: profile.id });
-  const projectInput = (name: string, repositoryPath: string, projectWorktreeRoot: string, repository: string) => ({ name, repositoryPath, worktreeRoot: projectWorktreeRoot, repository, baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, implementer: implementer.id, reviewer: reviewer.id } });
+  const projectInput = (name: string, repositoryPath: string, projectWorktreeRoot: string, repository: string) => ({ name, repositoryPath, worktreeRoot: projectWorktreeRoot, repository, baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, builder: builder.id, reviewer: reviewer.id } });
   await projects.createProject(admin.id, alpha.id, projectInput("Alpha member project", alphaRepository, alphaWorktrees, "acme/member-alpha"));
   await projects.createProject(admin.id, beta.id, projectInput("Beta member project", betaRepository, betaWorktrees, "acme/member-beta"));
 

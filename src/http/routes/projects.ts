@@ -10,11 +10,12 @@ export interface ProjectRoutesOptions {
   projects: ProjectService;
 }
 
-function roleDefaults(value: { analyst?: string | undefined; implementer?: string | undefined; reviewer?: string | undefined }): RoleAssignments {
+function roleDefaults(value: { planner?: string | undefined; builder?: string | undefined; reviewer?: string | undefined; integrator?: string | undefined }): RoleAssignments {
   const result: RoleAssignments = {};
-  if (value.analyst !== undefined) result.analyst = value.analyst;
-  if (value.implementer !== undefined) result.implementer = value.implementer;
+  if (value.planner !== undefined) result.planner = value.planner;
+  if (value.builder !== undefined) result.builder = value.builder;
   if (value.reviewer !== undefined) result.reviewer = value.reviewer;
+  if (value.integrator !== undefined) result.integrator = value.integrator;
   return result;
 }
 

@@ -16,10 +16,7 @@ type LegacyReviewResult = {
   reviewArtifact?: contracts.IssueWorkflowState["deliveryReviewArtifact"];
 };
 
-export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void {
-  setHandler(issueUpdates.review_delivery, async (rawInput) => {
-    assertPayloadWithinLimit("delivery review command", rawInput);
-    const command = contracts.StartPlanningInputSchema.parse(rawInput);
+export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
     const reviewing = stateTransitions.reviewingDeliveryState(ctx.state);
     ctx.state = reviewing;
     await ctx.project();
@@ -29,7 +26,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
       const common = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, branchName: ctx.state.branchName! };
       const supersedesReviewId = ctx.state.targetBaseOutcome === "revalidated" ? null : ctx.state.deliveryReviewSupersedesId ?? null;
       result = await ctx.acquireExternalTurn<contracts.DeliveryReviewActivityResult | LegacyReviewResult>(
-        { operation: "delivery_review", role: "analyst", profileId: ctx.input.roleProfiles.analyst, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
+        { operation: "delivery_review", role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
         (capacityRequestId) => activityProxies.reviewDelivery({ ...common, subject, worktreePath: ctx.state.worktreePath!, supersedesReviewId, ...(capacityRequestId ? { capacityRequestId } : {}) }) as unknown as Promise<contracts.DeliveryReviewActivityResult | LegacyReviewResult>,
         (value) => "attemptId" in value ? (value.outcome === "completed" ? value.review.leadExecutionId : value.executionId) : undefined,
       );
@@ -61,16 +58,49 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
     await ctx.project();
     void command;
     return ctx.state;
-  }, { validator(rawInput) {
+}
+
+export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void {
+  setHandler(issueUpdates.review_delivery, ctx.guarded(async (rawInput) => {
+    assertPayloadWithinLimit("delivery review command", rawInput);
+    return reviewDelivery(ctx, contracts.StartPlanningInputSchema.parse(rawInput));
+  }), { validator(rawInput) {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (ctx.state.phase !== "delivery_ready" && ctx.state.phase !== "delivery_blocked") throw new Error("Delivery review is not available in the current phase");
     if (ctx.state.phase === "delivery_blocked" && !ctx.state.deliveryReviewBlockerCode) throw new Error("A review blocker is required before retrying delivery review");
     if (!ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.deliveryArtifactId || !ctx.state.developerEvidenceArtifactId || !ctx.state.leadSessionRef || !ctx.state.leadOutputArtifactId) throw new Error("An exact Developer delivery and Lead session are required before review");
   } });
-  setHandler(issueUpdates.repair_delivery, async (rawInput) => {
+  setHandler(issueUpdates.repair_delivery, ctx.guarded(async (rawInput) => {
     assertPayloadWithinLimit("delivery repair command", rawInput);
+    return repairDelivery(ctx, contracts.StartPlanningInputSchema.parse(rawInput));
+  }), { validator(rawInput) {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
+    if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
+    if (ctx.state.phase !== "repair_required" && ctx.state.phase !== "delivery_blocked") throw new Error("Delivery repair is not available in the current phase");
+    if (!ctx.state.deliveryReviewId || (!ctx.state.deliveryReviewArtifact && ((!ctx.state.deliveryRepairPlan && !ctx.state.deliveryRepairPlanArtifactId) || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open")))) throw new Error("Open blocking findings and a bounded repair plan are required");
+    if (ctx.state.phase === "delivery_blocked" && !ctx.state.deliveryRepairBlockerCode) throw new Error("A repair blocker is required before retrying delivery repair");
+    if ((ctx.state.repairCycle ?? 0) >= ctx.repairCycleLimit) throw new Error("Delivery repair limit is exhausted");
+    if (!ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.leadSessionRef) throw new Error("The prior Developer delivery must be preserved before repair");
+  } });
+  setHandler(issueUpdates.record_delivery_decision, ctx.guarded(async (rawInput) => {
+    assertPayloadWithinLimit("delivery decision command", rawInput);
+    const command = contracts.PlanCommandInputSchema.parse(rawInput);
+    const decision = await activityProxies.recordDeliveryDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, actorUserId: command.actorUserId, note: command.note?.trim() || "Member decision recorded for blocked delivery" });
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_reviewed", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Ready to create a pull request", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, deliveryDecisionArtifactId: decision.artifactId, blocker: null, stateChangedAt: new Date().toISOString() });
+    if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
+    await ctx.project();
+    return ctx.state;
+  }), { validator(rawInput) {
+    const command = contracts.PlanCommandInputSchema.parse(rawInput);
+    if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
+    const legacyRepairDecision = ctx.state.phase === "delivery_blocked" && ctx.state.allowedCommands.includes("repair_delivery");
+    if ((ctx.state.phase !== "repair_required" && ctx.state.phase !== "delivery_blocked") || (!ctx.state.allowedCommands.includes("record_delivery_decision") && !legacyRepairDecision) || !ctx.state.deliveryReviewId) throw new Error("A delivery decision is not available in the current phase");
+  } });
+
+}
+
+export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
     const cycle = ctx.state.targetBaseOutcome === "revalidated" ? 1 : (ctx.state.repairCycle ?? 0) + 1;
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
@@ -111,7 +141,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
     let outcome: Awaited<ReturnType<typeof activityProxies.runDeveloperRepairSupervised>> | { status: "completed"; result: contracts.WorkflowDeveloperRepairResult | LegacyDeveloperRepairResult; resultHash: string };
     try {
       outcome = await ctx.acquireExternalTurn(
-        { operation: "developer_repair", role: "implementer", profileId: ctx.input.roleProfiles.implementer, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
+        { operation: "developer_repair", role: "builder", profileId: ctx.input.roleProfiles.builder, sessionRef: ctx.state.developerSessionRef, worktreePath: ctx.state.worktreePath },
         (capacityRequestId) => ctx.supervisedDeveloperTurns
           ? activityProxies.runDeveloperRepairSupervised({ ...repairInput, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "repair", ...(capacityRequestId ? { capacityRequestId } : {}) })
           : (activityProxies.runDeveloperRepair({ ...repairInput, ...(capacityRequestId ? { capacityRequestId } : {}) }) as unknown as Promise<contracts.WorkflowDeveloperRepairResult | LegacyDeveloperRepairResult>).then((result) => ({ status: "completed" as const, result, resultHash: "legacy" })),
@@ -148,28 +178,4 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
     await ctx.project();
     void command;
     return ctx.state;
-  }, { validator(rawInput) {
-    const command = contracts.StartPlanningInputSchema.parse(rawInput);
-    if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    if (ctx.state.phase !== "repair_required" && ctx.state.phase !== "delivery_blocked") throw new Error("Delivery repair is not available in the current phase");
-    if (!ctx.state.deliveryReviewId || (!ctx.state.deliveryReviewArtifact && ((!ctx.state.deliveryRepairPlan && !ctx.state.deliveryRepairPlanArtifactId) || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open")))) throw new Error("Open blocking findings and a bounded repair plan are required");
-    if (ctx.state.phase === "delivery_blocked" && !ctx.state.deliveryRepairBlockerCode) throw new Error("A repair blocker is required before retrying delivery repair");
-    if ((ctx.state.repairCycle ?? 0) >= ctx.repairCycleLimit) throw new Error("Delivery repair limit is exhausted");
-    if (!ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.leadSessionRef) throw new Error("The prior Developer delivery must be preserved before repair");
-  } });
-  setHandler(issueUpdates.record_delivery_decision, async (rawInput) => {
-    assertPayloadWithinLimit("delivery decision command", rawInput);
-    const command = contracts.PlanCommandInputSchema.parse(rawInput);
-    const decision = await activityProxies.recordDeliveryDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, actorUserId: command.actorUserId, note: command.note?.trim() || "Member decision recorded for blocked delivery" });
-    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_reviewed", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Ready to create a pull request", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, deliveryDecisionArtifactId: decision.artifactId, blocker: null, stateChangedAt: new Date().toISOString() });
-    if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
-    await ctx.project();
-    return ctx.state;
-  }, { validator(rawInput) {
-    const command = contracts.PlanCommandInputSchema.parse(rawInput);
-    if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    const legacyRepairDecision = ctx.state.phase === "delivery_blocked" && ctx.state.allowedCommands.includes("repair_delivery");
-    if ((ctx.state.phase !== "repair_required" && ctx.state.phase !== "delivery_blocked") || (!ctx.state.allowedCommands.includes("record_delivery_decision") && !legacyRepairDecision) || !ctx.state.deliveryReviewId) throw new Error("A delivery decision is not available in the current phase");
-  } });
-
 }

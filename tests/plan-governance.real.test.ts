@@ -60,7 +60,7 @@ interface Ticket07Proof {
   forgeCommitSha: string;
   codexVersion: string;
   model: string;
-  profileSettings: { analyst: string; reviewer: string };
+  profileSettings: { planner: string; reviewer: string };
   productionPath: "api_temporal_activities_sqlite_artifacts";
   leadSessionRef: string;
   reviewerSessionRef: string;
@@ -185,10 +185,10 @@ test("authenticated Ticket 07 production proof is present and complete", async (
     const lead = projects.createProfile("ticket07-admin", { name: "Ticket 07 Lead", model, reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
     const reviewer = projects.createProfile("ticket07-admin", { name: "Ticket 07 Reviewer", model, reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
     const developer = projects.createProfile("ticket07-admin", { name: "Ticket 07 Developer", model, reasoningLevel: "medium", servicePriority: "standard", capacity: 2 });
-    const analyst = projects.createAgent("ticket07-admin", { name: "Analyst", role: "analyst", profileId: lead.id });
-    const implementer = projects.createAgent("ticket07-admin", { name: "Implementer", role: "implementer", profileId: developer.id });
+    const planner = projects.createAgent("ticket07-admin", { name: "Planner", role: "planner", profileId: lead.id });
+    const builder = projects.createAgent("ticket07-admin", { name: "Builder", role: "builder", profileId: developer.id });
     const reviewerAgent = projects.createAgent("ticket07-admin", { name: "Reviewer", role: "reviewer", profileId: reviewer.id });
-    const project = await projects.createProject("ticket07-admin", company.id, { name: "Ticket 07 Fixture Project", repositoryPath, worktreeRoot, repository, baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { analyst: analyst.id, reviewer: reviewerAgent.id, implementer: implementer.id } });
+    const project = await projects.createProject("ticket07-admin", company.id, { name: "Ticket 07 Fixture Project", repositoryPath, worktreeRoot, repository, baseBranch: "main", targetBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: ["Tests / unit"], roleDefaults: { planner: planner.id, reviewer: reviewerAgent.id, builder: builder.id } });
     await projects.activateProject("ticket07-admin", project.id);
     const tasks = new TaskService(database, auth, projects, config);
     app = createApp({ config, auth, projects, tasks, health: {
@@ -240,7 +240,7 @@ test("authenticated Ticket 07 production proof is present and complete", async (
       forgeCommitSha,
       codexVersion,
       model,
-      profileSettings: { analyst: lead.id, reviewer: reviewer.id },
+      profileSettings: { planner: lead.id, reviewer: reviewer.id },
       productionPath: "api_temporal_activities_sqlite_artifacts",
       leadSessionRef: initialPlan.leadSessionRef,
       reviewerSessionRef: reviewerSessionRow.sessionRef,
@@ -280,7 +280,7 @@ test("authenticated Ticket 07 production proof is present and complete", async (
   expect(proof.forgeCommitSha).toMatch(/^[a-f0-9]{40,64}$/i);
   expect(proof.codexVersion).toBeTruthy();
   expect(proof.model).toBeTruthy();
-  expect(proof.profileSettings?.analyst).toBeTruthy();
+  expect(proof.profileSettings?.planner).toBeTruthy();
   expect(proof.profileSettings?.reviewer).toBeTruthy();
   expect(proof.productionPath).toBe("api_temporal_activities_sqlite_artifacts");
   expect(proof.leadSessionRef).toBeTruthy();

@@ -8,7 +8,7 @@ import { DeveloperEvidence, type DeveloperExecutionView } from "../src/frontend/
 import type { TaskResponse } from "../src/http/contracts/tasks.js";
 
 test("labels an agent with its execution profile", () => {
-  expect(invocationActorLabel({ agentName: "Analyst", profileName: "Smart", role: "analyst" })).toBe("Analyst (Smart)");
+  expect(invocationActorLabel({ agentName: "Planner", profileName: "Smart", role: "planner" })).toBe("Planner (Smart)");
 });
 
 test("makes conflict summaries easy to scan", () => {
@@ -30,7 +30,7 @@ test("renders the approved plan as static numbered instructions", () => {
   expect(html).toContain("Plan: Stream progress");
   expect(html).not.toContain("Revision 1");
   expect(html).not.toContain(">Material<");
-  expect(html).not.toContain("Implementer execution");
+  expect(html).not.toContain("Builder execution");
   expect(html).not.toContain("Active command");
   expect(html).not.toContain("Verification receipts");
   expect(html).toContain('data-slot="card-footer"');
@@ -76,12 +76,12 @@ test("labels planning capacity lifecycle entries", () => {
     { id: "planning-active", revision: 2, eventType: "planning_started", metadata: { planningStage: "active" }, createdAt, kind: "workflow" as const },
     { id: "planning-completed", revision: 3, eventType: "planning_started", metadata: { planningStage: "completed" }, createdAt, kind: "workflow" as const },
   ];
-  const html = renderToStaticMarkup(createElement(TaskActivity, { timeline, agentInvocations: [], processing: { agentName: "Analyst", avatarSeed: "default" } }));
+  const html = renderToStaticMarkup(createElement(TaskActivity, { timeline, agentInvocations: [], processing: { agentName: "Planner", avatarSeed: "default" } }));
 
   expect(html).toContain("started planning");
   expect(html).toContain("planning began");
   expect(html).toContain("planning completed");
-  expect(html).toContain("Analyst");
+  expect(html).toContain("Planner");
   expect(html).not.toContain("Forge");
 });
 

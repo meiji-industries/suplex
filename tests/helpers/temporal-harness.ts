@@ -65,7 +65,7 @@ export type TemporalHarness = {
   readonly workerConnection: NativeConnection;
   readonly state: TemporalHarnessState;
   readonly artifacts: TemporalHarnessArtifacts;
-  readonly issueRoleProfiles: { analyst: string; implementer: string };
+  readonly issueRoleProfiles: { planner: string; builder: string };
   readonly ciCalls: Map<string, number>;
   readonly ciPlanInputs: Array<{ leadSessionRef: string; ciAttemptId: string }>;
   readonly ciRepairInputs: Array<{ priorDeveloperSessionRef: string; ciAttemptId: string }>;
@@ -84,7 +84,7 @@ export function createTemporalHarness(): TemporalHarness {
   let workflowBundle: Awaited<ReturnType<typeof buildProductionWorkflowBundle>> | undefined;
   let restartActivitiesFactory: ((database: ForgeDatabase) => ReturnType<typeof createActivities>) | undefined;
   let started = false;
-  const issueRoleProfiles = { analyst: "profile", implementer: "profile" };
+  const issueRoleProfiles = { planner: "profile", builder: "profile" };
   const state: TemporalHarnessState = { planningFailure: false, permanentPlanningFailure: false, permanentPlanningCalls: 0, developerFailure: false, planningMaterial: true, preservedWorktreeCompatibility: null, revisionDisposition: "new", revisionAuthorizationCalls: 0, holdPlanning: false, releasePlanning: () => {}, planningGate: Promise.resolve() };
   const ciCalls = new Map<string, number>();
   const ciPlanInputs: Array<{ leadSessionRef: string; ciAttemptId: string }> = [];

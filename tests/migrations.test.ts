@@ -72,11 +72,11 @@ describe("timestamp migrations", () => {
 
       const now = new Date().toISOString();
       // Valid internal agent
-      database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_int_1', 'internal', 'Analyst 1', 'analyst', 'seed1', ?, ?, ?)").run(profile.id, now, now);
+      database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_int_1', 'internal', 'Planner 1', 'planner', 'seed1', ?, ?, ?)").run(profile.id, now, now);
 
       // Invalid internal agent (missing profile)
       expect(() => {
-        database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_bad_1', 'internal', 'Bad 1', 'analyst', 'seed2', NULL, ?, ?)").run(now, now);
+        database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_bad_1', 'internal', 'Bad 1', 'planner', 'seed2', NULL, ?, ?)").run(now, now);
       }).toThrow(/CHECK constraint/i);
 
       // Invalid internal agent (invalid role)
@@ -89,7 +89,7 @@ describe("timestamp migrations", () => {
 
       // Invalid hermes agent (has role or profile)
       expect(() => {
-        database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_bad_3', 'hermes', 'Bad 3', 'analyst', 'seed4', NULL, ?, ?)").run(now, now);
+        database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_bad_3', 'hermes', 'Bad 3', 'planner', 'seed4', NULL, ?, ?)").run(now, now);
       }).toThrow(/CHECK constraint/i);
       expect(() => {
         database.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES ('agent_bad_4', 'hermes', 'Bad 4', NULL, 'seed4', ?, ?, ?)").run(profile.id, now, now);
@@ -128,8 +128,8 @@ describe("timestamp migrations", () => {
     database.pragma("foreign_keys = ON");
     try {
       const allMigrations = readMigrations(folder);
-      const preCorrectionMigrations = allMigrations.filter((m) => !m.tag.includes("hermes_unified_agent_identity_and_attribution"));
       const correctiveMigration = allMigrations.find((m) => m.tag.includes("hermes_unified_agent_identity_and_attribution"))!;
+      const preCorrectionMigrations = allMigrations.filter((m) => m.createdAt < correctiveMigration.createdAt);
 
       // Apply migrations up to pre-correction
       database.exec(`CREATE TABLE IF NOT EXISTS __drizzle_migrations (
@@ -257,8 +257,8 @@ describe("timestamp migrations", () => {
     database.pragma("foreign_keys = ON");
     try {
       const allMigrations = readMigrations(folder);
-      const preCorrectionMigrations = allMigrations.filter((migration) => !migration.tag.includes("hermes_unified_agent_identity_and_attribution"));
       const correctiveMigration = allMigrations.find((migration) => migration.tag.includes("hermes_unified_agent_identity_and_attribution"))!;
+      const preCorrectionMigrations = allMigrations.filter((migration) => migration.createdAt < correctiveMigration.createdAt);
       database.exec("CREATE TABLE __drizzle_migrations (id SERIAL PRIMARY KEY, hash text NOT NULL, created_at numeric)");
       const insert = database.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
       database.transaction(() => {

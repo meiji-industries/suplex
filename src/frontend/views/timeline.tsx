@@ -14,7 +14,7 @@ import { readJson, withCompany } from "../lib/api.js";
 import type { ApiProject, ApiTask } from "../lib/view-shared.js";
 
 type RangePreset = "today" | "7-days" | "30-days" | "custom";
-type AgentRole = "analyst" | "reviewer" | "implementer";
+type AgentRole = "planner" | "reviewer" | "builder" | "integrator";
 type TimelineRange = { start: number; end: number };
 
 export type TimelineTask = Pick<ApiTask, "id" | "projectId" | "issueKey" | "title" | "agentInvocations">;
@@ -65,8 +65,9 @@ export type WorkTimelineSummary = {
 };
 
 const roleColors: Record<AgentRole, string> = {
-  analyst: "bg-blue-500",
-  implementer: "bg-amber-500",
+  planner: "bg-blue-500",
+  builder: "bg-amber-500",
+  integrator: "bg-emerald-500",
   reviewer: "bg-violet-500",
 };
 

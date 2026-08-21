@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { independentVerificationResults, isLegacyReceiptOnlyRecovery, reconcileDeveloperDelivery } from "../src/developer-reconciliation.js";
+import { developerReconciliationSummary, independentVerificationResults, isLegacyReceiptOnlyRecovery, reconcileDeveloperDelivery } from "../src/developer-reconciliation.js";
 
 const git = { branch: "work/issue/task_1", head: "b".repeat(40), tree: "c".repeat(40), status: "", parents: ["a".repeat(40)], commitCount: 1, isDescendant: true, changedPaths: ["README.md"] };
 const report = { kind: "delivery" as const, summary: "Delivered", steps: [{ number: 1, status: "completed" as const, filesChanged: ["README.md"], notes: "done" }], authorizedStepsNotCompleted: [], resultCommit: git.head, resultTree: git.tree, dirtyState: "clean" as const, blocker: null };
@@ -87,6 +87,15 @@ test("derives plan completion from the static manifest and report", () => {
 
   const blocked = reconcileDeveloperDelivery(input({ report: { ...report, steps: [{ ...report.steps[0], status: "blocked" }], authorizedStepsNotCompleted: [1], blocker: "blocked" } }));
   expect(blocked.mismatches).toContain("non-completed-step");
+});
+
+test("accepts an honest partial report and surfaces the Developer blocker", () => {
+  const partial = { ...report, steps: [{ ...report.steps[0], status: "incomplete" as const, notes: "blocked locally" }], authorizedStepsNotCompleted: [1], blocker: "Local environment lacks the 1Password CLI and a reachable Docker daemon." };
+  const result = reconcileDeveloperDelivery(input({ report: partial }));
+  expect(result.report).toEqual(partial);
+  expect(result.mismatches).not.toContain("raw-report-schema-invalid");
+  expect(result).toMatchObject({ outcome: "blocked", failureCode: "non-completed-step" });
+  expect(developerReconciliationSummary(result)).toBe("Developer could not complete step 1: Local environment lacks the 1Password CLI and a reachable Docker daemon.");
 });
 
 test("keeps an invalid delivery report as a diagnostic when required tests pass", () => {

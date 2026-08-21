@@ -59,7 +59,24 @@ test("returns a typed failure without running verification after setup failure",
     },
   });
   expect(calls).toEqual(["pnpm"]);
-  expect(result).toMatchObject({ outcome: "failed", code: "verification_failed", summary: "pnpm install did not complete successfully: error: setup failed" });
+  expect(result).toMatchObject({ outcome: "failed", code: "verification_failed" });
+  expect(result.summary).toContain("pnpm install did not complete successfully: error: setup failed");
+  expect(result.summary).toContain("Check the project's verification command.");
+  expect(result.summary).toContain("Output tail:\nbuilding\nerror: setup failed");
+});
+
+test("includes a redacted bounded output tail when final verification fails", async () => {
+  const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "pnpm install", verificationCommand: "pnpm test" }, {
+    guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
+    execute: async (_command, args) => {
+      if (args[0] === "install") return { stdout: "", stderr: "" };
+      throw Object.assign(new Error("missing manifest"), { code: 1, stderr: "ERR_PNPM_NO_PKG_MANIFEST No package.json found\nBearer gho_secret" });
+    },
+  });
+  expect(result.summary).toContain("pnpm test did not complete successfully");
+  expect(result.summary).toContain("ERR_PNPM_NO_PKG_MANIFEST No package.json found");
+  expect(result.summary).toContain("Check the project's verification command.");
+  expect(result.summary).not.toContain("gho_secret");
 });
 
 test("preserves a successful verification with bounded command output", async () => {

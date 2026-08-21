@@ -81,6 +81,17 @@ export interface DeveloperReconciliation {
   sha256: string;
 }
 
+/** Produces the user-facing explanation for a reconciliation result. */
+export function developerReconciliationSummary(reconciliation: Pick<DeveloperReconciliation, "outcome" | "failureCode" | "mismatches" | "report" | "independentVerification">): string {
+  const incompleteStep = reconciliation.report?.steps.find((step) => step.status !== "completed");
+  if (reconciliation.outcome === "blocked" && incompleteStep && reconciliation.report?.blocker) {
+    return `Developer could not complete step ${incompleteStep.number}: ${reconciliation.report.blocker}`;
+  }
+  if (reconciliation.failureCode === "developer-made-no-change") return "Developer made no change";
+  if (reconciliation.outcome === "completed") return reconciliation.report?.summary ?? "Developer delivery reconciled";
+  return `Developer delivery could not be accepted: ${reconciliation.mismatches.join(", ") || "reconciliation failed"}.${reconciliation.independentVerification?.outcome === "failed" ? ` Independent verification: ${reconciliation.independentVerification.summary}` : ""}`;
+}
+
 const GitObservationSchema = z.object({
   branch: z.string(),
   head: z.string(),
@@ -213,7 +224,7 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
   // Audit observations remain durable diagnostics; only required local checks and
   // unsafe worktree state decide whether delivery can continue.
   const requiredTestsFailed = !independentVerification || independentVerification.outcome !== "passed";
-  const blockingMismatch = ["developer-made-no-change", "dirty-final-tree", "branch-mismatch"].find((code) => uniqueMismatches.includes(code));
+  const blockingMismatch = ["developer-made-no-change", "dirty-final-tree", "branch-mismatch", "non-completed-step"].find((code) => uniqueMismatches.includes(code));
   const result: Omit<DeveloperReconciliation, "sha256"> = {
     kind: "developer-reconciliation",
     policyVersion: 2,

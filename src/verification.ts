@@ -25,7 +25,8 @@ const boundedEvidence = (commands: VerificationCommandEvidence[]): VerificationC
 const failureSummary = (display: string, stdout: string, stderr: string): string => {
   const lines = `${stdout}\n${stderr}`.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
   const detail = [...lines].reverse().find((line) => /^(?:error(?::|\[)|fatal:|failures:|test result: FAILED|thread .+ panicked|command timed out)/i.test(line));
-  return `${display} did not complete successfully${detail ? `: ${detail.slice(0, 240)}` : ""}`;
+  const outputTail = truncateBytes(lines.slice(-40).join("\n"), 3 * 1024);
+  return `${display} did not complete successfully${detail ? `: ${detail.slice(0, 240)}` : ""}. Check the project's verification command.${outputTail ? `\nOutput tail:\n${outputTail}` : ""}`;
 };
 
 const commands = new Map<string, readonly string[]>([

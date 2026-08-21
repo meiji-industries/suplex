@@ -168,7 +168,7 @@ export const DeveloperDeliverySchema = z.object({
   summary: z.string().min(1).max(2_000),
   steps: z.array(z.object({
     number: z.number().int().positive(),
-    status: z.enum(["completed", "not_completed", "blocked"]),
+    status: z.enum(["completed", "incomplete", "not_completed", "blocked"]),
     filesChanged: z.array(z.string().max(500)).max(128),
     notes: z.string().max(4_000),
   })).min(1).max(64),

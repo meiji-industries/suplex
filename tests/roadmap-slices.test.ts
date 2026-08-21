@@ -217,14 +217,17 @@ test("CI attempt idempotency avoids a second provider call and success resets tr
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("release blocks when GitHub reports any contradictory pull request for the exact branch identity", async () => {
+test("release adopts an existing open pull request for the branch identity", async () => {
   const value = await fixture();
   try {
     addReleaseFixtures(value.database);
     const github = fakeGithub();
     github.listPullRequests = async () => [pullRequest(), pullRequest({ number: 13, url: "https://github.com/acme/forge/pull/13", isDraft: false })];
     const service = new ReleaseService(value.database, new ArtifactStore(value.config.artifactRoot), github);
-    await expect(service.publish({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", coordinates: { projectRevisionId: "revision-a", repositoryPath: value.root, worktreePath: value.root, repository: "acme/forge", owner: "acme", headBranch: "issue/task-a", baseBranch: "main", expectedBaseSha: baseSha }, reviewedRevision: { reviewId: "review-a", developerExecutionId: "developer-a", commitSha: headSha, treeSha }, taskTitle: "Task A", delivery: {} })).rejects.toMatchObject({ code: "ambiguous-provider-state" });
+    const release = await service.publish({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", coordinates: { projectRevisionId: "revision-a", repositoryPath: value.root, worktreePath: value.root, repository: "acme/forge", owner: "acme", headBranch: "issue/task-a", baseBranch: "main", expectedBaseSha: baseSha }, reviewedRevision: { reviewId: "review-a", developerExecutionId: "developer-a", commitSha: headSha, treeSha }, taskTitle: "Task A", delivery: {} });
+    expect(release).toMatchObject({ reused: true, pullRequest: { number: 12, isDraft: true } });
+    expect(github.createdInput).toBeNull();
+    expect(github.updated).toBe(0);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -253,8 +256,8 @@ test("release reconciles push and create timeouts after success without duplicat
     const first = await service.publish(input);
     const second = await service.publish(input);
     expect(second).toMatchObject({ releaseId: first.releaseId, reused: true, attempt: 1, pullRequest: { number: first.pullRequest.number } });
-    expect({ pushes, creates, updates }).toEqual({ pushes: 1, creates: 1, updates: 1 });
-    expect(value.database.authQuery((db) => db.prepare("SELECT kind, status, attempt FROM forge_provider_operations WHERE release_key = (SELECT release_key FROM forge_releases WHERE id = ?) ORDER BY kind").all(first.releaseId))).toEqual([{ kind: "create-draft-pr", status: "completed", attempt: 1 }, { kind: "push", status: "completed", attempt: 1 }, { kind: "update-draft-pr", status: "completed", attempt: 1 }]);
+    expect({ pushes, creates, updates }).toEqual({ pushes: 1, creates: 1, updates: 0 });
+    expect(value.database.authQuery((db) => db.prepare("SELECT kind, status, attempt FROM forge_provider_operations WHERE release_key = (SELECT release_key FROM forge_releases WHERE id = ?) ORDER BY kind").all(first.releaseId))).toEqual([{ kind: "create-draft-pr", status: "completed", attempt: 1 }, { kind: "push", status: "completed", attempt: 1 }]);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

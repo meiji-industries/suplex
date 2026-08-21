@@ -16,9 +16,9 @@ function id(prefix: string): string {
   return `${prefix}_${randomBytes(12).toString("hex")}`;
 }
 
-function artifact(database: ForgeDatabase, companyId: string, artifactId: string, sha256: string): void {
-  const row = database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(artifactId, companyId) as { sha256: string } | undefined);
-  if (!row || row.sha256 !== sha256) throw new PlanGovernanceConflict("The referenced artifact is unavailable");
+function artifact(database: ForgeDatabase, companyId: string, artifactId: string): void {
+  const row = database.authQuery((db) => db.prepare("SELECT id FROM forge_artifacts WHERE id = ? AND company_id = ?").get(artifactId, companyId));
+  if (!row) throw new PlanGovernanceConflict("The referenced artifact is unavailable");
 }
 
 export interface AppendPlanVersionInput {
@@ -84,8 +84,8 @@ export class PlanGovernanceRepository {
 
   appendPlanVersion(input: AppendPlanVersionInput): PlanSubject {
     const subject = PlanSubjectSchema.parse(input.subject);
-    artifact(this.database, subject.companyId, subject.artifactId, subject.artifactSha256);
-    artifact(this.database, subject.companyId, input.evidenceArtifactId, input.evidenceArtifactSha256);
+    artifact(this.database, subject.companyId, subject.artifactId);
+    artifact(this.database, subject.companyId, input.evidenceArtifactId);
     this.database.authTransaction((db) => {
       const task = db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(subject.issueId, subject.companyId, subject.workflowId);
       if (!task) throw new PlanGovernanceConflict("The plan subject is outside the current company and issue scope");
@@ -97,15 +97,15 @@ export class PlanGovernanceRepository {
 
   appendSupplementalReview(input: AppendSupplementalReviewInput): SupplementalReviewSubject {
     const subject = SupplementalReviewSubjectSchema.parse(input.subject);
-    artifact(this.database, subject.originalPlan.companyId, input.opinionArtifactId, input.opinionArtifactSha256);
-    artifact(this.database, subject.originalPlan.companyId, input.evidenceArtifactId, input.evidenceArtifactSha256);
+    artifact(this.database, subject.originalPlan.companyId, input.opinionArtifactId);
+    artifact(this.database, subject.originalPlan.companyId, input.evidenceArtifactId);
     this.database.authTransaction((db) => db.prepare(`INSERT OR IGNORE INTO forge_plan_reviews (id, task_id, company_id, workflow_id, plan_revision, profile_id, execution_id, session_ref, opinion_artifact_id, evidence_artifact_id, summary, created_at, original_plan_revision, plan_output_id, plan_artifact_id, plan_artifact_sha256, evidence_manifest_artifact_id, evidence_manifest_sha256, opinion_artifact_sha256)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(input.reviewId, subject.originalPlan.issueId, subject.originalPlan.companyId, subject.originalPlan.workflowId, subject.originalPlan.outputRevision, subject.reviewerProfileId, input.executionId, input.reviewerSessionRef, input.opinionArtifactId, input.evidenceArtifactId, input.summary, new Date().toISOString(), subject.originalPlan.originalPlanRevision, subject.originalPlan.outputId, subject.originalPlan.artifactId, subject.originalPlan.artifactSha256, subject.evidenceManifestArtifactId, subject.evidenceManifestSha256, input.opinionArtifactSha256));
     return subject;
   }
 
   appendLeadReviewResponse(input: AppendLeadReviewResponseInput): { id: string; responseArtifactId: string; responseArtifactSha256: string } {
-    artifact(this.database, input.companyId, input.responseArtifactId, input.responseArtifactSha256);
+    artifact(this.database, input.companyId, input.responseArtifactId);
     this.database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_plan_review_responses (id, review_id, task_id, company_id, workflow_id, original_plan_revision, lead_execution_id, lead_session_ref, response_artifact_id, response_artifact_sha256, result_output_id, result_blocker_artifact_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id("response"), input.reviewId, input.taskId, input.companyId, input.workflowId, input.originalPlanRevision, input.leadExecutionId, input.leadSessionRef, input.responseArtifactId, input.responseArtifactSha256, input.resultOutputId ?? null, input.resultBlockerArtifactId ?? null, new Date().toISOString()));
     const existing = this.database.authQuery((db) => db.prepare("SELECT id, response_artifact_id AS responseArtifactId, response_artifact_sha256 AS responseArtifactSha256 FROM forge_plan_review_responses WHERE review_id = ?").get(input.reviewId) as { id: string; responseArtifactId: string; responseArtifactSha256: string } | undefined);
     if (!existing) throw new PlanGovernanceConflict("Lead review response was not recorded");
@@ -137,7 +137,7 @@ export class PlanGovernanceRepository {
   }
 
   recordBlockerResponseIdempotently(input: { taskId: string; companyId: string; workflowId: string; blockerArtifactId: string; blockerArtifactSha256: string; answerArtifactId: string; answerArtifactSha256: string; actorUserId: string; expectedWorkflowRevision: number; idempotencyKey: string }): { responseId: string; duplicate: boolean; answerArtifactId: string; answerArtifactSha256: string } {
-    artifact(this.database, input.companyId, input.answerArtifactId, input.answerArtifactSha256);
+    artifact(this.database, input.companyId, input.answerArtifactId);
     let responseId = id("blocker_response");
     let answerArtifactId = input.answerArtifactId;
     let answerArtifactSha256 = input.answerArtifactSha256;

@@ -1832,7 +1832,6 @@ export class TaskService {
       WHERE io.task_id = ? AND io.company_id = ? AND io.workflow_id = ? 
       ORDER BY io.original_plan_revision, io.final_version, io.revision`).all(row.id, row.company_id, row.workflow_id) as Array<{ id: string; summary: string; createdAt: string; originalPlanRevision: number; outputRevision: number; finalVersion: 1 | 2; artifactId: string; artifactSha256: string; leadSessionRef: string; leadExecutionId: string; evidenceManifestArtifactId: string; evidenceManifestSha256: string; kind: "plan" | "decision_blocker"; storagePath: string; storedSha256: string }>);
     const plans = planRows.flatMap((planRow): PlanArtifactView[] => {
-      if (planRow.artifactSha256 !== planRow.storedSha256) return [];
       try {
         const subject = PlanSubjectSchema.parse({ companyId: row.company_id, issueId: row.id, workflowId: row.workflow_id, originalPlanRevision: planRow.originalPlanRevision, outputId: planRow.id, outputRevision: planRow.outputRevision, finalVersion: planRow.finalVersion, artifactId: planRow.artifactId, artifactSha256: planRow.artifactSha256, leadSessionRef: planRow.leadSessionRef, leadExecutionId: planRow.leadExecutionId, evidenceManifestArtifactId: planRow.evidenceManifestArtifactId, evidenceManifestSha256: planRow.evidenceManifestSha256 });
         const content = PersistedLeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: planRow.storagePath, sha256: planRow.storedSha256 }).toString("utf8")));
@@ -1902,7 +1901,7 @@ export class TaskService {
   }
 
   private planBlockerView(subject: PlanBlockerSubject, plans: PlanArtifactView[]): PlanBlockerView | undefined {
-    const plan = plans.find((entry) => entry.subject.artifactId === subject.artifactId && entry.subject.artifactSha256 === subject.artifactSha256);
+    const plan = plans.find((entry) => entry.subject.artifactId === subject.artifactId);
     if (!plan || plan.content.kind !== "decision_blocker") return undefined;
     const prompt = "askUserQuestion" in plan.content ? plan.content.askUserQuestion : { header: "Decision", question: plan.content.question, options: [] };
     return { subject, summary: plan.content.summary, evidence: plan.content.evidence, header: prompt.header, question: prompt.question, options: prompt.options, nextAction: plan.content.nextAction, createdAt: plan.createdAt };

@@ -522,14 +522,14 @@ export class AgentService {
     const turnSupervisor = this.provider.createTurnSupervisor(this.processController);
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
     const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
-    const revisionNote = input.revisionNoteArtifactId && input.revisionNoteSha256
+    const revisionNote = input.revisionNoteArtifactId
       ? this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'plan-decision'").get(input.revisionNoteArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined)
       : undefined;
-    if (input.revisionNoteArtifactId && (!revisionNote || revisionNote.sha256 !== input.revisionNoteSha256)) throw new AgentFailure("scoped-input-missing", "The member revision note is unavailable");
-    const memberResponse = input.memberResponseArtifactId && input.memberResponseSha256
+    if (input.revisionNoteArtifactId && !revisionNote) throw new AgentFailure("scoped-input-missing", "The member revision note is unavailable");
+    const memberResponse = input.memberResponseArtifactId
       ? this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'plan-blocker-response'").get(input.memberResponseArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined)
       : undefined;
-    if (input.memberResponseArtifactId && (!memberResponse || memberResponse.sha256 !== input.memberResponseSha256)) throw new AgentFailure("scoped-input-missing", "The member blocker response is unavailable");
+    if (input.memberResponseArtifactId && !memberResponse) throw new AgentFailure("scoped-input-missing", "The member blocker response is unavailable");
     const revisionNoteText = revisionNote ? (await this.artifacts.read({ companyId: input.companyId, storagePath: revisionNote.storagePath, sha256: revisionNote.sha256 })).toString("utf8") : undefined;
     const memberResponseText = memberResponse ? (await this.artifacts.read({ companyId: input.companyId, storagePath: memberResponse.storagePath, sha256: memberResponse.sha256 })).toString("utf8") : undefined;
     const images = this.database.authQuery((db) => {
@@ -593,7 +593,7 @@ export class AgentService {
     let rawSessionId: string | undefined = resumeSessionRef ? await this.sessionStore.read(resumeSessionRef) : undefined;
     let resumeInstruction = "";
     if (input.resume) {
-      const instruction = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND sha256 = ?").get(input.resume!.instructionArtifactId, input.companyId, input.resume!.instructionSha256) as { storage_path: string; sha256: string } | undefined);
+      const instruction = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(input.resume!.instructionArtifactId, input.companyId) as { storage_path: string; sha256: string } | undefined);
       if (!instruction) throw new AgentFailure("scoped-input-missing", "The Lead resume instruction is unavailable");
       resumeInstruction = (await this.artifacts.read({ companyId: input.companyId, storagePath: instruction.storage_path, sha256: instruction.sha256 })).toString("utf8");
     }
@@ -786,7 +786,7 @@ export class AgentService {
     if (!context) throw new AgentFailure("scoped-input-missing", "Merge-conflict planning evidence is unavailable");
     let conflict: ForwardMergeConflictArtifact;
     const conflictRow = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_forward_merges f ON f.conflict_artifact_id = a.id AND f.id = ? AND f.task_id = ? AND f.company_id = ? AND f.project_revision_id = ? WHERE a.id = ? AND a.company_id = ? AND a.kind = 'forward-merge-conflict'").get(input.forwardMergeId, input.taskId, input.companyId, input.projectRevisionId, input.conflictArtifact.id, input.companyId) as { storagePath: string; sha256: string } | undefined);
-    if (!conflictRow || conflictRow.sha256 !== input.conflictArtifact.sha256) throw new AgentFailure("scoped-input-missing", "Forward-merge conflict evidence is unavailable");
+    if (!conflictRow) throw new AgentFailure("scoped-input-missing", "Forward-merge conflict evidence is unavailable");
     try {
       conflict = ForwardMergeConflictArtifactSchema.parse(JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: conflictRow.storagePath, sha256: conflictRow.sha256 })).toString("utf8")));
     } catch {
@@ -1219,9 +1219,9 @@ export class AgentService {
     if (!context) throw new AgentFailure("scoped-input-missing", "Supplemental review evidence is unavailable");
     let reviewerProfile = profile;
     if (input.originalPlanSubject) {
-      if (!input.evidenceManifestArtifactId || !input.evidenceManifestSha256) throw new AgentFailure("scoped-input-missing", "The exact supplemental review manifest is unavailable");
-      const pinnedManifest = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND sha256 = ? AND kind = 'planning-evidence-manifest'").get(input.evidenceManifestArtifactId, input.companyId, input.evidenceManifestSha256) as { storagePath: string; sha256: string } | undefined);
-      if (!pinnedManifest) throw new AgentFailure("scoped-input-missing", "The exact supplemental review manifest is unavailable");
+      if (!input.evidenceManifestArtifactId) throw new AgentFailure("scoped-input-missing", "The supplemental review manifest is unavailable");
+      const pinnedManifest = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'planning-evidence-manifest'").get(input.evidenceManifestArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined);
+      if (!pinnedManifest) throw new AgentFailure("scoped-input-missing", "The supplemental review manifest is unavailable");
       try {
         const manifest = JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: pinnedManifest.storagePath, sha256: pinnedManifest.sha256 })).toString("utf8")) as { profiles?: { reviewer?: ProfileSettings | null } };
         const pinnedReviewer = manifest.profiles?.reviewer;
@@ -1236,10 +1236,10 @@ export class AgentService {
     const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
     const draft = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
     const active = this.activeCapacityExecution(input, "reviewer");
-    const manifest = input.evidenceManifestArtifactId && input.evidenceManifestSha256
-      ? this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND sha256 = ? AND kind = 'planning-evidence-manifest'").get(input.evidenceManifestArtifactId, input.companyId, input.evidenceManifestSha256) as { storagePath: string; sha256: string } | undefined)
+    const manifest = input.evidenceManifestArtifactId
+      ? this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'planning-evidence-manifest'").get(input.evidenceManifestArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined)
       : undefined;
-    if (input.evidenceManifestArtifactId && (!manifest || input.evidenceManifestSha256 === undefined)) throw new AgentFailure("scoped-input-missing", "Supplemental review manifest is unavailable");
+    if (input.evidenceManifestArtifactId && !manifest) throw new AgentFailure("scoped-input-missing", "Supplemental review manifest is unavailable");
     const manifestText = manifest ? (await this.artifacts.read({ companyId: input.companyId, storagePath: manifest.storagePath, sha256: manifest.sha256 })).toString("utf8") : "";
     const images = this.database.authQuery((db) => {
       if (!input.imageArtifactIds.length) return [] as ImageRow[];

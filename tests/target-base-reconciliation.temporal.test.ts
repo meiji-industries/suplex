@@ -4,8 +4,8 @@ import { TestWorkflowEnvironment } from "@temporalio/testing";
 import { Worker } from "@temporalio/worker";
 import { afterEach, expect, test } from "vitest";
 
-import type { IssueActivities, IssueWorkflowInput, ReconcileTargetBaseActivityInput, ReconcileTargetBaseActivityResult, TargetBaseCheckpoint } from "../src/temporal/issue-contracts.js";
-import { acceptDeliveryUpdate, cancelIssueUpdate, finalReviewUpdate, issueWorkflow, publishDraftUpdate, resolveMergeConflictUpdate, retryForwardMergeVerificationUpdate } from "../src/temporal/workflows.js";
+import type { IssueActivities, IssueWorkflowInput, IssueWorkflowState, ReconcileTargetBaseActivityInput, ReconcileTargetBaseActivityResult, TargetBaseCheckpoint } from "../src/temporal/issue-contracts.js";
+import { acceptDeliveryUpdate, cancelIssueUpdate, finalReviewUpdate, issueWorkflow, retryForwardMergeVerificationUpdate } from "../src/temporal/workflows.js";
 import { createImmediateCapacityActivities } from "./immediate-capacity-activities.js";
 
 const base = "a".repeat(40);
@@ -104,16 +104,33 @@ function resultFor(input: ReconcileTargetBaseActivityInput, outcome: "no_drift" 
   };
 }
 
+// delivery_reviewed auto-chains straight into publish_draft from the main loop, so the
+// pinned revision the test seeded is stale before any explicit update reaches the
+// Workflow. Some of the phases that chain produces (delivery_ready, for instance) are
+// themselves auto-chained onward, so a live issueState query can race past them. The
+// projection fake sees every phase the moment it is written, so wait on that instead and
+// read the fresh revision off the projected state.
+async function awaitProjectedPhase(projections: IssueWorkflowState[], workflowId: string, phase: string): Promise<IssueWorkflowState> {
+  const start = Date.now();
+  while (Date.now() - start < 30_000) {
+    const found = projections.find((state) => state.workflowId === workflowId && state.phase === phase);
+    if (found) return found;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for ${workflowId} to reach phase ${phase}`);
+}
+
 test("time-skipping Workflows apply the same target-base contract at release, final review, and acceptance and replay every history", { timeout: 120_000 }, async () => {
   environment = await TestWorkflowEnvironment.createTimeSkipping();
   const histories: Array<{ history: Parameters<typeof Worker.runReplayHistory>[1]; workflowId: string }> = [];
   const outcomes = new Map<string, "no_drift" | "revalidated" | "provider" | "race" | "verification_then_pass" | "conflict">();
   const failConflictPlanning = new Map<string, boolean>();
   const attempts = new Map<string, number>();
+  const projections: IssueWorkflowState[] = [];
   const capacity = createImmediateCapacityActivities();
   const activities: Partial<IssueActivities> = {
     ...capacity.activities,
-    projectIssueState: async (event) => event.state,
+    projectIssueState: async (event) => { projections.push(structuredClone(event.state)); return event.state; },
     reconcileTargetBase: async (activityInput) => {
       const configured = outcomes.get(activityInput.taskId) ?? "no_drift";
       attempts.set(activityInput.taskId, (attempts.get(activityInput.taskId) ?? 0) + 1);
@@ -147,7 +164,7 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
         const handle = await environment.client.workflow.start(issueWorkflow, { workflowId: workflowInput.workflowId, taskQueue: "target-base-time-skipping", args: [workflowInput] });
         const command = { expectedRevision: 10, actorUserId: "member_test" };
         const state = checkpoint === "pre_release"
-          ? await handle.executeUpdate(publishDraftUpdate, { args: [command] })
+          ? await awaitProjectedPhase(projections, workflowInput.workflowId, outcome === "no_drift" ? "ci_waiting" : "delivery_ready")
           : checkpoint === "pre_final_review"
             ? await handle.executeUpdate(finalReviewUpdate, { args: [command] })
             : await handle.executeUpdate(acceptDeliveryUpdate, { args: [command] });
@@ -166,7 +183,7 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
       outcomes.set(issueId, blocker);
       const workflowInput = input(issueId, "pre_release");
       const handle = await environment.client.workflow.start(issueWorkflow, { workflowId: workflowInput.workflowId, taskQueue: "target-base-time-skipping", args: [workflowInput] });
-      const blocked = await handle.executeUpdate(publishDraftUpdate, { args: [{ expectedRevision: 10, actorUserId: "member_test" }] });
+      const blocked = await awaitProjectedPhase(projections, workflowInput.workflowId, "delivery_blocked");
       expect(blocked).toMatchObject({ phase: "delivery_blocked", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], targetBaseBlockerCode: blocker === "provider" ? "provider_unavailable" : "base_advanced_again" });
       const cancelled = await handle.executeUpdate(cancelIssueUpdate, { args: [{ expectedRevision: blocked.revision, actorUserId: "member_test" }] });
       expect(cancelled).toMatchObject({ phase: "cancelled", allowedCommands: ["continue_work"] });
@@ -177,7 +194,7 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
     outcomes.set(retryIssue, "verification_then_pass");
     const retryInput = input(retryIssue, "pre_release");
     const retryHandle = await environment.client.workflow.start(issueWorkflow, { workflowId: retryInput.workflowId, taskQueue: "target-base-time-skipping", args: [retryInput] });
-    const blocked = await retryHandle.executeUpdate(publishDraftUpdate, { args: [{ expectedRevision: 10, actorUserId: "member_test" }] });
+    const blocked = await awaitProjectedPhase(projections, retryInput.workflowId, "delivery_blocked");
     expect(blocked).toMatchObject({ phase: "delivery_blocked", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], resultCommit: mergedHead, resultTree: mergedTree, developerRecoveryStatus: null, developerRecoverySummary: null });
     const retried = await retryHandle.executeUpdate(retryForwardMergeVerificationUpdate, { args: [{ expectedRevision: blocked.revision, actorUserId: "member_test" }] });
     expect(retried).toMatchObject({ phase: "delivery_ready", targetBaseSha: nextBase, resultCommit: mergedHead, resultTree: mergedTree });
@@ -190,7 +207,9 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
     const conflictHandle = await environment.client.workflow.start(issueWorkflow, { workflowId: conflictInput.workflowId, taskQueue: "target-base-time-skipping", args: [conflictInput] });
     const planned = await conflictHandle.executeUpdate(finalReviewUpdate, { args: [{ expectedRevision: 10, actorUserId: "member_test" }] });
     expect(planned).toMatchObject({ phase: "merge_conflict_required", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], releaseId: "release_original", pullRequestNumber: 42, forwardMergeConflictFileCount: 1 });
-    const verificationBlocked = await conflictHandle.executeUpdate(resolveMergeConflictUpdate, { args: [{ expectedRevision: planned.revision, actorUserId: "member_test" }] });
+    // merge_conflict_required auto-chains straight into resolve_merge_conflict too, so wait
+    // for the phase that chain produces instead of sending the command ourselves.
+    const verificationBlocked = await awaitProjectedPhase(projections, conflictInput.workflowId, "delivery_blocked");
     expect(verificationBlocked).toMatchObject({ phase: "delivery_blocked", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], developerExecutionId: "developer_conflict_resolution", resultCommit: mergedHead, resultTree: mergedTree, releaseId: "release_original", pullRequestNumber: 42, developerRecoveryStatus: null, developerRecoverySummary: null });
     const conflictRecovered = await conflictHandle.executeUpdate(retryForwardMergeVerificationUpdate, { args: [{ expectedRevision: verificationBlocked.revision, actorUserId: "member_test" }] });
     expect(conflictRecovered).toMatchObject({ phase: "delivery_ready", developerExecutionId: "developer_forward_merge", resultCommit: mergedHead, resultTree: mergedTree, releaseId: "release_original", pullRequestNumber: 42, deliveryReviewId: null, ciRunId: null, finalReviewId: null });
@@ -204,7 +223,7 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
     const planBlocked = await retryConflictHandle.executeUpdate(finalReviewUpdate, { args: [{ expectedRevision: 10, actorUserId: "member_test" }] });
     expect(planBlocked).toMatchObject({ phase: "merge_conflict_required", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Forge could not prepare a conflict plan. Try resolving again." });
     failConflictPlanning.set(retryConflictIssue, false);
-    const retryResolved = await retryConflictHandle.executeUpdate(resolveMergeConflictUpdate, { args: [{ expectedRevision: planBlocked.revision, actorUserId: "member_test" }] });
+    const retryResolved = await awaitProjectedPhase(projections, retryConflictInput.workflowId, "delivery_blocked");
     expect(retryResolved).toMatchObject({ phase: "delivery_blocked", allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], developerExecutionId: "developer_conflict_resolution" });
     histories.push({ history: await retryConflictHandle.fetchHistory(), workflowId: retryConflictInput.workflowId });
   } finally {

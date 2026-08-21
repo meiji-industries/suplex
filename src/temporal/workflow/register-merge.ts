@@ -88,13 +88,21 @@ export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: R
         (value) => value.status === "completed" ? value.result.developerExecutionId : value.developerExecutionId,
       );
       if (outcome.status !== "completed") {
+        let autoRetry = false;
         const applied = await ctx.withStateMutation(() => {
           if (ctx.state.activeOperation?.commandId !== command.commandId) return false;
-          const allowedCommands = outcome.status === "ownership_ambiguous" ? ["verify_developer_ownership", "cancel_issue"] as const : ["resolve_merge_conflict", "cancel_issue"] as const;
-          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands, pendingAction: outcome.summary, ...ctx.recoveryFields(outcome.status, outcome.reasonCode, outcome.summary, "lastHeartbeatAt" in outcome ? outcome.lastHeartbeatAt : null), developerEvidenceArtifactId: outcome.status === "failed" ? outcome.evidenceArtifactId : ctx.state.developerEvidenceArtifactId, activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+          // In the trusted single-operator environment an unconfirmed process is
+          // treated as interrupted. The first loss is retried immediately; later
+          // losses leave the normal retry command available without a dead-end
+          // ownership-verification gate.
+          const interrupted = outcome.status === "interrupted" || outcome.status === "ownership_ambiguous";
+          autoRetry = interrupted && developerAttempt === 1 && ctx.patched("forge-merge-conflict-auto-retry-v1");
+          const recoveryStatus = interrupted ? "interrupted" : outcome.status;
+          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: autoRetry ? "lead" : "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: autoRetry ? "Developer conflict-resolution process ended; Forge is starting the one automatic retry." : outcome.summary, ...ctx.recoveryFields(recoveryStatus, outcome.reasonCode, outcome.summary, "lastHeartbeatAt" in outcome ? outcome.lastHeartbeatAt : null), developerEvidenceArtifactId: outcome.status === "failed" ? outcome.evidenceArtifactId : ctx.state.developerEvidenceArtifactId, activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
           return true;
         });
         if (applied) await ctx.project();
+        if (applied && autoRetry) return resolveMergeConflict(ctx, { ...command, expectedRevision: ctx.state.revision, commandId: `${ctx.state.workflowId}:auto-retry-merge-conflict:${ctx.state.revision}` });
         return ctx.state;
       }
       const result = outcome.result;

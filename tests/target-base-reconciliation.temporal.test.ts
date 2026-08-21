@@ -120,12 +120,23 @@ async function awaitProjectedPhase(projections: IssueWorkflowState[], workflowId
   throw new Error(`Timed out waiting for ${workflowId} to reach phase ${phase}`);
 }
 
+async function awaitProjectedState(projections: IssueWorkflowState[], workflowId: string, predicate: (state: IssueWorkflowState) => boolean): Promise<IssueWorkflowState> {
+  const start = Date.now();
+  while (Date.now() - start < 30_000) {
+    const found = projections.find((state) => state.workflowId === workflowId && predicate(state));
+    if (found) return found;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for ${workflowId} to reach the expected projected state`);
+}
+
 test("time-skipping Workflows apply the same target-base contract at release, final review, and acceptance and replay every history", { timeout: 120_000 }, async () => {
   environment = await TestWorkflowEnvironment.createTimeSkipping();
   const histories: Array<{ history: Parameters<typeof Worker.runReplayHistory>[1]; workflowId: string }> = [];
   const outcomes = new Map<string, "no_drift" | "revalidated" | "provider" | "race" | "verification_then_pass" | "conflict">();
   const failConflictPlanning = new Map<string, boolean>();
   const attempts = new Map<string, number>();
+  const mergeResolutionAttempts = new Map<string, number>();
   const projections: IssueWorkflowState[] = [];
   const capacity = createImmediateCapacityActivities();
   const activities: Partial<IssueActivities> = {
@@ -151,7 +162,12 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
       return { planId: "conflict_plan", planArtifactId: "conflict_plan_artifact", evidenceArtifactId: "conflict_plan_evidence", leadExecutionId: "lead_conflict", leadSessionRef: "lead_session", summary: "Preserve both branch invariants" };
     },
     resolveMergeConflict: async () => ({ outcome: "verification_blocked", developerExecutionId: "developer_conflict_resolution", developerSessionRef: "developer_session", resultCommit: mergedHead, resultTree: mergedTree, evidenceArtifactId: "conflict_resolution_evidence", verificationArtifact: { id: "verification_failed", sha256: artifactSha, kind: "forward-merge-verification" }, code: "verification_failed", summary: "Pinned verification failed after conflict resolution" }),
-    resolveMergeConflictSupervised: async () => ({ status: "completed", result: { outcome: "verification_blocked", developerExecutionId: "developer_conflict_resolution", developerSessionRef: "developer_session", resultCommit: mergedHead, resultTree: mergedTree, evidenceArtifactId: "conflict_resolution_evidence", verificationArtifact: { id: "verification_failed", sha256: artifactSha, kind: "forward-merge-verification" }, code: "verification_failed", summary: "Pinned verification failed after conflict resolution" }, resultHash: artifactSha }),
+    resolveMergeConflictSupervised: async (activityInput) => {
+      const attempt = (mergeResolutionAttempts.get(activityInput.taskId) ?? 0) + 1;
+      mergeResolutionAttempts.set(activityInput.taskId, attempt);
+      if (activityInput.taskId === "pre_final_review_conflict_ownership_ambiguous" && attempt === 1) return { status: "ownership_ambiguous", developerExecutionId: "developer_conflict_resolution", reasonCode: "agent-process-missing", summary: "The recorded Agent process is no longer running.", lastHeartbeatAt: null };
+      return { status: "completed", result: { outcome: "verification_blocked", developerExecutionId: "developer_conflict_resolution", developerSessionRef: "developer_session", resultCommit: mergedHead, resultTree: mergedTree, evidenceArtifactId: "conflict_resolution_evidence", verificationArtifact: { id: "verification_failed", sha256: artifactSha, kind: "forward-merge-verification" }, code: "verification_failed", summary: "Pinned verification failed after conflict resolution" }, resultHash: artifactSha };
+    },
   };
   const worker = await Worker.create({ connection: environment.nativeConnection, namespace: environment.namespace ?? "default", taskQueue: "target-base-time-skipping", workflowsPath, activities: activities as Record<string, (...args: never[]) => unknown> });
   const workerRun = worker.run();
@@ -214,6 +230,18 @@ test("time-skipping Workflows apply the same target-base contract at release, fi
     const conflictRecovered = await conflictHandle.executeUpdate(retryForwardMergeVerificationUpdate, { args: [{ expectedRevision: verificationBlocked.revision, actorUserId: "member_test" }] });
     expect(conflictRecovered).toMatchObject({ phase: "delivery_ready", developerExecutionId: "developer_forward_merge", resultCommit: mergedHead, resultTree: mergedTree, releaseId: "release_original", pullRequestNumber: 42, deliveryReviewId: null, ciRunId: null, finalReviewId: null });
     histories.push({ history: await conflictHandle.fetchHistory(), workflowId: conflictInput.workflowId });
+
+    const ambiguousConflictIssue = "pre_final_review_conflict_ownership_ambiguous";
+    outcomes.set(ambiguousConflictIssue, "conflict");
+    const ambiguousConflictInput = input(ambiguousConflictIssue, "pre_final_review");
+    const ambiguousConflictHandle = await environment.client.workflow.start(issueWorkflow, { workflowId: ambiguousConflictInput.workflowId, taskQueue: "target-base-time-skipping", args: [ambiguousConflictInput] });
+    await ambiguousConflictHandle.executeUpdate(finalReviewUpdate, { args: [{ expectedRevision: 10, actorUserId: "member_test" }] });
+    const autoRetrying = await awaitProjectedState(projections, ambiguousConflictInput.workflowId, (state) => state.phase === "merge_conflict_required" && state.developerRecoveryStatus === "interrupted");
+    expect(autoRetrying).toMatchObject({ owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], developerRecoveryStatus: "interrupted" });
+    const ambiguousRecovered = await awaitProjectedPhase(projections, ambiguousConflictInput.workflowId, "delivery_blocked");
+    expect(ambiguousRecovered).toMatchObject({ allowedCommands: ["retry_forward_merge_verification", "cancel_issue"], developerExecutionId: "developer_conflict_resolution" });
+    expect(mergeResolutionAttempts.get(ambiguousConflictIssue)).toBe(2);
+    histories.push({ history: await ambiguousConflictHandle.fetchHistory(), workflowId: ambiguousConflictInput.workflowId });
 
     const retryConflictIssue = "pre_final_review_conflict_plan_retry";
     outcomes.set(retryConflictIssue, "conflict");

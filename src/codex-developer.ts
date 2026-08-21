@@ -1056,7 +1056,7 @@ export class DeveloperService {
 
   private mergeConflictResolutionPrompt(plan: string, input: MergeConflictResolutionInput, conflict: ForwardMergeConflictArtifact): string {
     return [
-      "You are Forge's authenticated Developer continuing the same Developer session in the exact owned issue worktree. A guarded normal merge is already in progress. Resolve only the listed conflicts using the Lead-authored plan.",
+      "You are Forge's Integrator, continuing the same authenticated session in the exact owned issue worktree: your job is to get the Builder's branch merged against the current base. A guarded normal merge is already in progress. Resolve only the listed conflicts using the authored plan.",
       "Do not abort the merge, rebase, amend, reset, clean, force-push, use GitHub/provider commands, or modify another checkout. Inspect both sides and the combined conflict markers, apply the bounded resolutions, run the complete relevant local verification suite from the approved plan, stage only the resolved worktree, and create exactly one ordinary merge commit with both parents. Leave the worktree clean.",
       'Return exactly one JSON object with no markdown fences or commentary matching: {"kind":"merge_conflict_resolution","summary":"...","resolvedFiles":[],"commandsRun":[],"testResults":[],"resultCommit":"40+ hex","resultTree":"40+ hex","dirtyState":"clean","blocker":null}. Include every listed conflict file in resolvedFiles and report any blocker instead of claiming success.',
       "Merge identity:\n" + JSON.stringify({ branchName: input.branchName, priorHead: input.priorHead, targetBaseSha: input.targetBaseSha, conflictFiles: conflict.conflictFiles }),
@@ -1065,7 +1065,7 @@ export class DeveloperService {
   }
 
   private ciRepairPrompt(plan: string, input: { branchName: string; worktreePath: string; priorCommit: string; priorTree: string }): string {
-    return `You are Forge's authenticated Developer continuing the same Developer session in the same worktree and branch. Apply only the exact CI repair plan below. Do not create a PR, use provider commands, rerun CI, merge, rebase, amend, reset, clean, force-push, or rewrite history. Run the complete pinned local verification. Create exactly one ordinary child commit whose parent is the failed commit, leave the worktree clean, and return exactly the existing repair JSON schema with addressedFindingIds empty.\n\nCoordinates: ${JSON.stringify(input)}\nCI repair plan:\n${plan}`;
+    return `You are Forge's Integrator, continuing the same authenticated session in the same worktree and branch: your job is to get the Builder's branch merged, so fix what CI reported. Apply only the exact CI repair plan below. Do not create a PR, use provider commands, rerun CI, merge, rebase, amend, reset, clean, force-push, or rewrite history. Run the complete pinned local verification. Create exactly one ordinary child commit whose parent is the failed commit, leave the worktree clean, and return exactly the existing repair JSON schema with addressedFindingIds empty.\n\nCoordinates: ${JSON.stringify(input)}\nCI repair plan:\n${plan}`;
   }
 
   private repairPrompt(repairPlan: string, findings: DeliveryFinding[], worktree: { branchName: string; worktreePath: string; targetBaseSha: string; subjectCommit: string; subjectTree: string }): string {

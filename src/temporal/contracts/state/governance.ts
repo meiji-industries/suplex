@@ -5,7 +5,10 @@ import { durableId } from "../primitives.js";
 export const governanceStateFields = {
   leadReviewResponseArtifactId: durableId.nullable().optional(),
   leadReviewResponseArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
-  planDecisionReceipt: z.object({ idempotencyKey: DecisionIdempotencyKeySchema, decisionId: durableId, decision: z.enum(["approve", "request_revision"]), subjectHash: z.string().regex(/^[a-f0-9]{64}$/) }).nullable().optional(),
+  planDecisionReceipt: z.union([
+    z.object({ idempotencyKey: DecisionIdempotencyKeySchema, decisionId: durableId, decision: z.enum(["approve", "request_revision"]), subjectHash: z.string().regex(/^[a-f0-9]{64}$/) }),
+    z.object({ idempotencyKey: DecisionIdempotencyKeySchema, decisionId: durableId, decision: z.enum(["approve", "request_revision"]), subjectArtifactId: durableId }),
+  ]).nullable().optional(),
   planBlockerSubject: PlanBlockerSubjectSchema.nullable().optional(),
   planBlockerResponseReceipt: z.object({ idempotencyKey: DecisionIdempotencyKeySchema, responseId: durableId, blockerSubjectHash: z.string().regex(/^[a-f0-9]{64}$/) }).nullable().optional(),
   planRevision: z.number().int().nonnegative().nullable().optional(),

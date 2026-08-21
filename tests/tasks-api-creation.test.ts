@@ -71,7 +71,7 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
   try {
     const payload = { projectId: project.id, title: "API creation task", description: "# Details", idempotencyKey: "api-creation-0001", supplementalReview: true, images: [{ filename: "note.png", mimeType: "image/png", base64: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=" }] };
     const created = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload });
-    expect(created.statusCode).toBe(201); expect(created.json()).toMatchObject({ issueKey: "APIC-1", title: "API creation task", phase: "backlog", revision: 0, allowedCommands: ["start_planning"] });
+    expect(created.statusCode).toBe(201); expect(created.json()).toMatchObject({ issueKey: "APIC-1", title: "API creation task", phase: "backlog", revision: 0, allowedCommands: ["start_planning", "cancel_issue"] });
     const duplicate = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload });
     expect(duplicate.statusCode).toBe(200); expect(duplicate.json()).toMatchObject({ id: created.json().id, workflowId: created.json().workflowId });
     const task = created.json() as { id: string; workflowId: string };

@@ -193,14 +193,14 @@ export function evaluateExactHead(input: CiEvaluationInput): CiEvaluationResult 
   const exactSelected = selectedChecks.filter((check) => check.selectedForEvaluation && check.headSha.toLowerCase() === input.expectedHeadSha.toLowerCase());
   const missing = input.requiredChecks.filter((name) => !exactSelected.some((check) => check.name === name));
   const notApplicable = missing.length > 0 && pr.mergeStateStatus === "CLEAN" && exactSelected.length > 0 && exactSelected.every((check) => check.status === "completed");
+  const failed = exactSelected.filter((check) => check.conclusion === "failure");
+  if (failed.length) return evaluation("required_check_failed", "failed", "lead", true, selectedChecks, `Required checks failed: ${failed.map((check) => check.name).join(", ")}`);
   if (missing.length && !notApplicable && Date.parse(input.now) < Date.parse(input.propagationDeadline)) return evaluation("checks_propagating", "waiting", "system", false, selectedChecks, "Required checks are still propagating", new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
   if (notApplicable && exactSelected.every((check) => check.conclusion === "success" || check.conclusion === "skipped")) return evaluation("checks_passed_not_applicable", "passed", null, false, selectedChecks, `All reporting required checks passed; not applicable: ${missing.join(", ")} (did not report; GitHub merge state CLEAN)`);
   if (missing.length && !notApplicable && Date.parse(input.now) >= Date.parse(input.overallDeadline)) return evaluation("poll_window_exhausted", "waiting", "system", false, selectedChecks, `Waiting for required checks after the initial CI window: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_MERGE_OBSERVATION_INTERVAL_MS).toISOString());
   if (missing.length && !notApplicable) return evaluation("required_check_missing", "waiting", "system", false, selectedChecks, `Required checks are still missing: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
   const active = exactSelected.filter((check) => check.status !== "completed");
   if (active.length) return evaluation("checks_queued", "waiting", "system", false, selectedChecks, "Required checks are queued or running", new Date(Date.parse(input.now) + (Date.parse(input.now) >= Date.parse(input.overallDeadline) ? CI_MERGE_OBSERVATION_INTERVAL_MS : CI_POLL_INTERVAL_MS)).toISOString());
-  const failed = exactSelected.filter((check) => check.conclusion === "failure");
-  if (failed.length) return evaluation("required_check_failed", "failed", "lead", true, selectedChecks, `Required checks failed: ${failed.map((check) => check.name).join(", ")}`);
   const cancelled = exactSelected.find((check) => check.conclusion === "cancelled");
   if (cancelled) return evaluation("required_check_cancelled", "cancelled", "human", false, selectedChecks, `Required check cancelled: ${cancelled.name}`);
   const timedOut = exactSelected.find((check) => check.conclusion === "timed_out");

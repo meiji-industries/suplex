@@ -69,6 +69,15 @@ describe("exact-head CI evaluator", () => {
     expect(evaluate({ requiredChecks: required, now: propagation })).toMatchObject({ outcome: "waiting", reason: "required_check_missing" });
   });
 
+  it("routes a failed required check to repair even while another required check is missing", () => {
+    const required = ["CI (Linux)", "CI (Windows)", "Mintlify Deployment"];
+    const checks = [
+      check({ providerCheckId: "10", name: "CI (Linux)", conclusion: "success" }),
+      check({ providerCheckId: "11", name: "CI (Windows)", conclusion: "failure" }),
+    ];
+    expect(evaluate({ observedPullRequest: pullRequest({ mergeStateStatus: "UNSTABLE" }), requiredChecks: required, checks, now })).toMatchObject({ outcome: "failed", reason: "required_check_failed", owner: "lead", repairable: true });
+  });
+
   it("keeps observing after the initial CI window instead of stranding a merged PR", () => {
     expect(evaluate({ checks: [], now: overall })).toMatchObject({ outcome: "waiting", reason: "poll_window_exhausted", owner: "system" });
   });

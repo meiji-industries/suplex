@@ -30,6 +30,7 @@ import { parseAcceptedProjectRevision } from "./projects.js";
 import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
+import { createDeveloperLiveStatusReporter } from "./developer-live-status.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -667,6 +668,9 @@ export class DeveloperService {
     let sessionRef: string | undefined;
     let rawSessionId: string | undefined;
     let parserState: unknown;
+    const liveStatus = createDeveloperLiveStatusReporter((currentStep) => {
+      this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET current_step = ?, heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running')").run(currentStep, this.now().toISOString(), executionId));
+    });
     try {
       const result = await this.processRunner({
         command: this.command,
@@ -678,6 +682,7 @@ export class DeveloperService {
         onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); },
         onLine: async (line) => {
           outputLines.push(line);
+          liveStatus.report(line);
           const incremental = this.provider.parseExecutionTranscript([line], { executionId, attempt, worktreePath: activeWorktree.worktreePath, ...(parserState ? { state: parserState } : {}) });
           parserState = incremental.parserState;
           this.persistDeveloperReceipts(executionId, incremental.receipts);
@@ -694,7 +699,9 @@ export class DeveloperService {
       const leadSessionId = await this.sessionStore.read(input.leadSessionRef).catch(() => undefined);
       await evidenceBuilder.cleanup(activeWorktree.worktreePath, executionId).catch(() => undefined);
       const acceptedRevision = this.loadAcceptedVerificationRevision(input, evidence.manifest);
+      liveStatus.set(`Verifying: ${acceptedRevision.verificationCommand}`);
       const independentVerification = await runPinnedVerification({ worktreePath: activeWorktree.worktreePath, setupCommand: acceptedRevision.setupCommand, verificationCommand: acceptedRevision.verificationCommand }, { guard });
+      liveStatus.set("Reconciling delivery");
       const git = await collectDeveloperGitObservation(activeWorktree.worktreePath, activeWorktree.startingSha);
       const after = await this.observeProvider({ companyId: input.companyId, executionId, phase: "after", cwd: repositoryPath, repository: project.repositoryIdentity });
       const rawReportArtifact = await this.artifacts.put(input.companyId, "developer-delivery-raw", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(parsed.finalReport ?? null), "utf8") });

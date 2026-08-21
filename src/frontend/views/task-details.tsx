@@ -36,7 +36,7 @@ import { releaseFailureCopy } from "../../release-failures.js";
 import { Check, Copy, Ellipsis, ExternalLink, GitPullRequest, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
-type DevelopmentExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; lastOutputAt?: string | null; currentStep: number | null };
+type DevelopmentExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; lastOutputAt?: string | null; currentStep: string | null };
 type DevelopmentState = { status: string; execution: DevelopmentExecution | null };
 type DeveloperEventState = { executionId: string | null; events: DeveloperExecutionEventView[]; terminalSteps: Record<number, "completed" | "blocked"> };
 const noopExecutionStatus = (): void => {};
@@ -77,7 +77,8 @@ function DevelopmentStatus({ state, now, inline = false, activityLabel }: { stat
   const label = stale ? "No recent heartbeat" : state.status === "starting" ? "In Progress" : state.status === "result_pending_claim" ? "Finishing development" : state.status === "running" ? "Running" : state.status === "cancelling" ? "Cancelling" : state.status === "queued" ? "Queued" : state.status === "rate_limited" ? "Rate limited" : state.status === "completed" ? "Completed" : state.status === "blocked" ? "Blocked" : state.status === "failed" ? "Failed" : state.status;
   const elapsed = execution ? formatDuration((execution.finishedAt ? Date.parse(execution.finishedAt) : now) - Date.parse(execution.startedAt)) : "—";
   const outputAge = execution?.lastOutputAt ? formatDuration(now - Date.parse(execution.lastOutputAt)) : undefined;
-  const content = <><span className="flex items-center gap-1.5" role="status" aria-live="polite">{active && Boolean(execution?.lastHeartbeatAt) && !stale ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : null}<span>{label}</span></span><span className="tabular-nums text-muted-foreground">{elapsed}</span>{activityLabel && outputAge ? <span className="text-muted-foreground">Last {activityLabel.toLowerCase()} event {outputAge} ago</span> : null}</>;
+  const heartbeatAge = execution?.lastHeartbeatAt ? formatDuration(now - Date.parse(execution.lastHeartbeatAt)) : undefined;
+  const content = <><span className="flex items-center gap-1.5" role="status" aria-live="polite">{active && Boolean(execution?.lastHeartbeatAt) && !stale ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : null}<span>{label}</span></span><span className="tabular-nums text-muted-foreground">{elapsed}</span>{execution?.currentStep ? <span className="text-muted-foreground">{execution.currentStep}{heartbeatAge ? ` · heartbeat ${heartbeatAge} ago` : ""}</span> : null}{activityLabel && outputAge ? <span className="text-muted-foreground">Last {activityLabel.toLowerCase()} event {outputAge} ago</span> : null}</>;
   return inline ? <span className="inline-flex items-center gap-x-3 text-xs font-normal">{content}</span> : <div className="flex flex-wrap items-center gap-x-3 gap-y-1">{content}</div>;
 }
 

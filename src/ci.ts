@@ -70,6 +70,26 @@ export type CheckObservation = z.infer<typeof CheckObservationSchema>;
 export interface CiProvider {
   getPullRequest(input: { repository: string; pullRequestNumber: number }): Promise<PullRequestObservation>;
   listChecks(input: { repository: string; headSha: string }): Promise<readonly CheckObservation[]>;
+  /** Re-run only the failed jobs of a workflow run. Returns the run ids actually re-run. */
+  rerunFailedRuns?(input: { repository: string; runIds: readonly string[] }): Promise<string[]>;
+  /** Tail of the failing job log. Actions check-run summaries are empty, so this is the only usable evidence. */
+  fetchFailedRunLog?(input: { repository: string; runId: string }): Promise<string | null>;
+}
+
+export const CI_FAILED_LOG_MAX_LINES = 200;
+export const CI_FAILED_LOG_MAX_BYTES = 16 * 1024;
+
+/** Actions run id embedded in a check-run `details_url`/`html_url`. */
+export function ciRunIdFromDetailsUrl(detailsUrl: string | null): string | null {
+  return /\/actions\/runs\/(\d+)/.exec(detailsUrl ?? "")?.[1] ?? null;
+}
+
+/** Redacted, bounded tail of a job log, safe to store as evidence. */
+export function boundedLogTail(raw: string): string {
+  const lines = String(redact(raw)).split(/\r?\n/).slice(-CI_FAILED_LOG_MAX_LINES);
+  let tail = lines.join("\n");
+  while (Buffer.byteLength(tail, "utf8") > CI_FAILED_LOG_MAX_BYTES) tail = tail.slice(Math.ceil(tail.length / 8));
+  return tail.trim();
 }
 
 export type GithubCommandRunner = (args: string[]) => Promise<{ stdout: string; stderr: string }>;
@@ -322,6 +342,23 @@ export function createGithubCiProvider(commandOrOptions: string | { command?: st
       const response = await observe(["api", `repos/${input.repository}/commits/${input.headSha}/check-runs?per_page=100`, "--include", "--paginate", "--slurp"]);
       try { return parseChecks(parseJsonDocuments(response.stdout), input.repository); } catch (error) { if (error instanceof CiProviderFailure) throw error; throw providerError(error, now()); }
     },
+    async rerunFailedRuns(input) {
+      RepositorySchema.parse(input.repository);
+      const rerun: string[] = [];
+      for (const runId of input.runIds) {
+        if (!/^\d+$/.test(runId)) continue;
+        await observe(["run", "rerun", runId, "--failed", "-R", input.repository]);
+        rerun.push(runId);
+      }
+      return rerun;
+    },
+    async fetchFailedRunLog(input) {
+      RepositorySchema.parse(input.repository);
+      if (!/^\d+$/.test(input.runId)) return null;
+      // A missing or expired log is not a CI observation failure: repair simply gets no log.
+      const response = await run(["run", "view", input.runId, "--log-failed", "-R", input.repository]).catch(() => null);
+      return response ? boundedLogTail(response.stdout) || null : null;
+    },
   };
 }
 
@@ -398,7 +435,34 @@ export class CiService {
     let result = evaluateExactHead({ repository: revision.repository, pullRequestNumber: context.pullRequestNumber, expectedRepository: revision.repository, expectedPullRequestNumber: context.pullRequestNumber, expectedHeadSha: input.expectedHeadSha, expectedBaseBranch: context.baseBranch, expectedHeadBranch: context.headBranch, requiredChecks: policy.requiredChecks, observedPullRequest: observed, checks, now, propagationDeadline, overallDeadline });
     const nextRunFailures = 0;
     result = { ...result, retryAt: result.retryAt ?? null };
-    return this.persistObservation({ ...input, attemptNumber }, run, policy, policyHash, observed, result, checks, firstObservedAt, propagationDeadline, overallDeadline, nextRunFailures, now);
+    const failedLogs = result.outcome === "failed" ? await this.failedRunLogs(revision.repository, result.selectedChecks) : [];
+    return this.persistObservation({ ...input, attemptNumber }, run, policy, policyHash, observed, result, checks, firstObservedAt, propagationDeadline, overallDeadline, nextRunFailures, now, failedLogs);
+  }
+
+  /** GitHub Actions check-run summaries are empty; the failing job log is the only usable evidence. */
+  private async failedRunLogs(repository: string, selected: readonly SelectedCheck[]): Promise<Array<{ name: string; runId: string; log: string }>> {
+    if (!this.provider.fetchFailedRunLog) return [];
+    const logs: Array<{ name: string; runId: string; log: string }> = [];
+    const seen = new Set<string>();
+    for (const check of selected) {
+      if (!check.selectedForEvaluation || check.conclusion !== "failure") continue;
+      const runId = ciRunIdFromDetailsUrl(check.detailsUrl);
+      if (!runId || seen.has(runId)) continue;
+      seen.add(runId);
+      const log = await this.provider.fetchFailedRunLog({ repository, runId }).catch(() => null);
+      if (log) logs.push({ name: check.name, runId, log });
+    }
+    return logs;
+  }
+
+  /** Re-run the failed jobs behind one CI attempt. Used when the Lead judges the failure unrelated to the delivery. */
+  async rerunFailedChecks(input: { taskId: string; companyId: string; attemptId: string }): Promise<{ rerunRunIds: string[] }> {
+    if (!this.provider.rerunFailedRuns) throw new CiFailure("provider");
+    const rows = this.database.authQuery((db) => db.prepare(`SELECT c.details_url AS detailsUrl, r.repository FROM forge_ci_attempt_checks c JOIN forge_ci_attempts a ON a.id = c.attempt_id JOIN forge_ci_runs run ON run.id = a.run_id JOIN forge_releases r ON r.id = run.release_id AND r.task_id = ? AND r.company_id = ? WHERE c.attempt_id = ? AND c.selected_for_evaluation = 1 AND c.conclusion = 'failure'`).all(input.taskId, input.companyId, input.attemptId) as Array<{ detailsUrl: string | null; repository: string }>);
+    if (!rows.length) throw new CiFailure("stale-input");
+    const runIds = [...new Set(rows.map((row) => ciRunIdFromDetailsUrl(row.detailsUrl)).filter((runId): runId is string => runId !== null))];
+    if (!runIds.length) throw new CiFailure("stale-input");
+    return { rerunRunIds: await this.provider.rerunFailedRuns({ repository: rows[0]!.repository, runIds }) };
   }
 
   private async persistProviderFailure(input: CiReconcileInput & { attemptNumber: number }, run: { id: string; firstObservedAt: string | null; propagationDeadline: string | null; overallDeadline: string | null; consecutiveProviderFailures: number }, policy: CiPolicy, policyHash: string, firstObservedAt: string, propagationDeadline: string, overallDeadline: string, error: unknown): Promise<CiReconcileResult> {
@@ -411,9 +475,9 @@ export class CiService {
     return this.persistObservation(input, run, policy, policyHash, null, result, [], firstObservedAt, propagationDeadline, overallDeadline, failure.code === "transient" ? count : 0, this.now().toISOString());
   }
 
-  private async persistObservation(input: CiReconcileInput & { attemptNumber: number }, run: { id: string }, policy: CiPolicy, policyHash: string, observed: PullRequestObservation | null, result: CiEvaluationResult, checks: readonly CheckObservation[], firstObservedAt: string, propagationDeadline: string, overallDeadline: string, consecutiveFailures: number, now: string): Promise<CiReconcileResult> {
+  private async persistObservation(input: CiReconcileInput & { attemptNumber: number }, run: { id: string }, policy: CiPolicy, policyHash: string, observed: PullRequestObservation | null, result: CiEvaluationResult, checks: readonly CheckObservation[], firstObservedAt: string, propagationDeadline: string, overallDeadline: string, consecutiveFailures: number, now: string, failedLogs: Array<{ name: string; runId: string; log: string }> = []): Promise<CiReconcileResult> {
     const newAttemptId = attemptId();
-    const evidence = JSON.stringify({ policy: { projectRevisionId: policy.projectRevisionId, requiredChecks: policy.requiredChecks, acceptedConclusions: policy.acceptedConclusions }, expectedHeadSha: input.expectedHeadSha, observedPullRequest: observed, checks: checks.map((check) => ({ ...check, selectedForEvaluation: result.selectedChecks.some((selected) => selected.providerCheckId === check.providerCheckId && selected.selectedForEvaluation) })), outcome: result.outcome, reason: result.reason });
+    const evidence = JSON.stringify({ policy: { projectRevisionId: policy.projectRevisionId, requiredChecks: policy.requiredChecks, acceptedConclusions: policy.acceptedConclusions }, expectedHeadSha: input.expectedHeadSha, observedPullRequest: observed, checks: checks.map((check) => ({ ...check, selectedForEvaluation: result.selectedChecks.some((selected) => selected.providerCheckId === check.providerCheckId && selected.selectedForEvaluation) })), outcome: result.outcome, reason: result.reason, failedCheckLogs: failedLogs });
     let evidenceArtifact: StoredArtifact | undefined;
     let evidenceArtifactId: string | null = null;
     let evidenceArtifactSha256: string | undefined;

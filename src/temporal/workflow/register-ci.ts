@@ -5,6 +5,11 @@ import * as stateTransitions from "./state-transitions.js";
 import { issueUpdates } from "../issue-updates.js";
 import type { IssueBlocker } from "../issue-contracts.js";
 import type { IssueWorkflowContext } from "./context.js";
+
+/** Reruns are for flaky/unrelated failures; two per CI cycle, then repair the code. */
+export const CI_RERUN_LIMIT = 2;
+const CI_RERUN_POLL_DELAY_MS = 60_000;
+
 export function registerCiHandlers(ctx: IssueWorkflowContext): void {
   const runExactCiRepairTurn = async (): Promise<contracts.IssueWorkflowState> => {
     if (!ctx.state.ciRepairPlanId || !ctx.state.ciRepairPlanArtifactId || !ctx.state.ciRepairPlanEvidenceArtifactId || !ctx.state.ciAttemptId || !ctx.state.ciRunId || !ctx.state.expectedHeadSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName) throw new Error("The exact CI repair plan and prior Developer delivery are required");
@@ -77,6 +82,17 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
           (capacityRequestId) => activityProxies.planCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, leadSessionRef, ciRunId: result.runId, ciAttemptId, failedHeadSha: expectedHeadSha, evidenceArtifactId, requiredChecks: [], localVerification: [], ...(capacityRequestId ? { capacityRequestId } : {}) }),
           (repairPlan) => repairPlan.leadExecutionId,
         );
+        // The Lead can conclude the failure is not caused by this delivery. Re-run the
+        // failed provider jobs instead of forcing a code repair, then wait on CI again.
+        const rerunCount = ctx.state.ciRerunCount ?? 0;
+        if (plan.disposition === "rerun" && ctx.patched("forge-ci-rerun-v1") && rerunCount < CI_RERUN_LIMIT) {
+          const rerun = await activityProxies.rerunCi({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, ciRunId: result.runId, ciAttemptId }).catch(() => null);
+          if (rerun) {
+            ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: rerun.summary, ciRerunCount: rerunCount + 1, ciNextPollAt: new Date(Date.now() + CI_RERUN_POLL_DELAY_MS).toISOString(), ciRepairPlanSummary: plan.summary, ciRepairLeadExecutionId: plan.leadExecutionId, ciRepairLeadSessionRef: plan.leadSessionRef, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+            await ctx.project();
+            return ctx.state;
+          }
+        }
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ci_repair_required", owner: "lead", allowedCommands: [], pendingAction: "Developer repairing the exact failed CI result", ciRepairPlanId: plan.planId, ciRepairPlanArtifactId: plan.planArtifactId, ciRepairPlanEvidenceArtifactId: plan.evidenceArtifactId, ciRepairPlanSummary: plan.summary, ciRepairLeadExecutionId: plan.leadExecutionId, ciRepairLeadSessionRef: plan.leadSessionRef, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
         await ctx.project();
         return runExactCiRepairTurn();

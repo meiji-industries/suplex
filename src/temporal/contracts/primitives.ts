@@ -271,6 +271,8 @@ export const CiRepairPlanSchema = z.object({
   steps: z.array(z.object({ number: z.number().int().positive(), instruction: z.string().min(1).max(2_000), verification: z.string().min(1).max(1_000) }).strict()).min(1),
   localVerification: z.array(z.string().min(1).max(500)).min(1),
   unresolvedQuestions: z.array(z.string().min(1).max(1_000)).max(0),
+  // "rerun" means the failure is not caused by this delivery: re-run the failed provider jobs instead of editing code.
+  disposition: z.enum(["repair", "rerun"]).default("repair"),
 }).strict().superRefine((value, context) => {
   value.steps.forEach((step, index) => { if (step.number !== index + 1) context.addIssue({ code: "custom", path: ["steps", index, "number"], message: "Repair step numbers must be contiguous" }); });
 });

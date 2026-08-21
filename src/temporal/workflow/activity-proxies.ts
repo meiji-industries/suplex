@@ -174,6 +174,11 @@ export const { reconcileCi } = proxyActivities<IssueActivities>({
   retry: { maximumAttempts: 1 },
 });
 
+export const { rerunCi } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "2 minutes",
+  retry: { maximumAttempts: 1 },
+});
+
 export const { planCiRepair } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
   scheduleToCloseTimeout: "25 minutes",

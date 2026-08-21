@@ -1,6 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { access, constants, lstat, mkdir, realpath, rm, writeFile } from "node:fs/promises";
+import { access, constants, lstat, mkdir, realpath, rm, statfs, writeFile } from "node:fs/promises";
 import { delimiter, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
@@ -130,6 +130,17 @@ const defaultGit: GitAdapter = {
   },
 };
 
+const defaultMinFreeDiskGb = 10;
+
+export async function assertWorktreeDiskHeadroom(worktreeRoot: string, statfsFn: typeof statfs = statfs): Promise<void> {
+  const envGb = Number.parseFloat(process.env.FORGE_MIN_FREE_DISK_GB ?? "");
+  const thresholdGb = Number.isFinite(envGb) && envGb >= 0 ? envGb : defaultMinFreeDiskGb;
+  const filesystem = await statfsFn(worktreeRoot);
+  const freeBytes = Number(filesystem.bavail) * Number(filesystem.bsize);
+  const thresholdBytes = thresholdGb * 1024 * 1024 * 1024;
+  if (freeBytes < thresholdBytes) throw new WorktreeFailure("host_capacity", `Free disk below ${thresholdGb} GB on ${worktreeRoot} (${(freeBytes / (1024 * 1024 * 1024)).toFixed(1)} GB available); free space and retry`);
+}
+
 async function canonicalDirectory(raw: string, code: string): Promise<string> {
   const absolute = resolve(raw);
   try {
@@ -188,6 +199,7 @@ export class WorktreeManager {
       } catch (error) {
         if (error instanceof WorktreeFailure) throw error;
       }
+      await assertWorktreeDiskHeadroom(worktreeRoot);
       await this.git.run(["worktree", "add", "-b", branchName, worktreePath, input.targetBaseSha], repositoryPath);
       const canonicalWorktree = await realpath(worktreePath);
       if (canonicalWorktree !== worktreePath) throw new WorktreeFailure("worktree-symlink", "Created worktree path resolved through a symbolic link");
@@ -334,6 +346,7 @@ export class WorktreeManager {
     const branchAtBase = Boolean(before?.branchHead && before.branchHead.toLowerCase() === validated.startingSha.toLowerCase());
     if (!before?.pathExists && (!before?.branchHead || branchAtBase)) {
       // A branch already parked at the reserved sha (a previous attempt created it but the worktree add did not stick) is not ambiguous: attach to it.
+      await assertWorktreeDiskHeadroom(worktreeRoot);
       const add = branchAtBase ? ["worktree", "add", validated.worktreePath, validated.branchName] : ["worktree", "add", "-b", validated.branchName, validated.worktreePath, validated.startingSha];
       try { await this.git.run(add, repositoryPath); } catch {
         const afterFailure = await this.inspectOwned(validated, repositoryPath).catch(() => undefined);

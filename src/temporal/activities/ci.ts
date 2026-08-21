@@ -22,6 +22,15 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
       const result = await invokeAgent(input, () => (agent?.planCiRepair ?? defaultAgent.planCiRepair.bind(defaultAgent))(input));
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, result);
     },
+    async rerunCi(input) {
+      try {
+        const result = await ci.rerunFailedChecks({ taskId: input.taskId, companyId: input.companyId, attemptId: input.ciAttemptId });
+        return { rerunRunIds: result.rerunRunIds, summary: `Re-ran ${result.rerunRunIds.length} failed CI run(s)` };
+      } catch (error) {
+        const category: AttentionCategory = error instanceof CiProviderFailure && error.code === "authentication" ? "provider_authentication" : "provider_ambiguity";
+        return attentionFailure(input, category, "ci_rerun_failed", error instanceof Error ? error.message : "CI rerun failed.");
+      }
+    },
     async runCiRepair(input: WorkflowCiRepairActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);
       const operation = developer.runCiRepair ? developer.runCiRepair.bind(developer) : defaultDeveloper.runCiRepair.bind(defaultDeveloper);

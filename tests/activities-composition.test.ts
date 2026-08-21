@@ -56,6 +56,7 @@ const expectedActivityKeys = [
   "recordProbeStarted",
   "requestCapacity",
   "requeueCapacity",
+  "rerunCi",
   "resolveMergeConflict",
   "resolveMergeConflictSupervised",
   "reviewDelivery",

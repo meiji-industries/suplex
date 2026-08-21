@@ -49,6 +49,20 @@ export interface CiRepairPlanActivityResult {
   leadExecutionId: string;
   leadSessionRef: string;
   summary: string;
+  /** "rerun": the Lead judged the failure unrelated to this delivery, so re-run the provider jobs. */
+  disposition?: "repair" | "rerun";
+}
+
+export interface RerunCiActivityInput {
+  taskId: string;
+  companyId: string;
+  ciRunId: string;
+  ciAttemptId: string;
+}
+
+export interface RerunCiActivityResult {
+  rerunRunIds: string[];
+  summary: string;
 }
 
 export interface CiRepairActivityInput {
@@ -97,5 +111,6 @@ export type WorkflowCiRepairActivityResult = Omit<CiRepairActivityResult, "workt
 export interface CiActivities {
   reconcileCi(input: ReconcileCiActivityInput): Promise<ReconcileCiActivityResult>;
   planCiRepair(input: CiRepairPlanActivityInput): Promise<CiRepairPlanActivityResult>;
+  rerunCi(input: RerunCiActivityInput): Promise<RerunCiActivityResult>;
   runCiRepair(input: WorkflowCiRepairActivityInput): Promise<WorkflowCiRepairActivityResult>;
 }

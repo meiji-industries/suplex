@@ -105,10 +105,10 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
   };
   const capacity = createImmediateCapacityActivities();
   let planningTurn = 0;
+  let baseUpdateTurn = 0;
 
   const activities: Partial<IssueActivities> = {
     ...capacity.activities,
-    // The projection the UI reads: the real sqlite writer, integrity guards and unique constraints included.
     projectIssueState: async (event) => {
       calls.set(`projectIssueState:${event.eventId}`, (calls.get(`projectIssueState:${event.eventId}`) ?? 0) + 1);
       projectedDatabase.projectIssueEvent(event);
@@ -140,14 +140,18 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
       outcome: "completed" as const,
       attemptId: "delivery-review-attempt-happy",
       correctionAttempts: 0,
-      // The review may start from a persisted delivery snapshot while the branch
-      // advances. Its observed subject must become the workflow's current head.
       subject: { ...input.subject, subjectCommit: observedCommit, subjectTree: observedTree },
       review: { reviewId: "delivery-review-happy", leadExecutionId: "lead-execution-review", leadSessionRef: "lead-session-happy", opinionArtifactId: "artifact-happy-review-opinion", evidenceArtifactId: "artifact-happy-review-evidence", opinion: "approved" as const, summary: "The exact delivery matches the approved plan.", repairPlan: null, findings: [], supersedesReviewId: null, reviewArtifact: { artifactId: finalReviewArtifactId, companyId, kind: "delivery-review" as const, sha256, byteSize: 1, mimeType: "application/json" } },
     })),
     reconcileTargetBase: counted("reconcileTargetBase", async (input) => ({ outcome: "no_drift" as const, checkId: `target-base-${input.checkpoint}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: input.expectedBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree })),
     publishRelease: counted("publishRelease", async () => ({ outcome: "completed" as const, repository: "acme/forge", branchName: "forge/issue/task-happy", headSha: observedCommit, headTree: observedTree, reused: false, attempt: 0, releaseId: "release-happy", baseBranch: "main", pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", isDraft: false, targetBaseSha: baseSha })),
     reconcileCi: counted("reconcileCi", async (input) => ({ runId: "ci-run-happy", attemptId: "ci-attempt-happy", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: "artifact-happy-ci-evidence", outcome: "passed" as const, reason: "checks_passed", owner: null, repairable: false, summary: "All required checks passed", retryAt: null, nextPollAt: null, policyHash: "f".repeat(64), propagationDeadline: null, overallDeadline: null })),
+    updateCiFromBase: counted("updateCiFromBase", async () => {
+      baseUpdateTurn += 1;
+      return baseUpdateTurn === 1
+        ? { outcome: "updated" as const, baseSha: "b".repeat(40), headSha: "c".repeat(40), headTree: "d".repeat(40), summary: "Merged the latest base branch into the pull request and pushed it" }
+        : { outcome: "no_drift" as const, summary: "The pull request base has not advanced" };
+    }),
     finalReview: counted("finalReview", async (input) => ({ finalReviewId: "final-review-happy", leadExecutionId: "lead-execution-final", leadSessionRef: input.leadSessionRef, opinionArtifactId: finalReviewArtifactId, evidenceArtifactId: finalReviewArtifactId, evidenceArtifactSha256: sha256, reviewArtifact: { artifactId: finalReviewArtifactId, companyId, kind: "delivery-review" as const, sha256, byteSize: 1, mimeType: "application/json" }, outcome: "approved" as const, summary: "Exact release approved", findings: [], repairPlan: null, repairPlanArtifactId: null, repairPlanSha256: null })),
     acceptDelivery: counted("acceptDelivery", async () => ({ acceptanceId: "acceptance-happy", status: "accepted" as const, outcome: "ready" as const, retryAt: null, readyAt: "2026-08-20T00:00:00.000Z", acceptedAt: "2026-08-20T00:00:00.000Z", evidenceArtifactId: null, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", reasonArtifactId: null })),
     reconcileMerge: counted("reconcileMerge", async () => ({ outcome: "merged" as const, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", mergeObservationId: "merge-observation-happy", completionReceiptId: "completion-receipt-happy", observedAt: "2026-08-20T00:00:00.000Z", mergedAt: "2026-08-20T00:00:00.000Z", retryAt: null })),
@@ -174,8 +178,6 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
     };
     const handle = await environment.client.workflow.start(issueWorkflow, { workflowId, taskQueue, args: [input] });
 
-    // The invariant that broke in production: the Workflow never holds a revision the
-    // projection never saw. Polled because the Workflow keeps running between checks.
     const projectionAgreesWithWorkflow = async (): Promise<string> => {
       const queried = await handle.query(issueStateQuery);
       const projected = projections.find((state) => state.revision === queried.revision);
@@ -196,7 +198,6 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
     expect(blocked.allowedCommands).toContain("respond_plan_blocker");
     await settled();
 
-    // One answer is the only other thing a member does. Auto-approve carries it to a delivery.
     const delivered = await handle.executeUpdate(respondPlanBlockerUpdate, {
       args: [{ expectedRevision: blocked.revision, expectedWorkflowRevision: blocked.revision, actorUserId, answerStagingRef: "staging-happy-answer", answerSha256: sha256, idempotencyKey: "happy-blocker-answer" }],
       updateId: "happy-blocker-response",
@@ -204,14 +205,13 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
     expect(delivered).toMatchObject({ phase: "delivery_ready", developerOutcome: "completed", developerExecutionId: "developer-execution-happy", planMaterial: true, decisionId: "decision-happy" });
     await settled();
 
-    // The auto-chain takes it the rest of the way: review, publish, CI, final review, auto-merge acceptance, merge.
     const done = await handle.result();
     expect(done).toMatchObject({ phase: "done", pendingAction: "Merged pull request confirmed", allowedCommands: [], mergeOutcome: "merged", acceptanceId: "acceptance-happy", completionReceiptId: "completion-receipt-happy", finalReviewOutcome: "approved", ciOutcome: "passed" });
     const finalState = await settled();
-    expect(finalState.phase).toBe("done");
+    expect(finalState.phase).toBe("done"); expect(calls.get("updateCiFromBase")).toBe(2);
+    expect(calls.get("reviewDelivery")).toBe(1);
     expect(projections.find((state) => state.phase === "delivery_reviewed")).toMatchObject({ resultCommit: observedCommit, resultTree: observedTree });
 
-    // The user outcome, as the board renders it.
     expect(projectedDatabase.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = ?").get(issueId))).toEqual({ revision: done.revision, phase: "done", pending_action: "Merged pull request confirmed" });
     expect(projectedDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_attention_items WHERE task_id = ? AND active = 1").get(issueId))).toEqual({ count: 0 });
 
@@ -222,8 +222,6 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
       "final_review", "accepted", "manual_merge", "done",
     ]);
 
-    // A silent retry loop (the constraint-failure kind) shows up as one activity, or one
-    // projection event, attempted over and over. Nothing on the happy path may exceed three.
     expect(Object.fromEntries([...calls].filter(([, count]) => count > 3))).toEqual({});
 
     const history = await handle.fetchHistory();

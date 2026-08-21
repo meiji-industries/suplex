@@ -66,25 +66,6 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
         let pinned: ReturnType<typeof pinnedProjectRevision>;
         try { pinned = pinnedProjectRevision(context.normalizedJson); } catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "The accepted project revision is incomplete"); }
         identity.repository = pinned.repository;
-        let acceptedRevision = true;
-        try { parseAcceptedProjectRevision(context.normalizedJson); } catch { acceptedRevision = false; }
-        if (!acceptedRevision) {
-          await githubRelease.checkAuthentication();
-          const currentBaseSha = await githubRelease.getBranchHead({ repository: pinned.repository, branch: pinned.baseBranch });
-          if (currentBaseSha === null) throw new GithubReleaseFailure("target-base-drift", "Target base branch is unavailable");
-          if (currentBaseSha.toLowerCase() !== context.targetBaseSha.toLowerCase()) {
-            const merged = await legacyForwardMerge.reconcile({ worktreePath: context.worktreePath, repositoryPath: pinned.repositoryPath, branchName: context.branchName, expectedBaseSha: context.targetBaseSha, currentBaseSha, taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, projectRevisionId: context.projectRevisionId, checkpoint: "pre_release", developerExecutionId: context.developerExecutionId });
-          if (merged.status === "conflict") {
-            const evidence = await artifacts.put(input.companyId, "merge-conflict-evidence", { filename: `${input.taskId}-${merged.forwardMergeId ?? "forward-merge"}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, priorHead: merged.priorHead, targetBaseSha: currentBaseSha, conflictFiles: merged.conflictFiles, combinedDiff: merged.conflictDiff ?? "" }), "utf8") });
-            database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt));
-            const reference = await durableArtifactReference(database, artifacts, input.companyId, evidence.id, "merge-conflict-evidence");
-            return PublishReleaseActivityResultSchema.parse({ outcome: "base-drift-conflict", releaseId: null, repository: pinned.repository, branchName: context.branchName, baseBranch: pinned.baseBranch, headSha: context.subjectCommit, headTree: context.subjectTree, pullRequestNumber: null, pullRequestUrl: null, isDraft: false, reused: false, attempt: 1, baseDriftConflict: true, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), priorHead: merged.priorHead, priorTree: merged.priorTree, ...(merged.conflictArtifact ? { conflictArtifact: merged.conflictArtifact } : {}), ...(merged.conflictFiles.length ? { conflictFileCount: merged.conflictFiles.length } : {}), mergeConflictEvidence: reference, targetBaseSha: currentBaseSha });
-          }
-            const headSha = merged.mergeCommit ?? context.subjectCommit;
-            const headTree = merged.tree ?? context.subjectTree;
-            return PublishReleaseActivityResultSchema.parse({ outcome: "base-drift-merged", releaseId: null, repository: pinned.repository, branchName: context.branchName, baseBranch: pinned.baseBranch, headSha, headTree, pullRequestNumber: null, pullRequestUrl: null, isDraft: false, reused: false, attempt: 1, baseDriftMerged: true, targetBaseSha: currentBaseSha, priorHead: merged.priorHead, ...(merged.forwardMergeId ? { forwardMergeId: merged.forwardMergeId } : {}), ...(merged.mergeCommit ? { mergeCommit: merged.mergeCommit } : {}), ...(merged.tree ? { tree: merged.tree } : {}) });
-          }
-        }
         let delivery: ReturnType<typeof releaseDeliveryProjection>;
         try { delivery = releaseDeliveryProjection(JSON.parse(artifacts.readSync({ companyId: input.companyId, storagePath: context.deliveryStoragePath, sha256: context.deliverySha }).toString("utf8"))); }
         catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "Completed delivery artifact is unavailable"); }

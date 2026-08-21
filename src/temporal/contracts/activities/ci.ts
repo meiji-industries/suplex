@@ -83,7 +83,8 @@ export interface UpdateCiFromBaseActivityInput {
 
 export type UpdateCiFromBaseActivityResult =
   | { outcome: "no_drift"; summary: string }
-  | { outcome: "updated"; baseSha: string; headSha: string; headTree: string; summary: string };
+  | { outcome: "updated"; baseSha: string; headSha: string; headTree: string; summary: string }
+  | { outcome: "conflict"; forwardMergeId: string; priorHead: string; priorTree: string; baseSha: string; conflictArtifactId: string; conflictArtifactSha256: string; conflictFileCount: number; summary: string };
 
 export interface CiRepairActivityInput {
   taskId: string;

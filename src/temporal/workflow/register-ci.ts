@@ -71,6 +71,20 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
         await ctx.project();
         return ctx.state;
       }
+      const baseUpdateCount = ctx.state.ciBaseUpdateCount ?? 0;
+      if (ctx.patched("forge-kodiak-merge-v1") && baseUpdateCount < 5 && ctx.state.developerExecutionId && ctx.state.branchName && ctx.state.targetBaseSha && ctx.state.expectedHeadTree && ctx.state.resultCommit && ctx.state.ciRunId) {
+        const update = await activityProxies.updateCiFromBase({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, releaseId: ctx.state.releaseId!, developerExecutionId: ctx.state.developerExecutionId, branchName: ctx.state.branchName, expectedBaseSha: ctx.state.targetBaseSha, expectedHeadSha: ctx.state.resultCommit, expectedHeadTree: ctx.state.expectedHeadTree, ciRunId: ctx.state.ciRunId });
+        if (update.outcome === "updated") {
+          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: update.summary, targetBaseSha: update.baseSha, expectedHeadSha: update.headSha, resultCommit: update.headSha, resultTree: update.headTree, ciRunId: null, ciAttemptId: null, ciOutcome: "waiting", ciReason: null, ciEvidenceArtifactId: null, ciNextPollAt: null, ciBaseUpdateCount: baseUpdateCount + 1, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+          await ctx.project();
+          return ctx.state;
+        }
+        if (update.outcome === "conflict") {
+          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: update.summary, forwardMergeId: update.forwardMergeId, forwardMergePriorHead: update.priorHead, forwardMergePriorTree: update.priorTree, forwardMergeTargetBaseSha: update.baseSha, forwardMergeConflictArtifact: { id: update.conflictArtifactId, sha256: update.conflictArtifactSha256, kind: "forward-merge-conflict" }, forwardMergeConflictFileCount: update.conflictFileCount, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+          await ctx.project();
+          return ctx.state;
+        }
+      }
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "final_review", owner: "lead", allowedCommands: [], pendingAction: "Final Lead review", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.runFinalReviewTurn();

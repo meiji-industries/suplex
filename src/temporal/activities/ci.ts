@@ -76,7 +76,11 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
         ciRunId: input.ciRunId,
       });
       if (merge.status === "no_drift") return { outcome: "no_drift" as const, summary: "The pull request base has not advanced" };
-      if (merge.status !== "merged" || !merge.mergeCommit || !merge.tree) throw new Error("Updating the CI branch from its base requires conflict resolution");
+      if (merge.status === "conflict") {
+        if (!merge.forwardMergeId || !merge.priorTree || !merge.conflictArtifact || !merge.conflictFiles.length) throw new Error("Base update conflict evidence is unavailable");
+        return { outcome: "conflict" as const, forwardMergeId: merge.forwardMergeId, priorHead: merge.priorHead, priorTree: merge.priorTree, baseSha: merge.targetBaseSha, conflictArtifactId: merge.conflictArtifact.id, conflictArtifactSha256: merge.conflictArtifact.sha256, conflictFileCount: merge.conflictFiles.length, summary: "Updating the pull request branch has a merge conflict" };
+      }
+      if (!merge.mergeCommit || !merge.tree) throw new Error("Updated pull request branch is incomplete");
       await githubRelease.pushNormal({ cwd: context.worktreePath, branch: input.branchName });
       const observedHead = await githubRelease.getBranchHead({ repository: pinned.repository, branch: input.branchName });
       if (observedHead?.toLowerCase() !== merge.mergeCommit.toLowerCase()) throw new Error("The updated CI branch was not confirmed on the provider");

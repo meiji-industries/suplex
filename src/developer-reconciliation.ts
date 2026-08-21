@@ -206,10 +206,15 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
   }
 
   const uniqueMismatches = [...new Set(mismatches)];
+  const noChangeDelivery = rawInput.manifest.verificationCommands.length > 0
+    && rawInput.git.status === ""
+    && rawInput.git.head.toLowerCase() === rawInput.startingSha.toLowerCase()
+    && rawInput.git.changedPaths.length === 0;
+  if (noChangeDelivery && !uniqueMismatches.includes("developer-made-no-change")) uniqueMismatches.push("developer-made-no-change");
   // Audit observations remain durable diagnostics; only required local checks and
   // unsafe worktree state decide whether delivery can continue.
   const requiredTestsFailed = !independentVerification || independentVerification.outcome !== "passed";
-  const blockingMismatch = ["dirty-final-tree", "branch-mismatch"].find((code) => uniqueMismatches.includes(code));
+  const blockingMismatch = ["developer-made-no-change", "dirty-final-tree", "branch-mismatch"].find((code) => uniqueMismatches.includes(code));
   const result: Omit<DeveloperReconciliation, "sha256"> = {
     kind: "developer-reconciliation",
     policyVersion: 2,

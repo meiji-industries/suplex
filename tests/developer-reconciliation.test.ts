@@ -50,6 +50,15 @@ test("required local test failures block delivery in plain language", () => {
   expect(missing).toMatchObject({ outcome: "blocked", failureCode: "required-local-tests-failed" });
 });
 
+test("does not accept a clean no-change delivery for an authorized plan", () => {
+  const base = "a".repeat(40);
+  const noChangeGit = { ...git, head: base, tree: "e".repeat(40), parents: [], commitCount: 0, changedPaths: [] };
+  const noChangeReport = { ...report, resultCommit: base, resultTree: noChangeGit.tree, steps: [{ ...report.steps[0], filesChanged: [] }] };
+  const result = reconcileDeveloperDelivery(input({ git: noChangeGit, report: noChangeReport }));
+  expect(result).toMatchObject({ outcome: "blocked", failureCode: "developer-made-no-change" });
+  expect(result.mismatches).toEqual(expect.arrayContaining(["no-new-commit", "developer-made-no-change"]));
+});
+
 test("passes missing or mismatched audit evidence to the reviewer path", () => {
   const result = reconcileDeveloperDelivery(input({
     git: { ...git, status: " M README.md", parents: ["z".repeat(40)] },

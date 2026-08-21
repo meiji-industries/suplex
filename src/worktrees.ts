@@ -232,7 +232,6 @@ export class WorktreeManager {
 
   async currentDiff(input: WorktreeDiffInput): Promise<WorktreeDiff> {
     const record = await this.reuse(input);
-    if (resolve(input.worktreePath) !== record.worktreePath) throw new WorktreeFailure("worktree-reuse-mismatch", "Recorded Developer worktree did not match the task worktree coordinate");
     if (input.resultCommit && !shaPattern.test(input.resultCommit)) throw new WorktreeFailure("invalid-result-commit", "Recorded Developer result is not a canonical commit hash");
     try {
       const [patch, headSha] = input.resultCommit
@@ -271,11 +270,8 @@ export class WorktreeManager {
       if (configuredGitDir !== worktreeGitDir) throw new WorktreeFailure("worktree-ownership", "Preserved worktree is not owned by the configured repository");
       if (actualRoot !== canonicalWorktree) throw new WorktreeFailure("worktree-ownership", "Preserved worktree belongs to a different repository");
       if (actualBranch !== input.branchName) throw new WorktreeFailure("branch-mismatch", "Preserved worktree branch does not match the recorded branch");
-      if (input.resultCommit && headSha.toLowerCase() !== input.resultCommit.toLowerCase()) throw new WorktreeFailure("head-mismatch", "Preserved worktree head does not match the recorded result");
-      if (input.resultTree && treeSha.toLowerCase() !== input.resultTree.toLowerCase()) throw new WorktreeFailure("tree-mismatch", "Preserved worktree tree does not match the recorded result");
       const status = await this.git.run(["status", "--porcelain=v1", "--untracked-files=all"], canonicalWorktree);
       if (status) throw new WorktreeFailure("worktree-dirty", "Preserved worktree is not clean");
-      try { await this.git.run(["merge-base", "--is-ancestor", input.baseSha, headSha], canonicalWorktree); } catch { throw new WorktreeFailure("base-mismatch", "Recorded base is not an ancestor of the preserved worktree head"); }
       for (const marker of ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG"]) {
         let markerPath: string;
         try { markerPath = await this.git.run(["rev-parse", "--git-path", marker], canonicalWorktree); } catch { throw new WorktreeFailure("git-operation-check-failed", "Git operation state could not be inspected"); }
@@ -303,23 +299,48 @@ export class WorktreeManager {
 
   async reuse(input: WorktreeInput): Promise<WorktreeRecord> {
     if (!taskIdPattern.test(input.taskId) || !shaPattern.test(input.targetBaseSha)) throw new WorktreeFailure("invalid-reuse-coordinate", "Preserved worktree coordinates are invalid");
-    await canonicalDirectory(input.repositoryPath, "repository-unavailable");
+    const repositoryPath = await canonicalDirectory(input.repositoryPath, "repository-unavailable");
     const worktreeRoot = await canonicalDirectory(input.worktreeRoot, "worktree-root-unavailable");
     const branchName = input.branchName ?? `forge/issue/${input.taskId}`;
+    if (!branchPattern.test(branchName) || branchName.includes("..")) throw new WorktreeFailure("unsafe-branch", "Issue branch name is unsafe");
     const worktreePath = resolve(worktreeRoot, input.pathSegment ?? input.taskId);
     if (!withinRoot(worktreeRoot, worktreePath)) throw new WorktreeFailure("worktree-escape", "Preserved worktree escaped the configured root");
-    const canonicalWorktree = await canonicalDirectory(worktreePath, "worktree-unavailable");
+
+    let canonicalWorktree: string;
     try {
-      const [actualRoot, actualBranch, baseCommit] = await Promise.all([
+      canonicalWorktree = await canonicalDirectory(worktreePath, "worktree-unavailable");
+    } catch (error) {
+      if (!(error instanceof WorktreeFailure) || error.code !== "worktree-unavailable") throw error;
+      await assertWorktreeDiskHeadroom(worktreeRoot);
+      try {
+        await this.git.run(["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repositoryPath);
+        await this.git.run(["worktree", "add", worktreePath, branchName], repositoryPath);
+      } catch {
+        try { await this.git.run(["worktree", "add", "-b", branchName, worktreePath, input.targetBaseSha], repositoryPath); }
+        catch { throw new WorktreeFailure("worktree-recreate-failed", "The task worktree is unavailable and could not be recreated from its branch"); }
+      }
+      return await this.reuse(input);
+    }
+    try {
+      const [configuredGitDir, worktreeGitDir, actualRoot, actualBranch, actualHead, status] = await Promise.all([
+        this.git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"], repositoryPath),
+        this.git.run(["rev-parse", "--path-format=absolute", "--git-common-dir"], canonicalWorktree),
         this.git.run(["rev-parse", "--show-toplevel"], canonicalWorktree),
         this.git.run(["symbolic-ref", "--short", "HEAD"], canonicalWorktree),
-        this.git.run(["merge-base", "--is-ancestor", input.targetBaseSha, "HEAD"], canonicalWorktree).then(() => "ancestor").catch(() => "not-ancestor"),
+        this.git.run(["rev-parse", "HEAD"], canonicalWorktree),
+        this.git.run(["status", "--porcelain=v1", "--untracked-files=all"], canonicalWorktree),
       ]);
-      if (actualRoot !== canonicalWorktree || actualBranch !== branchName || baseCommit !== "ancestor") throw new WorktreeFailure("worktree-reuse-mismatch", "Preserved worktree ownership or target base could not be proven");
-      return { branchName, worktreePath: canonicalWorktree, targetBaseSha: input.targetBaseSha };
+      if (configuredGitDir !== worktreeGitDir || actualRoot !== canonicalWorktree) throw new WorktreeFailure("worktree-not-owned", "The preserved directory is not a Git worktree of the configured repository");
+      if (actualBranch !== branchName) {
+        if (status) throw new WorktreeFailure("worktree-dirty", "The preserved worktree has uncommitted changes and cannot switch to the task branch");
+        try { await this.git.run(["switch", branchName], canonicalWorktree); }
+        catch { throw new WorktreeFailure("worktree-branch-switch-failed", "The preserved worktree could not switch to the task branch"); }
+        return await this.reuse(input);
+      }
+      return { branchName, worktreePath: canonicalWorktree, targetBaseSha: actualHead };
     } catch (error) {
       if (error instanceof WorktreeFailure) throw error;
-      throw new WorktreeFailure("worktree-reuse-mismatch", "Preserved worktree ownership or target base could not be proven");
+      throw new WorktreeFailure("worktree-not-owned", "The preserved directory is not a usable Git worktree of the configured repository");
     }
   }
 
@@ -330,31 +351,28 @@ export class WorktreeManager {
     if (withinRoot(repositoryPath, worktreeRoot) || withinRoot(worktreeRoot, repositoryPath) || !withinRoot(worktreeRoot, validated.worktreePath)) throw new WorktreeFailure("worktree-separation", "Owned worktree paths overlap or escape configured roots");
     if (!shaPattern.test(validated.startingSha)) throw new WorktreeFailure("invalid-base-commit", "Owned worktree starting SHA is invalid");
     try {
-      const resolvedBase = await this.git.run(["rev-parse", "--verify", `${validated.startingSha}^{commit}`], repositoryPath);
-      if (resolvedBase.toLowerCase() !== validated.startingSha.toLowerCase()) throw new WorktreeFailure("base-commit-mismatch", "Owned worktree starting SHA does not resolve exactly");
+      await this.git.run(["rev-parse", "--verify", `${validated.startingSha}^{commit}`], repositoryPath);
     } catch (error) {
       if (error instanceof WorktreeFailure) throw error;
       throw new WorktreeFailure("base-commit-mismatch", "Owned worktree starting SHA is unavailable");
     }
     const before = await this.inspectOwned(validated, repositoryPath).catch(() => undefined);
     if (before?.pathIsSymlink || before?.pathExists && before.head === null) throw new WorktreeFailure("worktree-registry-ambiguous", "Owned worktree path exists but its Git identity is ambiguous");
-    if (before?.repositoryRegistered && before.head && before.branch === validated.branchName && before.head.toLowerCase() === validated.startingSha.toLowerCase() && before.dirtyState === "clean") return before;
+    if (before?.repositoryRegistered && before.head && before.branch === validated.branchName) return before;
     if (validated.status === "active" && before?.repositoryRegistered && before.head && before.branch === validated.branchName) {
-      try { await this.git.run(["merge-base", "--is-ancestor", validated.startingSha, before.head], repositoryPath); }
-      catch { throw new WorktreeFailure("worktree-registry-ambiguous", "Active worktree no longer descends from its reserved base"); }
       return before;
     }
-    const branchAtBase = Boolean(before?.branchHead && before.branchHead.toLowerCase() === validated.startingSha.toLowerCase());
-    if (!before?.pathExists && (!before?.branchHead || branchAtBase)) {
-      // A branch already parked at the reserved sha (a previous attempt created it but the worktree add did not stick) is not ambiguous: attach to it.
+    const branchExists = Boolean(before?.branchHead);
+    if (!before?.pathExists) {
+      // Reattach an existing task branch so its commits survive a missing worktree.
       await assertWorktreeDiskHeadroom(worktreeRoot);
-      const add = branchAtBase ? ["worktree", "add", validated.worktreePath, validated.branchName] : ["worktree", "add", "-b", validated.branchName, validated.worktreePath, validated.startingSha];
+      const add = branchExists ? ["worktree", "add", validated.worktreePath, validated.branchName] : ["worktree", "add", "-b", validated.branchName, validated.worktreePath, validated.startingSha];
       try { await this.git.run(add, repositoryPath); } catch {
         const afterFailure = await this.inspectOwned(validated, repositoryPath).catch(() => undefined);
-        if (!afterFailure?.head || afterFailure.branch !== validated.branchName || afterFailure.head.toLowerCase() !== validated.startingSha.toLowerCase()) throw new WorktreeFailure("worktree-registry-ambiguous", "Git worktree creation failed with an unresolved registry state");
+        if (!afterFailure?.head || afterFailure.branch !== validated.branchName) throw new WorktreeFailure("worktree-registry-ambiguous", "Git worktree creation failed with an unresolved registry state");
       }
       const created = await this.inspectOwned(validated, repositoryPath);
-      if (!created.repositoryRegistered || !created.head || created.branch !== validated.branchName || created.head.toLowerCase() !== validated.startingSha.toLowerCase() || created.dirtyState !== "clean") throw new WorktreeFailure("worktree-registry-ambiguous", "Created worktree did not match its reserved identity");
+      if (!created.repositoryRegistered || !created.head || created.branch !== validated.branchName || created.dirtyState !== "clean") throw new WorktreeFailure("worktree-registry-ambiguous", "Created worktree did not match the task branch");
       return created;
     }
     throw new WorktreeFailure("worktree-registry-ambiguous", "Existing branch or path does not exactly match the reserved worktree");
@@ -419,7 +437,7 @@ function hasUnpushedWork(owned: OwnedWorktree): boolean {
 }
 
 export function activateOwnedWorktree(database: ForgeDatabase, inspection: OwnedWorktreeInspection): OwnedWorktree {
-  if (!inspection.repositoryRegistered || inspection.dirtyState !== "clean" || inspection.head?.toLowerCase() !== inspection.owned.startingSha.toLowerCase() || inspection.branch !== inspection.owned.branchName || inspection.pathIsSymlink) throw new WorktreeFailure("worktree-verification", "Owned worktree activation did not match the reserved identity");
+  if (!inspection.repositoryRegistered || inspection.dirtyState !== "clean" || !inspection.head || inspection.branch !== inspection.owned.branchName || inspection.pathIsSymlink) throw new WorktreeFailure("worktree-verification", "Owned worktree did not match the task branch");
   database.authTransaction((db) => {
     const result = db.prepare("UPDATE forge_issue_worktrees SET status = 'active', activated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND project_id = ? AND workflow_id = ? AND worktree_path = ? AND branch_name = ? AND starting_sha = ? AND status = 'reserved'").run(new Date().toISOString(), inspection.owned.leaseId, inspection.owned.taskId, inspection.owned.companyId, inspection.owned.projectId, inspection.owned.workflowId, inspection.owned.worktreePath, inspection.owned.branchName, inspection.owned.startingSha);
     if (result.changes !== 1) throw new WorktreeFailure("worktree-lease-conflict", "Owned worktree activation lost its compare-and-set lease");

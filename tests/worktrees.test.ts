@@ -102,6 +102,24 @@ test("rejects an invalid target-base commit before creating a branch", async () 
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("reuses the task worktree when the configured base has moved", async () => {
+  const value = await fixture();
+  try {
+    const manager = new WorktreeManager();
+    const record = await manager.create({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_moved_base", targetBaseSha: value.baseSha });
+    await writeFile(join(value.repositoryPath, "BASE_MOVED.md"), "new base\n");
+    await git(["add", "BASE_MOVED.md"], value.repositoryPath);
+    await git(["commit", "-m", "advance base"], value.repositoryPath);
+    const movedBaseSha = await git(["rev-parse", "HEAD"], value.repositoryPath);
+
+    await expect(manager.reuse({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_moved_base", targetBaseSha: movedBaseSha, branchName: record.branchName })).resolves.toMatchObject({
+      branchName: record.branchName,
+      worktreePath: record.worktreePath,
+      targetBaseSha: value.baseSha,
+    });
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("reads the current delivery diff from the recorded base through committed and tracked worktree changes", async () => {
   const value = await fixture();
   try {
@@ -122,7 +140,9 @@ test("reads the current delivery diff from the recorded base through committed a
     expect(delivered.headSha).toBe(resultCommit);
     expect(delivered.patch).toContain("+committed delivery");
     expect(delivered.patch).not.toContain("+tracked current change");
-    await expect(manager.currentDiff({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_diff", targetBaseSha: value.baseSha, branchName: record.branchName, worktreePath: value.repositoryPath })).rejects.toMatchObject({ code: "worktree-reuse-mismatch" });
+    await expect(manager.currentDiff({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_diff", targetBaseSha: value.baseSha, branchName: record.branchName, worktreePath: value.repositoryPath })).resolves.toMatchObject({
+      headSha: await git(["rev-parse", "HEAD"], record.worktreePath),
+    });
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -195,11 +215,11 @@ test("an active lease adopts its existing worktree when configuration coordinate
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("maps a worktree lease conflict to a non-retryable Temporal failure", () => {
-  expect(asNonRetryableApplicationFailure(new WorktreeFailure("worktree-lease-conflict", "Restore the worktree path, then retry."))).toMatchObject({
-    type: "worktree-lease-conflict",
+test("maps every worktree failure code to a non-retryable Temporal failure", () => {
+  expect(asNonRetryableApplicationFailure(new WorktreeFailure("any-worktree-condition", "Restore the worktree path, then retry."))).toMatchObject({
+    type: "any-worktree-condition",
     nonRetryable: true,
     message: "Restore the worktree path, then retry.",
-    details: [{ code: "worktree-lease-conflict", summary: "Restore the worktree path, then retry." }],
+    details: [{ code: "any-worktree-condition", summary: "Restore the worktree path, then retry." }],
   });
 });

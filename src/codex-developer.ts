@@ -17,7 +17,7 @@ import { ForgeDatabase } from "./database.js";
 import { redact, StructuredLogger } from "./logging.js";
 import { toSafeSummary } from "./temporal/contracts/primitives.js";
 import type { GithubReleasePort } from "./github-release.js";
-import { createGitCommandGuard, withWorktreeMiseTrust, WorktreeManager } from "./worktrees.js";
+import { createGitCommandGuard, withWorktreeMiseTrust, WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { activateOwnedWorktree, reserveOwnedWorktree } from "./worktrees.js";
 import { DeveloperEvidenceBuilder } from "./developer-evidence.js";
 import { collectDeveloperGitObservation, developerReconciliationSummary, isLegacyReceiptOnlyRecovery, reconcileDeveloperDelivery, DeveloperReconciliationArtifactSchema } from "./developer-reconciliation.js";
@@ -393,6 +393,7 @@ export class DeveloperService {
         worktree = input.reuseWorktree || prior ? await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName }) : await this.worktrees.create({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha, branchName });
       }
     } catch (error) {
+      if (error instanceof WorktreeFailure) throw error;
       if (error instanceof Error && "code" in error) throw new AgentFailure(String((error as { code: string }).code), error.message);
       throw error;
     }

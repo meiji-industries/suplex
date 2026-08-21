@@ -80,7 +80,7 @@ class SupervisedDeveloperTerminalError extends Error {
 }
 
 export function asNonRetryableApplicationFailure(error: unknown): ApplicationFailure | undefined {
-  if (error instanceof WorktreeFailure && error.code === "worktree-lease-conflict") {
+  if (error instanceof WorktreeFailure) {
     return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
   }
   if (error instanceof ProjectionIntegrityFailure) {
@@ -241,10 +241,9 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       } catch (cancellationError) {
         if (cancellationError instanceof CancelledFailure) throw cancellationError;
       }
-      // Host and worktree ownership problems need a visible Retry blocker rather than
-      // repeated Temporal retries that cannot change their outcome.
-      if (error instanceof WorktreeFailure && error.code === "host_capacity") await attentionFailure(input, "capacity_exhausted", error.code, error.message);
-      if (error instanceof WorktreeFailure && error.code === "worktree-lease-conflict") await attentionFailure(input, "unsafe_recovery", error.code, error.message);
+      // Worktree failures are deterministic until a person changes the local state.
+      // Surface them as a Retry blocker instead of allowing Temporal to retry them.
+      if (error instanceof WorktreeFailure) await attentionFailure(input, error.code === "host_capacity" ? "capacity_exhausted" : "unsafe_recovery", error.code, error.message);
       const permanentFailure = asNonRetryableApplicationFailure(error) ?? asNonRetryableCapacityFailure(error);
       if (permanentFailure) {
         if (error instanceof AgentFailure) await attentionFailure(input, agentCategory(error), error.code, error.message);

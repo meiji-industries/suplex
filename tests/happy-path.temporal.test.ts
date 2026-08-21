@@ -19,6 +19,8 @@ const workflowsPath = fileURLToPath(new URL("../src/temporal/workflows.ts", impo
 const sha256 = "a".repeat(64);
 const commit = "b".repeat(40);
 const tree = "c".repeat(40);
+const observedCommit = "e".repeat(40);
+const observedTree = "f".repeat(40);
 const baseSha = "d".repeat(40);
 const companyId = "company-happy";
 const projectId = "project-happy";
@@ -138,11 +140,13 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
       outcome: "completed" as const,
       attemptId: "delivery-review-attempt-happy",
       correctionAttempts: 0,
-      subject: input.subject,
+      // The review may start from a persisted delivery snapshot while the branch
+      // advances. Its observed subject must become the workflow's current head.
+      subject: { ...input.subject, subjectCommit: observedCommit, subjectTree: observedTree },
       review: { reviewId: "delivery-review-happy", leadExecutionId: "lead-execution-review", leadSessionRef: "lead-session-happy", opinionArtifactId: "artifact-happy-review-opinion", evidenceArtifactId: "artifact-happy-review-evidence", opinion: "approved" as const, summary: "The exact delivery matches the approved plan.", repairPlan: null, findings: [], supersedesReviewId: null, reviewArtifact: { artifactId: finalReviewArtifactId, companyId, kind: "delivery-review" as const, sha256, byteSize: 1, mimeType: "application/json" } },
     })),
     reconcileTargetBase: counted("reconcileTargetBase", async (input) => ({ outcome: "no_drift" as const, checkId: `target-base-${input.checkpoint}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: input.expectedBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree })),
-    publishRelease: counted("publishRelease", async () => ({ outcome: "completed" as const, repository: "acme/forge", branchName: "forge/issue/task-happy", headSha: commit, headTree: tree, reused: false, attempt: 0, releaseId: "release-happy", baseBranch: "main", pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", isDraft: false, targetBaseSha: baseSha })),
+    publishRelease: counted("publishRelease", async () => ({ outcome: "completed" as const, repository: "acme/forge", branchName: "forge/issue/task-happy", headSha: observedCommit, headTree: observedTree, reused: false, attempt: 0, releaseId: "release-happy", baseBranch: "main", pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", isDraft: false, targetBaseSha: baseSha })),
     reconcileCi: counted("reconcileCi", async (input) => ({ runId: "ci-run-happy", attemptId: "ci-attempt-happy", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: "artifact-happy-ci-evidence", outcome: "passed" as const, reason: "checks_passed", owner: null, repairable: false, summary: "All required checks passed", retryAt: null, nextPollAt: null, policyHash: "f".repeat(64), propagationDeadline: null, overallDeadline: null })),
     finalReview: counted("finalReview", async (input) => ({ finalReviewId: "final-review-happy", leadExecutionId: "lead-execution-final", leadSessionRef: input.leadSessionRef, opinionArtifactId: finalReviewArtifactId, evidenceArtifactId: finalReviewArtifactId, evidenceArtifactSha256: sha256, reviewArtifact: { artifactId: finalReviewArtifactId, companyId, kind: "delivery-review" as const, sha256, byteSize: 1, mimeType: "application/json" }, outcome: "approved" as const, summary: "Exact release approved", findings: [], repairPlan: null, repairPlanArtifactId: null, repairPlanSha256: null })),
     acceptDelivery: counted("acceptDelivery", async () => ({ acceptanceId: "acceptance-happy", status: "accepted" as const, outcome: "ready" as const, retryAt: null, readyAt: "2026-08-20T00:00:00.000Z", acceptedAt: "2026-08-20T00:00:00.000Z", evidenceArtifactId: null, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", reasonArtifactId: null })),
@@ -205,6 +209,7 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
     expect(done).toMatchObject({ phase: "done", pendingAction: "Merged pull request confirmed", allowedCommands: [], mergeOutcome: "merged", acceptanceId: "acceptance-happy", completionReceiptId: "completion-receipt-happy", finalReviewOutcome: "approved", ciOutcome: "passed" });
     const finalState = await settled();
     expect(finalState.phase).toBe("done");
+    expect(projections.find((state) => state.phase === "delivery_reviewed")).toMatchObject({ resultCommit: observedCommit, resultTree: observedTree });
 
     // The user outcome, as the board renders it.
     expect(projectedDatabase.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = ?").get(issueId))).toEqual({ revision: done.revision, phase: "done", pending_action: "Merged pull request confirmed" });

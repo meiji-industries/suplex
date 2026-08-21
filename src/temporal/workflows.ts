@@ -105,6 +105,7 @@ const guardedHandlersPatch = "forge-guarded-handlers-v1";
 const autoChainLeadPhasesPatch = "forge-auto-chain-lead-phases-v1";
 const unconditionalCancelPatch = "forge-unconditional-cancel-v1";
 const failedRetryPatch = "forge-failed-retry-v1";
+const adoptObservedHeadPatch = "forge-adopt-observed-head-v1";
 
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
@@ -191,6 +192,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const result = await reconcileTargetBase({ taskId: validatedInput.issueId, companyId: validatedInput.companyId, workflowId: validatedInput.workflowId, projectRevisionId: validatedInput.projectRevisionId, checkpoint, developerExecutionId: state.developerExecutionId, expectedBaseSha: state.targetBaseSha, expectedHeadSha: state.resultCommit, expectedHeadTree: state.resultTree, ...(state.forwardMergeId ? { forwardMergeId: state.forwardMergeId } : {}), ...(verificationOnly ? { verificationOnly: true } : {}), ...(state.deliveryReviewId ? { deliveryReviewId: state.deliveryReviewId } : {}), ...(state.ciRunId ? { ciRunId: state.ciRunId } : {}), ...(state.finalReviewId ? { finalReviewId: state.finalReviewId } : {}), ...(state.acceptanceId ? { acceptanceId: state.acceptanceId } : {}), ...(state.releaseId ? { releaseId: state.releaseId } : {}) });
     if (result.outcome === "no_drift") {
       const priorRevision = state.revision;
+      if (patched(adoptObservedHeadPatch)) state = IssueWorkflowStateSchema.parse({ ...state, targetBaseSha: result.observedBaseSha, resultCommit: result.headSha, resultTree: result.headTree });
       state = applyTargetBaseNoDrift(state, result);
       if (state.revision !== priorRevision) await projectIssueState(state);
       return true;

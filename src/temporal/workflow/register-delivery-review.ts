@@ -49,6 +49,21 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...stateTransitions.revisioned(ctx.state, nextPhase, nextPhase === "repair_required" ? "lead" : "human", nextPhase === "repair_required" ? ["repair_delivery", "cancel_issue"] : nextPhase === "delivery_blocked" ? ["record_delivery_decision", "cancel_issue"] : ["publish_draft", "cancel_issue"], nextPhase === "repair_required" ? "Developer repair of blocking findings" : nextPhase === "delivery_blocked" ? "Member decision required" : "Publish draft pull request"), deliveryReviewId: legacyResult.reviewId, deliveryReviewOutcome: legacyResult.outcome, deliveryReviewSummary: legacyResult.summary, ...(legacyResult.reviewArtifact ? { deliveryReviewArtifact: legacyResult.reviewArtifact } : {}), deliveryBlockingFindings: openBlocking, deliveryRepairPlan: legacyResult.repairPlan ?? null, repairCycle: ctx.state.repairCycle ?? 0 });
     } else {
       const exactResult = result as contracts.DeliveryReviewActivityResult;
+      // A review observes the branch while it runs.  That observation is the
+      // authoritative delivery subject; the state snapshot that started the turn
+      // is only a hint.  Keep old histories byte-for-byte replayable.
+      if (ctx.patched("forge-adopt-observed-head-v1")) {
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({
+          ...ctx.state,
+          developerExecutionId: exactResult.subject.developerExecutionId,
+          developerSessionRef: exactResult.subject.developerSessionRef,
+          targetBaseSha: exactResult.subject.targetBaseSha,
+          resultCommit: exactResult.subject.subjectCommit,
+          resultTree: exactResult.subject.subjectTree,
+          deliveryArtifactId: exactResult.subject.deliveryArtifactId,
+          developerEvidenceArtifactId: exactResult.subject.developerEvidenceArtifactId,
+        });
+      }
       ctx.state = exactResult.outcome === "blocked"
         ? stateTransitions.reviewBlockedState(ctx.state, exactResult)
         : stateTransitions.repairRequiredState(ctx.state, exactResult, ctx.repairCycleLimit);

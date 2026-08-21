@@ -1710,26 +1710,29 @@ export class TaskService {
   }
 
   private workflowStateForTask(row: TaskRow): IssueWorkflowState {
-    const snapshot = this.database.authQuery((db) => db.prepare("SELECT company_id, workflow_id, revision, state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = (SELECT revision FROM forge_issue_projections WHERE task_id = ?)").get(row.id, row.id) as { company_id: string; workflow_id: string; revision: number; state_json: string } | undefined);
-    if (!snapshot) throw new TaskFailure("Task projection is unavailable", [finding("projection-integrity", "revision", "The authoritative workflow snapshot is unavailable")], 500);
-    let raw: unknown;
-    try { raw = JSON.parse(snapshot.state_json); } catch { throw new TaskFailure("Task projection is unavailable", [finding("projection-integrity", "revision", "The authoritative workflow snapshot is invalid")], 500); }
-    const record = raw !== null && typeof raw === "object" ? raw as Record<string, unknown> : {};
-    const parsed = IssueWorkflowStateSchema.safeParse({
-      ...record,
-      issueId: record.issueId ?? record.taskId ?? row.id,
-      companyId: record.companyId ?? row.company_id,
-      projectId: record.projectId ?? row.project_id,
-      workflowId: record.workflowId ?? row.workflow_id,
-      projectRevisionId: record.projectRevisionId ?? row.project_revision_id,
-      owner: record.owner === "system" ? "human" : record.owner,
-      continuationCount: record.continuationCount ?? 0,
-      lastSummaryHash: record.lastSummaryHash ?? null,
-    });
-    if (!parsed.success || snapshot.company_id !== row.company_id || snapshot.workflow_id !== row.workflow_id || snapshot.revision !== row.projection_revision || parsed.data?.issueId !== row.id || parsed.data?.companyId !== row.company_id || parsed.data?.workflowId !== row.workflow_id || parsed.data?.revision !== row.projection_revision) {
-      throw new TaskFailure("Task projection is unavailable", [finding("projection-integrity", "revision", "The authoritative workflow snapshot does not match the projection")], 500);
+    // Projections are a convenience read model.  A stale hash or an interrupted
+    // projection must not hide a task (and therefore its cancel action).  Use the
+    // newest self-consistent snapshot for this task instead of treating a hash
+    // mismatch as an access-control failure.
+    const snapshots = this.database.authQuery((db) => db.prepare("SELECT company_id, workflow_id, revision, state_json FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision DESC").all(row.id) as Array<{ company_id: string; workflow_id: string; revision: number; state_json: string }>);
+    for (const snapshot of snapshots) {
+      let raw: unknown;
+      try { raw = JSON.parse(snapshot.state_json); } catch { continue; }
+      const record = raw !== null && typeof raw === "object" ? raw as Record<string, unknown> : {};
+      const parsed = IssueWorkflowStateSchema.safeParse({
+        ...record,
+        issueId: record.issueId ?? record.taskId ?? row.id,
+        companyId: record.companyId ?? row.company_id,
+        projectId: record.projectId ?? row.project_id,
+        workflowId: record.workflowId ?? row.workflow_id,
+        projectRevisionId: record.projectRevisionId ?? row.project_revision_id,
+        owner: record.owner === "system" ? "human" : record.owner,
+        continuationCount: record.continuationCount ?? 0,
+        lastSummaryHash: record.lastSummaryHash ?? null,
+      });
+      if (parsed.success && snapshot.company_id === row.company_id && snapshot.workflow_id === row.workflow_id && parsed.data.issueId === row.id && parsed.data.companyId === row.company_id && parsed.data.workflowId === row.workflow_id) return parsed.data;
     }
-    return parsed.data;
+    throw new TaskFailure("Task projection is unavailable", [finding("projection-integrity", "revision", "No readable workflow snapshot is available")], 500);
   }
 
   private reviewLineage(row: TaskRow, workflowState: IssueWorkflowState): ReviewLineage {

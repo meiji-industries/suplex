@@ -50,7 +50,7 @@ function redactOutput(value: string): string {
 
 async function runGh(command: string, args: string[], cwd?: string): Promise<{ stdout: string; stderr: string }> {
   try {
-    return await execFileAsync(command, args, { cwd, timeout: 30_000, maxBuffer: 8 * 1024 * 1024 });
+    return await execFileAsync(command, args, { cwd, timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
   } catch (error) {
     const message = error instanceof Error ? redactOutput(error.message) : "command failed";
     if (/auth|not logged in|login required|oauth|credential/i.test(message)) throw new GithubFailure("authentication");
@@ -97,8 +97,8 @@ export function createGithubAdapter(command = process.env.FORGE_GH_COMMAND ?? "g
     },
     async observeMutationSurface(input) {
       const [branchesResult, pullsResult] = await Promise.all([
-        runGh(command, ["api", "--paginate", "--slurp", "-H", "Accept: application/vnd.github+json", `repos/${input.nameWithOwner}/git/refs/heads?per_page=100`], input.cwd),
-        runGh(command, ["api", "--paginate", "--slurp", "-H", "Accept: application/vnd.github+json", `repos/${input.nameWithOwner}/pulls?state=all&per_page=100`], input.cwd),
+        runGh(command, ["api", "--paginate", "--slurp", "--jq", "map({ref, object: {sha: .object.sha}})", "-H", "Accept: application/vnd.github+json", `repos/${input.nameWithOwner}/git/refs/heads?per_page=100`], input.cwd),
+        runGh(command, ["api", "--paginate", "--slurp", "--jq", "map({number, state, draft, head: {ref: .head.ref, sha: .head.sha}, base: {ref: .base.ref}, updated_at})", "-H", "Accept: application/vnd.github+json", `repos/${input.nameWithOwner}/pulls?state=open&per_page=100`], input.cwd),
       ]);
       try {
         const branches = flattenPages(JSON.parse(branchesResult.stdout)).flatMap((entry) => {

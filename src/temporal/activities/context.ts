@@ -238,7 +238,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       // A full disk is a host problem, not an agent problem: block visibly with Retry
       // instead of failing later as an unexplained ownership or supervisor error.
       if (error instanceof WorktreeFailure && error.code === "host_capacity") await attentionFailure(input, "capacity_exhausted", error.code, error.message);
-      const permanentFailure = asNonRetryableApplicationFailure(error);
+      const permanentFailure = asNonRetryableApplicationFailure(error) ?? asNonRetryableCapacityFailure(error);
       if (permanentFailure) {
         if (error instanceof AgentFailure) await attentionFailure(input, agentCategory(error), error.code, error.message);
         throw permanentFailure;

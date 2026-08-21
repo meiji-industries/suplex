@@ -39,6 +39,8 @@ export interface CiRepairPlanActivityInput {
   evidenceArtifactId: string;
   requiredChecks: string[];
   localVerification: string[];
+  roleProfiles?: { planner?: string | undefined; builder?: string | undefined; reviewer?: string | undefined; integrator?: string | undefined };
+  executionRole?: "planner" | "integrator";
   capacityRequestId?: string;
 }
 

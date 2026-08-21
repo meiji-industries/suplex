@@ -11,6 +11,7 @@ export interface MergeConflictPlanActivityInput {
   planRevision: number;
   forwardMergeId: string;
   roleProfiles?: { planner?: string | undefined; builder?: string | undefined; reviewer?: string | undefined; integrator?: string | undefined };
+  executionRole?: "planner" | "integrator";
   leadSessionRef: string;
   leadOutputArtifactId: string;
   worktreePath: string;

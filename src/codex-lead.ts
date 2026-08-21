@@ -495,7 +495,7 @@ export class AgentService {
     return this.database.authQuery((db) => db.prepare("SELECT id, name, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority, capacity FROM forge_profiles WHERE id = ?").get(profileId) as ProfileSettings | undefined);
   }
 
-  private activeCapacityExecution(input: { capacityRequestId?: string | undefined; taskId: string; companyId: string; workflowId: string }, role: "planner" | "reviewer"): { id: string; sessionRef: string | null } | undefined {
+  private activeCapacityExecution(input: { capacityRequestId?: string | undefined; taskId: string; companyId: string; workflowId: string }, role: "planner" | "reviewer" | "integrator"): { id: string; sessionRef: string | null } | undefined {
     if (!input.capacityRequestId) return undefined;
     return this.database.authQuery((db) => db.prepare(`SELECT id, session_ref AS sessionRef
       FROM forge_agent_executions
@@ -773,6 +773,7 @@ export class AgentService {
 
   async planMergeConflict(rawInput: MergeConflictPlanActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<MergeConflictPlanActivityResult> {
     const input = rawInput;
+    const executionRole = input.executionRole ?? "planner";
     const profile = this.executionProfile(input, undefined);
     if (profile && profile.provider !== this.provider.id) throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for merge-conflict planning");
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256
@@ -811,13 +812,13 @@ export class AgentService {
       this.artifacts.read({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
     ]);
     const rawSessionId = await this.sessionStore.read(input.leadSessionRef);
-    const leadProfile = await this.resolveTurnProfile(input.roleProfiles?.planner, input.leadSessionRef, "Lead");
+    const leadProfile = await this.resolveTurnProfile(input.roleProfiles?.[executionRole] ?? input.roleProfiles?.planner, input.leadSessionRef, "Integrator", executionRole);
     const schemaPath = await this.ensureLeadSchema();
-    const active = this.activeCapacityExecution(input, "planner");
+    const active = this.activeCapacityExecution(input, executionRole);
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     if (!active) this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?, 'merge-conflict-planning', ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:merge-conflict:${input.priorHead}:${input.targetBaseSha}:${input.capacityRequestId ?? executionId}`, input.planRevision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, input.leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, ?, 'starting', 1, ?, ?, 'merge-conflict-planning', ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, executionRole, `${input.workflowId}:merge-conflict:${input.priorHead}:${input.targetBaseSha}:${input.capacityRequestId ?? executionId}`, input.planRevision, leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, input.leadSessionRef, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, input.leadSessionRef, worktreePath);
     });
     const evidenceLines: string[] = [];
@@ -893,6 +894,7 @@ export class AgentService {
 
   async planCiRepair(rawInput: CiRepairPlanActivityInput): Promise<CiRepairPlanActivityResult> {
     const input = rawInput;
+    const executionRole = input.executionRole ?? "planner";
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, t.role_agents_json AS roleProfiles, a.outcome, a.observed_head_sha AS observedHeadSha, a.evidence_artifact_id AS evidenceArtifactId
       FROM forge_tasks t
       JOIN forge_ci_runs c ON c.id = ? AND c.task_id = t.id AND c.company_id = t.company_id AND c.superseded_at IS NULL
@@ -919,9 +921,10 @@ export class AgentService {
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(revision.normalized_json)));
     const rawSessionId = await this.sessionStore.read(input.leadSessionRef);
     if (!rawSessionId) throw new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
+    const profile = await this.resolveTurnProfile(input.roleProfiles?.[executionRole] ?? input.roleProfiles?.planner, input.leadSessionRef, "Integrator", executionRole);
     const executionId = `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.leadSessionRef, startedAt));
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at) VALUES (?, ?, ?, ?, ?, 'starting', 1, ?, ?, ?, ?, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, executionRole, profile.id, profile.model, profile.reasoningLevel, profile.servicePriority, input.leadSessionRef, startedAt));
     const evidenceLines: string[] = [];
     const outputLines: string[] = [];
     // Actions check-run summaries are empty; the failing job log tail recorded with the CI evidence is the real signal.
@@ -932,7 +935,7 @@ export class AgentService {
     let failure: AgentFailure | undefined;
     try {
       for (let turn = 0; turn < 2 && !plan; turn += 1) {
-        const result = await this.processRunner({ command: this.command, args: this.provider.buildTurnArgs({ prompt: turn === 0 ? prompt : `${prompt}\n\nReturn one corrected schema-valid object only.`, resumeSessionId: rawSessionId }), cwd: repositoryPath, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { const event = this.provider.parseEvent(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair planning returned a different Lead session identity"); evidenceLines.push(this.provider.sanitizeLine(line)); outputLines.push(line); await this.databaseHeartbeat(executionId, "running"); } });
+        const result = await this.processRunner({ command: this.command, args: this.provider.buildTurnArgs({ prompt: turn === 0 ? prompt : `${prompt}\n\nReturn one corrected schema-valid object only.`, resumeSessionId: rawSessionId, profile }), cwd: repositoryPath, onStart: async (pid, processStartedAt) => { await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, `${pid}:${processStartedAt}`, processStartedAt, executionId)); }, onLine: async (line) => { const event = this.provider.parseEvent(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair planning returned a different Lead session identity"); evidenceLines.push(this.provider.sanitizeLine(line)); outputLines.push(line); await this.databaseHeartbeat(executionId, "running"); } });
         if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, outputLines);
         try {
           plan = parseCiRepairPlan(outputLines, this.provider);
@@ -1452,8 +1455,8 @@ export class AgentService {
     return () => signal.removeEventListener("abort", mark);
   }
 
-  private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string): Promise<{ id: string; model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }> {
-    const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND role = 'planner' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(sessionRef) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
+  private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string, role: "planner" | "integrator" = "planner"): Promise<{ id: string; model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }> {
+    const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND role = ? AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(sessionRef, role) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const profile = pinned ? undefined : this.database.authQuery((db) => (profileId
       ? db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId)
       : db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE provider = ? ORDER BY id LIMIT 1").get(this.provider.id)) as { id: string; provider: string; model: string; reasoningLevel: string; servicePriority: string } | undefined);

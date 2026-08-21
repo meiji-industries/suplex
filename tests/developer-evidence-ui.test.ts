@@ -9,6 +9,7 @@ import type { TaskResponse } from "../src/http/contracts/tasks.js";
 
 test("labels an agent with its execution profile", () => {
   expect(invocationActorLabel({ agentName: "Planner", profileName: "Smart", role: "planner" })).toBe("Planner (Smart)");
+  expect(invocationActorLabel({ agentName: "Planner", profileName: "Fast", role: "integrator" })).toBe("Integrator (Fast)");
 });
 
 test("makes conflict summaries easy to scan", () => {

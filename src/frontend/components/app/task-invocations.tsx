@@ -8,8 +8,12 @@ import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
 export type TaskInvocation = TaskResponse["agentInvocations"][number];
 
+export function roleLabel(role: TaskInvocation["role"]): string {
+  return role.charAt(0).toUpperCase() + role.slice(1);
+}
+
 export function invocationActorLabel(invocation: Pick<TaskInvocation, "agentName" | "profileName" | "role">): string {
-  return invocation.agentName ? `${invocation.agentName}${invocation.profileName ? ` (${invocation.profileName})` : ""}` : `${invocation.role.charAt(0).toUpperCase()}${invocation.role.slice(1)}`;
+  return `${roleLabel(invocation.role)}${invocation.profileName ? ` (${invocation.profileName})` : ""}`;
 }
 
 function invocationDate(timestamp: string): string {

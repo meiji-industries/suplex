@@ -93,7 +93,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       try {
         const plan = await ctx.acquireExternalTurn<contracts.CiRepairPlanActivityResult>(
           { operation: "ci_repair_plan", ...stateTransitions.integratorTurn(ctx, "planner"), sessionRef: leadSessionRef },
-          (capacityRequestId) => activityProxies.planCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, leadSessionRef, ciRunId: result.runId, ciAttemptId, failedHeadSha: expectedHeadSha, evidenceArtifactId, requiredChecks: [], localVerification: [], ...(capacityRequestId ? { capacityRequestId } : {}) }),
+          (capacityRequestId) => activityProxies.planCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, leadSessionRef, ciRunId: result.runId, ciAttemptId, failedHeadSha: expectedHeadSha, evidenceArtifactId, requiredChecks: [], localVerification: [], roleProfiles: ctx.input.roleProfiles, executionRole: stateTransitions.integratorTurn(ctx, "planner").role === "integrator" ? "integrator" : "planner", ...(capacityRequestId ? { capacityRequestId } : {}) }),
           (repairPlan) => repairPlan.leadExecutionId,
         );
         // The Lead can conclude the failure is not caused by this delivery. Re-run the

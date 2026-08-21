@@ -52,18 +52,19 @@ async function recordedProcessLiveness(controller: ProcessController, row: Agent
   return alive.some(Boolean) ? "unknown" : "gone";
 }
 
-function markAmbiguous(database: ForgeDatabase, row: AgentExecutionRow, reason: string): void {
-  database.authTransaction((db) => {
-    db.prepare("UPDATE forge_agent_executions SET status = 'ownership_ambiguous', finished_at = ?, heartbeat_at = ?, failure_code = 'ownership-ambiguous', failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(new Date().toISOString(), new Date().toISOString(), reason, row.id);
-    db.prepare("UPDATE forge_issue_projections SET owner = 'human', allowed_commands_json = ?, pending_action = ?, updated_at = ? WHERE task_id = ?").run(JSON.stringify(["retry_capacity", "cancel_issue"]), "Operator must verify Agent ownership", new Date().toISOString(), row.task_id);
-  });
-}
-
 /** Reconcile Agent wrappers before the Temporal worker begins polling. */
 export async function reconcileAgentExecutions(database: ForgeDatabase, controller: ProcessController = defaultProcessController): Promise<AgentRecoveryOutcome[]> {
   const outcomes: AgentRecoveryOutcome[] = [];
   for (const row of rows(database)) {
     const liveness = await recordedProcessLiveness(controller, row);
+    if (liveness === "live") {
+      // The recorded PID identities are sufficient to resume a turn. Wrapper
+      // metadata is helpful for cleanup, but cannot turn a live Agent into a
+      // human-owned ownership gate.
+      heartbeat(database, row);
+      outcomes.push({ executionId: row.id, status: "active", reason: "live-process" });
+      continue;
+    }
     if (liveness === "gone") {
       markFailed(database, row, "The recorded Agent process is gone; Forge failed the turn so the workflow can retry.");
       outcomes.push({ executionId: row.id, status: "failed", reason: "process-gone" });
@@ -71,14 +72,8 @@ export async function reconcileAgentExecutions(database: ForgeDatabase, controll
     }
     if (!row.wrapper_id || !row.wrapper_path || !row.process_pid || !row.process_group_id || !row.process_start_identity) {
       // Too little evidence for a wrapper inspection: the process identity decides.
-      if (liveness === "live") {
-        heartbeat(database, row);
-        outcomes.push({ executionId: row.id, status: "active", reason: "live-process" });
-        continue;
-      }
-      if (!row.wrapper_id && !row.wrapper_path) continue;
-      markAmbiguous(database, row, "Agent process ownership evidence is incomplete");
-      outcomes.push({ executionId: row.id, status: "ownership_ambiguous", reason: row.wrapper_path ? "wrapper-identity-mismatch" : "wrapper-missing" });
+      markFailed(database, row, "The recorded Agent process is no longer running; Forge failed the turn so the workflow can retry.");
+      outcomes.push({ executionId: row.id, status: "failed", reason: row.wrapper_path ? "wrapper-identity-mismatch" : "wrapper-missing" });
       continue;
     }
     const inspection = await inspectDurableExecution({ controller, executionId: row.id, wrapperPath: row.wrapper_path, processPid: row.process_pid, processGroupId: row.process_group_id, processStartIdentity: row.process_start_identity });
@@ -88,8 +83,8 @@ export async function reconcileAgentExecutions(database: ForgeDatabase, controll
       continue;
     }
     if (inspection.status !== "live") {
-      markAmbiguous(database, row, "Agent wrapper or child process identity does not match the durable ledger");
-      outcomes.push({ executionId: row.id, status: "ownership_ambiguous", reason: inspection.status === "missing" ? "wrapper-missing" : "wrapper-identity-mismatch" });
+      markFailed(database, row, "The recorded Agent process is no longer running; Forge failed the turn so the workflow can retry.");
+      outcomes.push({ executionId: row.id, status: "failed", reason: inspection.status === "missing" ? "wrapper-missing" : "wrapper-identity-mismatch" });
       continue;
     }
     heartbeat(database, row);
@@ -106,7 +101,7 @@ export async function cancelAgentExecution(database: ForgeDatabase, executionId:
   const row = await agentRow(database, executionId);
   if (!row || !["starting", "running"].includes(row.status)) return { status: "ownership_ambiguous", reason: "execution-not-active" };
   if (!row.process_pid || !row.process_group_id || !row.process_start_identity || !row.wrapper_id || !row.wrapper_path) {
-    markAmbiguous(database, row, "Forge cannot prove ownership of the recorded Agent process");
+    markFailed(database, row, "The recorded Agent process is no longer running; Forge failed the turn so the workflow can retry.");
     return { status: "ownership_ambiguous", reason: "ownership-missing" };
   }
   const inspection = await inspectDurableExecution({ controller, executionId: row.id, wrapperPath: row.wrapper_path, processPid: row.process_pid, processGroupId: row.process_group_id, processStartIdentity: row.process_start_identity });
@@ -117,7 +112,7 @@ export async function cancelAgentExecution(database: ForgeDatabase, executionId:
     return { status: "cancelled" };
   }
   if (inspection.status !== "live") {
-    markAmbiguous(database, row, "Forge refused cancellation because Agent process ownership could not be proven");
+    markFailed(database, row, "The recorded Agent process is no longer running; Forge failed the turn so the workflow can retry.");
     return { status: "ownership_ambiguous", reason: "identity-mismatch" };
   }
   database.authTransaction((db) => db.prepare("UPDATE forge_agent_executions SET status = 'cancelling', heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running')").run(new Date().toISOString(), row.id));
@@ -134,7 +129,7 @@ export async function cancelAgentExecution(database: ForgeDatabase, executionId:
     terminalProof = false;
   }
   if (!terminalProof) {
-    markAmbiguous(database, row, "Forge could not prove the Agent process group terminated");
+    markFailed(database, row, "The recorded Agent process is no longer running; Forge failed the turn so the workflow can retry.");
     return { status: "ownership_ambiguous", reason: "cancellation-timeout" };
   }
   database.authTransaction((db) => {

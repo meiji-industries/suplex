@@ -535,6 +535,7 @@ test("Lead authors a complete conflict-resolution plan from both merge sides", a
   const conflictArtifact = await artifactStore.put("company_1", "forward-merge-conflict", { filename: "conflict.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkpoint: "pre_release", expectedBaseSha: "b".repeat(40), observedBaseSha: "b".repeat(40), priorHead: "a".repeat(40), priorTree: "a".repeat(40), conflictFiles: ["shared.txt"], combinedDiff: "<<<<<<< HEAD\nissue\n=======\nbase\n>>>>>>> base", priorCommitSummary: "", baseCommitSummary: "", commandEvidence: { command: "git diff --cc --no-ext-diff", complete: true } })) });
   const now = new Date().toISOString();
   value.database.authTransaction((db) => {
+    db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES ('profile_integrator', 'Integrator', 'codex', 'gpt-5.6-luna', 'low', 'fast', 1, ?, ?)").run(now, now);
     for (const artifact of [plan, leadEvidence, conflictArtifact]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
     db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, conflict_artifact_id, conflict_artifact_sha256, conflict_file_count, updated_at) VALUES ('merge-lead-1', 'task_1', 'company_1', ?, ?, ?, NULL, NULL, 'conflict', '[\"shared.txt\"]', ?, 'workflow-test-issue-task_1', 'revision_1', 'pre_release', ?, ?, ?, 1, ?)").run("b".repeat(40), "b".repeat(40), "a".repeat(40), now, "a".repeat(40), conflictArtifact.id, conflictArtifact.sha256, now);
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_conflict_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
@@ -548,13 +549,25 @@ test("Lead authors a complete conflict-resolution plan from both merge sides", a
   };
   try {
     const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_lead"; }, async read() { return "raw-lead"; } } });
-    const result = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, forwardMergeId: "merge-lead-1", leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictArtifact: { id: conflictArtifact.id, sha256: conflictArtifact.sha256, kind: "forward-merge-conflict" }, conflictFileCount: 1 });
+    const result = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, forwardMergeId: "merge-lead-1", roleProfiles: { planner: "profile_1", integrator: "profile_integrator" }, executionRole: "integrator", leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictArtifact: { id: conflictArtifact.id, sha256: conflictArtifact.sha256, kind: "forward-merge-conflict" }, conflictFileCount: 1 });
     expect(result).toMatchObject({ leadSessionRef: "session_lead", summary: "Resolve the shared file from both sides." });
+    expect(value.database.authQuery((db) => db.prepare("SELECT role, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ role: "integrator", profile_id: "profile_integrator", resolved_model: "gpt-5.6-luna", resolved_reasoning_level: "low", resolved_service_priority: "fast" });
     expect(value.database.authQuery((db) => db.prepare("SELECT status, lead_session_ref FROM forge_merge_conflict_resolutions WHERE id = ?").get(result.planId))).toEqual({ status: "planned", lead_session_ref: "session_lead" });
     const second = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, forwardMergeId: "merge-lead-1", leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictArtifact: { id: conflictArtifact.id, sha256: conflictArtifact.sha256, kind: "forward-merge-conflict" }, conflictFileCount: 1 });
     expect(second.planId).toBe(result.planId);
     const count = value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_merge_conflict_resolutions WHERE workflow_id = 'workflow-test-issue-task_1' AND prior_head = ? AND target_base_sha = ?").get("a".repeat(40), "b".repeat(40))) as { count: number };
     expect(count.count).toBe(1);
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("Integrator turns fall back to the Planner profile when no Integrator is configured", async () => {
+  const value = await fixture();
+  const service = new AgentService(value.database, value.config, { processRunner: async () => ({ exitCode: 0, stderr: "" }), sessionStore: { async create() { return "session"; }, async read() { return "missing"; } } });
+  try {
+    await expect((service as unknown as { resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string, role: "planner" | "integrator"): Promise<{ id: string }> }).resolveTurnProfile("profile_1", undefined, "Integrator", "integrator")).resolves.toEqual({ id: "profile_1", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

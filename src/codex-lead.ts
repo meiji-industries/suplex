@@ -371,9 +371,12 @@ interface DeliveryReviewContext {
   deliverySha256: string;
   evidenceStoragePath: string;
   evidenceSha256: string;
-  developerSessionRef: string;
+  developerSessionRef: string | null;
+  developerExecutionId: string;
   deliveryArtifactId: string;
   developerEvidenceArtifactId: string;
+  developerResultCommit: string | null;
+  developerResultTree: string | null;
   forwardMergePriorHead: string | null;
   forwardMergeTargetBaseSha: string | null;
 }
@@ -971,69 +974,45 @@ export class AgentService {
     const input = DeliveryReviewActivityInputSchema.parse(rawInput);
     let subject = input.subject;
     const targetBaseSha = subject.targetBaseSha;
-    const subjectCommit = subject.subjectCommit;
-    const subjectTree = subject.subjectTree;
+    let subjectCommit = subject.subjectCommit;
+    let subjectTree = subject.subjectTree;
     const leadSessionRef = subject.leadSessionRef;
     const isFinalReview = input.reviewKind === "final";
     if (isFinalReview && (!input.releaseId || !input.ciRunId || !input.deliveryReviewId)) throw new AgentFailure("scoped-input-missing", "Final review requires the exact release, delivery review, and CI run");
-    const finalContext = isFinalReview ? this.database.authQuery((db) => db.prepare("SELECT r.id, r.base_sha AS baseSha, r.head_sha AS headSha, r.head_tree AS headTree, c.status FROM forge_releases r JOIN forge_ci_runs c ON c.id = ? AND c.release_id = r.id WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ? AND r.superseded_at IS NULL AND c.superseded_at IS NULL AND c.project_revision_id = ? AND c.policy_hash IS NOT NULL AND EXISTS (SELECT 1 FROM forge_ci_attempts ca WHERE ca.run_id = c.id AND ca.attempt_number = (SELECT MAX(latest.attempt_number) FROM forge_ci_attempts latest WHERE latest.run_id = c.id) AND ca.outcome = 'passed' AND ca.observed_head_sha = r.head_sha)").get(input.ciRunId, input.releaseId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId) as { id: string; baseSha: string; headSha: string; headTree: string; status: string } | undefined) : undefined;
-    if (isFinalReview && (!finalContext || finalContext.status !== "passed" || finalContext.headSha.toLowerCase() !== subjectCommit.toLowerCase() || finalContext.headTree.toLowerCase() !== subjectTree.toLowerCase() || finalContext.baseSha.toLowerCase() !== targetBaseSha.toLowerCase())) {
-      throw new AgentFailure("ci-not-authoritative", "Final review requires passed CI for the exact reviewed release head");
-    }
-    if (isFinalReview) {
-      const exactDelivery = this.database.authQuery((db) => db.prepare(`SELECT dr.id
-        FROM forge_delivery_reviews dr
-        JOIN forge_developer_executions de ON de.id = ? AND de.id = ? AND de.task_id = dr.task_id AND de.company_id = dr.company_id AND de.workflow_id = dr.workflow_id
-        WHERE dr.id = ? AND dr.task_id = ? AND dr.company_id = ? AND dr.workflow_id = ? AND dr.outcome = 'approved'
-          AND dr.plan_revision = ? AND lower(dr.base_sha) = lower(?) AND lower(dr.subject_commit) = lower(?) AND lower(dr.subject_tree) = lower(?) AND dr.session_ref = ?`).get(subject.developerExecutionId, subject.developerExecutionId, input.deliveryReviewId, input.taskId, input.companyId, input.workflowId, subject.planRevision, targetBaseSha, subjectCommit, subjectTree, leadSessionRef) as { id: string } | undefined);
-      if (!exactDelivery) throw new AgentFailure("delivery-review-not-authoritative", "Final review requires the exact approved delivery review and Developer execution");
-    }
-    const existingFinal = isFinalReview ? this.database.authQuery((db) => db.prepare("SELECT id, lead_execution_id AS leadExecutionId, session_ref AS sessionRef, opinion_artifact_id AS opinionArtifactId, evidence_artifact_id AS evidenceArtifactId, outcome, summary FROM forge_final_reviews WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND release_id = ? AND ci_run_id = ? AND delivery_review_id = ? AND developer_execution_id = ? AND subject_commit = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.releaseId, input.ciRunId, input.deliveryReviewId, subject.developerExecutionId, subjectCommit) as { id: string; leadExecutionId: string; sessionRef: string; opinionArtifactId: string; evidenceArtifactId: string; outcome: "approved" | "blocking"; summary: string } | undefined) : undefined;
-    if (existingFinal) {
-      const findings = this.database.authQuery((db) => db.prepare("SELECT id AS findingId, severity, rationale, evidence_ref AS evidenceRef, disposition, repair_instruction AS repairInstruction FROM forge_final_review_findings WHERE review_id = ? ORDER BY id").all(existingFinal.id) as DeliveryReview["findings"]);
-      return DeliveryReviewActivityResultSchema.parse({ outcome: "completed", attemptId: `review_attempt_existing_${existingFinal.id}`, correctionAttempts: 0, subject, review: { reviewId: existingFinal.id, leadExecutionId: existingFinal.leadExecutionId, leadSessionRef: existingFinal.sessionRef, opinionArtifactId: existingFinal.opinionArtifactId, evidenceArtifactId: existingFinal.evidenceArtifactId, opinion: existingFinal.outcome, summary: existingFinal.summary, repairPlan: null, findings, supersedesReviewId: input.supersedesReviewId } });
-    }
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson,
       b.storage_path AS briefStoragePath, b.sha256 AS briefSha256,
       pa.storage_path AS planStoragePath, pa.sha256 AS planSha256,
       da.storage_path AS deliveryStoragePath, da.sha256 AS deliverySha256,
       ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256,
-      de.session_ref AS developerSessionRef,
-      delivery_de.delivery_artifact_id AS deliveryArtifactId,
-      delivery_de.evidence_artifact_id AS developerEvidenceArtifactId,
-      COALESCE(fm.prior_head, CASE WHEN delivery_de.id <> de.id THEN delivery_de.result_commit END) AS forwardMergePriorHead,
-      COALESCE(fm.current_base_sha, CASE WHEN delivery_de.id <> de.id THEN de.target_base_sha END) AS forwardMergeTargetBaseSha
+      delivery_de.id AS developerExecutionId, delivery_de.session_ref AS developerSessionRef,
+      delivery_de.delivery_artifact_id AS deliveryArtifactId, delivery_de.evidence_artifact_id AS developerEvidenceArtifactId,
+      delivery_de.result_commit AS developerResultCommit, delivery_de.result_tree AS developerResultTree,
+      fm.prior_head AS forwardMergePriorHead, fm.current_base_sha AS forwardMergeTargetBaseSha
       FROM forge_tasks t
-      JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
+      JOIN forge_project_revisions r ON r.id = t.project_revision_id
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id
-      JOIN forge_issue_outputs io ON io.task_id = t.id AND io.workflow_id = t.workflow_id AND io.output_artifact_id = ? AND io.revision = ?
-      JOIN forge_artifacts pa ON pa.id = io.output_artifact_id
-      JOIN forge_developer_executions de ON de.id = ? AND de.task_id = t.id AND de.company_id = t.company_id AND de.workflow_id = t.workflow_id AND lower(de.result_commit) = lower(?) AND lower(de.result_tree) = lower(?) AND lower(de.target_base_sha) = lower(?)
-      JOIN forge_developer_executions delivery_de ON delivery_de.id = COALESCE(
-        CASE WHEN de.delivery_artifact_id IS NOT NULL AND de.evidence_artifact_id IS NOT NULL THEN de.id END,
-        (SELECT prior.id FROM forge_developer_executions prior
-          WHERE prior.task_id = de.task_id AND prior.company_id = de.company_id AND prior.workflow_id = de.workflow_id
-            AND prior.delivery_artifact_id IS NOT NULL AND prior.evidence_artifact_id IS NOT NULL
-          ORDER BY prior.finished_at DESC, prior.started_at DESC, prior.id DESC LIMIT 1)
-      )
+      JOIN forge_developer_executions delivery_de ON delivery_de.id = (SELECT latest.id FROM forge_developer_executions latest
+        WHERE latest.task_id = t.id AND latest.company_id = t.company_id
+          AND latest.delivery_artifact_id IS NOT NULL AND latest.evidence_artifact_id IS NOT NULL
+        ORDER BY latest.finished_at DESC, latest.started_at DESC, latest.id DESC LIMIT 1)
+      JOIN forge_artifacts pa ON pa.id = COALESCE(
+        (SELECT requested.output_artifact_id FROM forge_issue_outputs requested
+          WHERE requested.task_id = t.id AND requested.company_id = t.company_id AND requested.output_artifact_id = ? LIMIT 1),
+        (SELECT latest.output_artifact_id FROM forge_issue_outputs latest
+          WHERE latest.task_id = t.id AND latest.company_id = t.company_id AND latest.kind = 'plan' AND latest.revision = delivery_de.plan_revision
+          ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1))
       JOIN forge_artifacts da ON da.id = delivery_de.delivery_artifact_id
       JOIN forge_artifacts ea ON ea.id = delivery_de.evidence_artifact_id
-      LEFT JOIN forge_forward_merges fm ON fm.developer_execution_id = de.id AND fm.task_id = de.task_id AND fm.company_id = de.company_id AND fm.workflow_id = de.workflow_id AND fm.status = 'merged' AND fm.conflict_file_count IS NULL AND lower(fm.result_head) = lower(de.result_commit) AND lower(fm.result_tree) = lower(de.result_tree)
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(
+      LEFT JOIN forge_forward_merges fm ON fm.id = (SELECT latest.id FROM forge_forward_merges latest
+        WHERE latest.task_id = t.id AND latest.company_id = t.company_id AND latest.status = 'merged'
+        ORDER BY latest.updated_at DESC, latest.created_at DESC, latest.id DESC LIMIT 1)
+      WHERE t.id = ? AND t.company_id = ?`).get(
       input.leadOutputArtifactId,
-      input.planRevision,
-      subject.developerExecutionId,
-      subjectCommit,
-      subjectTree,
-      targetBaseSha,
       input.taskId,
       input.companyId,
-      input.projectId,
-      input.projectRevisionId,
-      input.briefArtifactId,
     ) as DeliveryReviewContext | undefined);
-    if (context && (context.deliveryArtifactId !== subject.deliveryArtifactId || context.developerEvidenceArtifactId !== subject.developerEvidenceArtifactId)) {
-      subject = { ...subject, deliveryArtifactId: context.deliveryArtifactId, developerEvidenceArtifactId: context.developerEvidenceArtifactId };
+    if (context && (context.developerExecutionId !== subject.developerExecutionId || context.deliveryArtifactId !== subject.deliveryArtifactId || context.developerEvidenceArtifactId !== subject.developerEvidenceArtifactId)) {
+      subject = { ...subject, developerExecutionId: context.developerExecutionId, deliveryArtifactId: context.deliveryArtifactId, developerEvidenceArtifactId: context.developerEvidenceArtifactId, developerSessionRef: context.developerSessionRef ?? subject.developerSessionRef };
       input.subject = subject;
     }
     if (!context) {
@@ -1050,6 +1029,32 @@ export class AgentService {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("unsafe-working-directory", "The delivery worktree is outside the configured scope");
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
       throw failure;
+    }
+    try {
+      [subjectCommit, subjectTree] = await Promise.all([
+        execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath, timeout: 20_000, maxBuffer: 4 * 1024 }).then((result) => result.stdout.trim()),
+        execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: worktreePath, timeout: 20_000, maxBuffer: 4 * 1024 }).then((result) => result.stdout.trim()),
+      ]);
+    } catch {
+      if (context.developerResultCommit && context.developerResultTree) {
+        subjectCommit = context.developerResultCommit;
+        subjectTree = context.developerResultTree;
+      }
+    }
+    subject = { ...subject, subjectCommit, subjectTree };
+    input.subject = subject;
+    const finalContext = isFinalReview ? this.database.authQuery((db) => db.prepare("SELECT r.id, r.base_sha AS baseSha, r.head_sha AS headSha, r.head_tree AS headTree, c.status FROM forge_releases r JOIN forge_ci_runs c ON c.id = ? AND c.release_id = r.id WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ? AND r.superseded_at IS NULL AND c.superseded_at IS NULL AND c.policy_hash IS NOT NULL AND EXISTS (SELECT 1 FROM forge_ci_attempts ca WHERE ca.run_id = c.id AND ca.attempt_number = (SELECT MAX(latest.attempt_number) FROM forge_ci_attempts latest WHERE latest.run_id = c.id) AND ca.outcome = 'passed' AND ca.observed_head_sha = r.head_sha)").get(input.ciRunId, input.releaseId, input.taskId, input.companyId, input.workflowId) as { id: string; baseSha: string; headSha: string; headTree: string; status: string } | undefined) : undefined;
+    if (isFinalReview && (!finalContext || finalContext.status !== "passed" || finalContext.headSha.toLowerCase() !== subjectCommit.toLowerCase() || finalContext.headTree.toLowerCase() !== subjectTree.toLowerCase() || finalContext.baseSha.toLowerCase() !== targetBaseSha.toLowerCase())) {
+      throw new AgentFailure("ci-not-authoritative", "Final review requires passed CI for the exact reviewed release head");
+    }
+    if (isFinalReview) {
+      const approvedDelivery = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_delivery_reviews WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND outcome = 'approved'").get(input.deliveryReviewId, input.taskId, input.companyId, input.workflowId) as { id: string } | undefined);
+      if (!approvedDelivery) throw new AgentFailure("delivery-review-not-authoritative", "Final review requires an approved delivery review for this task");
+    }
+    const existingFinal = isFinalReview ? this.database.authQuery((db) => db.prepare("SELECT id, lead_execution_id AS leadExecutionId, session_ref AS sessionRef, opinion_artifact_id AS opinionArtifactId, evidence_artifact_id AS evidenceArtifactId, outcome, summary FROM forge_final_reviews WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND release_id = ? AND ci_run_id = ? AND delivery_review_id = ? AND developer_execution_id = ? AND subject_commit = ? ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.releaseId, input.ciRunId, input.deliveryReviewId, subject.developerExecutionId, subjectCommit) as { id: string; leadExecutionId: string; sessionRef: string; opinionArtifactId: string; evidenceArtifactId: string; outcome: "approved" | "blocking"; summary: string } | undefined) : undefined;
+    if (existingFinal) {
+      const findings = this.database.authQuery((db) => db.prepare("SELECT id AS findingId, severity, rationale, evidence_ref AS evidenceRef, disposition, repair_instruction AS repairInstruction FROM forge_final_review_findings WHERE review_id = ? ORDER BY id").all(existingFinal.id) as DeliveryReview["findings"]);
+      return DeliveryReviewActivityResultSchema.parse({ outcome: "completed", attemptId: `review_attempt_existing_${existingFinal.id}`, correctionAttempts: 0, subject, review: { reviewId: existingFinal.id, leadExecutionId: existingFinal.leadExecutionId, leadSessionRef: existingFinal.sessionRef, opinionArtifactId: existingFinal.opinionArtifactId, evidenceArtifactId: existingFinal.evidenceArtifactId, opinion: existingFinal.outcome, summary: existingFinal.summary, repairPlan: null, findings, supersedesReviewId: input.supersedesReviewId } });
     }
     let brief: string;
     let plan: string;

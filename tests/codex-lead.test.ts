@@ -992,6 +992,8 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_review_plan', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_lead_review', 1, 'plan', ?, ?, 'session_lead', 'Exact fixture plan', ?)").run(plan.id, leadEvidence.id, now);
     db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, current_step, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_prior_delivery', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'completed', 'forge/issue/task_1', ?, ?, 'session_developer', 1, ?, ?, ?, ?, 'clean', ?, ?)").run(worktreePath, targetBaseSha, now, now, targetBaseSha, targetBaseSha, delivery.id, developerEvidence.id);
     db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, current_step, started_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer_review_subject', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 2, 'completed', 'forge/issue/task_1', ?, ?, 'session_developer', 1, ?, ?, ?, ?, 'clean')").run(worktreePath, targetBaseSha, now, now, subjectCommit, subjectTree);
+    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, created_at) SELECT 'revision_2', project_id, 2, 'identity_2', normalized_json, base_sha, target_sha, actor_user_id, created_at FROM forge_project_revisions WHERE id = 'revision_1'").run();
+    db.prepare("UPDATE forge_tasks SET project_revision_id = 'revision_2' WHERE id = 'task_1'").run();
   });
   const sessions = new Map([["session_lead", "raw-lead"], ["session_developer", "raw-developer"]]);
   const sessionStore: SessionStore = { async create(raw) { const ref = `session_${raw}`; sessions.set(ref, raw); return ref; }, async read(ref) { return sessions.get(ref) ?? ""; } };
@@ -1020,7 +1022,7 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
   try {
     const lead = new AgentService(value.database, value.config, { processRunner: reviewRunner, sessionStore });
     value.database.authTransaction((db) => db.prepare("UPDATE forge_developer_executions SET session_ref = NULL WHERE id = 'developer_review_subject'").run());
-    const reviewInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadOutputArtifactId: plan.id, subject: { planRevision: 1, targetBaseSha, subjectCommit, subjectTree, developerExecutionId: "developer_review_subject", deliveryArtifactId: "stale_delivery_artifact", developerEvidenceArtifactId: "stale_verification_artifact", leadSessionRef: "session_lead", developerSessionRef: "session_developer" }, worktreePath, branchName: "forge/issue/task_1", supersedesReviewId: null };
+    const reviewInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadOutputArtifactId: plan.id, subject: { planRevision: 1, targetBaseSha, subjectCommit: "d".repeat(40), subjectTree: "e".repeat(40), developerExecutionId: "developer_review_subject", deliveryArtifactId: "stale_delivery_artifact", developerEvidenceArtifactId: "stale_verification_artifact", leadSessionRef: "session_lead", developerSessionRef: "session_developer" }, worktreePath, branchName: "forge/issue/task_1", supersedesReviewId: null };
     const review = await lead.reviewDelivery(reviewInput);
     expect(review).toMatchObject({ outcome: "completed", subject: { subjectCommit, subjectTree, deliveryArtifactId: delivery.id, developerEvidenceArtifactId: developerEvidence.id }, review: { opinion: "blocking", leadSessionRef: "session_lead" } });
     if (review.outcome !== "completed") throw new Error("Fixture review did not complete");
@@ -1031,8 +1033,6 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
     expect(reviewRequestPrompt).toContain(subjectCommit);
     expect(reviewRequestPrompt).toContain(subjectTree);
     expect(reviewRequestPrompt).toContain("Treat `not_applicable_locally` steps as acceptable when their note is reasonable.");
-    expect(reviewRequestPrompt).toContain("There is no Developer session for this head; review the current diff against the base");
-    expect(reviewRequestPrompt).toContain("This head is a clean forward merge of an already-reviewed delivery.");
     expect(reviewRequestPrompt.length).toBeLessThan(200_000);
     expect(reviewRequestPrompt).toContain("[truncated ");
     expect(reviewRequestPrompt).toContain("preserved-tail");

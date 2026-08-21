@@ -565,7 +565,6 @@ export class DeveloperService {
       const independentVerification = await runPinnedVerification({ worktreePath: owned.worktreePath, setupCommand: acceptedRevision.setupCommand, verificationCommand: acceptedRevision.verificationCommand }, { guard });
       const git = await collectDeveloperGitObservation(owned.worktreePath, owned.startingSha);
       const after = await this.observeProvider({ companyId: input.companyId, executionId: input.developerExecutionId, phase: "after", cwd: owned.repositoryRoot, repository: manifest!.projectRevision.repositoryIdentity });
-      if (!after.observation) { this.logRecoveryFault(input, "provider-observation", new Error("provider observation unavailable")); return null; }
       const reconciliation = reconcileDeveloperDelivery({ executionId: input.developerExecutionId, companyId: input.companyId, report: rawReport, independentVerification, git, startingSha: stored!.observations.startingSha, neutralBranch: stored!.observations.neutralBranch, providerBeforeSha256: row.beforeProviderSha256, providerAfterSha256: after.observation?.sha256 ?? null, processExitCode: stored!.observations.processExitCode, developerSessionId: stored!.observations.developerSessionId, leadSessionId: stored!.observations.leadSessionId, authorization: authorization!, manifest: manifest! });
       if (reconciliation.outcome !== "completed") return null;
       const artifact = await this.artifacts.putIdempotent(input.companyId, "developer-reconciliation", `${input.developerExecutionId}:reconciliation:v3:recovery:${reconciliation.sha256}`, { filename: `${input.developerExecutionId}-recovery.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(reconciliation), "utf8") });
@@ -601,7 +600,10 @@ export class DeveloperService {
     try {
       if (!this.githubObservation.observeMutationSurface) throw new Error("Provider observation is unavailable");
       observation = await this.githubObservation.observeMutationSurface({ cwd: input.cwd, nameWithOwner: input.repository });
-    } catch { observation = null; }
+    } catch (error) {
+      const message = toSafeSummary(String(redact(error instanceof Error ? error.message : String(error))).trim() || "unknown error");
+      new StructuredLogger().warn("Developer provider observation failed", {}, { executionId: input.executionId, phase: input.phase, error: message });
+    }
     const artifact = await this.artifacts.put(input.companyId, "developer-provider-observation", { filename: `${input.executionId}-${input.phase}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(observation ?? { available: false, reason: "provider-observation-unavailable" }), "utf8") });
     return { observation, artifact };
   }
@@ -646,7 +648,6 @@ export class DeveloperService {
     const activeWorktree = owned.status === "active" ? owned : activateOwnedWorktree(this.database, inspection);
     const startingTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: activeWorktree.worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
     const before = await this.observeProvider({ companyId: input.companyId, executionId, phase: "before", cwd: repositoryPath, repository: project.repositoryIdentity });
-    if (!before.observation) throw new AgentFailure("provider-observation-unavailable", "GitHub branch and pull-request state could not be observed before development");
     const beforeObservation = before.observation;
     const registeredExecution = this.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_developer_executions WHERE id = ?").get(executionId));
     if (!registeredExecution) await evidenceBuilder.cleanup(activeWorktree.worktreePath, executionId);
@@ -657,7 +658,7 @@ export class DeveloperService {
       registerArtifact(db, before.artifact);
       db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, NULL)").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, activeWorktree.branchName, activeWorktree.worktreePath, activeWorktree.startingSha, `wrapper_${randomBytes(12).toString("hex")}`, guard.directory, input.supersedesExecutionId ?? null, startedAt, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, undefined, activeWorktree.worktreePath);
-      db.prepare("INSERT OR IGNORE INTO forge_developer_execution_truth (execution_id, authorization_id, worktree_lease_id, manifest_artifact_id, manifest_sha256, boundary_mode, before_provider_artifact_id, before_provider_sha256, starting_commit, starting_tree) VALUES (?, ?, ?, ?, ?, 'owner_controlled_observed', ?, ?, ?, ?)").run(executionId, authorization.authorizationId, activeWorktree.leaseId, evidence.artifact.id, evidence.artifact.sha256, before.artifact.id, beforeObservation.sha256, inspection.head ?? activeWorktree.startingSha, startingTree);
+      db.prepare("INSERT OR IGNORE INTO forge_developer_execution_truth (execution_id, authorization_id, worktree_lease_id, manifest_artifact_id, manifest_sha256, boundary_mode, before_provider_artifact_id, before_provider_sha256, starting_commit, starting_tree) VALUES (?, ?, ?, ?, ?, 'owner_controlled_observed', ?, ?, ?, ?)").run(executionId, authorization.authorizationId, activeWorktree.leaseId, evidence.artifact.id, evidence.artifact.sha256, before.artifact.id, beforeObservation?.sha256 ?? null, inspection.head ?? activeWorktree.startingSha, startingTree);
     });
     const steps = evidence.manifest.verificationCommands.map((step) => `${step.stepNumber}: ${step.commands.join(" && ") || "(file/Git state verification)"}`).join("\n");
     const prompt = buildDeveloperExecutionPrompt({ executionId, reuseWorktree: Boolean(input.reuseWorktree), startingSha: activeWorktree.startingSha, verificationSteps: steps });
@@ -698,7 +699,7 @@ export class DeveloperService {
       const gitArtifact = await this.artifacts.put(input.companyId, "developer-git-snapshot", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(git), "utf8") });
       const receipts = parsed.receipts.map((receipt) => ExecutionReceiptSchema.parse(receipt));
       receipts.push(ExecutionReceiptSchema.parse({ eventId: `receipt_${createHash("sha256").update(`${executionId}:git-snapshot`).digest("hex").slice(0, 32)}`, executionId, attempt, sequence: Math.max(0, ...receipts.map((receipt) => receipt.sequence)) + 1, kind: "git_snapshot", stepNumber: null, sourceItemId: null, occurredAt: this.now().toISOString(), summary: "Final Git snapshot", exitCode: null, artifactId: gitArtifact.id, artifactSha256: gitArtifact.sha256, idempotencyKey: `git-snapshot:${gitArtifact.id}` }));
-      const reconciliation = reconcileDeveloperDelivery({ executionId, companyId: input.companyId, report: parsed.finalReport, independentVerification, git, startingSha: activeWorktree.startingSha, neutralBranch: activeWorktree.branchName, providerBeforeSha256: beforeObservation.sha256, providerAfterSha256: after.observation?.sha256 ?? null, processExitCode: result.exitCode, malformedLines: parsed.malformedLines, developerSessionId: rawSessionId ?? null, leadSessionId: leadSessionId ?? null, authorization, manifest: evidence.manifest });
+      const reconciliation = reconcileDeveloperDelivery({ executionId, companyId: input.companyId, report: parsed.finalReport, independentVerification, git, startingSha: activeWorktree.startingSha, neutralBranch: activeWorktree.branchName, providerBeforeSha256: beforeObservation?.sha256 ?? null, providerAfterSha256: after.observation?.sha256 ?? null, processExitCode: result.exitCode, malformedLines: parsed.malformedLines, developerSessionId: rawSessionId ?? null, leadSessionId: leadSessionId ?? null, authorization, manifest: evidence.manifest });
       const deliverySummary = reconciliation.failureCode === "developer-made-no-change"
         ? "Developer made no change"
         : reconciliation.outcome === "completed"

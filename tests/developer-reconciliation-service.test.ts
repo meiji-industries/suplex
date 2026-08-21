@@ -193,15 +193,15 @@ test("keeps the original authority when fresh verification fails", async () => {
   value.database.close();
 });
 
-test("rejects provider unavailability without mutating truth", async () => {
+test("recovers when the provider observation is unavailable", async () => {
   const value = await recoveryFixture();
   const adapter = (value.service as unknown as { githubObservation: GithubAdapter }).githubObservation;
   vi.spyOn(adapter, "observeMutationSurface").mockImplementation(async () => {
     value.counters.provider += 1;
     throw new Error("provider unavailable");
   });
-  expect(await value.service.reconcileStoredDelivery(value.input)).toBeNull();
-  expect(truth(value.database)).toMatchObject({ status: "blocked", reconciliationArtifactId: value.legacyArtifact.id });
+  expect(await value.service.reconcileStoredDelivery(value.input)).toMatchObject({ outcome: "completed" });
+  expect(truth(value.database)).toMatchObject({ status: "completed" });
   value.database.close();
 });
 

@@ -26,6 +26,12 @@ test("accepts a delivery when unrelated provider state changes", () => {
   expect(result.provider).toMatchObject({ matching: false });
 });
 
+test("accepts a delivery when provider observations are unavailable", () => {
+  const result = reconcileDeveloperDelivery(input({ providerBeforeSha256: null, providerAfterSha256: null }));
+  expect(result).toMatchObject({ outcome: "completed", failureCode: null, provider: { beforeSha256: null, afterSha256: null, matching: false } });
+  expect(result.mismatches).not.toContain("provider-observation-unavailable");
+});
+
 test("hashes authoritative report and verification facts, not transcript claims or timestamps", () => {
   const first = reconcileDeveloperDelivery(input({
     report: { ...report, commandsRun: ["untrusted command"], testResults: ["untrusted result"] },
@@ -68,7 +74,7 @@ test("passes missing or mismatched audit evidence to the reviewer path", () => {
     leadSessionId: "shared-session",
   }));
   expect(result).toMatchObject({ outcome: "blocked", failureCode: "dirty-final-tree" });
-  expect(result.mismatches).toEqual(expect.arrayContaining(["dirty-final-tree", "commit-parent-mismatch", "provider-observation-unavailable", "process-exit-nonzero", "session-identity-conflict"]));
+  expect(result.mismatches).toEqual(expect.arrayContaining(["dirty-final-tree", "commit-parent-mismatch", "process-exit-nonzero", "session-identity-conflict"]));
 });
 
 test("derives plan completion from the static manifest and report", () => {
@@ -133,7 +139,6 @@ test("isolates final-state reconciliation gates", () => {
     ["paths", { git: { ...git, changedPaths: ["OTHER.md"] } }, "reported-files-mismatch"],
     ["report commit", { report: { ...report, resultCommit: "d".repeat(40) } }, "reported-git-state-mismatch"],
     ["report tree", { report: { ...report, resultTree: "d".repeat(40) } }, "reported-git-state-mismatch"],
-    ["provider unavailable", { providerAfterSha256: null }, "provider-observation-unavailable"],
     ["process absent", { processExitCode: null }, "process-exit-unknown"],
     ["process failed", { processExitCode: 1 }, "process-exit-nonzero"],
     ["developer session", { developerSessionId: null }, "missing-session"],

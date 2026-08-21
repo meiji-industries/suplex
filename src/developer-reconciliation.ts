@@ -47,7 +47,7 @@ export interface DeveloperReconciliationInput {
   git: DeveloperGitObservation;
   startingSha: string;
   neutralBranch: string;
-  providerBeforeSha256: string;
+  providerBeforeSha256: string | null;
   providerAfterSha256: string | null;
   processExitCode: number | null;
   malformedLines?: number;
@@ -70,7 +70,7 @@ export interface DeveloperReconciliation {
   manifest: EvidenceManifest;
   independentVerification: IndependentVerification | null;
   git: DeveloperGitObservation;
-  provider: { beforeSha256: string; afterSha256: string | null; matching: boolean };
+  provider: { beforeSha256: string | null; afterSha256: string | null; matching: boolean };
   observations: {
     startingSha: string;
     neutralBranch: string;
@@ -118,7 +118,7 @@ export const DeveloperReconciliationArtifactSchema = z.object({
   receipts: z.array(ExecutionReceiptSchema).optional(),
   receiptCount: z.number().int().nonnegative().optional(),
   git: GitObservationSchema,
-  provider: z.object({ beforeSha256: z.string(), afterSha256: z.string().nullable(), matching: z.boolean() }),
+  provider: z.object({ beforeSha256: z.string().nullable(), afterSha256: z.string().nullable(), matching: z.boolean() }),
   observations: ObservationsSchema.optional(),
   sha256: z.string().regex(/^[a-f0-9]{64}$/i),
 }).passthrough();
@@ -183,7 +183,6 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
   if (rawInput.git.head.toLowerCase() === rawInput.startingSha.toLowerCase()) mismatches.push("no-new-commit");
   if (rawInput.git.parents.length !== 1 || rawInput.git.parents[0]?.toLowerCase() !== rawInput.startingSha.toLowerCase()) mismatches.push("commit-parent-mismatch");
   if (rawInput.git.commitCount !== 1) mismatches.push("commit-count-mismatch");
-  if (rawInput.providerAfterSha256 === null) mismatches.push("provider-observation-unavailable");
   if (rawInput.processExitCode !== 0) mismatches.push(rawInput.processExitCode === null ? "process-exit-unknown" : "process-exit-nonzero");
   if (!rawInput.developerSessionId) mismatches.push("missing-session");
   if (!rawInput.leadSessionId) mismatches.push("missing-lead-session");
@@ -228,7 +227,7 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
     manifest: rawInput.manifest,
     independentVerification,
     git: rawInput.git,
-    provider: { beforeSha256: rawInput.providerBeforeSha256, afterSha256: rawInput.providerAfterSha256, matching: rawInput.providerAfterSha256 !== null && rawInput.providerBeforeSha256 === rawInput.providerAfterSha256 },
+    provider: { beforeSha256: rawInput.providerBeforeSha256, afterSha256: rawInput.providerAfterSha256, matching: rawInput.providerBeforeSha256 !== null && rawInput.providerBeforeSha256 === rawInput.providerAfterSha256 },
     observations: { startingSha: rawInput.startingSha, neutralBranch: rawInput.neutralBranch, processExitCode: rawInput.processExitCode, developerSessionId: rawInput.developerSessionId, leadSessionId: rawInput.leadSessionId },
   };
   return { ...result, sha256: createHash("sha256").update(JSON.stringify(result)).digest("hex") };

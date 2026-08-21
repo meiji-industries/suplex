@@ -100,8 +100,8 @@ export class StructuredLogger {
     this.write("info", message, context);
   }
 
-  warn(message: string, context: LogContext = {}): void {
-    this.write("warn", message, context);
+  warn(message: string, context: LogContext = {}, details: Record<string, unknown> = {}): void {
+    this.write("warn", message, { ...context, ...details });
   }
 
   error(message: string, context: LogContext = {}, details: Record<string, unknown> = {}): void {

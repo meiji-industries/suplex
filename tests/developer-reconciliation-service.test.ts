@@ -193,19 +193,28 @@ test("keeps the original authority when fresh verification fails", async () => {
   value.database.close();
 });
 
-test("rejects provider unavailability and drift without mutating truth", async () => {
-  for (const mode of ["unavailable", "drift"] as const) {
-    const value = await recoveryFixture();
-    const adapter = (value.service as unknown as { githubObservation: GithubAdapter }).githubObservation;
-    vi.spyOn(adapter, "observeMutationSurface").mockImplementation(async () => {
-      value.counters.provider += 1;
-      if (mode === "unavailable") throw new Error("provider unavailable");
-      return { repository: "acme/forge", observedAt: new Date().toISOString(), branches: [], pullRequests: [], sha256: "d".repeat(64) };
-    });
-    expect(await value.service.reconcileStoredDelivery(value.input)).toBeNull();
-    expect(truth(value.database)).toMatchObject({ status: "blocked", reconciliationArtifactId: value.legacyArtifact.id });
-    value.database.close();
-  }
+test("rejects provider unavailability without mutating truth", async () => {
+  const value = await recoveryFixture();
+  const adapter = (value.service as unknown as { githubObservation: GithubAdapter }).githubObservation;
+  vi.spyOn(adapter, "observeMutationSurface").mockImplementation(async () => {
+    value.counters.provider += 1;
+    throw new Error("provider unavailable");
+  });
+  expect(await value.service.reconcileStoredDelivery(value.input)).toBeNull();
+  expect(truth(value.database)).toMatchObject({ status: "blocked", reconciliationArtifactId: value.legacyArtifact.id });
+  value.database.close();
+});
+
+test("recovers when unrelated provider state drifts", async () => {
+  const value = await recoveryFixture();
+  const adapter = (value.service as unknown as { githubObservation: GithubAdapter }).githubObservation;
+  vi.spyOn(adapter, "observeMutationSurface").mockImplementation(async () => {
+    value.counters.provider += 1;
+    return { repository: "acme/forge", observedAt: new Date().toISOString(), branches: [], pullRequests: [], sha256: "d".repeat(64) };
+  });
+  expect(await value.service.reconcileStoredDelivery(value.input)).toMatchObject({ outcome: "completed" });
+  expect(truth(value.database)).toMatchObject({ status: "completed" });
+  value.database.close();
 });
 
 test("cancellation, supersession, and truth-pointer races cannot complete recovery", async () => {

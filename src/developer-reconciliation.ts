@@ -184,7 +184,6 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
   if (rawInput.git.parents.length !== 1 || rawInput.git.parents[0]?.toLowerCase() !== rawInput.startingSha.toLowerCase()) mismatches.push("commit-parent-mismatch");
   if (rawInput.git.commitCount !== 1) mismatches.push("commit-count-mismatch");
   if (rawInput.providerAfterSha256 === null) mismatches.push("provider-observation-unavailable");
-  else if (rawInput.providerBeforeSha256 !== rawInput.providerAfterSha256) mismatches.push("provider-state-changed");
   if (rawInput.processExitCode !== 0) mismatches.push(rawInput.processExitCode === null ? "process-exit-unknown" : "process-exit-nonzero");
   if (!rawInput.developerSessionId) mismatches.push("missing-session");
   if (!rawInput.leadSessionId) mismatches.push("missing-lead-session");
@@ -207,10 +206,10 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
   }
 
   const uniqueMismatches = [...new Set(mismatches)];
-  // Audit observations remain durable diagnostics; only the required local check and a
-  // small set of unsafe-worktree/provider-drift gates decide whether delivery can continue.
+  // Audit observations remain durable diagnostics; only required local checks and
+  // unsafe worktree state decide whether delivery can continue.
   const requiredTestsFailed = !independentVerification || independentVerification.outcome !== "passed";
-  const blockingMismatch = ["dirty-final-tree", "branch-mismatch", "provider-state-changed"].find((code) => uniqueMismatches.includes(code));
+  const blockingMismatch = ["dirty-final-tree", "branch-mismatch"].find((code) => uniqueMismatches.includes(code));
   const result: Omit<DeveloperReconciliation, "sha256"> = {
     kind: "developer-reconciliation",
     policyVersion: 2,

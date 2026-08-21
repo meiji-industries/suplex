@@ -19,6 +19,13 @@ test("accepts a valid delivery without receipt input", () => {
   expect(result.sha256).toMatch(/^[a-f0-9]{64}$/);
 });
 
+test("accepts a delivery when unrelated provider state changes", () => {
+  const result = reconcileDeveloperDelivery(input({ providerAfterSha256: "f".repeat(64) }));
+  expect(result).toMatchObject({ outcome: "completed", failureCode: null });
+  expect(result.mismatches).not.toContain("provider-state-changed");
+  expect(result.provider).toMatchObject({ matching: false });
+});
+
 test("hashes authoritative report and verification facts, not transcript claims or timestamps", () => {
   const first = reconcileDeveloperDelivery(input({
     report: { ...report, commandsRun: ["untrusted command"], testResults: ["untrusted result"] },
@@ -118,7 +125,6 @@ test("isolates final-state reconciliation gates", () => {
     ["report commit", { report: { ...report, resultCommit: "d".repeat(40) } }, "reported-git-state-mismatch"],
     ["report tree", { report: { ...report, resultTree: "d".repeat(40) } }, "reported-git-state-mismatch"],
     ["provider unavailable", { providerAfterSha256: null }, "provider-observation-unavailable"],
-    ["provider drift", { providerAfterSha256: "f".repeat(64) }, "provider-state-changed"],
     ["process absent", { processExitCode: null }, "process-exit-unknown"],
     ["process failed", { processExitCode: 1 }, "process-exit-nonzero"],
     ["developer session", { developerSessionId: null }, "missing-session"],

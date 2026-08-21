@@ -301,7 +301,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   };
   const runSupervised = async <T extends { developerExecutionId: string; evidenceArtifactId: string | null; deliveryArtifactId?: string; verificationArtifact?: { id: string } }>(
     input: { taskId: string; companyId: string; workflowId: string; planRevision: number; capacityRequestId?: string } & DeveloperSupervisorActivityIdentity,
-    operation: (service: Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution">) => Promise<T>,
+    operation: (service: Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">) => Promise<T>,
   ): Promise<DeveloperTurnActivityOutcome<T>> => {
     const leases = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot);
     const priorClaim = leases.readClaim(input.developerTurnExecutionId);

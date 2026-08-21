@@ -188,7 +188,14 @@ export const { planCiRepair } = proxyActivities<IssueActivities>({
 export const { runCiRepair } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
   scheduleToCloseTimeout: "65 minutes",
-  retry: { maximumAttempts: 1 },
+  heartbeatTimeout: "15 seconds",
+  cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+  retry: { maximumAttempts: 100, initialInterval: "1 second", maximumInterval: "30 seconds", nonRetryableErrorTypes: ["developer-ownership-ambiguous", "developer-result-claim-conflict"] },
+});
+
+export const { updateCiFromBase } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "10 minutes",
+  retry: { maximumAttempts: 3, initialInterval: "5 seconds", maximumInterval: "1 minute" },
 });
 
 export const { finalReview } = proxyActivities<IssueActivities>({

@@ -39,6 +39,18 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
         WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_revision_id = ?`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId) as { normalizedJson: string; worktreePath: string } | undefined);
       if (!context) throw new Error("The exact CI delivery worktree is unavailable");
       const pinned = parseAcceptedProjectRevision(context.normalizedJson);
+      const adopt = (baseSha: string, headSha: string, headTree: string): { outcome: "updated"; baseSha: string; headSha: string; headTree: string; summary: string } => {
+        const update = database.authTransaction((db) => db.prepare("UPDATE forge_releases SET base_sha = ?, head_sha = ?, head_tree = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(baseSha, headSha, headTree, new Date().toISOString(), input.releaseId, input.taskId, input.companyId));
+        if (update.changes !== 1) throw new Error("The exact CI release record is unavailable");
+        return { outcome: "updated", baseSha, headSha, headTree, summary: "Merged the latest base branch into the pull request and pushed it" };
+      };
+      const local = await githubRelease.inspectLocalRevision({ cwd: context.worktreePath });
+      const remoteHead = await githubRelease.getBranchHead({ repository: pinned.repository, branch: input.branchName });
+      if (local.headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase() && remoteHead?.toLowerCase() === local.headSha.toLowerCase()) {
+        const baseSha = await githubRelease.getBranchHead({ repository: pinned.repository, branch: pinned.baseBranch });
+        if (!baseSha) throw new Error("The updated CI base branch was not confirmed on the provider");
+        return adopt(baseSha, local.headSha, local.treeSha);
+      }
       const service = new ForwardMergeService(database, githubRelease, new ArtifactStore(config.artifactRoot));
       const merge = await service.reconcile({
         worktreePath: context.worktreePath,
@@ -63,7 +75,7 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
       await githubRelease.pushNormal({ cwd: context.worktreePath, branch: input.branchName });
       const observedHead = await githubRelease.getBranchHead({ repository: pinned.repository, branch: input.branchName });
       if (observedHead?.toLowerCase() !== merge.mergeCommit.toLowerCase()) throw new Error("The updated CI branch was not confirmed on the provider");
-      return { outcome: "updated" as const, baseSha: merge.targetBaseSha, headSha: merge.mergeCommit, headTree: merge.tree, summary: "Merged the latest base branch into the pull request and pushed it" };
+      return adopt(merge.targetBaseSha, merge.mergeCommit, merge.tree);
     },
     async runCiRepair(input: WorkflowCiRepairActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);

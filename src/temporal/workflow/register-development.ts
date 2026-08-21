@@ -95,7 +95,10 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
     // Retain this marker for retries recorded before retry_development always started
     // a fresh turn. Those histories invoked the patch regardless of reconcileOnly.
     const reconciliationRecoveryEnabled = ctx.patched(ctx.developerReconciliationRecoveryPatch);
-    if (command.reconcileOnly && ctx.state.phase === "delivery_blocked" && ctx.state.developerExecutionId && reconciliationRecoveryEnabled) {
+    // `retry_development` originally reconciled evidence before scheduling a
+    // replacement Developer turn. Keep that exact command sequence for
+    // histories created before the fresh-turn behavior was introduced.
+    if (!ctx.patched("forge-retry-fresh-turn-v1") && ctx.state.phase === "delivery_blocked" && ctx.state.developerExecutionId && reconciliationRecoveryEnabled) {
       const priorExecutionId = ctx.state.developerExecutionId;
       const reconciled = await activityProxies.reconcileDeveloperDeliveryEvidence({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, developerExecutionId: priorExecutionId });
       if (reconciled?.outcome === "completed") {

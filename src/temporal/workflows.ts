@@ -6,6 +6,7 @@ import {
   IssueProjectionEventSchema,
   IssueWorkflowInputSchema,
   IssueWorkflowStateSchema,
+  normalizeSafeSummary,
   type IssueBlocker,
   type IssueBlockerAction,
   type IssueCommand,
@@ -164,13 +165,14 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const verification = result.code === "verification_failed" || result.code === "verification_timed_out" || result.code === "verification_evidence_too_large";
     const retryable = result.retryable || (result.code === "merge_state_ownership_mismatch" && Boolean(state.forwardMergeId));
     const allowedCommands = retryable ? [verification ? "retry_forward_merge_verification" : "retry_target_base_reconciliation", "cancel_issue"] as const : ["cancel_issue"] as const;
+    const summary = normalizeSafeSummary(result.summary, 200);
     state = IssueWorkflowStateSchema.parse({
       ...state,
       revision: state.revision + 1,
       phase: "delivery_blocked",
       owner: result.owner === "lead" ? "lead" : "human",
       allowedCommands,
-      pendingAction: result.summary,
+      pendingAction: summary,
       lastEventId: `${state.workflowId}:${state.revision + 1}`,
       targetBaseCheckId: result.checkId,
       targetBaseCheckpoint: result.checkpoint,
@@ -178,7 +180,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       targetBaseBlockerCode: result.code,
       targetBaseBlockerOwner: result.owner,
       targetBaseBlockerRetryable: retryable,
-      targetBaseBlockerSummary: result.summary,
+      targetBaseBlockerSummary: summary,
       ...recoveryFields(null, null, null, null),
       ...(verification && result.observedBaseSha ? { forwardMergeTargetBaseSha: result.observedBaseSha } : {}),
       ...(verification && result.resultHead ? { resultCommit: result.resultHead } : {}),

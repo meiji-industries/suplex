@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { TERMINAL_PHASES } from "../../../issue-phases.js";
+import { normalizeSafeSummary } from "../primitives.js";
 import { acceptanceStateFields } from "./acceptance.js";
 import { capacityStateFields } from "./capacity.js";
 import { ciStateFields } from "./ci.js";
@@ -43,6 +44,22 @@ const orderedStateFields = {
 };
 
 export const IssueWorkflowStateSchema = z.preprocess((raw) => {
+  if (raw && typeof raw === "object") {
+    const state = { ...(raw as Record<string, unknown>) };
+    // Activity-provided summaries are not trusted to fit the compact workflow
+    // state fields. Normalize before validation so replaying an old activity
+    // result cannot make a workflow task fail forever.
+    if (typeof state.pendingAction === "string") state.pendingAction = normalizeSafeSummary(state.pendingAction, 200);
+    for (const [key, value] of Object.entries(state)) {
+      if (key.endsWith("Summary") && typeof value === "string") state[key] = normalizeSafeSummary(value, 200);
+    }
+    if (state.blocker && typeof state.blocker === "object") {
+      const blocker = { ...(state.blocker as Record<string, unknown>) };
+      if (typeof blocker.summary === "string") blocker.summary = normalizeSafeSummary(blocker.summary, 200);
+      state.blocker = blocker;
+    }
+    raw = state;
+  }
   // A human blocker is a human-owned wait. When a transition hands ownership back to an
   // agent without clearing it, the blocker is stale, not an invariant violation.
   if (raw && typeof raw === "object" && (raw as { owner?: unknown }).owner !== "human" && (raw as { blocker?: { unblockOwner?: unknown } | null }).blocker?.unblockOwner === "human") return { ...(raw as object), blocker: null };

@@ -181,16 +181,20 @@ export const DurableArtifactReferenceSchema = z.object({
 
 export type DurableArtifactReference = z.infer<typeof DurableArtifactReferenceSchema>;
 
-export function normalizeSafeSummary(value: unknown): string {
+export function normalizeSafeSummary(value: unknown, maxBytes = 240): string {
   const normalized = String(value).replace(/[\r\n]+/g, " ").trim();
   if (!normalized) return "The operation requires operator attention.";
+  const suffix = "…";
+  const encoder = new TextEncoder();
+  if (encoder.encode(normalized).byteLength <= maxBytes) return normalized;
+  const budget = maxBytes - encoder.encode(suffix).byteLength;
   let result = "";
   for (const character of normalized) {
     const candidate = result + character;
-    if (new TextEncoder().encode(candidate).byteLength > 240) break;
+    if (encoder.encode(candidate).byteLength > budget) break;
     result = candidate;
   }
-  return result || "The operation requires operator attention.";
+  return result ? `${result.trimEnd()}${suffix}` : suffix;
 }
 
 export const SafeSummarySchema = z.string().min(1).superRefine((value, context) => {

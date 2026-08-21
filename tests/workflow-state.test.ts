@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { DeliveryReviewActivityResultSchema, DeveloperRepairActivityResultSchema, IssueWorkflowStateSchema, SafeSummarySchema, toSafeSummary } from "../src/temporal/issue-contracts.js";
+import { DeliveryReviewActivityResultSchema, DeveloperRepairActivityResultSchema, IssueWorkflowStateSchema, SafeSummarySchema, normalizeSafeSummary, toSafeSummary } from "../src/temporal/issue-contracts.js";
 import { ISSUE_PHASES, TERMINAL_PHASES } from "../src/issue-phases.js";
 import { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "../src/temporal/workflows.js";
 
@@ -33,6 +33,16 @@ test("safe summaries are normalized before entering workflow state", () => {
   expect(new TextEncoder().encode(compactUnicode).byteLength).toBeLessThanOrEqual(240);
   expect(compactUnicode.endsWith("…")).toBe(true);
   expect(compactUnicode).not.toContain("�");
+});
+
+test("workflow summaries are truncated before state validation", () => {
+  const longSummary = "blocked ".repeat(100);
+  const parsed = IssueWorkflowStateSchema.parse({ ...state(), phase: "delivery_blocked", owner: "human", pendingAction: longSummary, targetBaseBlockerSummary: longSummary, blocker: { category: "agent_exhausted", summary: longSummary, unblockOwner: "human", actions: [{ command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidence: { artifactId: "artifact_evidence", sha256: "d".repeat(64), kind: "attention-evidence" }, createdAt: "2026-01-01T00:00:00.000Z", retry: null } });
+
+  expect(normalizeSafeSummary(longSummary, 200).endsWith("…")).toBe(true);
+  expect(parsed.pendingAction!.length).toBeLessThanOrEqual(200);
+  expect(parsed.targetBaseBlockerSummary!.length).toBeLessThanOrEqual(200);
+  expect(parsed.blocker?.summary.length).toBeLessThanOrEqual(200);
 });
 
 test("delivery workflow constructors keep blockers retryable and approvals exact", () => {

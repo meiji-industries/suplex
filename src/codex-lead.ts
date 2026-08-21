@@ -372,6 +372,7 @@ interface DeliveryReviewContext {
   evidenceStoragePath: string;
   evidenceSha256: string;
   developerSessionRef: string;
+  deliveryArtifactId: string;
   developerEvidenceArtifactId: string;
   forwardMergePriorHead: string | null;
   forwardMergeTargetBaseSha: string | null;
@@ -998,23 +999,30 @@ export class AgentService {
       da.storage_path AS deliveryStoragePath, da.sha256 AS deliverySha256,
       ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256,
       de.session_ref AS developerSessionRef,
-      de.evidence_artifact_id AS developerEvidenceArtifactId,
-      fm.prior_head AS forwardMergePriorHead,
-      fm.current_base_sha AS forwardMergeTargetBaseSha
+      delivery_de.delivery_artifact_id AS deliveryArtifactId,
+      delivery_de.evidence_artifact_id AS developerEvidenceArtifactId,
+      COALESCE(fm.prior_head, CASE WHEN delivery_de.id <> de.id THEN delivery_de.result_commit END) AS forwardMergePriorHead,
+      COALESCE(fm.current_base_sha, CASE WHEN delivery_de.id <> de.id THEN de.target_base_sha END) AS forwardMergeTargetBaseSha
       FROM forge_tasks t
       JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id
       JOIN forge_issue_outputs io ON io.task_id = t.id AND io.workflow_id = t.workflow_id AND io.output_artifact_id = ? AND io.revision = ?
       JOIN forge_artifacts pa ON pa.id = io.output_artifact_id
-      JOIN forge_developer_executions de ON de.id = ? AND de.task_id = t.id AND de.company_id = t.company_id AND de.workflow_id = t.workflow_id AND de.delivery_artifact_id = ? AND lower(de.result_commit) = lower(?) AND lower(de.result_tree) = lower(?) AND lower(de.target_base_sha) = lower(?)
-      JOIN forge_artifacts da ON da.id = de.delivery_artifact_id
-      JOIN forge_artifacts ea ON ea.id = de.evidence_artifact_id
+      JOIN forge_developer_executions de ON de.id = ? AND de.task_id = t.id AND de.company_id = t.company_id AND de.workflow_id = t.workflow_id AND lower(de.result_commit) = lower(?) AND lower(de.result_tree) = lower(?) AND lower(de.target_base_sha) = lower(?)
+      JOIN forge_developer_executions delivery_de ON delivery_de.id = COALESCE(
+        CASE WHEN de.delivery_artifact_id IS NOT NULL AND de.evidence_artifact_id IS NOT NULL THEN de.id END,
+        (SELECT prior.id FROM forge_developer_executions prior
+          WHERE prior.task_id = de.task_id AND prior.company_id = de.company_id AND prior.workflow_id = de.workflow_id
+            AND prior.delivery_artifact_id IS NOT NULL AND prior.evidence_artifact_id IS NOT NULL
+          ORDER BY prior.finished_at DESC, prior.started_at DESC, prior.id DESC LIMIT 1)
+      )
+      JOIN forge_artifacts da ON da.id = delivery_de.delivery_artifact_id
+      JOIN forge_artifacts ea ON ea.id = delivery_de.evidence_artifact_id
       LEFT JOIN forge_forward_merges fm ON fm.developer_execution_id = de.id AND fm.task_id = de.task_id AND fm.company_id = de.company_id AND fm.workflow_id = de.workflow_id AND fm.status = 'merged' AND fm.conflict_file_count IS NULL AND lower(fm.result_head) = lower(de.result_commit) AND lower(fm.result_tree) = lower(de.result_tree)
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(
       input.leadOutputArtifactId,
       input.planRevision,
       subject.developerExecutionId,
-      subject.deliveryArtifactId,
       subjectCommit,
       subjectTree,
       targetBaseSha,
@@ -1024,8 +1032,8 @@ export class AgentService {
       input.projectRevisionId,
       input.briefArtifactId,
     ) as DeliveryReviewContext | undefined);
-    if (context?.developerEvidenceArtifactId && context.developerEvidenceArtifactId !== subject.developerEvidenceArtifactId) {
-      subject = { ...subject, developerEvidenceArtifactId: context.developerEvidenceArtifactId };
+    if (context && (context.deliveryArtifactId !== subject.deliveryArtifactId || context.developerEvidenceArtifactId !== subject.developerEvidenceArtifactId)) {
+      subject = { ...subject, deliveryArtifactId: context.deliveryArtifactId, developerEvidenceArtifactId: context.developerEvidenceArtifactId };
       input.subject = subject;
     }
     if (!context) {

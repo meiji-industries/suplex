@@ -148,10 +148,7 @@ function defaultProcessRunner(invocation: LeadInvocation): Promise<LeadProcessRe
           executable: inspection.executable,
           argv: inspection.argv,
         } : undefined;
-        if (!owned || !await turnSupervisor.cancelOwnedProcess(owned, inspection)) {
-          reject(new AgentFailure("ownership_ambiguous", "Codex wrapper ownership could not be verified"));
-          return;
-        }
+        if (owned) await turnSupervisor.cancelOwnedProcess(owned, inspection);
       };
       if (invocation.signal.aborted) void cancel();
       else invocation.signal.addEventListener("abort", () => void cancel(), { once: true });

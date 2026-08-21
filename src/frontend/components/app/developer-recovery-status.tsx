@@ -15,7 +15,6 @@ const labels: Record<DeveloperRecoveryView["status"], string> = {
   reconnecting: "Reconnecting",
   result_pending_claim: "Finishing",
   interrupted: "Interrupted",
-  ownership_ambiguous: "Interrupted",
   cancellation_requested: "Cancellation requested",
   cancelling: "Cancelling",
   cancelled: "Cancelled",
@@ -24,10 +23,9 @@ const labels: Record<DeveloperRecoveryView["status"], string> = {
 
 export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, busy, isAdmin, onAction, developmentStatus, children }: { taskId: string; recovery: DeveloperRecoveryView | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction) => Promise<void>; developmentStatus?: ReactNode; children?: ReactNode }): ReactElement | null {
   if (!recovery) return null;
-  const ambiguous = recovery.status === "ownership_ambiguous";
   const interrupted = recovery.status === "interrupted";
   const failed = recovery.status === "failed";
-  const attention = ambiguous || interrupted || failed;
+  const attention = interrupted || failed;
   const description = attention ? recovery.summary : null;
   const recoveryCommands = allowedCommands;
   const hasActions = recoveryCommands.includes("retry_development") || recoveryCommands.includes("cancel_development");

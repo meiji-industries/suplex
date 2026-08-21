@@ -179,7 +179,7 @@ test("Planning progress reuses the durable agent spool", async () => {
     expect(first.events).toHaveLength(1);
     expect(first.events[0]?.summary).toBe("Inspecting the README.");
     expect(value.tasks.getPlanningProgress(value.adminId, created.task.id, { executionId, sequence: 1 }).events).toEqual([]);
-    value.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'ownership_ambiguous', finished_at = ? WHERE id = ?").run(startedAt, executionId));
+    value.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ? WHERE id = ?").run(startedAt, executionId));
     expect(value.tasks.getPlanningProgress(value.adminId, created.task.id)).toMatchObject({ status: "failed", execution: { status: "failed" } });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

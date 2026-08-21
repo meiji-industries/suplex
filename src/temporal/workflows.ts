@@ -220,7 +220,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     return false;
   };
   const supervisedDeveloperTurns = patched(developerSupervisorPatch);
-  const recoveryFields = (status: "starting" | "active" | "reconnecting" | "result_pending_claim" | "cancellation_requested" | "cancelling" | "interrupted" | "cancelled" | "ownership_ambiguous" | "failed" | null, reasonCode: string | null, summary: string | null, heartbeatAt: string | null) => ({ developerRecoveryStatus: status, developerRecoveryReasonCode: reasonCode, developerRecoverySummary: summary, developerLastHeartbeatAt: heartbeatAt });
+  const recoveryFields = (status: "starting" | "active" | "reconnecting" | "result_pending_claim" | "cancellation_requested" | "cancelling" | "interrupted" | "cancelled" | "failed" | null, reasonCode: string | null, summary: string | null, heartbeatAt: string | null) => ({ developerRecoveryStatus: status, developerRecoveryReasonCode: reasonCode, developerRecoverySummary: summary, developerLastHeartbeatAt: heartbeatAt });
   const applyCompletedDeveloperResult = (rawResult: unknown, summary: string): boolean => {
     if (!rawResult || typeof rawResult !== "object") return false;
     const result = rawResult as Record<string, unknown>;
@@ -373,13 +373,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   registerLifecycleHandlersContinuation(workflowContext);
   registerPlanningHandlersReject(workflowContext);
   registerCapacityHandlers(workflowContext);
-  // Old histories can contain the former ownership blocker even though its
-  // capacity request has already been released.  Clear that ceremonial gate
-  // once this patch is active, without changing replay of histories before it.
-  if (patched("forge-capacity-ownership-clear-v1") && state.capacityBlocker?.category === "ownership_ambiguous" && state.capacity) {
+  if (patched("forge-capacity-ownership-clear-v1") && !patched("forge-no-ownership-v2") && (state.capacityBlocker as { category?: string } | null)?.category === "ownership_ambiguous" && state.capacity) {
     const request = await inspectCapacity({ requestId: state.capacity.requestId });
     if (["released", "cancelled", "stale", "exhausted"].includes(request.status)) {
-      state = IssueWorkflowStateSchema.parse({ ...state, capacity: null, capacityBlocker: null, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer retry is available", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      state = { ...state, capacity: null, capacityBlocker: null, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer retry is available", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` };
     }
   }
   assertPayloadWithinLimit("Issue Workflow result", state);

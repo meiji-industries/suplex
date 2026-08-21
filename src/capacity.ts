@@ -166,7 +166,7 @@ export class CapacityManager {
     return row(raw);
   }
 
-  tryAcquire(requestId: string, expectedWorkflowRevision = 0, now = new Date().toISOString()): (CapacityAdmissionResult & { acquired: boolean; request: CapacityRequestSnapshot }) | { status: "ownership_ambiguous"; publicState: CapacityAdmissionResult["publicState"]; acquired: false; request: CapacityRequestSnapshot } {
+  tryAcquire(requestId: string, expectedWorkflowRevision = 0, now = new Date().toISOString()): CapacityAdmissionResult & { acquired: boolean; request: CapacityRequestSnapshot } {
     return this.database.authImmediateTransaction((db) => {
       this.sweepInactiveExecutions(db, now);
       const raw = db.prepare("SELECT * FROM forge_capacity_requests WHERE id = ?").get(requestId) as Record<string, unknown> | undefined;

@@ -17,19 +17,19 @@ interface AgentExecutionRow {
 
 export interface AgentRecoveryOutcome {
   executionId: string;
-  status: "active" | "terminal_result" | "ownership_ambiguous" | "failed";
+  status: "active" | "terminal_result" | "failed";
   reason: "live-wrapper" | "live-process" | "stored-wrapper-result" | "wrapper-missing" | "wrapper-identity-mismatch" | "process-gone";
 }
 
 const EXECUTION_COLUMNS = "id, task_id, status, process_pid, process_group_id, process_start_identity, wrapper_id, wrapper_path, wrapper_pid, wrapper_start_identity";
 
 function rows(database: ForgeDatabase): AgentExecutionRow[] {
-  return database.authQuery((db) => db.prepare(`SELECT ${EXECUTION_COLUMNS} FROM forge_agent_executions WHERE status IN ('starting', 'running', 'cancelling', 'ownership_ambiguous') ORDER BY started_at, id`).all() as AgentExecutionRow[]);
+  return database.authQuery((db) => db.prepare(`SELECT ${EXECUTION_COLUMNS} FROM forge_agent_executions WHERE status IN ('starting', 'running', 'cancelling') ORDER BY started_at, id`).all() as AgentExecutionRow[]);
 }
 
 function markFailed(database: ForgeDatabase, row: AgentExecutionRow, summary: string): void {
   const now = new Date().toISOString();
-  database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = 'worker-restart', failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling', 'ownership_ambiguous')").run(now, now, summary, row.id));
+  database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = 'worker-restart', failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(now, now, summary, row.id));
 }
 
 function heartbeat(database: ForgeDatabase, row: AgentExecutionRow): void {
@@ -97,12 +97,12 @@ async function agentRow(database: ForgeDatabase, executionId: string): Promise<A
   return database.authQuery((db) => db.prepare(`SELECT ${EXECUTION_COLUMNS} FROM forge_agent_executions WHERE id = ?`).get(executionId) as AgentExecutionRow | undefined);
 }
 
-export async function cancelAgentExecution(database: ForgeDatabase, executionId: string, controller: ProcessController = defaultProcessController): Promise<{ status: "cancelled" | "ownership_ambiguous"; reason?: string }> {
+export async function cancelAgentExecution(database: ForgeDatabase, executionId: string, controller: ProcessController = defaultProcessController): Promise<{ status: "cancelled"; reason?: string }> {
   const row = await agentRow(database, executionId);
-  if (!row || !["starting", "running"].includes(row.status)) return { status: "ownership_ambiguous", reason: "execution-not-active" };
+  if (!row || !["starting", "running"].includes(row.status)) return { status: "cancelled", reason: "execution-not-active" };
   if (!row.process_pid || !row.process_group_id || !row.process_start_identity || !row.wrapper_id || !row.wrapper_path) {
     markFailed(database, row, "The recorded Agent process is no longer running; Forge failed the turn so the workflow can retry.");
-    return { status: "ownership_ambiguous", reason: "ownership-missing" };
+    return { status: "cancelled", reason: "ownership-missing" };
   }
   const inspection = await inspectDurableExecution({ controller, executionId: row.id, wrapperPath: row.wrapper_path, processPid: row.process_pid, processGroupId: row.process_group_id, processStartIdentity: row.process_start_identity });
   if (inspection.status === "terminal_result") {
@@ -113,7 +113,7 @@ export async function cancelAgentExecution(database: ForgeDatabase, executionId:
   }
   if (inspection.status !== "live") {
     markFailed(database, row, "The recorded Agent process is no longer running; Forge failed the turn so the workflow can retry.");
-    return { status: "ownership_ambiguous", reason: "identity-mismatch" };
+    return { status: "cancelled", reason: "identity-mismatch" };
   }
   database.authTransaction((db) => db.prepare("UPDATE forge_agent_executions SET status = 'cancelling', heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running')").run(new Date().toISOString(), row.id));
   let terminalProof = false;
@@ -130,7 +130,7 @@ export async function cancelAgentExecution(database: ForgeDatabase, executionId:
   }
   if (!terminalProof) {
     markFailed(database, row, "The recorded Agent process is no longer running; Forge failed the turn so the workflow can retry.");
-    return { status: "ownership_ambiguous", reason: "cancellation-timeout" };
+    return { status: "cancelled", reason: "cancellation-timeout" };
   }
   database.authTransaction((db) => {
     const finishedAt = new Date().toISOString();

@@ -44,7 +44,7 @@ test("INV-01/INV-07/INV-08 execution identity is deterministic, claims are idemp
     expect(repo.claim({ executionId, resultHash: "r".repeat(64), activityResultJson: "{\"kind\":\"delivery\"}", deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_evidence" }).conflict).toBe(false);
     expect(() => repo.claim({ executionId, resultHash: "x".repeat(64), activityResultJson: "{}", deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_evidence" })).not.toThrow();
     expect(repo.claim({ executionId, resultHash: "x".repeat(64), activityResultJson: "{}", deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_evidence" }).conflict).toBe(true);
-    expect(repo.get(executionId)?.status).toBe("ownership_ambiguous");
+    expect(repo.get(executionId)?.status).toBe("failed");
     expect(value.database.authQuery((db) => db.prepare("SELECT existing_result_hash, conflicting_result_hash FROM forge_developer_result_conflicts WHERE execution_id = ?").get(executionId))).toEqual({ existing_result_hash: "r".repeat(64), conflicting_result_hash: "x".repeat(64) });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

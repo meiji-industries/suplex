@@ -49,7 +49,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       ctx.planningPromise = undefined;
       ctx.planningScope = undefined;
     }
-    if (ctx.state.developerExecutionId && ["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling", "ownership_ambiguous"].includes(ctx.state.developerRecoveryStatus ?? "")) {
+    if (ctx.state.developerExecutionId && ["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling"].includes(ctx.state.developerRecoveryStatus ?? "")) {
       const cancellation = await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId: ctx.state.developerExecutionId });
       if (cancellation.status === "completed_before_cancellation") {
         if (!unconditionalCancellation && ctx.applyCompletedDeveloperResult(cancellation.result, "Developer result claimed before issue cancellation.")) {

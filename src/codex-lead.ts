@@ -624,13 +624,13 @@ export class AgentService {
           if (wrapperAlive) return this.attachPlanningResult(input, active, runtime.signal, wrapper);
           if (childAlive && child) {
             const childOwnership = { name: "codex-child", pid: child.pid, command: child.command, startedAt, processGroup: child.processGroup, startTime: child.startTime, executable: child.executable, argv: child.argv };
-            if (!await turnSupervisor.cancelOwnedProcess(childOwnership, child)) throw new AgentFailure("ownership_ambiguous", "The stale Lead child process could not be safely terminated");
+            await turnSupervisor.cancelOwnedProcess(childOwnership, child);
           } else if (groupAlive) {
-            throw new AgentFailure("ownership_ambiguous", "The stale Lead process group could not be safely identified");
+            await this.processController.signalGroup?.(active.wrapper_process_group!, "SIGTERM");
+            await this.processController.signalGroup?.(active.wrapper_process_group!, "SIGKILL");
           }
-          if (!active.wrapper_pid || !active.wrapper_process_group || !active.wrapper_start_identity) throw new AgentFailure("ownership_ambiguous", "The stale Lead execution has incomplete process ownership or pinned settings");
         }
-        if (!active.resolved_model || !active.resolved_reasoning_level || !active.resolved_service_priority) throw new AgentFailure("ownership_ambiguous", "The Lead execution has incomplete pinned settings");
+        if (!active.resolved_model || !active.resolved_reasoning_level || !active.resolved_service_priority) throw new AgentFailure("scope_configuration", "The Lead execution has incomplete pinned settings");
         executionId = active.id;
         sessionRef = active.session_ref ?? undefined;
         rawSessionId = sessionRef ? await this.sessionStore.read(sessionRef) : undefined;
@@ -639,8 +639,6 @@ export class AgentService {
         leadProfile.servicePriority = active.resolved_service_priority;
         const claim = this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'starting', attempt = ?, heartbeat_at = ?, finished_at = NULL, failure_code = NULL, failure_summary = NULL, cancellation_requested_at = NULL, cancelled_at = NULL WHERE id = ? AND status = ?").run(active.attempt + 1, startedAt, executionId, active.status));
         if (claim.changes !== 1) {
-          const latest = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_agent_executions WHERE id = ?").get(executionId) as { status: string } | undefined);
-          if (latest?.status === "ownership_ambiguous") throw new AgentFailure("ownership_ambiguous", "Restart reconciliation could not prove ownership of the Lead execution");
           throw new AgentFailure("active-lease", "A Lead execution is already active for this issue");
         }
       } else {
@@ -760,7 +758,7 @@ export class AgentService {
       }
       throw lastFailure ?? new AgentFailure("lead-failed", "Codex Lead execution failed");
     } catch (error) {
-      const cancelled = runtime.signal?.aborted === true && !(error instanceof AgentFailure && error.code === "ownership_ambiguous");
+      const cancelled = runtime.signal?.aborted === true;
       const failure = cancelled ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("lead-failed", "Codex Lead execution failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       this.database.authQuery((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt));
@@ -866,7 +864,7 @@ export class AgentService {
       });
       return { planId, planArtifactId: planArtifact.id, evidenceArtifactId: evidence.id, leadExecutionId: executionId, leadSessionRef: input.leadSessionRef, summary: output.summary };
     } catch (error) {
-      const failure = runtime.signal?.aborted && !(error instanceof AgentFailure && error.code === "ownership_ambiguous") ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("merge-conflict-plan-failed", "Codex Lead merge-conflict planning failed");
+      const failure = runtime.signal?.aborted ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("merge-conflict-plan-failed", "Codex Lead merge-conflict planning failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const finalStatus = failure.code === "cancelled" ? "cancelled" : "failed";
       this.database.authTransaction((db) => {
@@ -1200,7 +1198,7 @@ export class AgentService {
       const completed = DeliveryReviewActivityResultSchema.parse({ outcome: "completed", attemptId, correctionAttempts, subject: { ...subject, developerSessionRef: context.developerSessionRef ?? subject.developerSessionRef }, review: { reviewId, leadExecutionId: executionId, leadSessionRef, opinionArtifactId: opinion.id, evidenceArtifactId: evidence.id, opinion: review.outcome, summary: review.summary, repairPlan: review.repairPlan, repairPlanArtifactId: repairPlanArtifact?.id ?? null, repairPlanSha256: repairPlanArtifact?.sha256 ?? null, findings: review.findings, supersedesReviewId: input.supersedesReviewId } });
       return completed;
     } catch (error) {
-      const cancelled = runtime.signal?.aborted && !(error instanceof AgentFailure && error.code === "ownership_ambiguous");
+      const cancelled = runtime.signal?.aborted === true;
       const expectedFailure = error instanceof AgentFailure && !cancelled;
       const failure = cancelled ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("delivery-review-failed", "Codex Lead delivery review failed");
       evidenceLines.push(JSON.stringify({ type: "forge.review-turn-failed", code: failure.code }));
@@ -1322,7 +1320,7 @@ export class AgentService {
       }
       return { reviewId, reviewArtifactId: reviewArtifact.id, evidenceArtifactId: evidence.id, executionId, sessionRef, summary: review.summary, ...(reviewSubject ? { subject: reviewSubject, reviewArtifactSha256: reviewArtifact.sha256, evidenceManifestArtifactId: reviewSubject.evidenceManifestArtifactId, evidenceManifestSha256: reviewSubject.evidenceManifestSha256 } : {}) };
     } catch (error) {
-      const failure = runtime.signal?.aborted && !(error instanceof AgentFailure && error.code === "ownership_ambiguous") ? new AgentFailure("cancelled", "The Codex supplemental review was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("review-failed", "Supplemental review failed");
+      const failure = runtime.signal?.aborted ? new AgentFailure("cancelled", "The Codex supplemental review was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("review-failed", "Supplemental review failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, lines);
       const finalStatus = failure.code === "cancelled" ? "cancelled" : "failed";
       this.database.authTransaction((db) => {
@@ -1384,7 +1382,7 @@ export class AgentService {
       await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), persisted.evidence.id, executionId));
       return { ...persisted.result, leadReviewResponseArtifactId: responseArtifact.id, leadReviewResponseArtifactSha256: responseArtifact.sha256 };
     } catch (error) {
-      const failure = runtime.signal?.aborted && !(error instanceof AgentFailure && error.code === "ownership_ambiguous") ? new AgentFailure("cancelled", "The Codex Lead consolidation was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("consolidation-failed", "Lead consolidation failed");
+      const failure = runtime.signal?.aborted ? new AgentFailure("cancelled", "The Codex Lead consolidation was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("consolidation-failed", "Lead consolidation failed");
       const evidence = await this.persistEvidence(rawInput.companyId, executionId, lines);
       const finalStatus = failure.code === "cancelled" ? "cancelled" : "failed";
       this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, cancelled_at = ?, evidence_artifact_id = ? WHERE id = ?").run(finalStatus, this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, finalStatus === "cancelled" ? this.now().toISOString() : null, evidence.id, executionId); });
@@ -1504,7 +1502,6 @@ export class AgentService {
   }
 
   private async recordLeadProcessStart(executionId: string, pid: number, fallback: string, inspection?: ProcessInspection): Promise<void> {
-    if (this.processRunner === this.provider.processRunner && !inspection) throw new AgentFailure("ownership_ambiguous", "Codex wrapper identity could not be inspected at launch");
     const identity = inspection ? `${pid}:${inspection.startTime}` : await processStartIdentity(pid, fallback);
     const processGroup = inspection?.processGroup ?? pid;
     await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'running', wrapper_pid = ?, wrapper_process_group = ?, wrapper_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, processGroup, identity, this.now().toISOString(), executionId));
@@ -1523,7 +1520,7 @@ export class AgentService {
     const recorded = this.database.authQuery((db) => db.prepare("SELECT wrapper_process_group FROM forge_agent_executions WHERE id = ?").get(executionId) as { wrapper_process_group: number | null } | undefined);
     const inspection = await defaultProcessController.inspect(childPid);
     if (!inspection || inspection.processGroup !== childProcessGroup || (recorded?.wrapper_process_group !== null && recorded?.wrapper_process_group !== undefined && inspection.processGroup !== recorded.wrapper_process_group) || `${childPid}:${inspection.startTime}` !== childStartIdentity) {
-      throw new AgentFailure("ownership_ambiguous", "Codex child ownership could not be verified");
+      return;
     }
     await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET process_pid = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(childPid, childStartIdentity, this.now().toISOString(), executionId));
   }
@@ -1615,11 +1612,11 @@ export class AgentService {
   }
 
   private runtimePath(relativePath: string | null): string {
-    if (!relativePath || relativePath.startsWith("/") || relativePath.includes("\\")) throw new AgentFailure("ownership_ambiguous", "The active Lead runtime paths are unavailable");
+    if (!relativePath || relativePath.startsWith("/") || relativePath.includes("\\")) throw new AgentFailure("scope_configuration", "The active Lead runtime paths are unavailable");
     const root = resolve(this.config.runtimeRoot);
     const target = resolve(root, relativePath);
     const withinRoot = relative(root, target);
-    if (withinRoot.startsWith(`..${sep}`) || withinRoot === "..") throw new AgentFailure("ownership_ambiguous", "The active Lead runtime paths are unsafe");
+    if (withinRoot.startsWith(`..${sep}`) || withinRoot === "..") throw new AgentFailure("scope_configuration", "The active Lead runtime paths are unsafe");
     return target;
   }
 
@@ -1650,9 +1647,10 @@ export class AgentService {
         if (error instanceof AgentFailure) throw error;
       }
       if (signal?.aborted) {
-        if (!wrapper) throw new AgentFailure("ownership_ambiguous", "The active Lead wrapper could not be safely cancelled");
-        const owned = { name: `${this.provider.id}-wrapper`, pid: wrapper.pid, command: wrapper.command, startedAt: active.heartbeat_at ?? wrapper.startTime, processGroup: wrapper.processGroup, startTime: wrapper.startTime, executable: wrapper.executable, argv: wrapper.argv };
-        if (!await this.provider.createTurnSupervisor(this.processController).cancelOwnedProcess(owned, wrapper)) throw new AgentFailure("ownership_ambiguous", "The active Lead wrapper could not be safely cancelled");
+        if (wrapper) {
+          const owned = { name: `${this.provider.id}-wrapper`, pid: wrapper.pid, command: wrapper.command, startedAt: active.heartbeat_at ?? wrapper.startTime, processGroup: wrapper.processGroup, startTime: wrapper.startTime, executable: wrapper.executable, argv: wrapper.argv };
+          await this.provider.createTurnSupervisor(this.processController).cancelOwnedProcess(owned, wrapper);
+        }
         const cancelledAt = this.now().toISOString();
         this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'cancelled', finished_at = ?, heartbeat_at = ?, failure_code = 'cancelled', failure_summary = ?, cancelled_at = ? WHERE id = ?").run(cancelledAt, cancelledAt, "The Codex Lead turn was cancelled.", cancelledAt, active.id));
         throw new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true });

@@ -505,7 +505,7 @@ export interface ForgeTask {
     failureSummary?: string | null;
   };
   developerRecovery?: {
-    status: "starting" | "active" | "reconnecting" | "result_pending_claim" | "interrupted" | "ownership_ambiguous" | "cancellation_requested" | "cancelling" | "cancelled" | "failed";
+    status: "starting" | "active" | "reconnecting" | "result_pending_claim" | "interrupted" | "cancellation_requested" | "cancelling" | "cancelled" | "failed";
     reasonCode: string | null;
     summary: string | null;
     lastHeartbeatAt: string | null;
@@ -1364,10 +1364,10 @@ export class TaskService {
     this.database.authTransaction((db) => {
       db.prepare(`UPDATE forge_capacity_requests
         SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, ?), released_at = COALESCE(released_at, ?), terminal_reason = 'cancelled', skip_reason = 'workflow_not_running', updated_at = ?
-        WHERE task_id = ? AND workflow_id = ? AND status IN ('queued', 'active', 'rate_limited', 'ownership_ambiguous')`).run(now, now, now, task.id, task.workflowId);
+        WHERE task_id = ? AND workflow_id = ? AND status IN ('queued', 'active', 'rate_limited')`).run(now, now, now, task.id, task.workflowId);
       db.prepare(`UPDATE forge_developer_execution_leases
         SET status = 'terminated', updated_at = ?
-        WHERE task_id = ? AND workflow_id = ? AND status IN ('reserved', 'supervisor_starting', 'running', 'result_ready', 'cancel_requested', 'cancelling', 'ownership_ambiguous')`).run(now, task.id, task.workflowId);
+        WHERE task_id = ? AND workflow_id = ? AND status IN ('reserved', 'supervisor_starting', 'running', 'result_ready', 'cancel_requested', 'cancelling')`).run(now, task.id, task.workflowId);
     });
   }
 
@@ -1582,7 +1582,7 @@ export class TaskService {
       const state = snapshot ? IssueWorkflowStateSchema.safeParse(json<unknown>(snapshot.stateJson, null)).data : undefined;
       const recovery = state?.developerRecoveryStatus ?? task.developerRecovery?.status;
       const heartbeat = state?.developerLastHeartbeatAt ?? task.developerRecovery?.lastHeartbeatAt ?? null;
-      const status = recovery === "starting" ? "starting" : recovery === "cancelling" || recovery === "cancellation_requested" ? "cancelling" : recovery === "active" || recovery === "reconnecting" || recovery === "result_pending_claim" ? "running" : recovery === "failed" || recovery === "interrupted" || recovery === "ownership_ambiguous" ? "failed" : task.capacity?.status === "queued" ? "queued" : task.capacity?.status === "rate_limited" ? "rate_limited" : "idle";
+      const status = recovery === "starting" ? "starting" : recovery === "cancelling" || recovery === "cancellation_requested" ? "cancelling" : recovery === "active" || recovery === "reconnecting" || recovery === "result_pending_claim" ? "running" : recovery === "failed" || recovery === "interrupted" ? "failed" : task.capacity?.status === "queued" ? "queued" : task.capacity?.status === "rate_limited" ? "rate_limited" : "idle";
       return status === "idle" ? { status, execution: null, events: [] } : { status, execution: { id: null, status, startedAt: state?.stateChangedAt ?? task.updatedAt, finishedAt: null, lastHeartbeatAt: heartbeat, currentStep: null }, events: [] };
     }
     const rows = this.database.authQuery((db) => db.prepare(`SELECT event_id, sequence, kind, step_number, occurred_at, summary, exit_code, artifact_id
@@ -1596,7 +1596,7 @@ export class TaskService {
     const execution = this.database.authQuery((db) => db.prepare(`SELECT id, status, attempt, started_at AS startedAt, finished_at AS finishedAt, heartbeat_at AS lastHeartbeatAt, spool_relative_path AS spoolRelativePath
       FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND role = 'planner' AND purpose = 'planning' ORDER BY started_at DESC LIMIT 1`).get(task.id, task.companyId) as { id: string; status: string; attempt: number; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; spoolRelativePath: string | null } | undefined);
     if (!execution) return { status: "idle", execution: null, events: [] };
-    const status = execution.status === "ownership_ambiguous" ? "failed" : execution.status;
+    const status = execution.status;
     const runtimeRoot = resolve(this.config.runtimeRoot);
     const spoolPath = execution.spoolRelativePath && !isAbsolute(execution.spoolRelativePath) ? resolve(runtimeRoot, execution.spoolRelativePath) : undefined;
     const spoolRelative = spoolPath ? relative(runtimeRoot, spoolPath) : "..";

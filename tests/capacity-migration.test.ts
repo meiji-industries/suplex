@@ -70,7 +70,7 @@ test("the durable capacity migration preserves legacy history, binds a unique ow
     const rows = sqlite.prepare("SELECT id, logical_turn_key, profile_id, provider, model, reasoning_level, service_priority, lane_key, requested_capacity, status, execution_kind, execution_id, terminal_reason FROM forge_capacity_requests ORDER BY id").all() as Array<Record<string, unknown>>;
     expect(rows).toHaveLength(3);
     expect(rows.find((row) => row.id === "capacity-unique")).toMatchObject({ logical_turn_key: "workflow-unique:lead:legacy:capacity-unique", profile_id: "profile", provider: "codex", model: "gpt-5.6-sol", reasoning_level: "high", service_priority: "priority", lane_key: "codex:profile", requested_capacity: 3, status: "active", execution_kind: "agent", execution_id: "agent-unique", terminal_reason: null });
-    expect(rows.find((row) => row.id === "capacity-ambiguous")).toMatchObject({ status: "ownership_ambiguous", execution_kind: null, execution_id: null, terminal_reason: "ownership_ambiguous" });
+    expect(rows.find((row) => row.id === "capacity-ambiguous")).toMatchObject({ status: "released", execution_kind: null, execution_id: null, terminal_reason: "ownership_ambiguous" });
     expect(rows.find((row) => row.id === "capacity-released")).toMatchObject({ status: "released", terminal_reason: "completed" });
     expect(sqlite.prepare("SELECT capacity FROM forge_profiles WHERE id = 'profile'").get()).toEqual({ capacity: 3 });
   } finally {

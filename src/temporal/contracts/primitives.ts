@@ -224,7 +224,7 @@ export const ActiveOperationSchema = z.object({
 
 export type ActiveOperation = z.infer<typeof ActiveOperationSchema>;
 
-export const DeveloperRecoveryStatusSchema = z.enum(["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling", "interrupted", "cancelled", "ownership_ambiguous", "failed"]);
+export const DeveloperRecoveryStatusSchema = z.enum(["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling", "interrupted", "cancelled", "failed"]);
 export type DeveloperRecoveryStatus = z.infer<typeof DeveloperRecoveryStatusSchema>;
 
 export const DeveloperRecoveryFields = {

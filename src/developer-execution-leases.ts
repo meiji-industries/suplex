@@ -8,7 +8,7 @@ import { sha256 } from "./developer-supervisor-protocol.js";
 import type { DeveloperSupervisorIdentity } from "./developer-supervisor-protocol.js";
 import type { ForgeDatabase } from "./database.js";
 
-export type DeveloperExecutionLeaseStatus = "reserved" | "supervisor_starting" | "running" | "result_ready" | "cancel_requested" | "cancelling" | "terminated" | "interrupted" | "ownership_ambiguous" | "failed";
+export type DeveloperExecutionLeaseStatus = "reserved" | "supervisor_starting" | "running" | "result_ready" | "cancel_requested" | "cancelling" | "terminated" | "interrupted" | "failed";
 export type DeveloperTurnKind = "implementation" | "repair" | "merge_conflict_resolution";
 
 export interface DeveloperExecutionLease {
@@ -294,7 +294,7 @@ export class DeveloperExecutionLeaseRepository {
         if (claim.resultHash !== input.resultHash) {
           db.prepare(`INSERT OR IGNORE INTO forge_developer_result_conflicts (id, execution_id, existing_result_hash, conflicting_result_hash, existing_delivery_artifact_id, existing_evidence_artifact_id, conflicting_delivery_artifact_id, conflicting_evidence_artifact_id, recorded_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(`developer_result_conflict_${randomBytes(12).toString("hex")}`, input.executionId, claim.resultHash, input.resultHash, claim.deliveryArtifactId, claim.evidenceArtifactId, input.deliveryArtifactId, input.evidenceArtifactId, claimedAt);
-          db.prepare("UPDATE forge_developer_execution_leases SET status = 'ownership_ambiguous', failure_code = 'developer-result-claim-conflict', failure_summary = ?, updated_at = ? WHERE execution_id = ?").run(`Conflicting Developer result hashes: ${claim.resultHash} and ${input.resultHash}.`, claimedAt, input.executionId);
+          db.prepare("UPDATE forge_developer_execution_leases SET status = 'failed', failure_code = 'developer-result-claim-conflict', failure_summary = ?, updated_at = ? WHERE execution_id = ?").run(`Conflicting Developer result hashes: ${claim.resultHash} and ${input.resultHash}.`, claimedAt, input.executionId);
           return { claim, conflict: true };
         }
         return { claim, conflict: false };

@@ -24,13 +24,13 @@ export type CapacityRole = z.infer<typeof CapacityRoleSchema>;
 const legacyRoles: Record<string, string> = { lead: "planner", analyst: "planner", developer: "builder", implementer: "builder" };
 const PersistedCapacityRoleSchema = z.preprocess((value) => typeof value === "string" ? legacyRoles[value] ?? value : value, CapacityRoleSchema);
 
-export const CapacityRequestStatusSchema = z.enum(["queued", "active", "rate_limited", "released", "cancelled", "stale", "ownership_ambiguous", "exhausted"]);
+export const CapacityRequestStatusSchema = z.enum(["queued", "active", "rate_limited", "released", "cancelled", "stale", "exhausted"]);
 export type CapacityRequestStatus = z.infer<typeof CapacityRequestStatusSchema>;
 
 export const CapacityWaitReasonSchema = z.enum(["lane_full", "issue_active", "session_active", "worktree_active", "rate_limit_reset"]);
 export type CapacityWaitReason = z.infer<typeof CapacityWaitReasonSchema>;
 
-export const CapacityTerminalReasonSchema = z.enum(["completed", "failed_before_start", "process_failed", "cancelled", "proven_dead", "stored_result", "rate_limited", "wait_exhausted", "ownership_ambiguous"]);
+export const CapacityTerminalReasonSchema = z.enum(["completed", "failed_before_start", "process_failed", "cancelled", "proven_dead", "stored_result", "rate_limited", "wait_exhausted"]);
 export type CapacityTerminalReason = z.infer<typeof CapacityTerminalReasonSchema>;
 
 export const CapacitySettingsSchema = z.object({
@@ -60,7 +60,7 @@ export const WorkflowCapacityStateSchema = z.object({
 export type WorkflowCapacityState = z.infer<typeof WorkflowCapacityStateSchema>;
 
 export const CapacityBlockerSchema = z.object({
-  category: z.enum(["capacity_exhausted", "ownership_ambiguous"]),
+  category: z.literal("capacity_exhausted"),
   summary: z.string().max(200),
   nextAction: z.string().max(200),
   resumeOperation: CapacityOperationSchema,
@@ -121,9 +121,6 @@ export const CapacityRequestInputSchema = z.object({
 export type CapacityRequestInput = z.infer<typeof CapacityRequestInputSchema>;
 
 export const CapacityAdmissionResultSchema = z.object({
-  // `ownership_ambiguous` remains readable in persisted request history, but
-  // admission never produces it. Cancellation is resolved by the recorded
-  // process' liveness and the request is released.
   status: z.enum(["queued", "active", "rate_limited", "released", "cancelled", "stale", "exhausted"]),
   publicState: WorkflowCapacityStateSchema,
 });
@@ -141,7 +138,7 @@ export const PublicCapacityStatusSchema = z.object({
   profileId: durableId,
   agentName: z.string().min(1).max(120),
   avatarSeed: z.string(),
-  status: z.enum(["queued", "active", "rate_limited", "ownership_ambiguous", "exhausted"]),
+  status: z.enum(["queued", "active", "rate_limited", "exhausted"]),
   position: z.number().int().positive().nullable(),
   reason: CapacityWaitReasonSchema.nullable(),
   requestedAt: z.string().datetime(),

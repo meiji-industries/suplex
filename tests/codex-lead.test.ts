@@ -402,13 +402,12 @@ test("Lead stale-child reconciliation signals through the injected process contr
   }
 });
 
-test("Lead retry reports ownership ambiguity when restart reconciliation wins the lease race", async () => {
+test("Lead retry continues when restart reconciliation observes a gone process", async () => {
   const value = await fixture();
   const now = new Date().toISOString();
   value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES ('agent_reconciled', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:wrapper-start', 'agent-turns/agent_reconciled/spool.ndjson', 'agent-turns/agent_reconciled/status.json', ?, 0)").run(now));
   const controller = {
     async inspect() {
-      value.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'ownership_ambiguous' WHERE id = 'agent_reconciled'").run());
       return undefined;
     },
     async signal() {},
@@ -416,7 +415,7 @@ test("Lead retry reports ownership ambiguity when restart reconciliation wins th
   };
   try {
     const service = new AgentService(value.database, value.config, { processController: controller, processRunner: async () => { throw new Error("reconciled turns must not spawn"); }, sessionStore: { async create() { return "session_opaque"; }, async read() { return "raw-session"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "ownership_ambiguous" });
+    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "lead-failed" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

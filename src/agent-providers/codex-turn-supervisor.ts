@@ -87,7 +87,6 @@ export const SAFE_CODEX_FAILURE_SUMMARIES: Record<string, string> = {
   schema_mismatch: "Codex returned output outside the required Lead schema.",
   scope_configuration: "The Lead evidence or profile configuration is unavailable.",
   evidence_contradiction: "The Lead evidence failed integrity verification.",
-  ownership_ambiguous: "Forge could not prove ownership of the Codex process.",
   internal_persistence: "Forge could not persist the Lead result safely.",
 };
 

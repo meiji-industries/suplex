@@ -49,9 +49,7 @@ function heartbeatExpired(heartbeatAt: string | null): boolean {
 
 export const DeveloperRecoveryObservationSchema = z.object({
   executionId: z.string().regex(/^developer_[a-f0-9]{24}$/),
-  // Kept solely to read pre-v1 persisted observations. New recovery never
-  // emits this legacy value.
-  status: z.enum(["active", "result_ready", "interrupted", "ownership_ambiguous"]),
+  status: z.enum(["active", "result_ready", "interrupted"]),
   reasonCode: z.string().max(100).nullable(),
   summary: z.string().max(500),
   lastHeartbeatAt: z.string().datetime().nullable(),
@@ -159,9 +157,9 @@ async function reconcileStaleLegacyDeveloperExecutions(database: ForgeDatabase, 
 function markExecutionTerminal(database: ForgeDatabase, executionId: string, status: "cancelled" | "interrupted", failureCode: string | null, failureSummary: string | null): void {
   const now = new Date().toISOString();
   database.authTransaction((db) => {
-    db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = COALESCE(finished_at, ?), heartbeat_at = ?, failure_code = ?, failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling', 'ownership_ambiguous')").run(status, now, now, failureCode, failureSummary, executionId);
+    db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = COALESCE(finished_at, ?), heartbeat_at = ?, failure_code = ?, failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(status, now, now, failureCode, failureSummary, executionId);
     releaseDeveloperExecutionLease(db, executionId, "interrupted");
-    db.prepare("UPDATE forge_capacity_requests SET status = 'released', released_at = ?, terminal_reason = ?, wait_reason = NULL, updated_at = ? WHERE execution_kind = 'developer' AND execution_id = ? AND status IN ('active', 'ownership_ambiguous')").run(now, status === "interrupted" ? "process_failed" : "cancelled", now, executionId);
+    db.prepare("UPDATE forge_capacity_requests SET status = 'released', released_at = ?, terminal_reason = ?, wait_reason = NULL, updated_at = ? WHERE execution_kind = 'developer' AND execution_id = ? AND status = 'active'").run(now, status === "interrupted" ? "process_failed" : "cancelled", now, executionId);
   });
 }
 

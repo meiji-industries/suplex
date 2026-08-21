@@ -16,7 +16,7 @@ export type Failure = { code: string; summary: string; category?: IssueBlocker["
 export type StateRef = { get(): IssueWorkflowState; set(next: IssueWorkflowState): void };
 export type ExternalTurnSpec = { operation: CapacityOperation; role: CapacityRole; profileId?: string | undefined; sessionRef?: string | null | undefined; worktreePath?: string | null | undefined };
 export type CapacityCancellation = { status: "cancelled"; executionId?: string | undefined };
-export type RecoveryStatus = "starting" | "active" | "reconnecting" | "result_pending_claim" | "cancellation_requested" | "cancelling" | "interrupted" | "cancelled" | "ownership_ambiguous" | "failed";
+export type RecoveryStatus = "starting" | "active" | "reconnecting" | "result_pending_claim" | "cancellation_requested" | "cancelling" | "interrupted" | "cancelled" | "failed";
 
 export interface IssueWorkflowContext {
   readonly input: IssueWorkflowInput;

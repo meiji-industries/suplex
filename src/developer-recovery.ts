@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { z } from "zod";
 
 import type { ForgeDatabase } from "./database.js";
-import { DeveloperExecutionLeaseRepository, type DeveloperExecutionLease } from "./developer-execution-leases.js";
+import { DeveloperExecutionLeaseRepository, releaseDeveloperExecutionLease, type DeveloperExecutionLease } from "./developer-execution-leases.js";
 import { requestDeveloperSupervisor } from "./developer-supervisor.js";
 import { DeveloperSupervisorSnapshotSchema, validateSupervisorResult, type DeveloperSupervisorResult } from "./developer-supervisor-protocol.js";
 import { compareProcessIdentity, defaultProcessController, type ProcessInspection } from "./process-manager.js";
@@ -153,6 +153,7 @@ function markExecutionTerminal(database: ForgeDatabase, executionId: string, sta
   const now = new Date().toISOString();
   database.authTransaction((db) => {
     db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = COALESCE(finished_at, ?), heartbeat_at = ?, failure_code = ?, failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling', 'ownership_ambiguous')").run(status, now, now, failureCode, failureSummary, executionId);
+    releaseDeveloperExecutionLease(db, executionId, "interrupted");
     db.prepare("UPDATE forge_capacity_requests SET status = 'released', released_at = ?, terminal_reason = ?, wait_reason = NULL, updated_at = ? WHERE execution_kind = 'developer' AND execution_id = ? AND status IN ('active', 'ownership_ambiguous')").run(now, status === "interrupted" ? "process_failed" : "cancelled", now, executionId);
   });
 }
@@ -167,7 +168,10 @@ export function reconcileRestoredDeveloperExecutions(database: ForgeDatabase): R
   const legacyRows = database.authQuery((db) => db.prepare("SELECT d.id FROM forge_developer_executions d LEFT JOIN forge_developer_execution_leases l ON l.execution_id = d.id WHERE l.execution_id IS NULL AND d.status IN ('starting', 'running', 'cancelling') ORDER BY d.started_at, d.id").all() as Array<{ id: string }>);
   if (legacyRows.length > 0) {
     database.authTransaction((db) => {
-      for (const row of legacyRows) db.prepare("UPDATE forge_developer_executions SET status = 'interrupted', failure_code = 'restore-process-invalidated', failure_summary = 'Restore invalidated process ownership.' WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(row.id);
+      for (const row of legacyRows) {
+        db.prepare("UPDATE forge_developer_executions SET status = 'interrupted', failure_code = 'restore-process-invalidated', failure_summary = 'Restore invalidated process ownership.' WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(row.id);
+        releaseDeveloperExecutionLease(db, row.id, "interrupted");
+      }
     });
     reports.push(...legacyRows.map((row) => ({ executionId: row.id, status: "interrupted" as const, reason: "restore-invalidated-process-ownership" as const })));
   }
@@ -199,7 +203,6 @@ export async function reconcileDeveloperExecutions(database: ForgeDatabase, cont
     if (diskState.kind === "gone" && heartbeatExpired(lease.heartbeatAt)) {
       // Release the lease too: the active-worktree unique index otherwise keeps
       // blocking every retry on this worktree with "lease was not created".
-      new DeveloperExecutionLeaseRepository(database, "").setStatus(lease.executionId, "interrupted", ["reserved", "supervisor_starting", "running", "result_ready", "cancel_requested", "cancelling"]);
       markExecutionTerminal(database, lease.executionId, "interrupted", "worker-restart", "The recorded Developer process is gone; Forge marked the turn interrupted so the workflow can retry.");
       outcomes.push({ executionId: lease.executionId, status: "interrupted", reason: supervisorComparison.kind === "exact_match" ? "process-missing" : "supervisor-and-process-missing" });
       continue;
@@ -239,7 +242,6 @@ export async function cancelDeveloperExecution(database: ForgeDatabase, executio
   const inspection = await controller.inspect(current.child.pid);
   if (!inspection) {
     if (controller.isProcessGroupAlive && await controller.isProcessGroupAlive(current.child.processGroup)) return { status: "ownership_ambiguous", executionId, reasonCode: "developer-child-group-live", summary: "Forge cannot prove ownership of the previous Developer process." };
-    repository.setStatus(executionId, "interrupted", ["reserved", "supervisor_starting", "running", "result_ready", "cancel_requested", "cancelling"]);
     markExecutionTerminal(database, executionId, "interrupted", "developer-child-missing", "The recorded Developer process is no longer running.");
     return { status: "interrupted", executionId, reasonCode: "developer-child-missing", summary: "The recorded Developer process is no longer running." };
   }

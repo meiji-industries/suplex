@@ -99,6 +99,7 @@ test("missing Developer process marks the lease and execution interrupted", asyn
     expect(await cancelDeveloperExecution(value.database, id, controller(new Map(), []))).toMatchObject({ status: "interrupted", reasonCode: "developer-child-missing" });
     expect(await cancelDeveloperExecution(value.database, id, controller(new Map(), []))).toMatchObject({ status: "interrupted", reasonCode: "developer-child-missing" });
     expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(id))).toEqual({ status: "interrupted" });
+    expect(repository.get(id)?.status).toBe("interrupted");
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

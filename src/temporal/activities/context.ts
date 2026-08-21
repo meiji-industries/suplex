@@ -13,7 +13,7 @@ import { AgentFailure, AgentService, type LeadProcessRunner } from "../../codex-
 import { DeveloperService } from "../../codex-developer.js";
 import { cancelDeveloperExecution, reconcileDeveloperExecutions } from "../../developer-recovery.js";
 import { cancelAgentExecution, reconcileAgentExecutions } from "../../agent-recovery.js";
-import { DeveloperExecutionLeaseRepository } from "../../developer-execution-leases.js";
+import { DeveloperExecutionLeaseRepository, DeveloperLeaseFailure } from "../../developer-execution-leases.js";
 import { runDeveloperTurn, type DeveloperTurnRunResult } from "../../developer-turn-runner.js";
 import { validateSupervisorResult } from "../../developer-supervisor-protocol.js";
 import { AcceptanceFailure, AcceptanceService } from "../../acceptance.js";
@@ -80,6 +80,9 @@ class SupervisedDeveloperTerminalError extends Error {
 }
 
 export function asNonRetryableApplicationFailure(error: unknown): ApplicationFailure | undefined {
+  if (error instanceof DeveloperLeaseFailure) {
+    return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
+  }
   if (error instanceof WorktreeFailure) {
     return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
   }
@@ -244,6 +247,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       // Worktree failures are deterministic until a person changes the local state.
       // Surface them as a Retry blocker instead of allowing Temporal to retry them.
       if (error instanceof WorktreeFailure) await attentionFailure(input, error.code === "host_capacity" ? "capacity_exhausted" : "unsafe_recovery", error.code, error.message);
+      if (error instanceof DeveloperLeaseFailure) await attentionFailure(input, "unsafe_recovery", error.code, error.message);
       const permanentFailure = asNonRetryableApplicationFailure(error) ?? asNonRetryableCapacityFailure(error);
       if (permanentFailure) {
         if (error instanceof AgentFailure) await attentionFailure(input, agentCategory(error), error.code, error.message);

@@ -5,6 +5,8 @@ import type { ForgeDatabase } from "./database.js";
 import { TERMINAL_PHASES } from "./issue-phases.js";
 import type { IssueCommand } from "./commands/registry.js";
 import { connectTemporal } from "./temporal/service.js";
+import { issueStateQuery } from "./temporal/workflows.js";
+import { IssueWorkflowStateSchema } from "./temporal/issue-contracts.js";
 import { routeWorkflowToCurrentDeployment } from "./developer-reconciliation-recovery.js";
 import type { ForgeTask, TaskService } from "./tasks.js";
 
@@ -54,8 +56,22 @@ export class TaskRescueService {
 
   async rescue(actorUserId: string, taskId: string): Promise<{ steps: RescueStep[] }> {
     let task = this.task(actorUserId, taskId);
-    if (TERMINAL_PHASES.has(task.phase)) return { steps: [this.record(task, "Rescue", "skipped", "Task is already terminal.")] };
     const steps: RescueStep[] = [];
+    try {
+      const temporal = await connectTemporal(this.config);
+      try {
+        const handle = temporal.client.workflow.getHandle(task.workflowId);
+        const [rawState, description] = await Promise.all([handle.query(issueStateQuery), handle.describe()]);
+        const state = IssueWorkflowStateSchema.parse(rawState);
+        const runId = description.rootExecution?.runId ?? description.runId;
+        this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, ...(runId ? { runId } : {}), revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state });
+        steps.push(this.record(task, "Resync projection", "completed", `Projected workflow revision ${state.revision}.`));
+      } finally { temporal.connection.close(); }
+    } catch (error) {
+      steps.push(this.record(task, "Resync projection", "failed", error instanceof Error ? error.message.slice(0, 300) : "Could not query the live workflow state."));
+    }
+    task = this.task(actorUserId, taskId);
+    if (TERMINAL_PHASES.has(task.phase)) return { steps: [...steps, this.record(task, "Rescue", "skipped", "Task is already terminal.")] };
     const diagnostics = await this.diagnostics(actorUserId, taskId);
     const needsReset = diagnostics.workflow.lastWorkflowTaskFailure !== null || (diagnostics.workflow.pendingWorkflowTaskAgeSeconds ?? 0) > 60;
     if (needsReset) {
@@ -81,7 +97,7 @@ export class TaskRescueService {
     steps.push(this.record(task, "Release stale bookkeeping", released ? "completed" : "skipped", released ? `Released ${released} stale capacity, lease, or execution record${released === 1 ? "" : "s"}.` : "No terminal or pid-less bookkeeping was found."));
     task = this.task(actorUserId, taskId);
     const command = retryCommands.find((candidate) => task.allowedCommands.includes(candidate));
-    if (command && ["delivery_blocked", "blocked", "failed", "ci_repair_required", "repair_required"].includes(task.phase)) {
+    if (command && (task.phase === "delivery_blocked" || task.phase === "blocked" || task.phase === "failed" || task.phase === "ci_repair_required" || task.phase === "repair_required" || task.allowedCommands.includes("retry_development"))) {
       try { await this.tasks.executeCommand(actorUserId, task.id, command, { expectedRevision: task.revision, commandId: randomUUID() }); steps.push(this.record(task, "Retry current step", "completed", `Issued ${command}.`)); }
       catch (error) { steps.push(this.record(task, "Retry current step", "failed", error instanceof Error ? error.message.slice(0, 300) : `Could not issue ${command}.`)); }
     } else steps.push(this.record(task, "Retry current step", "skipped", "No retry command is available for the current phase."));

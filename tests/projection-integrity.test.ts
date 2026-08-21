@@ -56,8 +56,8 @@ test("stale projections do not write and re-issued events replace their state", 
     database.observeIssueProjection(planning);
     database.projectIssueEvent(planning);
     database.projectIssueEvent(initial);
-    expect(database.authQuery((db) => db.prepare("SELECT authoritative_revision, length(authoritative_event_hash) AS hash_length FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ authoritative_revision: 1, hash_length: 64 });
-    expect(database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all("task-integrity"))).toEqual([{ revision: 0 }, { revision: 1 }]);
+    expect(database.authQuery((db) => db.prepare("SELECT authoritative_revision, length(authoritative_event_hash) AS hash_length FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ authoritative_revision: 0, hash_length: 64 });
+    expect(database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all("task-integrity"))).toEqual([{ revision: 0 }]);
     const before = database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_issue_timeline WHERE task_id = ?").get("task-integrity"));
     database.projectIssueEvent(initial);
     expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_issue_timeline WHERE task_id = ?").get("task-integrity"))).toEqual(before);
@@ -73,6 +73,23 @@ test("stale projections do not write and re-issued events replace their state", 
     expect(() => database.replaceIssueProjectionFromEvents("task-integrity", [initial, planning, conflictingRebuild])).not.toThrow();
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ revision: 1, phase: "planning", pending_action: "Conflicting history" });
     expect(database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all("task-integrity"))).toEqual([{ revision: 0 }, { revision: 1 }]);
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("projectIssueState replaces a higher projection revision after a workflow reset", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-projection-reset-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    const newer = createEvent(26, "planning", "workflow-integrity:26");
+    database.projectIssueEvent(newer);
+    const reset = createEvent(25, "planning", "workflow-integrity:25");
+    reset.state.pendingAction = "Workflow reset state";
+    database.projectIssueState({ taskId: reset.state.issueId, companyId: reset.state.companyId, projectId: reset.state.projectId, workflowId: reset.state.workflowId, runId: "run-after-reset", revision: reset.state.revision, phase: reset.state.phase, owner: reset.state.owner, allowedCommands: reset.state.allowedCommands, pendingAction: reset.state.pendingAction, lastEventId: reset.state.lastEventId, state: reset.state });
+    expect(database.authQuery((db) => db.prepare("SELECT revision, pending_action, last_run_id FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ revision: 25, pending_action: "Workflow reset state", last_run_id: "run-after-reset" });
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });

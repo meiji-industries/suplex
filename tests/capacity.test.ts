@@ -72,31 +72,18 @@ test("uses the current host default when an override is cleared", async () => {
   }
 });
 
-test("releases an unbound admission when ownership is no longer observable", async () => {
-  const value = await fixture();
-  try {
-    const capacity = new CapacityManager(value.database, value.config);
-    const request = capacity.request(input("task-a", "unbound-retry"));
-    expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
-    expect(capacity.markOwnershipAmbiguous(request.id, "worker restarted before execution registration")).toMatchObject({ status: "released", terminalReason: "process_failed" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
 test("binding a terminal request is a no-op so a retry can admit a fresh request", async () => {
   const value = await fixture();
   try {
     const capacity = new CapacityManager(value.database, value.config);
     const released = capacity.request(input("task-a", "released-bind"));
     expect(capacity.tryAcquire(released.id, 0).status).toBe("active");
-    capacity.markOwnershipAmbiguous(released.id, "Developer process was interrupted");
+    capacity.finalize(released.id, released.id, "failed_before_start");
 
     expect(capacity.bindExecution(released.id, { executionKind: "developer", executionId: "developer-late" })).toMatchObject({
       id: released.id,
       status: "released",
-      terminalReason: "process_failed",
+      terminalReason: "failed_before_start",
     });
 
     const retry = capacity.request(input("task-a", "fresh-retry"));
@@ -168,10 +155,10 @@ test("terminal execution ledgers release capacity during reconciliation", async 
   const value = await fixture();
   try {
     const capacity = new CapacityManager(value.database, value.config);
-    const request = capacity.request(input("task-a", "workflow-a:ambiguous:developer_execution"));
+    const request = capacity.request(input("task-a", "workflow-a:terminal:developer_execution"));
     expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
-    capacity.bindExecution(request.id, { executionKind: "developer", executionId: "developer-ambiguous", worktreePath: "/tmp/ambiguous" });
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('developer-ambiguous', 'task-a', 'company', 'workflow-a', 1, 99, 'ownership_ambiguous', 'forge/ambiguous', '/tmp/ambiguous', ?, ?)").run("a".repeat(40), now));
+    capacity.bindExecution(request.id, { executionKind: "developer", executionId: "developer-terminal", worktreePath: "/tmp/terminal" });
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('developer-terminal', 'task-a', 'company', 'workflow-a', 1, 99, 'interrupted', 'forge/terminal', '/tmp/terminal', ?, ?)").run("a".repeat(40), now));
     capacity.reconcileFromLedgers();
     expect(capacity.inspect(request.id)).toMatchObject({ status: "released", terminalReason: "process_failed" });
   } finally {
@@ -198,7 +185,7 @@ test("admission sweeps a capacity holder whose heartbeat has expired", async () 
   }
 });
 
-test("a dead agent process fails its execution and frees the ambiguous capacity slot", async () => {
+test("a dead agent process fails its execution and frees its capacity slot", async () => {
   const value = await fixture();
   const deadProcess = { inspect: async () => undefined, signalGroup: async () => undefined };
   try {
@@ -207,10 +194,6 @@ test("a dead agent process fails its execution and frees the ambiguous capacity 
     expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, process_pid, process_start_identity, started_at) VALUES ('agent-dead', 'task-a', 'company', 'workflow-task-a', 'planner', 'running', 1, 424242, '424242:Fri 21 Aug 00:47:24 2026', ?)").run(now));
     capacity.bindExecution(request.id, { executionKind: "agent", executionId: "agent-dead", sessionRef: "session-dead" });
-    capacity.markOwnershipAmbiguous(request.id, "operator killed the stack mid-turn");
-    // A prior pass already demoted the execution: a dead pid must still resolve.
-    value.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'ownership_ambiguous', failure_code = 'ownership-ambiguous' WHERE id = 'agent-dead'").run());
-
     expect(await reconcileAgentExecutions(value.database, deadProcess)).toEqual([{ executionId: "agent-dead", status: "failed", reason: "process-gone" }]);
     capacity.reconcileFromLedgers();
 

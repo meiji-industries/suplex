@@ -51,7 +51,7 @@ export function createCapacityActivities(ctx: ActivityContext): CapacityActiviti
       await reconcileAgentExecutions(database);
       await reconcileDeveloperExecutions(database);
       capacity.reconcileFromLedgers(input?.now);
-      return database.authQuery((db) => (db.prepare("SELECT id AS requestId, status, COALESCE(terminal_reason, 'reconciled') AS reason FROM forge_capacity_requests WHERE status = 'ownership_ambiguous'").all() as Array<{ requestId: string; status: string; reason: string }>).map((entry) => ({ requestId: entry.requestId, status: entry.status as "ownership_ambiguous", reason: entry.reason })));
+      return [];
     },
     async cancelCapacityExecution(input) {
       const request = capacity.inspect(input.requestId);
@@ -59,17 +59,13 @@ export function createCapacityActivities(ctx: ActivityContext): CapacityActiviti
         capacity.cancelQueued(input.requestId, "workflow cancellation");
         return { status: "cancelled" as const };
       }
-      if (request.status === "ownership_ambiguous") {
-        capacity.markOwnershipAmbiguous(input.requestId, "legacy ownership ambiguity reconciled during cancellation");
-        return { status: "cancelled" as const, ...(request.executionId ? { executionId: request.executionId } : {}), reason: "legacy-ownership-ambiguity" };
-      }
       if (request.status !== "active" || !request.executionKind || !request.executionId) {
-        capacity.markOwnershipAmbiguous(input.requestId, "Active capacity has no provable external execution owner");
+        if (request.status === "active") capacity.finalize(request.id, request.id, "failed_before_start");
         return { status: "cancelled" as const, reason: "ownership-missing" };
       }
       if (request.executionKind === "agent") {
         const result = await cancelAgentExecution(database, request.executionId);
-        if (result.status === "ownership_ambiguous") capacity.markOwnershipAmbiguous(input.requestId, result.reason ?? "agent cancellation ownership ambiguity");
+        capacity.finalize(request.id, request.executionId, result.status === "cancelled" ? "cancelled" : "process_failed");
         return { status: "cancelled" as const, executionId: request.executionId, ...(result.reason ? { reason: result.reason } : {}) };
       }
       await cancelDeveloperExecution(database, request.executionId);

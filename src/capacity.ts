@@ -166,7 +166,7 @@ export class CapacityManager {
     return row(raw);
   }
 
-  tryAcquire(requestId: string, expectedWorkflowRevision = 0, now = new Date().toISOString()): CapacityAdmissionResult & { acquired: boolean; request: CapacityRequestSnapshot } {
+  tryAcquire(requestId: string, expectedWorkflowRevision = 0, now = new Date().toISOString()): (CapacityAdmissionResult & { acquired: boolean; request: CapacityRequestSnapshot }) | { status: "ownership_ambiguous"; publicState: CapacityAdmissionResult["publicState"]; acquired: false; request: CapacityRequestSnapshot } {
     return this.database.authImmediateTransaction((db) => {
       this.sweepInactiveExecutions(db, now);
       const raw = db.prepare("SELECT * FROM forge_capacity_requests WHERE id = ?").get(requestId) as Record<string, unknown> | undefined;
@@ -175,11 +175,7 @@ export class CapacityManager {
       if (request.workflowRevision !== expectedWorkflowRevision) throw new CapacityFailure("stale-revision");
       if (request.status === "active") return { status: "active", publicState: toWorkflowState(request), acquired: true, request };
       if (!(["queued", "rate_limited"] as string[]).includes(request.status)) {
-        if (request.status === "ownership_ambiguous") {
-          db.prepare("UPDATE forge_capacity_requests SET status = 'released', terminal_reason = 'process_failed', released_at = ?, updated_at = ? WHERE id = ? AND status = 'ownership_ambiguous'").run(now, now, requestId);
-          request = row(db.prepare("SELECT * FROM forge_capacity_requests WHERE id = ?").get(requestId) as Record<string, unknown>);
-        }
-        return { status: request.status as Exclude<CapacityRequestSnapshot["status"], "ownership_ambiguous">, publicState: toWorkflowState(request), acquired: false, request };
+        return { status: request.status, publicState: toWorkflowState(request), acquired: false, request };
       }
       if (request.status === "rate_limited") return { status: request.status, publicState: toWorkflowState(request), acquired: false, request };
       if (this.enforceDeadline && Date.parse(request.deadlineAt) <= Date.parse(now)) {
@@ -192,14 +188,14 @@ export class CapacityManager {
       if (ownerConflict) {
         this.setWait(db, requestId, ownerConflict, now);
         request = row(db.prepare("SELECT * FROM forge_capacity_requests WHERE id = ?").get(requestId) as Record<string, unknown>);
-        return { status: request.status as Exclude<CapacityRequestSnapshot["status"], "ownership_ambiguous">, publicState: toWorkflowState(request), acquired: false, request };
+        return { status: request.status, publicState: toWorkflowState(request), acquired: false, request };
       }
       const effectiveCapacity = this.currentLaneCapacity(db, request.profileId);
       const activeCount = Number((db.prepare("SELECT COUNT(*) AS count FROM forge_capacity_requests WHERE lane_key = ? AND status = 'active'").get(request.laneKey) as { count: number }).count);
       if (activeCount >= effectiveCapacity) {
         this.setWait(db, requestId, "lane_full", now);
         request = row(db.prepare("SELECT * FROM forge_capacity_requests WHERE id = ?").get(requestId) as Record<string, unknown>);
-        return { status: request.status as Exclude<CapacityRequestSnapshot["status"], "ownership_ambiguous">, publicState: toWorkflowState(request, this.positionInTransaction(db, requestId)), acquired: false, request };
+        return { status: request.status, publicState: toWorkflowState(request, this.positionInTransaction(db, requestId)), acquired: false, request };
       }
 
       const eligible = this.eligibleInTransaction(db, request.laneKey, now);
@@ -207,7 +203,7 @@ export class CapacityManager {
       if (!first || first.id !== requestId) {
         this.setWait(db, requestId, "lane_full", now);
         request = row(db.prepare("SELECT * FROM forge_capacity_requests WHERE id = ?").get(requestId) as Record<string, unknown>);
-        return { status: request.status as Exclude<CapacityRequestSnapshot["status"], "ownership_ambiguous">, publicState: toWorkflowState(request, this.positionInTransaction(db, requestId)), acquired: false, request };
+        return { status: request.status, publicState: toWorkflowState(request, this.positionInTransaction(db, requestId)), acquired: false, request };
       }
       const changed = db.prepare("UPDATE forge_capacity_requests SET status = 'active', wait_reason = NULL, skip_reason = NULL, acquired_at = ?, heartbeat_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'").run(now, now, now, requestId).changes;
       if (changed !== 1) throw new CapacityFailure("duplicate");
@@ -317,15 +313,6 @@ export class CapacityManager {
       const request = this.inspectInTransaction(db, requestId);
       if (!["queued", "rate_limited"].includes(request.status)) throw new CapacityFailure("invalid-status");
       db.prepare("UPDATE forge_capacity_requests SET status = 'cancelled', cancelled_at = ?, released_at = ?, terminal_reason = 'cancelled', skip_reason = ?, updated_at = ? WHERE id = ? AND status IN ('queued', 'rate_limited')").run(now, now, reason.slice(0, 200), now, requestId);
-      return this.inspectInTransaction(db, requestId);
-    });
-  }
-
-  markOwnershipAmbiguous(requestId: string, reason: string, now = new Date().toISOString()): CapacityRequestSnapshot {
-    return this.database.authTransaction((db) => {
-      const request = this.inspectInTransaction(db, requestId);
-      if (request.status !== "active") return request;
-      db.prepare("UPDATE forge_capacity_requests SET status = 'released', terminal_reason = 'process_failed', skip_reason = ?, released_at = ?, updated_at = ? WHERE id = ? AND status = 'active'").run(reason.slice(0, 200), now, now, requestId);
       return this.inspectInTransaction(db, requestId);
     });
   }

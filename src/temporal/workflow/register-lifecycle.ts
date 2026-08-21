@@ -20,7 +20,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       await cancelQueuedCapacity();
       return { status: "cancelled" };
     }
-    if (ctx.state.capacity.status === "active" || ctx.state.capacity.status === "ownership_ambiguous") {
+    if (ctx.state.capacity.status === "active") {
       return cancelCapacityExecution({ requestId: ctx.state.capacity.requestId });
     }
     return { status: "cancelled" };
@@ -49,7 +49,6 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       ctx.planningPromise = undefined;
       ctx.planningScope = undefined;
     }
-    let ownershipAmbiguous = false;
     if (ctx.state.developerExecutionId && ["starting", "active", "reconnecting", "result_pending_claim", "cancellation_requested", "cancelling", "ownership_ambiguous"].includes(ctx.state.developerRecoveryStatus ?? "")) {
       const cancellation = await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId: ctx.state.developerExecutionId });
       if (cancellation.status === "completed_before_cancellation") {
@@ -62,7 +61,6 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       }
       if (cancellation.status !== "completed_before_cancellation" && !["cancelled", "cancelled_confirmed", "interrupted"].includes(cancellation.status)) {
         const summary = "summary" in cancellation ? cancellation.summary : "Forge could not confirm Developer termination.";
-        ownershipAmbiguous = true;
         if (!unconditionalCancellation) {
           ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: summary, ...ctx.recoveryFields("interrupted", "reasonCode" in cancellation ? cancellation.reasonCode : "developer-termination-unconfirmed", summary, ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
           await ctx.project();
@@ -84,7 +82,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       const decision = await recordDeliveryDecision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, actorUserId: command.actorUserId, note: command.note });
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, deliveryDecisionArtifactId: decision.artifactId });
     }
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: ctx.reviseContinueEnabled ? ["continue_work"] : [], pendingAction: ownershipAmbiguous ? "Issue cancelled; operator must verify external ownership" : "Issue cancelled", acceptanceStatus, acceptanceReasonArtifactId, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: ctx.reviseContinueEnabled ? ["continue_work"] : [], pendingAction: "Issue cancelled", acceptanceStatus, acceptanceReasonArtifactId, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     return ctx.state;
   }));

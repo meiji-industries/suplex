@@ -36,8 +36,10 @@ with the Playwright browser proof at desktop and narrow viewport sizes.
 
 `mise run dev` runs Temporal, the Forge API, and the worker as one foreground
 command; Vite is embedded in Fastify. Frontend changes use Vite HMR and React
-Fast Refresh; backend changes restart the API/worker automatically via
-`tsx watch` — no restart command is needed. Before runtime or browser
+Fast Refresh. Backend changes do NOT hot-reload under `mise run dev` — Ctrl-C
+and rerun it (this keeps live Developer turns intact while `src/` is being
+edited). `mise run dev:watch` is the same stack with `tsx watch`, which restarts
+the API/worker on every save. Before runtime or browser
 verification, run `mise run dev:status` and reuse a stack that is already
 listening. Ctrl-C in the dev terminal stops everything; `mise run down` stops
 a stack from elsewhere; `mise run dev:recover` force-kills anything still
@@ -54,8 +56,9 @@ mise run dev
 Before creating or modifying database migrations, read
 `docs/database-migrations.md`. Create migrations with
 `pnpm migration:new <name>`; timestamped SQL files are the canonical format.
-Never edit a migration file after saving it once: the dev stack hot-reloads and
-applies it immediately, and a later edit changes its hash and stops the server.
+Never edit a migration file after saving it once: the dev stack applies it on
+the next start (immediately under `dev:watch`), and a later edit changes its
+hash and stops the server.
 Need a change? Create a new migration.
 
 ## Where new code goes (anti-hub rules)

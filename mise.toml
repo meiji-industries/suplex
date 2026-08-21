@@ -17,7 +17,12 @@ FORGE_BIND_ADDRESS = "127.0.0.1"
 _.path = "./node_modules/.bin"
 
 [tasks.dev]
-description = "Run Temporal, the Forge API, and the worker; tsx watch restarts backend on change"
+description = "Run Temporal, the Forge API, and the worker without hot reload (restart manually; live Developer turns survive src edits)"
+run = [{ tasks = ["temporal", "server", "worker"] }]
+
+[tasks."dev:watch"]
+description = "Same as dev, but tsx watch restarts the API and worker on every src save"
+env = { FORGE_WATCH = "1" }
 run = [{ tasks = ["temporal", "server", "worker"] }]
 
 [tasks.down]
@@ -42,8 +47,8 @@ lsof -nP -iTCP:$FP -iTCP:$TP -iTCP:$UI -sTCP:LISTEN || echo "dev stack not runni
 '''
 
 [tasks."dev:restart"]
-description = "No-op: tsx watch restarts the API and worker on file save"
-run = "echo 'Backend restarts automatically on file change (tsx watch); press Return in the dev terminal to force a rerun.'"
+description = "Reminder: `mise run dev` has no hot reload — Ctrl-C and rerun it (or use dev:watch)"
+run = "echo 'mise run dev does not hot-reload: Ctrl-C and rerun it. Use `mise run dev:watch` for tsx watch.'"
 
 [tasks."dev:recover"]
 description = "Force-kill anything still holding this checkout's dev ports"
@@ -71,13 +76,16 @@ exec temporal server start-dev --port "$TP" --ui-port "$UI" --db-filename .forge
 '''
 
 [tasks.server]
-description = "Forge API under tsx watch (waits for Temporal, embeds Vite HMR)"
+description = "Forge API (waits for Temporal, embeds Vite HMR; tsx watch only under dev:watch)"
 run = '''
 TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
+export PATH="$(dirname "$(mise which node)"):$PATH"
+[ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
 until nc -z 127.0.0.1 "$TP" 2>/dev/null; do sleep 0.5; done
 export FORGE_PORT=${CONDUCTOR_PORT:-4111}
 export FORGE_TEMPORAL_ADDRESS="127.0.0.1:$TP"
-exec tsx watch --clear-screen=false --exclude "./src/frontend/**" src/server.ts
+if [ -n "${FORGE_WATCH:-}" ]; then exec tsx watch --clear-screen=false --exclude "./src/frontend/**" src/server.ts; fi
+exec tsx src/server.ts
 '''
 
 [tasks.server.env]
@@ -87,12 +95,15 @@ FORGE_FRONTEND_DEV_SERVER = "1"
 FORGE_DEVELOPMENT_AUTO_LOGIN = "1"
 
 [tasks.worker]
-description = "Forge Temporal worker under tsx watch (waits for Temporal)"
+description = "Forge Temporal worker (waits for Temporal; tsx watch only under dev:watch)"
 run = '''
 TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
+export PATH="$(dirname "$(mise which node)"):$PATH"
+[ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
 until nc -z 127.0.0.1 "$TP" 2>/dev/null; do sleep 0.5; done
 export FORGE_TEMPORAL_ADDRESS="127.0.0.1:$TP"
-exec tsx watch --clear-screen=false --exclude "./src/frontend/**" src/worker.ts
+if [ -n "${FORGE_WATCH:-}" ]; then exec tsx watch --clear-screen=false --exclude "./src/frontend/**" src/worker.ts; fi
+exec tsx src/worker.ts
 '''
 
 [tasks.worker.env]

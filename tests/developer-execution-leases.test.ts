@@ -77,6 +77,19 @@ test("a terminal execution's stale active lease is released before its worktree 
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("a reset can reserve a new execution with a re-issued attempt", async () => {
+  const value = await fixture();
+  try {
+    const repo = new DeveloperExecutionLeaseRepository(value.database, value.root);
+    const worktree = join(value.root, "worktree");
+    repo.reserve({ executionId: value.executionId, companyId: "company_1", taskId: "task_1", workflowId: "workflow_1", attempt: 1, turnKind: "implementation", canonicalWorktreePath: worktree, worktreeIdentityHash: "w".repeat(64) });
+    value.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'blocked' WHERE id = ?").run(value.executionId));
+    const resetId = deriveDeveloperExecutionId("workflow_1", 2, 1, "implementation");
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, 'task_1', 'company_1', 'workflow_1', 2, 1, 'starting', 'forge/issue/task_1', ?, ?, ?, ?)").run(resetId, worktree, "a".repeat(40), new Date().toISOString(), new Date().toISOString()));
+    expect(repo.reserve({ executionId: resetId, companyId: "company_1", taskId: "task_1", workflowId: "workflow_1", attempt: 1, turnKind: "implementation", canonicalWorktreePath: worktree, worktreeIdentityHash: "w".repeat(64) }).created).toBe(true);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("a command-hashed Developer execution and its supervisor lease insert in one transaction", async () => {
   const value = await fixture();
   try {

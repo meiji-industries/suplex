@@ -46,7 +46,7 @@ function fixture(database: ForgeDatabase): void {
   });
 }
 
-test("stale projections do not write and conflicting events fail closed", async () => {
+test("stale projections do not write and re-issued events replace their state", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-projection-integrity-test-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
   try {
@@ -64,15 +64,14 @@ test("stale projections do not write and conflicting events fail closed", async 
 
     const conflict = createEvent(1, "planning", "workflow-integrity:1");
     conflict.state.pendingAction = "Different planning state";
-    await expect(Promise.resolve().then(() => database.projectIssueEvent(conflict))).rejects.toMatchObject({ code: "projection_event_conflict" });
-    expect(database.authQuery((db) => db.prepare("SELECT code FROM forge_projection_integrity_findings WHERE task_id = ? ORDER BY detected_at DESC LIMIT 1").get("task-integrity"))).toEqual({ code: "projection_event_conflict" });
-    expect(() => database.projectIssueEvent(planning)).not.toThrow();
-    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ revision: 1, phase: "planning" });
+    expect(() => database.projectIssueEvent(conflict)).not.toThrow();
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ revision: 1, phase: "planning", pending_action: "Different planning state" });
+    expect(() => database.projectIssueEvent(conflict)).not.toThrow();
 
     const conflictingRebuild = structuredClone(planning);
     conflictingRebuild.state.pendingAction = "Conflicting history";
-    expect(() => database.replaceIssueProjectionFromEvents("task-integrity", [initial, planning, conflictingRebuild])).toThrow();
-    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ revision: 1, phase: "planning" });
+    expect(() => database.replaceIssueProjectionFromEvents("task-integrity", [initial, planning, conflictingRebuild])).not.toThrow();
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ revision: 1, phase: "planning", pending_action: "Conflicting history" });
     expect(database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all("task-integrity"))).toEqual([{ revision: 0 }, { revision: 1 }]);
   } finally {
     database.close();
@@ -128,10 +127,13 @@ test("a reset workflow's new run supersedes the abandoned run's projected revisi
     expect(database.authQuery((db) => db.prepare("SELECT run_id FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all("task-integrity")))
       .toEqual([{ run_id: "run-integrity" }, { run_id: "run-after-reset" }]);
 
-    // The same run reusing a revision with different state is still corruption.
+    // The projection activity only carries workflow identity, so a re-issued
+    // event from that path must also replace the earlier projection.
     const sameRun = createEvent(1, "planning", "workflow-integrity:1");
     sameRun.state.pendingAction = "Conflicting same-run state";
-    expect(() => database.projectIssueEvent(IssueProjectionEventSchema.parse({ ...sameRun, runId: "run-after-reset" }))).toThrow();
+    expect(() => database.projectIssueEvent(IssueProjectionEventSchema.parse({ ...sameRun, runId: "run-after-reset" }))).not.toThrow();
+    expect(database.authQuery((db) => db.prepare("SELECT pending_action FROM forge_issue_projections WHERE task_id = ?").get("task-integrity")))
+      .toEqual({ pending_action: "Conflicting same-run state" });
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });

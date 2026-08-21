@@ -205,7 +205,7 @@ export class DeveloperExecutionLeaseRepository {
     const insert = db.prepare(`INSERT OR IGNORE INTO forge_developer_execution_leases (execution_id, company_id, task_id, workflow_id, attempt, turn_kind, lease_token_hash, execution_root, canonical_worktree_path, worktree_identity_hash, status, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)`);
     const result = insert.run(input.executionId, input.companyId, input.taskId, input.workflowId, input.attempt, input.turnKind, tokenHash, executionRoot, input.canonicalWorktreePath, input.worktreeIdentityHash, createdAt, createdAt);
-    const existing = db.prepare("SELECT * FROM forge_developer_execution_leases WHERE execution_id = ? OR (workflow_id = ? AND attempt = ? AND turn_kind = ?)").get(input.executionId, input.workflowId, input.attempt, input.turnKind) as Record<string, unknown> | undefined;
+    const existing = db.prepare("SELECT * FROM forge_developer_execution_leases WHERE execution_id = ?").get(input.executionId) as Record<string, unknown> | undefined;
     if (!existing) {
       const busy = db.prepare(`SELECT execution_id FROM forge_developer_execution_leases
           WHERE worktree_identity_hash = ? AND status IN (${activeStatuses.map(() => "?").join(",")})
@@ -214,7 +214,7 @@ export class DeveloperExecutionLeaseRepository {
       throw new DeveloperLeaseFailure("lease-conflict", "Developer execution lease conflicts with an existing lease");
     }
     const parsed = row(existing);
-    if (parsed.executionId !== input.executionId || parsed.companyId !== input.companyId || parsed.taskId !== input.taskId || parsed.workflowId !== input.workflowId || parsed.attempt !== input.attempt || parsed.turnKind !== input.turnKind || parsed.canonicalWorktreePath !== input.canonicalWorktreePath || parsed.worktreeIdentityHash !== input.worktreeIdentityHash || (input.leaseToken !== undefined && parsed.leaseTokenHash !== tokenHash)) throw new DeveloperLeaseFailure("lease-conflict", "Developer execution lease identity conflicts with an existing attempt");
+    if (parsed.executionId !== input.executionId || parsed.companyId !== input.companyId || parsed.taskId !== input.taskId || parsed.workflowId !== input.workflowId || parsed.canonicalWorktreePath !== input.canonicalWorktreePath || parsed.worktreeIdentityHash !== input.worktreeIdentityHash || (input.leaseToken !== undefined && parsed.leaseTokenHash !== tokenHash)) throw new DeveloperLeaseFailure("lease-conflict", "Developer execution lease identity conflicts with an existing execution");
     return { lease: parsed, leaseToken: result.changes === 1 ? token : null, created: result.changes === 1 };
   }
 

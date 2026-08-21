@@ -54,6 +54,9 @@ mise run dev
 Before creating or modifying database migrations, read
 `docs/database-migrations.md`. Create migrations with
 `pnpm migration:new <name>`; timestamped SQL files are the canonical format.
+Never edit a migration file after saving it once: the dev stack hot-reloads and
+applies it immediately, and a later edit changes its hash and stops the server.
+Need a change? Create a new migration.
 
 ## Where new code goes (anti-hub rules)
 

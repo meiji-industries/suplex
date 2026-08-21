@@ -116,8 +116,8 @@ export async function reconcileDeveloperExecutions(database: ForgeDatabase, cont
     const supervisorComparison = supervisorInspection ? compareProcessIdentity({ name: "developer-supervisor", pid: lease.supervisor.pid, command: lease.supervisor.argv.join(" "), startedAt: lease.supervisor.startTime, processGroup: lease.supervisor.processGroup, startTime: lease.supervisor.startTime, executable: lease.supervisor.executable, argv: lease.supervisor.argv, ...(lease.supervisor.ownerUid !== null ? { ownerUid: lease.supervisor.ownerUid } : {}) }, toInspection(supervisorInspection)) : { kind: "not_running" as const };
     const inspection = await controller.inspect(lease.child.pid);
     if (!inspection) {
-      if (supervisorComparison.kind === "exact_match") outcomes.push({ executionId: lease.executionId, status: "interrupted", reason: "process-missing" });
-      else outcomes.push({ executionId: lease.executionId, status: "interrupted", reason: "supervisor-and-process-missing" });
+      markExecutionTerminal(database, lease.executionId, "interrupted", "worker-restart", "The recorded Developer process is gone; Forge marked the turn interrupted so the workflow can retry.");
+      outcomes.push({ executionId: lease.executionId, status: "interrupted", reason: supervisorComparison.kind === "exact_match" ? "process-missing" : "supervisor-and-process-missing" });
       continue;
     }
     const comparison = compareProcessIdentity({ name: "developer", pid: lease.child.pid, command: lease.child.argv.join(" "), startedAt: lease.child.startTime, processGroup: lease.child.processGroup, startTime: lease.child.startTime, executable: lease.child.executable, argv: lease.child.argv, ...(lease.child.ownerUid !== null ? { ownerUid: lease.child.ownerUid } : {}) }, toInspection(inspection));

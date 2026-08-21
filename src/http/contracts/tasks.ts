@@ -112,6 +112,7 @@ export const ContinueWorkResponseSchema = z.object({ original: TaskResponseSchem
 export const ImageResponseSchema = z.object({ artifactId: z.string(), filename: z.string(), mimeType: z.string(), byteSize: z.number() });
 export const TaskDeveloperDiffResponseSchema = z.object({ patch: z.string(), branchName: z.string(), repository: z.string().optional(), baseSha: z.string(), headSha: z.string() });
 export const DeveloperExecutionEventsResponseSchema = z.object({ events: z.array(DeveloperExecutionEventResponseSchema), hasMore: z.boolean() });
+export const TaskActivityResponseSchema = z.object({ execution: z.object({ id: z.string(), role: z.enum(["planner", "builder", "reviewer", "integrator"]), status: z.string(), currentStep: z.string().nullable() }).nullable(), events: z.array(z.object({ at: z.string(), kind: z.enum(["thinking", "command", "output", "message", "status"]), text: z.string(), exitCode: z.number().optional() })) });
 export type ReviewFindingResponse = z.infer<typeof ReviewFindingResponseSchema>;
 export type TaskDeveloperDiffResponse = z.infer<typeof TaskDeveloperDiffResponseSchema>;
 export type DeveloperExecutionEventResponse = z.infer<typeof DeveloperExecutionEventResponseSchema>;

@@ -39,7 +39,34 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } 
 type DevelopmentExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; lastOutputAt?: string | null; currentStep: string | null };
 type DevelopmentState = { status: string; execution: DevelopmentExecution | null };
 type DeveloperEventState = { executionId: string | null; events: DeveloperExecutionEventView[]; terminalSteps: Record<number, "completed" | "blocked"> };
+type ActivityEvent = { at: string; kind: "thinking" | "command" | "output" | "message" | "status"; text: string; exitCode?: number };
+type ActivityFeed = { execution: { id: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: string; currentStep: string | null } | null; events: ActivityEvent[] };
 const noopExecutionStatus = (): void => {};
+
+function ActivityPanel({ task }: { task: ApiTask }): ReactElement | null {
+  const shouldShow = task.owner === "lead" || Boolean(task.developerExecution && ["starting", "running", "cancelling"].includes(task.developerExecution.status)) || task.agentInvocations.some((invocation) => ["starting", "running", "cancelling"].includes(invocation.status));
+  const [feed, setFeed] = useState<ActivityFeed | null>(null);
+  const [paused, setPaused] = useState(false);
+  const logRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    let active = true;
+    void readJson<ActivityFeed>(`/api/tasks/${encodeURIComponent(task.id)}/activity`).then((value) => { if (active) setFeed(value); }).catch(() => { if (active) setFeed(null); });
+    const stream = new EventSource(`/api/tasks/${encodeURIComponent(task.id)}/activity/stream`);
+    stream.addEventListener("activity", (message) => { try { const event = JSON.parse((message as MessageEvent<string>).data) as ActivityEvent; if (active) setFeed((current) => ({ execution: current?.execution ?? null, events: [...(current?.events ?? []), event].slice(-300) })); } catch { /* Ignore malformed live activity. */ } });
+    return () => { active = false; stream.close(); };
+  }, [task.id]);
+  useEffect(() => { if (!paused) logRef.current?.scrollTo({ top: logRef.current.scrollHeight }); }, [feed?.events, paused]);
+  if (!shouldShow && !feed?.execution) return null;
+  const events = feed?.events ?? [];
+  const status = [...events].reverse().find((event) => event.kind === "status");
+  return <section data-task-activity-panel className="space-y-2 border-t pt-3" aria-label="Activity">
+    <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-semibold">Activity</h3>{status ? <span className="text-[11px] text-muted-foreground" aria-live="polite">{status.text}</span> : null}</div>
+    <div ref={logRef} className="max-h-72 overflow-auto border border-border bg-muted/30 font-mono text-[11px] leading-5" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
+      {events.filter((event) => event.kind !== "status").map((event, index) => <div className="flex gap-2 border-b border-border/50 px-2 py-1 last:border-0" key={`${event.at}:${event.kind}:${index}`}><time className="shrink-0 text-muted-foreground">{new Date(event.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time><Badge variant="outline" className="h-5 shrink-0 rounded-sm px-1 font-mono text-[10px]">{event.kind}</Badge><div className="min-w-0 flex-1 whitespace-pre-wrap break-words">{event.kind === "output" ? <details><summary className="cursor-pointer">{event.exitCode === undefined ? "Output" : `Exit ${event.exitCode}`}</summary><pre className="mt-1 whitespace-pre-wrap break-words">{event.text}</pre></details> : <>{event.text}{event.exitCode === undefined ? null : <span className="ml-2 text-muted-foreground">exit {event.exitCode}</span>}</>}</div></div>)}
+      {!events.some((event) => event.kind !== "status") ? <div className="px-2 py-2 text-muted-foreground">Waiting for activity…</div> : null}
+    </div>
+  </section>;
+}
 
 function NextAction({ value }: { value: string | null }): ReactElement {
   if (value === "Lead delivery review" || value?.startsWith("Fresh Lead delivery review")) return <>Forge is checking the completed work against the approved plan.</>;
@@ -607,6 +634,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                     {pullRequestInMain ? <div data-active-pull-request><PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} {...(task.allowedCommands.includes("reconcile_ci") ? { onCheckCi: () => onPlanAction("reconcile-ci") } : {})} {...(task.allowedCommands.includes("reconcile_merge") ? { onCheckMerge: () => onPlanAction("reconcile-merge") } : {})} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
                     {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} developmentStatus={developerLiveness ? <DevelopmentStatus state={developerLiveness} now={developmentNow} inline /> : undefined} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} compact /></DeveloperRecoveryStatus> : <LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
                     {task.developerExecution ? <DeveloperEvidence taskId={task.id} execution={task.developerExecution} repository={project?.repository} /> : null}
+                    <ActivityPanel task={task} />
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
                     {currentPlan ?? decisionControls}
                     {task.governance.blocker && blockerCommand ? <PlanBlockerResponseForm blocker={task.governance.blocker} expectedRevision={blockerCommand.expectedRevision} busy={busy} onSubmit={(payload) => onPlanAction(blockerCommand.endpoint as TaskPlanAction, undefined, { answer: payload.answer, idempotencyKey: payload.idempotencyKey, expectedWorkflowRevision: payload.expectedWorkflowRevision })} error={error} /> : task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">{task.governance.blocker.header}</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}

@@ -24,6 +24,7 @@ import { MaterialityEvidenceArtifactSchema, PlanSubjectSchema, deterministicMate
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { developerVerificationProjection } from "./developer-task-projection.js";
 import { parseCodexJsonl } from "./agent-providers/codex-jsonl.js";
+import { normalizeTaskActivityJsonl, type TaskActivityEvent } from "./task-activity.js";
 import type { HermesPrincipal } from "./hermes-agents.js";
 import type { HermesSafeTaskProjection } from "./http/contracts/hermes.js";
 import { creationRequestHash, duplicateTitle, finding, id, json, normalizeText, parseImageIds, parseMetadata, parseRoleAgents, publicDeveloperSummary, shaAbbrev, type TaskFinding } from "./task-utils.js";
@@ -1541,6 +1542,28 @@ export class TaskService {
       WHERE ev.execution_id = ? ORDER BY ev.sequence DESC LIMIT ?`).all(task.id, task.companyId, executionId, boundedLimit + 1) as Array<{ event_id: string; sequence: number; kind: string; step_number: number | null; occurred_at: string; summary: string; exit_code: number | null; artifact_id: string | null }>);
     if (!rows.length) throw new TaskFailure("Not found", [], 404);
     return { events: rows.slice(0, boundedLimit).reverse().map((row) => ({ eventId: row.event_id, sequence: row.sequence, kind: row.kind, stepNumber: row.step_number, occurredAt: row.occurred_at, summary: publicDeveloperSummary(row.kind, row.step_number, row.summary, row.exit_code), exitCode: row.exit_code, artifactId: row.artifact_id })), hasMore: rows.length > boundedLimit };
+  }
+
+  getTaskActivity(actorUserId: string, taskId: string, limit = 200): { execution: { id: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: string; currentStep: string | null } | null; events: TaskActivityEvent[] } {
+    const task = this.getTask(actorUserId, taskId);
+    const execution = this.database.authQuery((db) => db.prepare(`SELECT id, role, status, currentStep FROM (
+      SELECT id, 'builder' AS role, status, current_step AS currentStep, started_at AS startedAt FROM forge_developer_executions WHERE task_id = ? AND company_id = ?
+      UNION ALL
+      SELECT id, role, status, NULL AS currentStep, started_at AS startedAt FROM forge_agent_executions WHERE task_id = ? AND company_id = ?
+    ) ORDER BY CASE WHEN status IN ('starting', 'running', 'active', 'reconnecting', 'cancelling', 'result_pending_claim') THEN 0 ELSE 1 END, startedAt DESC LIMIT 1`).get(task.id, task.companyId, task.id, task.companyId) as { id: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: string; currentStep: string | number | null } | undefined);
+    if (!execution || !/^[A-Za-z0-9_-]+$/.test(execution.id)) return { execution: null, events: [] };
+    const currentStep = execution.currentStep === null ? null : String(execution.currentStep);
+    const root = resolve(this.config.runtimeRoot);
+    const directory = resolve(root, execution.role === "builder" ? "developer-executions" : "agent-turns", execution.id);
+    if (relative(root, directory).startsWith("..")) return { execution: null, events: [] };
+    const paths = execution.role === "builder" ? [resolve(directory, "events.jsonl")] : [resolve(directory, "events.jsonl"), resolve(directory, "spool.ndjson")];
+    let source = "";
+    for (const path of paths) try { source = readFileSync(path, "utf8"); if (source) break; } catch { /* The execution may not have written its spool yet. */ }
+    const activity = normalizeTaskActivityJsonl(source.split(/\r?\n/).filter(Boolean));
+    const status = execution.status === "running" || execution.status === "active" ? `${execution.role[0]!.toUpperCase()}${execution.role.slice(1)} is working${currentStep ? `: ${currentStep}` : ""}` : `${execution.role[0]!.toUpperCase()}${execution.role.slice(1)}: ${execution.status}`;
+    const statusEvent: TaskActivityEvent = { at: new Date().toISOString(), kind: "status", text: String(redact(status)) };
+    const boundedLimit = Math.min(300, Math.max(1, Math.trunc(limit)));
+    return { execution: { ...execution, currentStep }, events: [statusEvent, ...activity.slice(-(boundedLimit - 1))] };
   }
 
   getDeveloperProgress(actorUserId: string, taskId: string, after?: { executionId: string; sequence: number }): { status: string; execution: { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; currentStep: string | null } | null; events: DeveloperExecutionEvent[] } {

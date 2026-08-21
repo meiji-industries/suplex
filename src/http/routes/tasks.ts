@@ -7,7 +7,7 @@ import { TaskFailure, type TaskService } from "../../tasks.js";
 import { GithubReleaseFailure, type ReleaseService } from "../../github-release.js";
 import { routedIssueCommands, type IssueCommand } from "../../commands/registry.js";
 import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, HttpPlanDecisionBodySchema, ResolveDecisionBlockerBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
-import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, DuplicateTaskBodySchema, PlanRevisionBodySchema, TaskAgentsBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, DuplicateTaskBodySchema, PlanRevisionBodySchema, TaskActivityResponseSchema, TaskAgentsBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
 import developmentEvents from "./development-events.js";
 
 export interface TaskRoutesOptions {
@@ -29,6 +29,31 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
     return reply.code(result.created ? 201 : 200).send(result.task);
   });
   typed.get("/api/tasks/:taskId", { schema: { params: TaskIdParamsSchema, ...taskResponse } }, async (request, reply) => reply.send(tasks.getTask(request.forgeUser.id, request.params.taskId)));
+  typed.get("/api/tasks/:taskId/activity", { schema: { params: TaskIdParamsSchema, response: { 200: TaskActivityResponseSchema } } }, async (request, reply) => reply.header("Cache-Control", "private, no-store").send(tasks.getTaskActivity(request.forgeUser.id, request.params.taskId)));
+  typed.get("/api/tasks/:taskId/activity/stream", { schema: { params: TaskIdParamsSchema } }, async (request, reply) => {
+    let closed = false;
+    let known = new Set<string>();
+    const key = (event: { at: string; kind: string; text: string; exitCode?: number }): string => JSON.stringify(event);
+    const send = (initial = false): void => {
+      if (closed || reply.raw.destroyed) return;
+      try {
+        const feed = tasks.getTaskActivity(request.forgeUser.id, request.params.taskId, 300);
+        const events = initial ? [...feed.events.filter((event) => event.kind === "status").slice(-1), ...feed.events.filter((event) => event.kind !== "status").slice(-49)] : feed.events.filter((event) => !known.has(key(event)));
+        for (const event of events) reply.raw.write(`event: activity\ndata: ${JSON.stringify(event)}\n\n`);
+        known = new Set(feed.events.map(key));
+      } catch { close(true); }
+    };
+    let timer: NodeJS.Timeout | undefined;
+    let keepalive: NodeJS.Timeout | undefined;
+    const close = (destroy = false): void => { if (closed) return; closed = true; if (timer) clearInterval(timer); if (keepalive) clearInterval(keepalive); if (destroy && !reply.raw.destroyed) reply.raw.destroy(); };
+    reply.hijack();
+    reply.raw.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache, no-store", Connection: "keep-alive" });
+    send(true);
+    if (!closed) timer = setInterval(() => send(), 1_000);
+    if (!closed) keepalive = setInterval(() => { if (!closed && reply.raw.writable) reply.raw.write(": keepalive\n\n"); }, 15_000);
+    request.raw.on("close", close);
+    return reply;
+  });
   typed.post("/api/tasks/:taskId/duplicate", { schema: { params: TaskIdParamsSchema, body: DuplicateTaskBodySchema, response: { 201: TaskResponseSchema } } }, async (request, reply) => reply.code(201).send(await tasks.duplicateTask(request.forgeUser.id, request.params.taskId, request.body.idempotencyKey)));
   typed.patch("/api/tasks/:taskId", { schema: { params: TaskIdParamsSchema, body: TaskDetailsBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.updateTaskDetails(request.forgeUser.id, request.params.taskId, request.body)));
   typed.patch("/api/tasks/:taskId/agents", { schema: { params: TaskIdParamsSchema, body: TaskAgentsBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(tasks.updateTaskAgents(request.forgeUser.id, request.params.taskId, request.body)));

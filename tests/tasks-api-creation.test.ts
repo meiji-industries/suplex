@@ -75,6 +75,14 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
     const duplicate = await app.inject({ method: "POST", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin }, payload });
     expect(duplicate.statusCode).toBe(200); expect(duplicate.json()).toMatchObject({ id: created.json().id, workflowId: created.json().workflowId });
     const task = created.json() as { id: string; workflowId: string };
+    const executionId = "agent_activity_test";
+    await mkdir(join(config.runtimeRoot, "agent-turns", executionId), { recursive: true });
+    await writeFile(join(config.runtimeRoot, "agent-turns", executionId, "spool.ndjson"), `${JSON.stringify({ type: "item.started", item: { type: "command_execution", command: "pnpm typecheck" } })}\n`);
+    database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, spool_relative_path) VALUES (?, ?, ?, ?, 'planner', 'running', 1, ?, ?)").run(executionId, task.id, company.id, task.workflowId, new Date().toISOString(), `agent-turns/${executionId}/spool.ndjson`));
+    const activity = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/activity`, headers: { cookie, origin } });
+    expect(activity.statusCode).toBe(200);
+    expect(activity.headers["cache-control"]).toBe("private, no-store");
+    expect(activity.json()).toMatchObject({ execution: { id: executionId, role: "planner", status: "running" }, events: expect.arrayContaining([expect.objectContaining({ kind: "command", text: "pnpm typecheck" })]) });
     const body = await new ArtifactStore(config.artifactRoot).put(company.id, "release-public-body", { filename: "release.md", mimeType: "text/markdown", bytes: Buffer.from("## Summary\n\nAPI creation task") });
     database.authTransaction((db) => { const now = new Date().toISOString(); db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(body.id, body.companyId, body.kind, body.filename, body.mimeType, body.byteSize, body.sha256, body.storagePath, body.createdAt); db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, body_artifact_id, reused, created_at, updated_at) SELECT 'release-api-creation', id, company_id, workflow_id, 'release-api-creation-key', 'acme/forge', 'issue/api-creation-task', 'main', ?, ?, ?, 'draft', 17, 'https://github.com/acme/forge/pull/17', title, ?, 1, ?, ? FROM forge_tasks WHERE id = ?").run("a".repeat(40), "b".repeat(40), "c".repeat(40), body.id, now, now, task.id); });
     const release = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/release`, headers: { cookie, origin } });

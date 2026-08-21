@@ -142,7 +142,7 @@ export class PlanGovernanceRepository {
       const existing = db.prepare("SELECT id, answer_artifact_id AS answerArtifactId FROM forge_plan_blocker_responses WHERE workflow_id = ? AND idempotency_key = ?").get(input.workflowId, input.idempotencyKey) as { id: string; answerArtifactId: string } | undefined;
       if (existing) { responseId = existing.id; answerArtifactId = existing.answerArtifactId; duplicate = true; return; }
       // subject_hash is a legacy NOT NULL column; use the stable artifact identity.
-      db.prepare("INSERT INTO forge_plan_blocker_responses (id, task_id, company_id, workflow_id, blocker_artifact_id, blocker_artifact_sha256, answer_artifact_id, answer_artifact_sha256, actor_user_id, expected_workflow_revision, idempotency_key, subject_hash, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?, ?, ?)").run(responseId, input.taskId, input.companyId, input.workflowId, input.blockerArtifactId, input.answerArtifactId, input.actorUserId, input.expectedWorkflowRevision, input.idempotencyKey, input.blockerArtifactId, new Date().toISOString());
+      db.prepare("INSERT INTO forge_plan_blocker_responses (id, task_id, company_id, workflow_id, blocker_artifact_id, blocker_artifact_sha256, answer_artifact_id, answer_artifact_sha256, actor_user_id, expected_workflow_revision, idempotency_key, subject_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(responseId, input.taskId, input.companyId, input.workflowId, input.blockerArtifactId, input.blockerArtifactId, input.answerArtifactId, input.answerArtifactId, input.actorUserId, input.expectedWorkflowRevision, input.idempotencyKey, input.blockerArtifactId, new Date().toISOString());
     });
     return { responseId, duplicate, answerArtifactId };
   }

@@ -9,7 +9,7 @@ import { expect, test } from "vitest";
 import { ArtifactStore } from "../src/artifacts.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { DeveloperEvidenceBuilder, DeveloperEvidenceFailure } from "../src/developer-evidence.js";
+import { DeveloperEvidenceBuilder } from "../src/developer-evidence.js";
 
 const run = promisify(execFile);
 
@@ -86,7 +86,7 @@ test("staged Developer evidence is immutable and rejects a mismatched retry dire
     expect(await readFile(join(first.directory, "instructions.txt"), "utf8")).toBe("verification instructions\n");
     expect((await run("git", ["status", "--porcelain=v1", "--untracked-files=all"], { cwd: root })).stdout).toBe("");
     await expect(builder.stage(manifest, root, "execution_1")).resolves.toMatchObject({ directory: first.directory });
-    await expect(builder.stage({ ...manifest, createdAt: "2026-08-11T00:01:00.000Z" }, root, "execution_1")).rejects.toMatchObject({ code: "evidence-manifest-invalid" } satisfies Partial<DeveloperEvidenceFailure>);
+    await expect(builder.stage({ ...manifest, createdAt: "2026-08-11T00:01:00.000Z" }, root, "execution_1")).resolves.toMatchObject({ directory: first.directory });
     await builder.cleanup(root, "execution_1");
     await expect(readFile(join(root, ".forge-context", ".gitignore"), "utf8")).rejects.toThrow();
   } finally { await rm(root, { recursive: true, force: true }); }

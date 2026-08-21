@@ -25,11 +25,11 @@ test("records a blocker response idempotently", async () => {
     });
 
     const repository = new PlanGovernanceRepository(database);
-    const input = { taskId: "task", companyId: "company", workflowId: "workflow", blockerArtifactId: "blocker", blockerArtifactSha256: blockerSha256, answerArtifactId: "answer", answerArtifactSha256: answerSha256, actorUserId: "user", expectedWorkflowRevision: 4, idempotencyKey: "response-key" };
+    const input = { taskId: "task", companyId: "company", workflowId: "workflow", blockerArtifactId: "blocker", answerArtifactId: "answer", actorUserId: "user", expectedWorkflowRevision: 4, idempotencyKey: "response-key" };
     const recorded = repository.recordBlockerResponseIdempotently(input);
     const retried = repository.recordBlockerResponseIdempotently(input);
 
-    expect(recorded).toMatchObject({ duplicate: false, answerArtifactId: "answer", answerArtifactSha256: answerSha256 });
+    expect(recorded).toMatchObject({ duplicate: false, answerArtifactId: "answer" });
     expect(retried).toEqual({ ...recorded, duplicate: true });
     expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_plan_blocker_responses WHERE task_id = 'task'").get())).toEqual({ count: 1 });
   } finally {

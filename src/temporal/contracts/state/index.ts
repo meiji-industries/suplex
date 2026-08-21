@@ -42,7 +42,12 @@ const orderedStateFields = {
   ...successorStateFields2,
 };
 
-export const IssueWorkflowStateSchema = z.object(orderedStateFields).superRefine((state, context) => {
+export const IssueWorkflowStateSchema = z.preprocess((raw) => {
+  // A human blocker is a human-owned wait. When a transition hands ownership back to an
+  // agent without clearing it, the blocker is stale, not an invariant violation.
+  if (raw && typeof raw === "object" && (raw as { owner?: unknown }).owner !== "human" && (raw as { blocker?: { unblockOwner?: unknown } | null }).blocker?.unblockOwner === "human") return { ...(raw as object), blocker: null };
+  return raw;
+}, z.object(orderedStateFields)).superRefine((state, context) => {
   if (state.blocker?.unblockOwner !== "human") return;
   if (state.owner !== "human") context.addIssue({ code: "custom", path: ["owner"], message: "Human blockers require human ownership" });
   if (state.blocker.retry && !state.blocker.retry.exhausted && state.blocker.retry.retryAt !== null) context.addIssue({ code: "custom", path: ["blocker", "retry"], message: "Retryable blockers cannot be surfaced as human attention" });

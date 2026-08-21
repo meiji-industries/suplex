@@ -93,8 +93,13 @@ function normalizeInspection(value: DeveloperProcessInspection | ProcessInspecti
   return "processGroupId" in value ? toInspection(value) : value;
 }
 
-/** The supervisor directory is the completion authority, ahead of child PID liveness. */
-export async function inspectDeveloperExecution(lease: DeveloperExecutionLease, controller: DeveloperDiskProcessController): Promise<DeveloperExecutionDiskState> {
+function hasTerminalDeveloperExecution(database: ForgeDatabase, executionId: string): boolean {
+  return Boolean(database.authQuery((db) => db.prepare("SELECT 1 FROM forge_developer_executions WHERE id = ? AND status IN ('blocked', 'completed', 'interrupted')").get(executionId)));
+}
+
+/** The supervisor directory is the completion authority only while its execution remains unclaimed. */
+export async function inspectDeveloperExecution(lease: DeveloperExecutionLease, controller: DeveloperDiskProcessController, database?: ForgeDatabase): Promise<DeveloperExecutionDiskState> {
+  if (database && hasTerminalDeveloperExecution(database, lease.executionId)) return { kind: "gone" };
   const result = await readDeveloperSupervisorResult(lease);
   if (result) return { kind: "result_ready", result };
   const snapshot = await open(join(lease.executionRoot, "supervisor.json"), constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0))
@@ -189,7 +194,7 @@ export async function reconcileDeveloperExecutions(database: ForgeDatabase, cont
     // A turn that finished just before the restart has a durable result but no
     // claim yet. Its child is legitimately gone; marking it interrupted here
     // would discard a completed turn instead of letting the Activity claim it.
-    const diskState = await inspectDeveloperExecution(lease, controller);
+    const diskState = await inspectDeveloperExecution(lease, controller, database);
     if (lease.resultHash || diskState.kind === "result_ready") {
       outcomes.push({ executionId: lease.executionId, status: "recovered", reason: "stored-supervisor-result" });
       continue;

@@ -46,8 +46,8 @@ export function sha256Hex(value: string): string {
   return [h0, h1, h2, h3, h4, h5, h6, h7].map((part) => part.toString(16).padStart(8, "0")).join("");
 }
 
-export function developerExecutionId(workflowId: string, planRevision: number, attempt: number, turnKind: "implementation" | "repair" | "merge_conflict_resolution"): string {
-  return `developer_${sha256Hex(`${workflowId}\0${planRevision}\0${attempt}\0${turnKind}`).slice(0, 24)}`;
+export function developerExecutionId(workflowId: string, planRevision: number, attempt: number, turnKind: "implementation" | "repair" | "merge_conflict_resolution", commandId?: string): string {
+  return `developer_${sha256Hex(`${workflowId}\0${planRevision}\0${attempt}\0${turnKind}${commandId === undefined ? "" : `\0${commandId}`}`).slice(0, 24)}`;
 }
 
 export function workflowTimestamp(): string {

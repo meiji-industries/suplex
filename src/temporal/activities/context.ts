@@ -265,6 +265,10 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     return result;
   };
   const recoverFinalizedDeveloperResult = async <T>(input: { taskId: string; companyId: string; workflowId: string; planRevision: number } & DeveloperSupervisorActivityIdentity): Promise<{ result: T; resultHash: string } | undefined> => {
+    const terminal = database.authQuery((db) => db.prepare("SELECT 1 FROM forge_developer_executions WHERE id = ? AND status IN ('blocked', 'completed', 'interrupted')").get(input.developerTurnExecutionId));
+    // A terminal row belongs to a previously claimed turn. Its spool must not
+    // turn a new command into a replay of that old delivery.
+    if (terminal) return undefined;
     const lease = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).get(input.developerTurnExecutionId);
     // The supervisor atomically publishes result.json before the worker can
     // perform post-exit verification.  A restart in that gap leaves the SQL
@@ -311,7 +315,8 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     operation: (service: Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">) => Promise<T>,
   ): Promise<DeveloperTurnActivityOutcome<T>> => {
     const leases = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot);
-    const priorClaim = leases.readClaim(input.developerTurnExecutionId);
+    const terminalRow = database.authQuery((db) => db.prepare("SELECT 1 FROM forge_developer_executions WHERE id = ? AND status IN ('blocked', 'completed', 'interrupted')").get(input.developerTurnExecutionId));
+    const priorClaim = terminalRow ? undefined : leases.readClaim(input.developerTurnExecutionId);
     if (priorClaim) {
       return { status: "completed", result: JSON.parse(priorClaim.activityResultJson) as T, resultHash: priorClaim.resultHash };
     }

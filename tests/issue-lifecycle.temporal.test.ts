@@ -7,6 +7,15 @@ import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
 import { connectTemporal, continueIssueWork, executeIssueCommand, queryIssueWorkflow, rejectIssuePlan, reviseIssuePlan, startIssueWorkflow } from "../src/temporal/service.js";
 import { replayIssueHistory, type ReplayHistory } from "../src/temporal/replay.js";
 import { createTemporalHarness } from "./helpers/temporal-harness.js";
+import { developerExecutionId } from "../src/temporal/deterministic-id.js";
+
+test("Temporal retries with rewound attempt numbers get distinct Developer execution IDs", () => {
+  const firstRetry = developerExecutionId("workflow-reset", 1, 2, "implementation", "retry-before-reset");
+  const replayedRetry = developerExecutionId("workflow-reset", 1, 2, "implementation", "retry-after-reset");
+
+  expect(replayedRetry).not.toBe(firstRetry);
+  expect(replayedRetry).toMatch(/^developer_[a-f0-9]{24}$/);
+});
 
 test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebuild scenarios", async () => {
   const harness = createTemporalHarness();

@@ -224,7 +224,7 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
           await activitySleep(250);
           continue;
         }
-        const diskState = latest ? await inspectDeveloperExecution(latest, controller) : { kind: "gone" as const };
+        const diskState = latest ? await inspectDeveloperExecution(latest, controller, input.database) : { kind: "gone" as const };
         if (diskState.kind === "result_ready") {
           // Result publication can be visible just before its contents are
           // readable. Keep polling disk instead of treating the child as gone.

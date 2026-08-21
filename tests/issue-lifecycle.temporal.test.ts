@@ -169,13 +169,24 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     await expect.poll(() => database!.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = 'issue-developer-failure'").get()), { timeout: 10_000 }).toEqual({ revision: 7, phase: "delivery_blocked", pending_action: "The agent invocation did not complete." });
     state.developerFailure = false;
 
+    const failedRetryWorkflowId = `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-failed-retry`;
+    await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-failed-retry", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, continuationState: { phase: "failed", revision: 8, owner: "human", allowedCommands: ["retry_development", "start_planning", "continue_work", "cancel_issue"], pendingAction: "Developer retry is required", lastEventId: `${failedRetryWorkflowId}:8`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_integration", leadOutputArtifactId: "artifact_integration_output", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], supplementalReviewUsed: false, repairCycle: 0, developerExecutionId: "developer_failed_retry", developerAttempt: 1, branchName: "forge/issue/failed-retry" } });
+    state.holdDeveloper = true;
+    state.developerGate = new Promise<void>((resolve) => { state.releaseDeveloper = resolve; });
+    const retriedFailedDevelopmentPromise = executeIssueCommand(config, failedRetryWorkflowId, "retry_development", { expectedRevision: 8, actorUserId: "issue-admin" });
+    const retriedFailedDevelopment = await waitForPhase(failedRetryWorkflowId, "development");
+    expect(retriedFailedDevelopment).toMatchObject({ phase: "development", owner: "lead", developerAttempt: 2, pendingAction: "Developer retry" });
+    state.releaseDeveloper();
+    state.holdDeveloper = false;
+    await retriedFailedDevelopmentPromise;
+
     state.planningFailure = true;
     const startedPlanningFailure = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "ci-planning-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false });
     const retryablePlanningFailure = await executeIssueCommand(config, startedPlanningFailure.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "issue-admin" });
     expect(retryablePlanningFailure).toMatchObject({ phase: "failed", owner: "human", allowedCommands: ["start_planning", "continue_work", "cancel_issue"], pendingAction: "Planning failed; retry is available" });
     state.planningFailure = false;
-    const retriedPlanning = await executeIssueCommand(config, startedPlanningFailure.workflowId, "start_planning", { expectedRevision: retryablePlanningFailure.revision, actorUserId: "issue-admin" });
-    expect(retriedPlanning).toMatchObject({ phase: "approval", allowedCommands: expect.arrayContaining(["approve_plan", "reject_plan"]) });
+    const continuedFailedPlanning = await continueIssueWork(config, startedPlanningFailure.workflowId, { expectedRevision: retryablePlanningFailure.revision, actorUserId: "issue-admin", reason: "Continue the failed planning work in a fresh successor." });
+    expect(continuedFailedPlanning).toMatchObject({ phase: "failed", revision: retryablePlanningFailure.revision + 1, allowedCommands: ["cancel_issue"], successorReference: { predecessorTaskId: "ci-planning-failure" }, successorTaskId: "ci-planning-failure-successor-" + retryablePlanningFailure.revision });
 
     state.permanentPlanningFailure = true;
     const startedPermanentFailure = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-permanent-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false });

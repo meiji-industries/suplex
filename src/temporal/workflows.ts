@@ -104,6 +104,7 @@ const capacityReadmissionPatch = "forge-capacity-readmit-v1";
 const guardedHandlersPatch = "forge-guarded-handlers-v1";
 const autoChainLeadPhasesPatch = "forge-auto-chain-lead-phases-v1";
 const unconditionalCancelPatch = "forge-unconditional-cancel-v1";
+const failedRetryPatch = "forge-failed-retry-v1";
 
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
@@ -112,6 +113,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const continueAfter = validatedInput.continueAsNewAfter ?? 0;
   const reviseContinueEnabled = patched(reviseContinuePatch);
   const guardedHandlersEnabled = patched(guardedHandlersPatch);
+  const failedRetryEnabled = patched(failedRetryPatch);
   const addRevisionCommand = (commands: IssueCommand[]): IssueCommand[] => reviseContinueEnabled && !commands.includes("revise_plan") ? [...commands, "revise_plan"] : commands;
   let state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState(validatedInput),
@@ -255,7 +257,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     return projectedRevision;
   };
   const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: projectIssueState, projectCapacityState, patched, durableCapacityPatch, capacityFinalizationOwnershipPatch, capacityReadmissionPatch });
-  const guarded = createGuarded({ get: () => state, set: (next) => { state = next; } }, { enabled: guardedHandlersEnabled, reviseContinueEnabled, project: projectIssueState });
+  const guarded = createGuarded({ get: () => state, set: (next) => { state = next; } }, { enabled: guardedHandlersEnabled, reviseContinueEnabled, failedRetryEnabled, project: projectIssueState });
   const workflowContext = createIssueWorkflowContext(validatedInput, state, {
     project: () => projectIssueState(state),
     projectState: (value) => projectIssueState(value),

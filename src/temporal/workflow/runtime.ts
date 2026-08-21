@@ -300,7 +300,7 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
 // that the projection never saw: recover to a retryable failed state and project it.
 export function createGuarded(
   store: { get: () => IssueWorkflowState; set: (next: IssueWorkflowState) => void },
-  options: { enabled: boolean; reviseContinueEnabled: boolean; project: (state: IssueWorkflowState) => Promise<unknown> },
+  options: { enabled: boolean; reviseContinueEnabled: boolean; failedRetryEnabled: boolean; project: (state: IssueWorkflowState) => Promise<unknown> },
 ) {
   return <A extends unknown[], R>(fn: (...args: A) => Promise<R>, command?: string) => async (...args: A): Promise<R> => {
     const before = store.get();
@@ -356,6 +356,16 @@ export function createGuarded(
         await options.project(retryable);
         throw error;
       }
+      const canRetryDevelopment = options.failedRetryEnabled
+        && state.planMaterial === true
+        && Boolean(state.leadOutputArtifactId)
+        && Boolean(state.leadSessionRef);
+      const allowedCommands = canRetryDevelopment
+        ? ["retry_development", "start_planning", ...(options.reviseContinueEnabled ? ["continue_work"] : []), "cancel_issue"]
+        : options.reviseContinueEnabled ? ["start_planning", "continue_work", "cancel_issue"] : ["start_planning", "cancel_issue"];
+      const retryActions = canRetryDevelopment
+        ? [{ command: "retry_development" as const, label: "Retry development", requiresNote: false, destructive: false }, { command: "start_planning" as const, label: "Start planning", requiresNote: false, destructive: false }]
+        : [{ command: "start_planning" as const, label: "Retry planning", requiresNote: false, destructive: false }];
       const next = IssueWorkflowStateSchema.parse({
         ...state,
         capacity: null,
@@ -363,9 +373,9 @@ export function createGuarded(
         phase: "failed",
         revision,
         owner: "human",
-        allowedCommands: options.reviseContinueEnabled ? ["start_planning", "continue_work", "cancel_issue"] : ["start_planning", "cancel_issue"],
+        allowedCommands,
         pendingAction: summary,
-        blocker: failure?.category ? humanBlocker(failure.category, summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : null,
+        blocker: failure?.category ? humanBlocker(failure.category, summary, [...retryActions, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : null,
         stateChangedAt: new Date().toISOString(),
         lastEventId: `${state.workflowId}:${revision}`,
       });

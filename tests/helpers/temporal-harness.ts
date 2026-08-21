@@ -45,6 +45,9 @@ export type TemporalHarnessState = {
   holdPlanning: boolean;
   releasePlanning: () => void;
   planningGate: Promise<void>;
+  holdDeveloper: boolean;
+  releaseDeveloper: () => void;
+  developerGate: Promise<void>;
 };
 
 export type TemporalHarnessArtifacts = {
@@ -85,7 +88,7 @@ export function createTemporalHarness(): TemporalHarness {
   let restartActivitiesFactory: ((database: ForgeDatabase) => ReturnType<typeof createActivities>) | undefined;
   let started = false;
   const issueRoleProfiles = { planner: "profile", builder: "profile" };
-  const state: TemporalHarnessState = { planningFailure: false, permanentPlanningFailure: false, permanentPlanningCalls: 0, developerFailure: false, planningMaterial: true, preservedWorktreeCompatibility: null, revisionDisposition: "new", revisionAuthorizationCalls: 0, holdPlanning: false, releasePlanning: () => {}, planningGate: Promise.resolve() };
+  const state: TemporalHarnessState = { planningFailure: false, permanentPlanningFailure: false, permanentPlanningCalls: 0, developerFailure: false, planningMaterial: true, preservedWorktreeCompatibility: null, revisionDisposition: "new", revisionAuthorizationCalls: 0, holdPlanning: false, releasePlanning: () => {}, planningGate: Promise.resolve(), holdDeveloper: false, releaseDeveloper: () => {}, developerGate: Promise.resolve() };
   const ciCalls = new Map<string, number>();
   const ciPlanInputs: Array<{ leadSessionRef: string; ciAttemptId: string }> = [];
   const ciRepairInputs: Array<{ priorDeveloperSessionRef: string; ciAttemptId: string }> = [];
@@ -157,6 +160,7 @@ export function createTemporalHarness(): TemporalHarness {
     };
     const integrationDeveloper = {
       run: async (input: { executionId?: string }) => {
+        if (state.holdDeveloper) await state.developerGate;
         if (state.developerFailure) throw new AgentFailure("process-exited", "The agent invocation did not complete.");
         return { developerExecutionId: input.executionId ?? "developer_integration", developerSessionRef: "session_developer_integration", worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), currentStep: 1, resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_developer_evidence", deliverySummary: "Developer delivery", outcome: "completed" as const };
       },
@@ -275,6 +279,7 @@ export function createTemporalHarness(): TemporalHarness {
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-permanent-failure', 'issue-company', 'issue-project', 'Permanent failure issue', 'issue-brief', '[]', ?, 0, ?, 'issue-revision', 'issue-permanent-failure-key', ?, ?)").run(JSON.stringify(issueRoleProfiles), `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-permanent-failure`, new Date().toISOString(), new Date().toISOString());
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-start-failure', 'issue-company', 'issue-project', 'Developer start failure', 'issue-brief', '[]', ?, 0, ?, 'issue-revision', 'issue-start-failure-key', ?, ?)").run(JSON.stringify(issueRoleProfiles), `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-start-failure`, new Date().toISOString(), new Date().toISOString());
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-developer-failure', 'issue-company', 'issue-project', 'Developer activity failure', 'issue-brief', '[]', ?, 0, ?, 'issue-revision', 'issue-developer-failure-key', ?, ?)").run(JSON.stringify(issueRoleProfiles), `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-developer-failure`, new Date().toISOString(), new Date().toISOString());
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-failed-retry', 'issue-company', 'issue-project', 'Failed retry issue', 'issue-brief', '[]', ?, 0, ?, 'issue-revision', 'issue-failed-retry-key', ?, ?)").run(JSON.stringify(issueRoleProfiles), `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-failed-retry`, new Date().toISOString(), new Date().toISOString());
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('ci-provider-failure', 'issue-company', 'issue-project', 'CI provider failure issue', 'issue-brief', '[]', ?, 0, ?, 'issue-revision', 'ci-provider-failure-key', ?, ?)").run(JSON.stringify(issueRoleProfiles), `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-ci-provider-failure`, new Date().toISOString(), new Date().toISOString());
     });
     artifacts.ciProviderEvidence = await new ArtifactStore(config.artifactRoot).put("issue-company", "ci-evidence", { filename: "ci-provider-failure.json", mimeType: "application/json", bytes: Buffer.from('{"code":"provider_failure","summary":"The CI provider did not return an authoritative result."}', "utf8") });

@@ -103,7 +103,7 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
     const supersedesExecutionId = ctx.state.developerExecutionId!;
     const executionId = ctx.supervisedDeveloperTurns ? developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "implementation") : `developer_${ctx.state.workflowId}_${command.commandId}`.slice(0, 256);
     await ctx.withStateMutation(() => {
-      if (ctx.state.revision !== command.expectedRevision || (ctx.state.phase !== "development" && ctx.state.phase !== "delivery_blocked")) throw new Error("Developer retry was superseded by another command");
+      if (ctx.state.revision !== command.expectedRevision || (ctx.state.phase !== "development" && ctx.state.phase !== "delivery_blocked" && !(ctx.state.phase === "failed" && ctx.patched("forge-failed-retry-v1")))) throw new Error("Developer retry was superseded by another command");
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "development", owner: "lead", allowedCommands: ctx.addRevisionCommand(["cancel_development", "reject_plan", "cancel_issue"]), pendingAction: "Developer retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: executionId, developerAttempt, developerTurnKind: "implementation", ...ctx.recoveryFields("starting", null, "Starting a linked Developer retry.", null), activeOperation: { commandId: command.commandId, kind: "development", startedRevision: ctx.state.revision + 1 }, blocker: null, stateChangedAt: new Date().toISOString() });
       ctx.markCommandProcessed(command.commandId);
     });
@@ -137,7 +137,7 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (ctx.commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
-    if (ctx.state.phase !== "development" && ctx.state.phase !== "delivery_blocked") throw new Error("Developer retry is not available in the current phase");
+    if (ctx.state.phase !== "development" && ctx.state.phase !== "delivery_blocked" && !(ctx.state.phase === "failed" && ctx.patched("forge-failed-retry-v1") && ctx.state.planMaterial === true && ctx.state.leadOutputArtifactId && ctx.state.leadSessionRef)) throw new Error("Developer retry is not available in the current phase");
     // Materiality only has to be decided, not true — same check start_development makes.
     // Truthiness here made every routine (non-material) plan permanently unretryable.
     if (!ctx.state.developerExecutionId || ctx.state.planMaterial === null || ctx.state.planMaterial === undefined || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef) throw new Error("A preserved Developer attempt and approved plan are required before retry");

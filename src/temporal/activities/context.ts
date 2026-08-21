@@ -96,8 +96,12 @@ export function asRetryableAgentFailure(error: unknown): ApplicationFailure | un
   return ApplicationFailure.retryable(error.message, error.code, { ...(retryAt ? { retryAt } : {}), ...(error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}) });
 }
 
-function asNonRetryableCapacityFailure(error: unknown): ApplicationFailure | undefined {
+export function asNonRetryableCapacityFailure(error: unknown): ApplicationFailure | undefined {
   if (!(error instanceof CapacityFailure)) return undefined;
+  if (error.code === "invalid-status" || error.code === "stale-owner") {
+    const summary = "The previous Developer turn was interrupted and its capacity request cannot be reused — retry development.";
+    return ApplicationFailure.nonRetryable(summary, error.code, { code: error.code, summary });
+  }
   return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
 }
 

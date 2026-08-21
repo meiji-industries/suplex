@@ -80,7 +80,10 @@ function activeLeases(database: ForgeDatabase): DeveloperExecutionLease[] {
 
 function markExecutionTerminal(database: ForgeDatabase, executionId: string, status: "cancelled" | "interrupted", failureCode: string | null, failureSummary: string | null): void {
   const now = new Date().toISOString();
-  database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = COALESCE(finished_at, ?), heartbeat_at = ?, failure_code = ?, failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling', 'ownership_ambiguous')").run(status, now, now, failureCode, failureSummary, executionId));
+  database.authTransaction((db) => {
+    db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = COALESCE(finished_at, ?), heartbeat_at = ?, failure_code = ?, failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling', 'ownership_ambiguous')").run(status, now, now, failureCode, failureSummary, executionId);
+    db.prepare("UPDATE forge_capacity_requests SET status = 'released', released_at = ?, terminal_reason = ?, wait_reason = NULL, updated_at = ? WHERE execution_kind = 'developer' AND execution_id = ? AND status IN ('active', 'ownership_ambiguous')").run(now, status === "interrupted" ? "process_failed" : "cancelled", now, executionId);
+  });
 }
 
 /** Read-only observation. Workflow state changes belong to the Temporal Workflow. */

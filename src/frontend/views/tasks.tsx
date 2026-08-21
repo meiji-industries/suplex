@@ -342,13 +342,20 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setError(reason instanceof Error ? reason.message : "Unable to resolve the decision blocker"); }
     finally { setBusy(false); }
   };
+  const rescueTask = async (): Promise<{ steps: Array<{ name: string; outcome: "completed" | "skipped" | "failed"; detail: string }> }> => {
+    if (!selected) return { steps: [] };
+    setBusy(true); setError("");
+    try { const report = await readJson<{ steps: Array<{ name: string; outcome: "completed" | "skipped" | "failed"; detail: string }> }>(`/api/tasks/${selected.id}/rescue`, { method: "POST" }); await reload(); return report; }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to rescue task"); throw reason; }
+    finally { setBusy(false); }
+  };
 
   if (routeTaskId && loading) return <TaskDetailsSkeleton />;
   if (routeTaskId && !companyId) return <TaskDetailsNotFound companyId="" returnTo={mode} />;
   if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
   if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
-  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} onMarkReady={markReady} onDuplicate={duplicateTask} onUpdateDetails={updateTaskDetails} onRefresh={reload} />;
+  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} onMarkReady={markReady} onDuplicate={duplicateTask} onUpdateDetails={updateTaskDetails} onRefresh={reload} onRescue={rescueTask} />;
 
   if (mode === "board") {
     return (

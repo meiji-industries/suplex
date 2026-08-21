@@ -1983,7 +1983,7 @@ export class TaskService {
       FROM forge_audit_events a
       LEFT JOIN forge_users u ON u.id = a.actor_user_id
       LEFT JOIN forge_agents ag ON ag.id = a.actor_agent_id
-      WHERE a.company_id = ? AND json_extract(a.metadata_json, '$.taskId') = ? AND a.action IN ('task_created', 'task_command')
+      WHERE a.company_id = ? AND json_extract(a.metadata_json, '$.taskId') = ? AND a.action IN ('task_created', 'task_command', 'task_rescue')
       ORDER BY a.created_at, a.id`).all(row.company_id, row.id) as Array<{
         id: string; action: string; metadata_json: string; created_at: string;
         user_id: string | null; user_name: string | null; user_username: string | null; user_avatar_seed: string | null;
@@ -2012,6 +2012,10 @@ export class TaskService {
       const metadata = parseMetadata(entry.metadata_json);
       return { id: entry.id, revision: Number(metadata.revision), eventType: "member_action", metadata, createdAt: entry.created_at, kind: "member" as const, actor: { id: entry.user_id!, displayName: entry.user_name!, username: entry.user_username!, avatarSeed: entry.user_avatar_seed || entry.user_username! } };
     }).filter((entry) => Number.isInteger(entry.revision));
+    const rescueActivity: TaskActivityEntry[] = memberRows.filter((entry) => entry.action === "task_rescue").map((entry) => {
+      const metadata = parseMetadata(entry.metadata_json);
+      return { id: entry.id, revision: Number(metadata.revision), eventType: "system_action", metadata, createdAt: entry.created_at, kind: "member" as const, actor: { id: "forge", displayName: "Forge", username: "forge", avatarSeed: "forge" } };
+    }).filter((entry) => Number.isInteger(entry.revision));
     const commandKeys = new Set(commandActivity.map((entry) => `${entry.actor?.id}:${entry.revision}:${String(entry.metadata.command)}`));
     const decisionActivity = this.database.authQuery((db) => db.prepare(`SELECT d.id, d.plan_revision, d.decision, d.actor_user_id, d.expected_workflow_revision, d.created_at, u.display_name, u.username, u.avatar_seed
       FROM forge_plan_decisions d JOIN forge_users u ON u.id = d.actor_user_id
@@ -2021,7 +2025,7 @@ export class TaskService {
       if (commandKeys.has(`${entry.actor_user_id}:${revision}:${command}`)) return [];
       return [{ id: `plan-decision-${entry.id}`, revision, eventType: "member_action", metadata: { command, actionLabel: issueCommands[command].label }, createdAt: entry.created_at, kind: "member", actor: { id: entry.actor_user_id, displayName: entry.display_name, username: entry.username, avatarSeed: entry.avatar_seed || entry.username } }];
     });
-    const activity: TaskActivityEntry[] = [...timeline.map((entry): TaskActivityEntry => ({ ...entry, kind: "workflow", ...(entry.eventType === "task_created" && creatorActor ? { actor: creatorActor } : {}) })), ...commandActivity, ...decisionActivity]
+    const activity: TaskActivityEntry[] = [...timeline.map((entry): TaskActivityEntry => ({ ...entry, kind: "workflow", ...(entry.eventType === "task_created" && creatorActor ? { actor: creatorActor } : {}) })), ...commandActivity, ...rescueActivity, ...decisionActivity]
       .sort((left, right) => left.revision - right.revision || (left.kind === right.kind ? left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id) : left.kind === "member" ? -1 : 1));
     // ponytail: display agent resolved via current task assignment; add agent_id columns to execution tables if history fidelity ever matters
     const agentInvocations = this.database.authQuery((db) => db.prepare(`SELECT e.id, e.role, e.status, e.attempt, e.session_ref, e.started_at, e.finished_at, e.failure_code, e.failure_summary, e.evidence_artifact_id,

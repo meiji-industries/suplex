@@ -10,6 +10,7 @@ import { Textarea } from "../components/ui/textarea.js";
 import { Skeleton } from "../components/ui/skeleton.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.js";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog.js";
 import { ApplicationFrame } from "../components/app/application-frame.js";
 import { getWorkerHealthFailure, useSystemHealth } from "../components/app/system-health.js";
 import { TaskActivity, TaskHistory } from "../components/app/task-history.js";
@@ -451,6 +452,22 @@ function TaskOptions({ canCancel, busy, resyncBusy, onCancel, onDuplicate, onRes
   );
 }
 
+type RescueReport = { steps: Array<{ name: string; outcome: "completed" | "skipped" | "failed"; detail: string }> };
+type Diagnostics = { workflow: { status: string; lastWorkflowTaskFailure: string | null; pendingWorkflowTaskAgeSeconds: number | null; buildId: string | null; currentBuildId: string | null }; executions: Array<{ id: string; kind: string; status: string; pid: number | null; terminal: boolean }>; capacityRequests: Array<{ id: string; status: string; executionId: string | null }>; leases: Array<{ executionId: string; status: string }> };
+
+function RescueControls({ task, busy, onRescue }: { task: ApiTask; busy: boolean; onRescue: () => Promise<RescueReport> }): ReactElement | null {
+  const [confirmOpen, setConfirmOpen] = useState(false); const [report, setReport] = useState<RescueReport | null>(null); const [diagnostics, setDiagnostics] = useState<Diagnostics | null>(null); const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  if (["done", "cancelled"].includes(task.phase)) return null;
+  const run = async (): Promise<void> => { setConfirmOpen(false); setReport(await onRescue()); };
+  const loadDiagnostics = (): void => { setDiagnosticsOpen((open) => !open); if (!diagnostics) void readJson<Diagnostics>(`/api/tasks/${encodeURIComponent(task.id)}/diagnostics`).then(setDiagnostics).catch(() => setDiagnostics(null)); };
+  return <section className="space-y-2" data-task-rescue>
+    <div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmOpen(true)}>{busy ? "Rescuing…" : "Rescue"}</Button><Button size="sm" variant="ghost" onClick={loadDiagnostics} aria-expanded={diagnosticsOpen}>Diagnostics</Button></div>
+    {report ? <div className="space-y-1 text-xs" data-rescue-report>{report.steps.map((step) => <div key={step.name}><span className="font-medium">{step.name}</span> · {step.outcome}: {step.detail}</div>)}</div> : null}
+    {diagnosticsOpen ? <div className="border-l pl-3 text-xs" data-task-diagnostics>{diagnostics ? <><div>Workflow: {diagnostics.workflow.status}{diagnostics.workflow.pendingWorkflowTaskAgeSeconds !== null ? ` · pending ${diagnostics.workflow.pendingWorkflowTaskAgeSeconds}s` : ""}</div>{diagnostics.workflow.lastWorkflowTaskFailure ? <div>Last failure: {diagnostics.workflow.lastWorkflowTaskFailure}</div> : null}<div>Executions: {diagnostics.executions.map((entry) => `${entry.kind} ${entry.status}${entry.pid ? ` (pid ${entry.pid})` : ""}`).join(", ") || "none"}</div><div>Capacity: {diagnostics.capacityRequests.map((entry) => `${entry.status}${entry.executionId ? ` (${entry.executionId})` : ""}`).join(", ") || "none"}</div><div>Leases: {diagnostics.leases.map((entry) => `${entry.executionId} ${entry.status}`).join(", ") || "none"}</div></> : "Loading diagnostics…"}</div> : null}
+    <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Rescue this task?</AlertDialogTitle><AlertDialogDescription>Forge will re-dispatch the workflow to the current worker, release stale locks, and retry the current step.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => void run()}>Rescue task</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+  </section>;
+}
+
 function PlanningRunCard({ task }: { task: ApiTask }): ReactElement | null {
   const invocation = [...task.agentInvocations].reverse().find((candidate) => candidate.role === "planner" && ["starting", "running", "cancelling"].includes(candidate.status));
   const [now, setNow] = useState(() => Date.now());
@@ -535,7 +552,7 @@ function InlineTaskEditor({ field, value, onSave }: { field: "title" | "descript
     : <button type="button" data-task-description-editor aria-label="Edit task description" onClick={start} className="block w-full whitespace-pre-wrap text-left font-sans text-[13px] leading-5">{value || "No description."}</button>;
 }
 
-export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onDuplicate, onUpdateDetails, onRefresh }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onDuplicate: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void> }): ReactElement {
+export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onDuplicate, onUpdateDetails, onRefresh, onRescue }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onDuplicate: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport> }): ReactElement {
   const approveCommand = task.commands.find((command) => command.name === "approve_plan");
   const revisionCommand = task.commands.find((command) => command.name === "request_plan_revision");
   const blockerCommand = task.commands.find((command) => command.name === "respond_plan_blocker");
@@ -633,6 +650,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                     <PlanningRunCard task={task} />
                     {task.phase === "planning" ? <LiveExecutionRun taskId={task.id} eventPath="planning-events" activityLabel="Planner" onRefresh={onRefresh} /> : null}
                     {pullRequestInMain ? <div data-active-pull-request><PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} {...(task.allowedCommands.includes("reconcile_ci") ? { onCheckCi: () => onPlanAction("reconcile-ci") } : {})} {...(task.allowedCommands.includes("reconcile_merge") ? { onCheckMerge: () => onPlanAction("reconcile-merge") } : {})} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
+                    <RescueControls task={task} busy={busy} onRescue={onRescue} />
                     {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} developmentStatus={developerLiveness ? <DevelopmentStatus state={developerLiveness} now={developmentNow} inline /> : undefined} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} compact /></DeveloperRecoveryStatus> : <LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
                     {task.developerExecution ? <DeveloperEvidence taskId={task.id} execution={task.developerExecution} repository={project?.repository} /> : null}
                     <ActivityPanel task={task} />

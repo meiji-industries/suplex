@@ -135,7 +135,9 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
     if (ctx.commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (ctx.state.phase !== "development" && ctx.state.phase !== "delivery_blocked") throw new Error("Developer retry is not available in the current phase");
-    if (!ctx.state.developerExecutionId || !ctx.state.planMaterial || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef) throw new Error("A preserved Developer attempt and approved plan are required before retry");
+    // Materiality only has to be decided, not true — same check start_development makes.
+    // Truthiness here made every routine (non-material) plan permanently unretryable.
+    if (!ctx.state.developerExecutionId || ctx.state.planMaterial === null || ctx.state.planMaterial === undefined || !ctx.state.leadOutputArtifactId || !ctx.state.leadSessionRef) throw new Error("A preserved Developer attempt and approved plan are required before retry");
   } });
 
 }

@@ -95,8 +95,15 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
       return result;
     },
     async observeDeveloperExecution(input) {
-      const lease = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).get(input.executionId);
+      const leases = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot);
+      const lease = leases.get(input.executionId);
       const outcome = (await reconcileDeveloperExecutions(database)).find((entry) => entry.executionId === input.executionId);
+      // The reconciler only sweeps active leases. A lease that already reached a
+      // terminal status must report that recorded fact, otherwise
+      // verify_developer_ownership reports "cannot prove ownership" forever and
+      // the task can never reach retry_development.
+      if (!outcome && lease && leases.readClaim(input.executionId)) return { executionId: input.executionId, status: "result_ready", reasonCode: "stored-delivery-result", summary: "The Developer result is durably available.", lastHeartbeatAt: lease.heartbeatAt };
+      if (!outcome && (lease?.status === "interrupted" || lease?.status === "terminated" || lease?.status === "failed")) return { executionId: input.executionId, status: "interrupted", reasonCode: `developer-lease-${lease.status}`, summary: "The recorded Developer process is no longer running.", lastHeartbeatAt: lease.heartbeatAt };
       if (!outcome) return { executionId: input.executionId, status: "ownership_ambiguous", reasonCode: "developer-lease-missing", summary: "Forge cannot prove ownership of the previous Developer process.", lastHeartbeatAt: lease?.heartbeatAt ?? null };
       if (outcome.status === "recovered") return { executionId: input.executionId, status: "result_ready", reasonCode: outcome.reason ?? null, summary: "The Developer result is durably available.", lastHeartbeatAt: lease?.heartbeatAt ?? null };
       if (outcome.status === "active") return { executionId: input.executionId, status: "active", reasonCode: null, summary: "Forge confirmed the recorded Developer supervisor and child.", lastHeartbeatAt: lease?.heartbeatAt ?? null };

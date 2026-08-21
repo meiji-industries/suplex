@@ -272,6 +272,25 @@ function scopedRepository(root: string, candidate: string): Promise<string> {
   });
 }
 
+/**
+ * Roll a Forge-owned CI-repair worktree back to the commit the repair started
+ * from. A repair turn that fails after committing otherwise leaves its own
+ * commit as HEAD and every later pre-flight refuses forever. Only unpushed
+ * commits are ever discarded: `origin/<branch>` must already be an ancestor of
+ * the prior commit, and the prior commit an ancestor of HEAD.
+ */
+export async function rollbackUnpushedRepairCommits(worktreePath: string, branchName: string, priorCommit: string): Promise<boolean> {
+  const git = async (args: string[]): Promise<string> => (await execFileAsync("git", args, { cwd: worktreePath, timeout: 8_000, maxBuffer: 64 * 1024 })).stdout.trim();
+  try {
+    if (await git(["rev-parse", "--abbrev-ref", "HEAD"]) !== branchName) return false;
+    if ((await git(["rev-parse", "HEAD"])).toLowerCase() === priorCommit.toLowerCase()) return true;
+    await git(["merge-base", "--is-ancestor", priorCommit, "HEAD"]);
+    await git(["merge-base", "--is-ancestor", await git(["rev-parse", `refs/remotes/origin/${branchName}`]), priorCommit]);
+    await git(["reset", "--hard", priorCommit]);
+    return true;
+  } catch { return false; }
+}
+
 async function processStartIdentity(pid: number, fallback: string): Promise<string> {
   try {
     const result = await execFileAsync("ps", ["-p", String(pid), "-o", "lstart="], { maxBuffer: 4 * 1024 });
@@ -1010,7 +1029,10 @@ export class DeveloperService {
     // Draft is not part of the pull request identity: acceptance marks a delivery ready for review while CI is still observed, so CI repair must still run on the exact head.
     if (pullRequest.state !== "open" || pullRequest.repository.toLowerCase() !== plan.repository.toLowerCase() || pullRequest.number !== plan.pullRequestNumber || pullRequest.url.replace(/\/$/, "").toLowerCase() !== plan.pullRequestUrl.replace(/\/$/, "").toLowerCase() || pullRequest.headBranch !== plan.headBranch || pullRequest.baseBranch !== plan.baseBranch || pullRequest.baseSha.toLowerCase() !== plan.baseSha.toLowerCase() || pullRequest.headSha.toLowerCase() !== input.failedHeadSha.toLowerCase()) throw new AgentFailure("ci-repair-pull-request-changed", "The pull request changed before CI repair");
     const worktreePath = await scopedRepository(this.config.worktreeRoot, input.worktreePath);
-    const current = await this.worktrees.inspectDelivery(worktreePath);
+    let current = await this.worktrees.inspectDelivery(worktreePath);
+    // A previously failed repair attempt can leave its own unpushed commit on HEAD.
+    // Discard it and retry the same exact repair instead of refusing forever.
+    if (current.headSha.toLowerCase() !== input.priorCommit.toLowerCase() && await rollbackUnpushedRepairCommits(worktreePath, input.branchName, input.priorCommit)) current = await this.worktrees.inspectDelivery(worktreePath);
     if (current.branchName !== input.branchName || current.headSha.toLowerCase() !== input.priorCommit.toLowerCase() || current.treeSha.toLowerCase() !== input.priorTree.toLowerCase() || current.dirtyState !== "clean") throw new AgentFailure("ci-repair-subject-changed", "The CI repair worktree is not the original clean failed revision");
     const rawSessionId = await this.sessionStore.read(input.priorDeveloperSessionRef);
     if (!rawSessionId) throw new AgentFailure("invalid-session-reference", "Developer session reference is invalid");
@@ -1049,6 +1071,8 @@ export class DeveloperService {
       return { repairId, developerExecutionId: executionId, developerSessionRef: input.priorDeveloperSessionRef, worktreePath, branchName: input.branchName, priorCommit: input.priorCommit, priorTree: input.priorTree, resultCommit: gitState.headSha, resultTree: gitState.treeSha, deliveryArtifactId: delivery.id, evidenceArtifactId: evidence.id, summary: report.summary, outcome: "completed" };
     } catch (error) {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("ci-repair-failed", "CI repair failed");
+      // Leave the worktree on the recorded failed head so the retry starts clean.
+      await rollbackUnpushedRepairCommits(worktreePath, input.branchName, input.priorCommit);
       const evidence = await this.persistEvidence(input.companyId, evidenceLines);
       this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); db.prepare("UPDATE forge_ci_repairs SET status = 'failed', failure_code = ?, summary = ?, evidence_artifact_id = ?, completed_at = ? WHERE id = ?").run(failure.code, failure.message, evidence.id, this.now().toISOString(), repairId); });
       throw failure;

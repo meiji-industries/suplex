@@ -90,7 +90,13 @@ export function developerReconciliationSummary(reconciliation: Pick<DeveloperRec
     return `Developer could not complete step ${incompleteStep.number}: ${reconciliation.report.blocker}`;
   }
   if (reconciliation.failureCode === "developer-made-no-change") return "Developer made no change";
-  if (reconciliation.outcome === "completed") return reconciliation.report?.summary ?? "Developer delivery reconciled";
+  if (reconciliation.outcome === "completed") {
+    const summary = reconciliation.report?.summary ?? "Developer delivery reconciled";
+    const localOnlySteps = reconciliation.report?.steps.filter((step) => step.status === "not_applicable_locally") ?? [];
+    return localOnlySteps.length
+      ? `${summary}\n\nNot verified locally: ${localOnlySteps.map((step) => `step ${step.number} — ${step.notes}`).join("; ")}`
+      : summary;
+  }
   return `Developer delivery could not be accepted: ${reconciliation.mismatches.join(", ") || "reconciliation failed"}.${reconciliation.independentVerification?.outcome === "failed" ? ` Independent verification: ${reconciliation.independentVerification.summary}` : ""}`;
 }
 
@@ -208,7 +214,7 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
     const changedByReport = new Set(report.steps.flatMap((step) => step.filesChanged));
     const changedByGit = new Set(rawInput.git.changedPaths);
     if (changedByReport.size !== changedByGit.size || [...changedByReport].some((path) => !changedByGit.has(path))) mismatches.push("reported-files-mismatch");
-    const incomplete = report.steps.filter((step) => step.status !== "completed").map((step) => step.number).sort((a, b) => a - b);
+    const incomplete = report.steps.filter((step) => step.status !== "completed" && step.status !== "not_applicable_locally").map((step) => step.number).sort((a, b) => a - b);
     if (JSON.stringify(incomplete) !== JSON.stringify([...report.authorizedStepsNotCompleted].sort((a, b) => a - b))) mismatches.push("incomplete-step-mismatch");
     if (incomplete.length || report.blocker !== null) mismatches.push("non-completed-step");
   }

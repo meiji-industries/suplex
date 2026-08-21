@@ -175,11 +175,16 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
   const sessions = new Map<string, string>();
   const sessionStore: SessionStore = { async create(raw) { sessions.set("session_opaque", raw); return "session_opaque"; }, async read(ref) { return sessions.get(ref) ?? ""; } };
   const calls: string[][] = [];
+  let planningPrompt = "";
   let resumedSessionRef: string | undefined;
   let resumedModel: string | undefined;
   const runner: LeadProcessRunner = async (invocation) => {
     await invocation.onStart(4321, "2026-08-11T00:00:00.000Z");
     calls.push(invocation.args);
+    if (calls.length === 1) {
+      const request = JSON.parse(await readFile(invocation.args.at(-1)!, "utf8")) as { promptPath: string };
+      planningPrompt = await readFile(request.promptPath, "utf8");
+    }
     if (calls.length >= 2) {
       const request = JSON.parse(await readFile(invocation.args.at(-1)!, "utf8")) as { resumeSessionRef?: string; model?: string };
       resumedSessionRef = request.resumeSessionRef;
@@ -198,6 +203,7 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
     const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
     expect(result.leadSessionRef).toBe("session_opaque");
     expect(calls).toHaveLength(2);
+    expect(planningPrompt).toContain("Plan only work that can be completed and verified inside an isolated git worktree. Do not add steps for deployment, rollout, physical device checks or production verification — mention them in a 'Follow-up outside Forge' note instead.");
     expect(resumedSessionRef).toBe("session_opaque");
     expect(sessions.get("session_opaque")).toBe("raw-session-1");
     const briefSha = value.database.authQuery((db) => (db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ?").get(value.briefId) as { sha256: string }).sha256);
@@ -1022,6 +1028,7 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
     expect(reviewRequestPrompt).toContain(targetBaseSha);
     expect(reviewRequestPrompt).toContain(subjectCommit);
     expect(reviewRequestPrompt).toContain(subjectTree);
+    expect(reviewRequestPrompt).toContain("Treat `not_applicable_locally` steps as acceptable when their note is reasonable.");
     expect(reviewRequestPrompt.length).toBeLessThan(200_000);
     expect(reviewRequestPrompt).toContain("[truncated ");
     expect(reviewRequestPrompt).toContain("preserved-tail");

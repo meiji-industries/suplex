@@ -98,6 +98,14 @@ test("accepts an honest partial report and surfaces the Developer blocker", () =
   expect(developerReconciliationSummary(result)).toBe("Developer could not complete step 1: Local environment lacks the 1Password CLI and a reachable Docker daemon.");
 });
 
+test("accepts external-environment steps and includes their notes in the delivery summary", () => {
+  const external = { ...report, steps: [{ ...report.steps[0], status: "not_applicable_locally" as const, notes: "Requires production kiosk hardware." }] };
+  const result = reconcileDeveloperDelivery(input({ report: external }));
+  expect(result).toMatchObject({ outcome: "completed", failureCode: null });
+  expect(result.mismatches).not.toContain("non-completed-step");
+  expect(developerReconciliationSummary(result)).toBe("Delivered\n\nNot verified locally: step 1 — Requires production kiosk hardware.");
+});
+
 test("keeps an invalid delivery report as a diagnostic when required tests pass", () => {
   const result = reconcileDeveloperDelivery(input({ report: { kind: "delivery", summary: "missing facts" } }));
   expect(result).toMatchObject({ outcome: "completed", failureCode: null });

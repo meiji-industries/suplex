@@ -29,38 +29,12 @@ const failureSummary = (display: string, stdout: string, stderr: string): string
   return `${display} did not complete successfully${detail ? `: ${detail.slice(0, 240)}` : ""}. Check the project's verification command.${outputTail ? `\nOutput tail:\n${outputTail}` : ""}`;
 };
 
-const commands = new Map<string, readonly string[]>([
-  ["pnpm install", ["pnpm", "install"]],
-  ["pnpm install --frozen-lockfile", ["pnpm", "install", "--frozen-lockfile"]],
-  ["npm install", ["npm", "install"]],
-  ["npm ci", ["npm", "ci"]],
-  ["yarn install", ["yarn", "install"]],
-  ["yarn install --immutable", ["yarn", "install", "--immutable"]],
-  ["bun install", ["bun", "install"]],
-  ["mise run setup", ["mise", "run", "setup"]],
-  ["cargo fetch --locked", ["cargo", "fetch", "--locked"]],
-  ["pnpm test", ["pnpm", "test"]],
-  ["pnpm typecheck", ["pnpm", "typecheck"]],
-  ["pnpm lint", ["pnpm", "lint"]],
-  ["npm test", ["npm", "test"]],
-  ["npm run typecheck", ["npm", "run", "typecheck"]],
-  ["npm run lint", ["npm", "run", "lint"]],
-  ["yarn test", ["yarn", "test"]],
-  ["yarn typecheck", ["yarn", "typecheck"]],
-  ["yarn lint", ["yarn", "lint"]],
-  ["bun test", ["bun", "test"]],
-  ["mise run test", ["mise", "run", "test"]],
-  ["mise run typecheck", ["mise", "run", "typecheck"]],
-  ["mise run lint", ["mise", "run", "lint"]],
-  ["cargo test", ["cargo", "test"]],
-  ["make test", ["make", "test"]],
-  ["make setup", ["make", "setup"]],
-  ["make test-local", ["make", "test-local"]],
-  ["make check", ["make", "check"]],
-] as const);
-
 export function commandArgv(command: string): readonly string[] | undefined {
-  return commands.get(command.trim());
+  const trimmed = command.trim();
+  // Commands are operator-owned project configuration, not an allowlist.  Keep
+  // the single-line/no-secret validation in projects.ts and execute through sh
+  // so normal shell quoting and arguments remain available.
+  return trimmed && !/[\r\n]/.test(trimmed) ? ["sh", "-lc", trimmed] : undefined;
 }
 
 export type VerificationBlockerCode = "verification_failed" | "verification_timed_out" | "verification_evidence_too_large";
@@ -112,7 +86,7 @@ const defaultExecute: Execute = async (command, args, options) => execFileAsync(
 export async function runPinnedVerification(input: PinnedVerificationInput, dependencies: VerificationDependencies = {}): Promise<VerificationResult> {
   const setupArgv = commandArgv(input.setupCommand);
   const verificationArgv = commandArgv(input.verificationCommand);
-  if (!setupArgv || !verificationArgv) return { outcome: "failed", code: "verification_failed", summary: "Pinned verification command is not an accepted literal", commands: [] };
+  if (!setupArgv || !verificationArgv) return { outcome: "failed", code: "verification_failed", summary: "Project verification commands must be non-empty single lines", commands: [] };
   const execute = dependencies.execute ?? defaultExecute;
   const now = dependencies.now ?? (() => new Date().toISOString());
   const ownedGuard = dependencies.guard ? undefined : await createGitCommandGuard(input.runtimeRoot ?? input.worktreePath);
@@ -120,7 +94,6 @@ export async function runPinnedVerification(input: PinnedVerificationInput, depe
   const evidence: VerificationCommandEvidence[] = [];
   try {
     const stages: Array<readonly [string, readonly string[], number]> = [
-      ...(setupArgv[0] === "mise" || verificationArgv[0] === "mise" ? [["mise trust", ["mise", "trust"], 60_000] as const] : []),
       [input.setupCommand, setupArgv, 10 * 60_000],
       [input.verificationCommand, verificationArgv, 20 * 60_000],
     ];
@@ -159,7 +132,7 @@ export async function runPinnedVerification(input: PinnedVerificationInput, depe
       if (Buffer.byteLength(serialized, "utf8") > 256 * 1024) return { outcome: "failed", code: "verification_evidence_too_large", summary: "Verification evidence exceeded the safe artifact limit", commands: boundedEvidence(evidence) };
       if (timedOut || exitCode !== 0) return { outcome: "failed", code: timedOut ? "verification_timed_out" : "verification_failed", summary: failureSummary(display, commandEvidence.stdout, commandEvidence.stderr), commands: evidence };
     }
-    return { outcome: "passed", summary: "Pinned setup and verification passed", commands: evidence };
+    return { outcome: "passed", summary: "Project setup and verification passed", commands: evidence };
   } finally {
     await ownedGuard?.cleanup();
   }

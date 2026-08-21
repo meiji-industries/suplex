@@ -2,11 +2,11 @@ import { expect, test } from "vitest";
 
 import { commandArgv, runPinnedVerification } from "../src/verification.js";
 
-test("maps only accepted literal setup and verification commands", () => {
-  expect(commandArgv("pnpm install --frozen-lockfile")).toEqual(["pnpm", "install", "--frozen-lockfile"]);
-  expect(commandArgv("mise run test")).toEqual(["mise", "run", "test"]);
-  expect(commandArgv("pnpm test && git push")).toBeUndefined();
-  expect(commandArgv("pnpm test -- malicious")).toBeUndefined();
+test("runs project-owned single-line setup and verification commands", () => {
+  expect(commandArgv("pnpm install --frozen-lockfile")).toEqual(["sh", "-lc", "pnpm install --frozen-lockfile"]);
+  expect(commandArgv("mise run test")).toEqual(["sh", "-lc", "mise run test"]);
+  expect(commandArgv("make test-local && pnpm typecheck")).toEqual(["sh", "-lc", "make test-local && pnpm typecheck"]);
+  expect(commandArgv("pnpm test\ngit push")).toBeUndefined();
 });
 
 test("runs setup before verification and returns bounded redacted evidence", async () => {
@@ -28,14 +28,14 @@ test("runs setup before verification and returns bounded redacted evidence", asy
       return () => new Date(++value).toISOString();
     })(),
   });
-  expect(calls).toEqual(["pnpm install", "pnpm test"]);
+  expect(calls).toEqual(["sh -lc pnpm install", "sh -lc pnpm test"]);
   expect(result.outcome).toBe("passed");
   expect(JSON.stringify(result)).not.toContain("gho_secret");
   expect(JSON.stringify(result)).not.toContain("x".repeat(70_000));
   expect(JSON.stringify(result).length).toBeLessThanOrEqual(256 * 1024);
 });
 
-test("trusts a worktree before running mise tasks", async () => {
+test("runs mise tasks as configured", async () => {
   const calls: string[] = [];
   const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "mise run setup", verificationCommand: "mise run test" }, {
     guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
@@ -45,7 +45,7 @@ test("trusts a worktree before running mise tasks", async () => {
     },
   });
 
-  expect(calls).toEqual(["mise trust", "mise run setup", "mise run test"]);
+  expect(calls).toEqual(["sh -lc mise run setup", "sh -lc mise run test"]);
   expect(result.outcome).toBe("passed");
 });
 
@@ -58,7 +58,7 @@ test("returns a typed failure without running verification after setup failure",
       throw Object.assign(new Error("setup failed"), { code: 1, stdout: "building\nerror: setup failed" });
     },
   });
-  expect(calls).toEqual(["pnpm"]);
+  expect(calls).toEqual(["sh"]);
   expect(result).toMatchObject({ outcome: "failed", code: "verification_failed" });
   expect(result.summary).toContain("pnpm install did not complete successfully: error: setup failed");
   expect(result.summary).toContain("Check the project's verification command.");
@@ -69,7 +69,7 @@ test("includes a redacted bounded output tail when final verification fails", as
   const result = await runPinnedVerification({ worktreePath: "/worktrees/task-1", setupCommand: "pnpm install", verificationCommand: "pnpm test" }, {
     guard: { directory: "/tmp/forge-test-guard", env: process.env, cleanup: async () => {} },
     execute: async (_command, args) => {
-      if (args[0] === "install") return { stdout: "", stderr: "" };
+      if (args[1] === "pnpm install") return { stdout: "", stderr: "" };
       throw Object.assign(new Error("missing manifest"), { code: 1, stderr: "ERR_PNPM_NO_PKG_MANIFEST No package.json found\nBearer gho_secret" });
     },
   });

@@ -15,4 +15,6 @@ export const lifecycleStateFields = {
   stateChangedAt: z.string().datetime().optional(),
   activeOperation: ActiveOperationSchema.optional(),
   processedCommandIds: z.array(durableId).max(64).optional(),
+  // Appended last: workflow-state field order is part of the persisted contract.
+  lastHandlerError: z.object({ command: z.string().max(128), reason: z.string().max(256), at: z.string().datetime() }).nullable().optional(),
 };

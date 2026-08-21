@@ -85,6 +85,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
       const body = request.body as Record<string, unknown>;
       return reply.send(await tasks.executeCommand(request.forgeUser.id, request.params.taskId, descriptor.name as IssueCommand, {
         expectedRevision: (body.expectedRevision ?? body.expectedWorkflowRevision) as number,
+        ...(body.commandId !== undefined ? { commandId: body.commandId as string } : {}),
         ...(body.note !== undefined ? { note: body.note as string } : {}),
         ...(body.answer !== undefined ? { note: body.answer as string } : {}),
         ...(body.idempotencyKey !== undefined ? { idempotencyKey: body.idempotencyKey as string } : {}),

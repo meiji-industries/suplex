@@ -402,6 +402,7 @@ export interface ForgeTask {
   owner: "human" | "lead";
   allowedCommands: IssueCommand[];
   pendingAction: string | null;
+  lastHandlerError?: { command: string; reason: string; at: string } | null;
   createdAt: string;
   updatedAt: string;
   timeline: TaskTimelineEntry[];
@@ -655,6 +656,7 @@ export interface IssueWorkflowPort {
 
 export interface TaskCommandPayload {
   expectedRevision: number;
+  commandId?: string;
   note?: string;
   subject?: unknown;
   idempotencyKey?: string;
@@ -1392,7 +1394,7 @@ export class TaskService {
     };
     if (command === "approve_plan" || command === "request_plan_revision" || command === "respond_plan_blocker") return this.exactDecisionCommand(actorUserId, taskId, planInput, command);
     const input: StartPlanningInput | PlanCommandInput = descriptor.family === "start"
-      ? { expectedRevision, actorUserId, ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
+      ? { expectedRevision, actorUserId, ...(payload.commandId !== undefined ? { commandId: payload.commandId } : {}), ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
       : planInput;
     try {
       const state = command === "start_planning" && this.workflow.acceptPlanning
@@ -1413,8 +1415,10 @@ export class TaskService {
         return this.getTask(actorUserId, taskId);
       }
       const stale = error instanceof Error && /stale workflow revision/i.test(error.message);
-      const message = stale ? "Task changed before this action was accepted" : command === "start_planning" ? "Planning command could not be accepted" : command === "record_delivery_decision" ? "Delivery decision could not be accepted" : descriptor.family === "start" ? "Plan action could not be accepted" : "Task action could not be accepted";
-      throw new TaskFailure(message, [finding(stale ? "stale-revision" : "workflow-update-rejected", stale ? "expectedRevision" : "workflow", message)], 409, this.getTask(actorUserId, taskId));
+      const current = this.getTask(actorUserId, taskId);
+      const handlerReason = current.lastHandlerError?.reason;
+      const message = stale ? "Task changed before this action was accepted" : handlerReason ?? (command === "start_planning" ? "Planning command could not be accepted" : command === "record_delivery_decision" ? "Delivery decision could not be accepted" : descriptor.family === "start" ? "Plan action could not be accepted" : "Task action could not be accepted");
+      throw new TaskFailure(message, [finding(stale ? "stale-revision" : "workflow-update-rejected", stale ? "expectedRevision" : "workflow", message)], 409, current);
     }
   }
 

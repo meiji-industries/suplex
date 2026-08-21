@@ -360,11 +360,15 @@ export function createGuarded(
       // entire run. New commands must reject in validators, while an accepted
       // legacy command safely reports the state it reached.
       if (!(error instanceof ApplicationFailure)) {
+        const reason = error instanceof Error ? error.message.slice(0, 256) : String(error).slice(0, 256);
         log.warn("Ignoring non-ApplicationFailure from update handler", {
           command: command ?? "unknown",
-          reason: error instanceof Error ? error.message.slice(0, 256) : String(error).slice(0, 256),
+          reason,
         });
-        return state as R;
+        const recorded = IssueWorkflowStateSchema.parse({ ...state, lastHandlerError: { command: command ?? "unknown", reason, at: new Date().toISOString() } });
+        store.set(recorded);
+        await options.project(recorded);
+        return recorded as R;
       }
       if (!options.enabled || state === before) throw error;
       const failure = permanentActivityFailure(error, true);

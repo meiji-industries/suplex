@@ -80,6 +80,9 @@ class SupervisedDeveloperTerminalError extends Error {
 }
 
 export function asNonRetryableApplicationFailure(error: unknown): ApplicationFailure | undefined {
+  if (error instanceof WorktreeFailure && error.code === "worktree-lease-conflict") {
+    return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
+  }
   if (error instanceof ProjectionIntegrityFailure) {
     return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message, taskId: error.taskId, revision: error.revision });
   }
@@ -238,9 +241,10 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       } catch (cancellationError) {
         if (cancellationError instanceof CancelledFailure) throw cancellationError;
       }
-      // A full disk is a host problem, not an agent problem: block visibly with Retry
-      // instead of failing later as an unexplained ownership or supervisor error.
+      // Host and worktree ownership problems need a visible Retry blocker rather than
+      // repeated Temporal retries that cannot change their outcome.
       if (error instanceof WorktreeFailure && error.code === "host_capacity") await attentionFailure(input, "capacity_exhausted", error.code, error.message);
+      if (error instanceof WorktreeFailure && error.code === "worktree-lease-conflict") await attentionFailure(input, "unsafe_recovery", error.code, error.message);
       const permanentFailure = asNonRetryableApplicationFailure(error) ?? asNonRetryableCapacityFailure(error);
       if (permanentFailure) {
         if (error instanceof AgentFailure) await attentionFailure(input, agentCategory(error), error.code, error.message);

@@ -1,5 +1,6 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 import { access, constants, lstat, mkdir, realpath, rm, statfs, writeFile } from "node:fs/promises";
 import { delimiter, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -383,9 +384,21 @@ export class WorktreeManager {
 export function reserveOwnedWorktree(database: ForgeDatabase, input: OwnedWorktreeCoordinates): OwnedWorktree {
   const existing = database.authQuery((db) => db.prepare("SELECT id AS leaseId, lease_token_hash AS leaseTokenHash, task_id AS taskId, company_id AS companyId, project_id AS projectId, workflow_id AS workflowId, repository_path AS repositoryRoot, worktree_root AS worktreeRoot, worktree_path AS worktreePath, branch_name AS branchName, starting_sha AS startingSha, legacy, status FROM forge_issue_worktrees WHERE task_id = ? AND status <> 'released'").get(input.taskId) as (Omit<OwnedWorktree, "legacy"> & { legacy: number }) | undefined);
   if (existing) {
-    const exact = existing.repositoryRoot === input.repositoryRoot && existing.worktreeRoot === input.worktreeRoot && existing.worktreePath === input.worktreePath && existing.branchName === input.branchName && existing.startingSha.toLowerCase() === input.startingSha.toLowerCase() && existing.companyId === input.companyId && existing.projectId === input.projectId && existing.workflowId === input.workflowId;
-    if (!exact) throw new WorktreeFailure("worktree-lease-conflict", "The issue already owns a different worktree identity");
-    return OwnedWorktreeSchema.parse({ ...existing, legacy: existing.legacy === 1 });
+    const stored = OwnedWorktreeSchema.parse({ ...existing, legacy: existing.legacy === 1 });
+    const checkedOutBranch = existsSync(stored.worktreePath)
+      ? (() => {
+          try { return execFileSync("git", ["symbolic-ref", "--short", "HEAD"], { cwd: stored.worktreePath, encoding: "utf8", timeout: 8_000 }).trim(); }
+          catch { return null; }
+        })()
+      : null;
+    if (!existsSync(stored.worktreePath) && hasUnpushedWork(stored)) {
+      throw new WorktreeFailure("worktree-lease-conflict", `The recorded worktree path is gone while ${stored.branchName} has work that would be lost. Restore the worktree path or push/preserve that branch, then retry.`);
+    }
+    if (checkedOutBranch === stored.branchName && (stored.repositoryRoot !== input.repositoryRoot || stored.worktreeRoot !== input.worktreeRoot || stored.startingSha.toLowerCase() !== input.startingSha.toLowerCase())) {
+      database.authTransaction((db) => db.prepare("UPDATE forge_issue_worktrees SET repository_path = ?, worktree_root = ?, starting_sha = ? WHERE id = ?").run(input.repositoryRoot, input.worktreeRoot, input.startingSha, stored.leaseId));
+      return { ...stored, repositoryRoot: input.repositoryRoot, worktreeRoot: input.worktreeRoot, startingSha: input.startingSha };
+    }
+    return stored;
   }
   const owned = OwnedWorktreeSchema.parse({ ...input, leaseId: `worktree_${randomBytes(12).toString("hex")}`, leaseTokenHash: createHash("sha256").update(randomBytes(32)).digest("hex"), legacy: input.legacy ?? false, status: "reserved" });
   try {
@@ -395,6 +408,14 @@ export function reserveOwnedWorktree(database: ForgeDatabase, input: OwnedWorktr
     throw error;
   }
   return owned;
+}
+
+function hasUnpushedWork(owned: OwnedWorktree): boolean {
+  try {
+    return Number.parseInt(execFileSync("git", ["rev-list", "--count", `${owned.startingSha}..${owned.branchName}`], { cwd: owned.repositoryRoot, encoding: "utf8", timeout: 8_000 }).trim(), 10) > 0;
+  } catch {
+    return false;
+  }
 }
 
 export function activateOwnedWorktree(database: ForgeDatabase, inspection: OwnedWorktreeInspection): OwnedWorktree {

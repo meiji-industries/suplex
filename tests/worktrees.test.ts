@@ -6,7 +6,8 @@ import { promisify } from "node:util";
 
 import { expect, test } from "vitest";
 
-import { createGitCommandGuard, WorktreeManager } from "../src/worktrees.js";
+import { asNonRetryableApplicationFailure } from "../src/temporal/activities/context.js";
+import { createGitCommandGuard, reserveOwnedWorktree, WorktreeFailure, WorktreeManager } from "../src/worktrees.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -146,4 +147,59 @@ test("reconnects an active owned worktree after its branch advances", async () =
 
     await expect(manager.materialize({ leaseId: "lease_active", leaseTokenHash: "a".repeat(64), taskId: "task_active", companyId: "company_1", projectId: "project_1", workflowId: "workflow_1", repositoryRoot: value.repositoryPath, worktreeRoot: value.worktreeRoot, worktreePath: record.worktreePath, branchName: record.branchName, startingSha: value.baseSha, legacy: false, status: "active" })).resolves.toMatchObject({ repositoryRegistered: true, branch: record.branchName, dirtyState: "clean" });
   } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("an active lease adopts its existing worktree when configuration coordinates change", async () => {
+  const value = await fixture();
+  try {
+    const record = await new WorktreeManager().create({ repositoryPath: value.repositoryPath, worktreeRoot: value.worktreeRoot, taskId: "task_lease", targetBaseSha: value.baseSha, branchName: "work/issue/task_lease" });
+    const existing = {
+      leaseId: "lease_active",
+      leaseTokenHash: "a".repeat(64),
+      taskId: "task_lease",
+      companyId: "company_1",
+      projectId: "project_1",
+      workflowId: "workflow_1",
+      repositoryRoot: value.repositoryPath,
+      worktreeRoot: value.worktreeRoot,
+      worktreePath: record.worktreePath,
+      branchName: record.branchName,
+      startingSha: value.baseSha,
+      legacy: 0,
+      status: "active" as const,
+    };
+    const updates: unknown[][] = [];
+    const database = {
+      authQuery<T>(operation: (db: { prepare: (_sql: string) => { get: (_taskId: string) => typeof existing } }) => T): T {
+        return operation({ prepare: () => ({ get: () => existing }) });
+      },
+      authTransaction<T>(operation: (db: { prepare: (_sql: string) => { run: (...values: unknown[]) => void } }) => T): T {
+        return operation({ prepare: () => ({ run: (...values) => { updates.push(values); } }) });
+      },
+    };
+
+    const owned = reserveOwnedWorktree(database as never, {
+      taskId: existing.taskId,
+      companyId: existing.companyId,
+      projectId: existing.projectId,
+      workflowId: existing.workflowId,
+      repositoryRoot: join(value.root, "new-repository-root"),
+      worktreeRoot: join(value.root, "new-worktree-root"),
+      worktreePath: join(value.root, "new-worktree-root", "task_lease"),
+      branchName: "work/issue/changed-name",
+      startingSha: "b".repeat(40),
+    });
+
+    expect(owned).toMatchObject({ worktreePath: record.worktreePath, branchName: record.branchName, repositoryRoot: join(value.root, "new-repository-root"), worktreeRoot: join(value.root, "new-worktree-root"), startingSha: "b".repeat(40) });
+    expect(updates).toEqual([[join(value.root, "new-repository-root"), join(value.root, "new-worktree-root"), "b".repeat(40), existing.leaseId]]);
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("maps a worktree lease conflict to a non-retryable Temporal failure", () => {
+  expect(asNonRetryableApplicationFailure(new WorktreeFailure("worktree-lease-conflict", "Restore the worktree path, then retry."))).toMatchObject({
+    type: "worktree-lease-conflict",
+    nonRetryable: true,
+    message: "Restore the worktree path, then retry.",
+    details: [{ code: "worktree-lease-conflict", summary: "Restore the worktree path, then retry." }],
+  });
 });

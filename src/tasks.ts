@@ -1330,7 +1330,7 @@ export class TaskService {
     const artifact = await this.artifacts.put(task.companyId, "decision-answer", { filename: `decision-answer-${task.id}.md`, mimeType: "text/markdown", bytes: Buffer.from(normalizedAnswer, "utf8") });
     this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
     try {
-      const input: ResolveDecisionBlockerInput = { expectedRevision, actorUserId, answerArtifactId: artifact.id, answerSha256: artifact.sha256 };
+      const input: ResolveDecisionBlockerInput = { expectedRevision, actorUserId, answerArtifactId: artifact.id };
       const state = await this.workflow.resolveDecisionBlocker(task.workflowId, input);
       this.recordTaskCommand(task, actorUserId, "resolve_decision_blocker", state.revision);
     } catch (error) {
@@ -1391,7 +1391,7 @@ export class TaskService {
     };
     if (command === "approve_plan" || command === "request_plan_revision" || command === "respond_plan_blocker") return this.exactDecisionCommand(actorUserId, taskId, planInput, command);
     const input: StartPlanningInput | PlanCommandInput = descriptor.family === "start"
-      ? { expectedRevision, actorUserId, ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}), ...(command !== "start_planning" && task.planArtifactSha256 ? { planArtifactSha256: task.planArtifactSha256 } : {}) }
+      ? { expectedRevision, actorUserId, ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
       : planInput;
     try {
       const state = command === "start_planning" && this.workflow.acceptPlanning
@@ -1451,12 +1451,12 @@ export class TaskService {
     if (!note?.trim()) throw new TaskFailure("A decision note is required", [finding("required-note", isBlocker ? "answer" : "note", "Enter a concise response")], 422);
     if (!boundInput.idempotencyKey) throw new TaskFailure("An idempotency key is required", [finding("required-idempotency-key", "idempotencyKey", "Retry with the same key")], 422);
     const staged = await this.artifacts.stage(task.companyId, isBlocker ? "plan-blocker-response" : "plan-decision", { filename: `${boundInput.idempotencyKey}.md`, mimeType: "text/markdown", bytes: Buffer.from(note.trim(), "utf8") });
-    const workflowInput: PlanCommandInput = { expectedRevision: boundInput.expectedRevision, actorUserId, idempotencyKey: boundInput.idempotencyKey, ...(isBlocker ? { answerStagingRef: staged.ref, answerSha256: staged.sha256, expectedWorkflowRevision: boundInput.expectedWorkflowRevision ?? boundInput.expectedRevision } : { noteStagingRef: staged.ref, noteSha256: staged.sha256 }) };
+    const workflowInput: PlanCommandInput = { expectedRevision: boundInput.expectedRevision, actorUserId, idempotencyKey: boundInput.idempotencyKey, ...(isBlocker ? { answerStagingRef: staged.ref, expectedWorkflowRevision: boundInput.expectedWorkflowRevision ?? boundInput.expectedRevision } : { noteStagingRef: staged.ref }) };
     try {
       let state = await this.workflow.execute(commandName, task.workflowId, workflowInput);
       this.recordTaskCommand(task, actorUserId, commandName, state.revision);
       if (commandName === "approve_plan" && state.phase === "ready_for_development") {
-        const startInput: StartPlanningInput = { expectedRevision: state.revision, actorUserId, ...(state.planAuthorizationId ? { planAuthorizationId: state.planAuthorizationId } : {}), ...(state.planArtifactSha256 ? { planArtifactSha256: state.planArtifactSha256 } : {}) };
+        const startInput: StartPlanningInput = { expectedRevision: state.revision, actorUserId, ...(state.planAuthorizationId ? { planAuthorizationId: state.planAuthorizationId } : {}) };
         try {
           state = this.workflow.acceptDevelopment
             ? await this.workflow.acceptDevelopment(task.workflowId, startInput)

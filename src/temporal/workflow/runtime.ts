@@ -1,4 +1,4 @@
-import { ActivityFailure, ApplicationFailure, sleep } from "@temporalio/workflow";
+import { ActivityFailure, ApplicationFailure, isCancellation, sleep } from "@temporalio/workflow";
 
 import type { CapacityOperation, CapacityRole } from "../../capacity-contracts.js";
 import {
@@ -10,6 +10,7 @@ import {
 import { cancelCapacityExecution, finalizeCapacity, inspectCapacity, rateLimitCapacity, requestCapacity, requeueCapacity, tryAcquireCapacity } from "./activity-proxies.js";
 import { repairDelivery, reviewDelivery } from "./register-delivery-review.js";
 import { resolveMergeConflict } from "./register-merge.js";
+import { evidencePointer, humanBlocker } from "./state-transitions.js";
 import type { IssueWorkflowContext, StateRef } from "./context.js";
 
 export function compactStateForContinuation(state: IssueWorkflowState): IssueWorkflowState {
@@ -267,4 +268,40 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   } catch {
     haltedChains.add(chained.command); // the manual button stays in allowedCommands for a retry
   }
+}
+
+// A rejected update handler must never leave the Workflow holding mutated state
+// that the projection never saw: recover to a retryable failed state and project it.
+export function createGuarded(
+  store: { get: () => IssueWorkflowState; set: (next: IssueWorkflowState) => void },
+  options: { enabled: boolean; reviseContinueEnabled: boolean; project: (state: IssueWorkflowState) => Promise<unknown> },
+) {
+  return <A extends unknown[], R>(fn: (...args: A) => Promise<R>) => async (...args: A): Promise<R> => {
+    const before = store.get();
+    try {
+      return await fn(...args);
+    } catch (error) {
+      const state = store.get();
+      if (!options.enabled || state === before || isCancellation(error)) throw error;
+      const failure = permanentActivityFailure(error, true);
+      const summary = failure?.summary ?? "The command failed; retry is available";
+      const revision = state.revision + 1;
+      const next = IssueWorkflowStateSchema.parse({
+        ...state,
+        capacity: null,
+        capacityBlocker: null,
+        phase: "failed",
+        revision,
+        owner: "human",
+        allowedCommands: options.reviseContinueEnabled ? ["start_planning", "continue_work", "cancel_issue"] : ["start_planning", "cancel_issue"],
+        pendingAction: summary,
+        blocker: failure?.category ? humanBlocker(failure.category, summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : null,
+        stateChangedAt: new Date().toISOString(),
+        lastEventId: `${state.workflowId}:${revision}`,
+      });
+      store.set(next);
+      await options.project(next);
+      throw error;
+    }
+  };
 }

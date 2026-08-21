@@ -36,7 +36,7 @@ import { registerDevelopmentHandlers } from "./workflow/register-development.js"
 import { registerMergeHandlers, registerMergeReconciliationHandler } from "./workflow/register-merge.js";
 import { registerReleaseHandlers } from "./workflow/register-release.js";
 import { registerTargetBaseHandlers } from "./workflow/register-target-base.js";
-import { applyLeadResult, applyLegacyLeadResult, autoChainedCommand, compactStateForContinuation, createAcquireExternalTurn, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
+import { applyLeadResult, applyLegacyLeadResult, autoChainedCommand, compactStateForContinuation, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
 
 export * from "./issue-updates.js";
 export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
@@ -253,34 +253,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     return projectedRevision;
   };
   const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: projectIssueState, projectCapacityState, patched, durableCapacityPatch, capacityFinalizationOwnershipPatch });
-  // A rejected update handler must never leave the Workflow holding mutated state
-  // that the projection never saw: recover to a retryable failed state and project it.
-  const guarded = <A extends unknown[], R>(fn: (...args: A) => Promise<R>) => async (...args: A): Promise<R> => {
-    const before = state;
-    try {
-      return await fn(...args);
-    } catch (error) {
-      if (!guardedHandlersEnabled || state === before || isCancellation(error)) throw error;
-      const failure = permanentActivityFailure(error, true);
-      const summary = failure?.summary ?? "The command failed; retry is available";
-      const revision = state.revision + 1;
-      state = IssueWorkflowStateSchema.parse({
-        ...state,
-        capacity: null,
-        capacityBlocker: null,
-        phase: "failed",
-        revision,
-        owner: "human",
-        allowedCommands: reviseContinueEnabled ? ["start_planning", "continue_work", "cancel_issue"] : ["start_planning", "cancel_issue"],
-        pendingAction: summary,
-        blocker: failure?.category ? humanBlocker(failure.category, summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : null,
-        stateChangedAt: new Date().toISOString(),
-        lastEventId: `${state.workflowId}:${revision}`,
-      });
-      await projectIssueState(state);
-      throw error;
-    }
-  };
+  const guarded = createGuarded({ get: () => state, set: (next) => { state = next; } }, { enabled: guardedHandlersEnabled, reviseContinueEnabled, project: projectIssueState });
   const workflowContext = createIssueWorkflowContext(validatedInput, state, {
     project: () => projectIssueState(state),
     projectState: (value) => projectIssueState(value),

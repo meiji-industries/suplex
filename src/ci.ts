@@ -409,7 +409,7 @@ export class CiService {
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.project_id AS projectId, t.project_revision_id AS projectRevisionId, r.repository, r.head_sha AS expectedHeadSha, r.head_tree AS expectedHeadTree, r.base_branch AS baseBranch, r.head_branch AS headBranch, r.pr_number AS pullRequestNumber, r.status AS releaseStatus, r.superseded_at AS releaseSupersededAt, pr.normalized_json AS normalizedJson, pr.state AS revisionState
       FROM forge_tasks t JOIN forge_releases r ON r.id = ? AND r.task_id = t.id AND r.company_id = ? JOIN forge_project_revisions pr ON pr.id = t.project_revision_id
       WHERE t.id = ? AND t.company_id = ?`).get(input.releaseId, input.companyId, input.taskId, input.companyId) as { projectId: string; projectRevisionId: string; repository: string; expectedHeadSha: string; expectedHeadTree: string; baseBranch: string; headBranch: string; pullRequestNumber: number | null; releaseStatus: string; releaseSupersededAt: string | null; normalizedJson: string; revisionState: string } | undefined);
-    if (!context || context.releaseSupersededAt || !["draft", "ready", "releasing", "ci_waiting"].includes(context.releaseStatus) || context.pullRequestNumber === null || context.revisionState !== "accepted" || context.expectedHeadSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) throw new CiFailure("stale-input");
+    if (!context || context.releaseSupersededAt || !["draft", "ready", "releasing", "ci_waiting"].includes(context.releaseStatus) || context.pullRequestNumber === null || context.revisionState !== "accepted") throw new CiFailure("stale-input");
     const revision = revisionConfig(context.normalizedJson);
     if (context.repository.toLowerCase() !== revision.repository.toLowerCase()) throw new CiFailure("stale-input");
     const { policy, policyJson, policyHash } = buildCiPolicy(context.projectRevisionId, revision.requiredChecks);
@@ -425,24 +425,36 @@ export class CiService {
     run = this.database.authQuery((db) => db.prepare("SELECT id, attempt, first_observed_at AS firstObservedAt, propagation_deadline AS propagationDeadline, overall_deadline AS overallDeadline, consecutive_provider_failures AS consecutiveProviderFailures FROM forge_ci_runs WHERE release_id = ? AND expected_head_sha = ? AND policy_hash = ? LIMIT 1").get(input.releaseId, input.expectedHeadSha, policyHash) as typeof run);
     if (!run) throw new CiFailure("scope");
     const attemptNumber = requestedAttempt;
-    const existing = this.database.authQuery((db) => db.prepare("SELECT id, observed_head_sha AS observedHeadSha, evidence_artifact_id AS evidenceArtifactId, outcome, reason, owner, repairable, retry_at AS retryAt, summary, attempt_number AS attemptNumber FROM forge_ci_attempts WHERE run_id = ? AND attempt_number = ?").get(run.id, attemptNumber) as { id: string; observedHeadSha: string | null; evidenceArtifactId: string | null; outcome: CiOutcome; reason: string; owner: CiOwner; repairable: number; retryAt: string | null; summary: string; attemptNumber: number } | undefined);
-    if (existing) return { runId: run.id, attemptId: existing.id, attemptNumber: existing.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: existing.observedHeadSha, evidenceArtifactId: existing.evidenceArtifactId, policyHash, policy, propagationDeadline, overallDeadline, outcome: existing.outcome, reason: existing.reason, owner: existing.owner, repairable: existing.repairable === 1, retryAt: existing.retryAt, nextPollAt: existing.retryAt, selectedChecks: this.readAttemptChecks(existing.id), summary: existing.summary };
+    const cached = this.database.authQuery((db) => db.prepare("SELECT id, observed_head_sha AS observedHeadSha, evidence_artifact_id AS evidenceArtifactId, outcome, reason, owner, repairable, retry_at AS retryAt, summary, attempt_number AS attemptNumber FROM forge_ci_attempts WHERE run_id = ? AND attempt_number = ?").get(run.id, attemptNumber) as { id: string; observedHeadSha: string | null; evidenceArtifactId: string | null; outcome: CiOutcome; reason: string; owner: CiOwner; repairable: number; retryAt: string | null; summary: string; attemptNumber: number } | undefined);
+    if (cached && context.expectedHeadSha.toLowerCase() === input.expectedHeadSha.toLowerCase()) return { runId: run.id, attemptId: cached.id, attemptNumber: cached.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: cached.observedHeadSha, evidenceArtifactId: cached.evidenceArtifactId, policyHash, policy, propagationDeadline, overallDeadline, outcome: cached.outcome, reason: cached.reason, owner: cached.owner, repairable: cached.repairable === 1, retryAt: cached.retryAt, nextPollAt: cached.retryAt, selectedChecks: this.readAttemptChecks(cached.id), summary: cached.summary };
     let observed: PullRequestObservation;
     try {
       observed = await this.provider.getPullRequest({ repository: revision.repository, pullRequestNumber: context.pullRequestNumber });
     } catch (error) { return this.persistProviderFailure({ ...input, attemptNumber }, run, policy, policyHash, firstObservedAt, propagationDeadline, overallDeadline, error); }
+    let effectiveInput = input;
+    if (observed.headSha.toLowerCase() !== input.expectedHeadSha.toLowerCase()) {
+      this.database.authTransaction((db) => {
+        db.prepare("UPDATE forge_releases SET head_sha = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(observed.headSha, now, input.releaseId, input.taskId, input.companyId);
+        db.prepare("UPDATE forge_ci_runs SET expected_head_sha = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(observed.headSha, now, run!.id, input.taskId, input.companyId);
+      });
+      effectiveInput = { ...input, expectedHeadSha: observed.headSha };
+    } else if (context.expectedHeadSha.toLowerCase() !== observed.headSha.toLowerCase()) {
+      this.database.authTransaction((db) => db.prepare("UPDATE forge_releases SET head_sha = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(observed.headSha, now, input.releaseId, input.taskId, input.companyId));
+    }
+    const existing = this.database.authQuery((db) => db.prepare("SELECT id, observed_head_sha AS observedHeadSha, evidence_artifact_id AS evidenceArtifactId, outcome, reason, owner, repairable, retry_at AS retryAt, summary, attempt_number AS attemptNumber FROM forge_ci_attempts WHERE run_id = ? AND attempt_number = ?").get(run.id, attemptNumber) as { id: string; observedHeadSha: string | null; evidenceArtifactId: string | null; outcome: CiOutcome; reason: string; owner: CiOwner; repairable: number; retryAt: string | null; summary: string; attemptNumber: number } | undefined);
+    if (existing) return { runId: run.id, attemptId: existing.id, attemptNumber: existing.attemptNumber, expectedHeadSha: effectiveInput.expectedHeadSha, observedHeadSha: existing.observedHeadSha, evidenceArtifactId: existing.evidenceArtifactId, policyHash, policy, propagationDeadline, overallDeadline, outcome: existing.outcome, reason: existing.reason, owner: existing.owner, repairable: existing.repairable === 1, retryAt: existing.retryAt, nextPollAt: existing.retryAt, selectedChecks: this.readAttemptChecks(existing.id), summary: existing.summary };
     let checks: CheckObservation[] = [];
-    if (observed.headSha.toLowerCase() === input.expectedHeadSha.toLowerCase() && observed.repository.toLowerCase() === revision.repository.toLowerCase() && observed.number === context.pullRequestNumber) {
+    if (observed.headSha.toLowerCase() === effectiveInput.expectedHeadSha.toLowerCase() && observed.repository.toLowerCase() === revision.repository.toLowerCase() && observed.number === context.pullRequestNumber) {
       try {
         const rawChecks = await this.provider.listChecks({ repository: revision.repository, headSha: observed.headSha });
         checks = rawChecks.map((check) => CheckObservationSchema.parse(check));
       } catch (error) { return this.persistProviderFailure({ ...input, attemptNumber }, run, policy, policyHash, firstObservedAt, propagationDeadline, overallDeadline, error); }
     }
-    let result = evaluateExactHead({ repository: revision.repository, pullRequestNumber: context.pullRequestNumber, expectedRepository: revision.repository, expectedPullRequestNumber: context.pullRequestNumber, expectedHeadSha: input.expectedHeadSha, expectedBaseBranch: context.baseBranch, expectedHeadBranch: context.headBranch, requiredChecks: policy.requiredChecks, observedPullRequest: observed, checks, now, propagationDeadline, overallDeadline });
+    let result = evaluateExactHead({ repository: revision.repository, pullRequestNumber: context.pullRequestNumber, expectedRepository: revision.repository, expectedPullRequestNumber: context.pullRequestNumber, expectedHeadSha: effectiveInput.expectedHeadSha, expectedBaseBranch: context.baseBranch, expectedHeadBranch: context.headBranch, requiredChecks: policy.requiredChecks, observedPullRequest: observed, checks, now, propagationDeadline, overallDeadline });
     const nextRunFailures = 0;
     result = { ...result, retryAt: result.retryAt ?? null };
     const failedLogs = result.outcome === "failed" ? await this.failedRunLogs(revision.repository, result.selectedChecks) : [];
-    return this.persistObservation({ ...input, attemptNumber }, run, policy, policyHash, observed, result, checks, firstObservedAt, propagationDeadline, overallDeadline, nextRunFailures, now, failedLogs);
+    return this.persistObservation({ ...effectiveInput, attemptNumber }, run, policy, policyHash, observed, result, checks, firstObservedAt, propagationDeadline, overallDeadline, nextRunFailures, now, failedLogs);
   }
 
   /** GitHub Actions check-run summaries are empty; the failing job log is the only usable evidence. */

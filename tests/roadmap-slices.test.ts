@@ -135,6 +135,22 @@ test("release publishes one exact reviewed draft and CI accepts only the exact h
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("CI adopts a moved remote branch head and continues waiting", async () => {
+  const value = await fixture();
+  try {
+    addReleaseFixtures(value.database, "ci_waiting");
+    const movedHead = "d".repeat(40);
+    const ci = new CiService(value.database, {
+      async getPullRequest() { return { repository: "acme/forge", number: 12, url: "https://github.com/acme/forge/pull/12", state: "open", draft: true, baseBranch: "main", baseSha, headBranch: "issue/task-a", headSha: movedHead }; },
+      async listChecks() { return []; },
+    });
+    const result = await ci.reconcile({ taskId: "task-a", companyId: "company-a", releaseId: "release-a", expectedHeadSha: headSha, attemptNumber: 1 });
+    expect(result).toMatchObject({ outcome: "waiting", expectedHeadSha: movedHead, observedHeadSha: movedHead });
+    expect(value.database.authQuery((db) => db.prepare("SELECT head_sha FROM forge_releases WHERE id = 'release-a'").get())).toEqual({ head_sha: movedHead });
+    expect(value.database.authQuery((db) => db.prepare("SELECT expected_head_sha FROM forge_ci_runs WHERE id = ?").get(result.runId))).toEqual({ expected_head_sha: movedHead });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("marking a draft pull request ready verifies the exact provider identity", async () => {
   const value = await fixture();
   try {

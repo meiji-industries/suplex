@@ -40,7 +40,12 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
       if (!context) throw new Error("The exact CI delivery worktree is unavailable");
       const pinned = parseAcceptedProjectRevision(context.normalizedJson);
       const adopt = (baseSha: string, headSha: string, headTree: string): { outcome: "updated"; baseSha: string; headSha: string; headTree: string; summary: string } => {
-        const update = database.authTransaction((db) => db.prepare("UPDATE forge_releases SET base_sha = ?, head_sha = ?, head_tree = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(baseSha, headSha, headTree, new Date().toISOString(), input.releaseId, input.taskId, input.companyId));
+        const now = new Date().toISOString();
+        const update = database.authTransaction((db) => {
+          const release = db.prepare("UPDATE forge_releases SET base_sha = ?, head_sha = ?, head_tree = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(baseSha, headSha, headTree, now, input.releaseId, input.taskId, input.companyId);
+          db.prepare("UPDATE forge_ci_runs SET expected_head_sha = ?, expected_head_tree = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(headSha, headTree, now, input.ciRunId, input.taskId, input.companyId);
+          return release;
+        });
         if (update.changes !== 1) throw new Error("The exact CI release record is unavailable");
         return { outcome: "updated", baseSha, headSha, headTree, summary: "Merged the latest base branch into the pull request and pushed it" };
       };

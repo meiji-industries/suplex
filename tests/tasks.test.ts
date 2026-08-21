@@ -250,6 +250,29 @@ test("non-terminal projections always expose cancellation", async () => {
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("failed tasks with a plan expose and accept Developer retry", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Failed retry", description: "body", idempotencyKey: "failed-retry-task", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    const failed = IssueWorkflowStateSchema.parse({ ...initial, phase: "failed", revision: 1, owner: "human", allowedCommands: ["start_planning", "continue_work", "cancel_issue"], pendingAction: "Development failed", planRevision: 1, lastEventId: `${initial.workflowId}:1` });
+    value.stateByTask.set(created.task.id, failed);
+    projectState(value.database, failed);
+    let acceptedCommand: string | undefined;
+    value.workflow.acceptDevelopment = async (workflowId, input, command) => {
+      acceptedCommand = command;
+      const next = IssueWorkflowStateSchema.parse({ ...failed, revision: input.expectedRevision + 1, phase: "development", owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer retry", lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
+      value.stateByTask.set(created.task.id, next);
+      projectState(value.database, next);
+      return next;
+    };
+
+    expect(value.tasks.getTask(value.adminId, created.task.id).allowedCommands).toContain("retry_development");
+    await expect(value.tasks.executeCommand(value.adminId, created.task.id, "retry_development", { expectedRevision: 1 })).resolves.toMatchObject({ phase: "development", revision: 2 });
+    expect(acceptedCommand).toBe("retry_development");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("a Developer retry returns after the retry update is accepted", async () => {
   const value = await fixture();
   try {

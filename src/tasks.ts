@@ -65,6 +65,20 @@ function workflowCancellationFailureIsTransient(error: unknown): boolean {
   return false;
 }
 
+function derivedAllowedCommands(phase: TaskPhase, projectedCommands: IssueCommand[], planRevision: number | null | undefined, hasPlanArtifact: boolean): IssueCommand[] {
+  const failedCommand: IssueCommand | undefined = phase === "failed"
+    ? (planRevision !== null && planRevision !== undefined && planRevision >= 1) || hasPlanArtifact
+      ? "retry_development"
+      : "start_planning"
+    : undefined;
+  const commands = failedCommand && !projectedCommands.includes(failedCommand)
+    ? [...projectedCommands, failedCommand]
+    : projectedCommands;
+  return !TERMINAL_PHASES.has(phase) && !commands.includes("cancel_issue")
+    ? [...commands, "cancel_issue"]
+    : commands;
+}
+
 
 export interface TaskImageInput {
   filename: string;
@@ -1356,6 +1370,7 @@ export class TaskService {
 
   async executeCommand(actorUserId: string, taskId: string, command: IssueCommand, payload: TaskCommandPayload): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
+    const allowedCommands = derivedAllowedCommands(task.phase, task.allowedCommands, task.planRevision, task.planHistory.some((plan) => plan.kind === "plan"));
     const descriptor = issueCommands[command];
     if (descriptor.family === "bespoke") throw new TaskFailure("This command requires its dedicated action", [finding("workflow-unavailable", "workflow", "The durable issue workflow is unavailable")], 503, task);
     const expectedRevision = payload.expectedRevision;
@@ -1363,7 +1378,7 @@ export class TaskService {
     const retryingCancellation = command === "cancel_development" && task.developerRecovery?.status === "cancellation_requested";
     const canContinuePastReview = command === "record_delivery_decision" && (task.phase === "repair_required" || (task.phase === "delivery_blocked" && task.allowedCommands.includes("repair_delivery")));
     const retryingLegacyConflictPlan = command === "resolve_merge_conflict" && task.phase === "merge_conflict_required" && task.pendingAction === "Lead conflict-resolution planning failed; inspect the recorded evidence";
-    if (command !== "cancel_issue" && !task.allowedCommands.includes(command) && !retryingCancellation && !canContinuePastReview && !retryingLegacyConflictPlan) {
+    if (command !== "cancel_issue" && !allowedCommands.includes(command) && !retryingCancellation && !canContinuePastReview && !retryingLegacyConflictPlan) {
       const message = command === "start_planning" ? "Planning cannot start from the current state" : command === "record_delivery_decision" ? "A delivery decision is not available" : descriptor.family === "start" ? "Plan action is not available" : "Task action is not available";
       throw new TaskFailure(message, [finding("illegal-command", "phase", message)], 409, task);
     }
@@ -2023,11 +2038,10 @@ export class TaskService {
     const { verificationCommands, verificationResults } = developerVerificationProjection(this.database, this.artifacts, row.company_id, developerExecution?.manifestArtifactId ?? null, developerExecution?.reconciliationArtifactId ?? null);
     const workflowSnapshot = this.database.authQuery((db) => db.prepare("SELECT state_json AS stateJson FROM forge_workflow_snapshots WHERE task_id = ? AND revision = ?").get(row.id, row.projection_revision) as { stateJson: string } | undefined);
     const snapshotState = workflowSnapshot ? IssueWorkflowStateSchema.safeParse(json<unknown>(workflowSnapshot.stateJson, null)) : undefined;
+    const planHistory = this.database.authQuery((db) => db.prepare("SELECT revision, kind, summary, execution_id AS executionId, output_artifact_id AS outputArtifactId, evidence_artifact_id AS evidenceArtifactId, created_at AS createdAt FROM forge_issue_outputs WHERE task_id = ? AND company_id = ? ORDER BY revision, created_at, id").all(row.id, row.company_id) as TaskPlanHistoryEntry[]);
     const rawAllowedCommands = json<unknown[]>(row.allowed_commands_json, []);
     const projectedCommands = IssueCommandSchema.array().safeParse(rawAllowedCommands).success ? IssueCommandSchema.array().parse(rawAllowedCommands) : [];
-    const allowedCommands: IssueCommand[] = !TERMINAL_PHASES.has(row.phase) && !projectedCommands.includes("cancel_issue")
-      ? [...projectedCommands, "cancel_issue"]
-      : projectedCommands;
+    const allowedCommands = derivedAllowedCommands(row.phase, projectedCommands, workflowState.planRevision, planHistory.some((plan) => plan.kind === "plan"));
     const recoveryStatus = developerExecution?.leaseStatus === "result_ready" ? "result_pending_claim" : snapshotState?.success ? snapshotState.data.developerRecoveryStatus : undefined;
     const nextRecoveryCommand = recoveryStatus ? (["verify_developer_ownership", "retry_development", "cancel_development", "cancel_issue"] as const).find((command) => allowedCommands.includes(command)) : undefined;
     const developerRecovery = recoveryStatus && snapshotState?.success ? {
@@ -2043,7 +2057,6 @@ export class TaskService {
     const decision = this.database.authQuery((db) => db.prepare("SELECT artifact_id FROM forge_delivery_decisions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { artifact_id: string } | undefined);
     const review = this.database.authQuery((db) => db.prepare("SELECT id, outcome, summary, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, opinion_artifact_id, evidence_artifact_id, repair_cycle FROM forge_delivery_reviews WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC, id DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { id: string; outcome: "approved" | "blocking"; summary: string; plan_revision: number; base_sha: string; subject_commit: string; subject_tree: string; lead_execution_id: string; opinion_artifact_id: string; evidence_artifact_id: string; repair_cycle: number } | undefined);
     const findings = review ? this.database.authQuery((db) => db.prepare("SELECT id, severity, rationale, evidence_ref, disposition, repair_instruction FROM forge_delivery_findings WHERE review_id = ? AND task_id = ? AND company_id = ? ORDER BY id").all(review.id, row.id, row.company_id) as Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidence_ref: string; disposition: string; repair_instruction: string | null }>) : [];
-    const planHistory = this.database.authQuery((db) => db.prepare("SELECT revision, kind, summary, execution_id AS executionId, output_artifact_id AS outputArtifactId, evidence_artifact_id AS evidenceArtifactId, created_at AS createdAt FROM forge_issue_outputs WHERE task_id = ? AND company_id = ? ORDER BY revision, created_at, id").all(row.id, row.company_id) as TaskPlanHistoryEntry[]);
     const planDecisionHistory = this.database.authQuery((db) => db.prepare("SELECT id, plan_revision AS planRevision, decision, note_artifact_id AS noteArtifactId, created_at AS createdAt FROM forge_plan_decisions WHERE task_id = ? AND company_id = ? ORDER BY plan_revision, created_at, id").all(row.id, row.company_id) as TaskPlanDecisionHistoryEntry[]);
     const revisionHistory = this.database.authQuery((db) => db.prepare("SELECT id, request_revision AS requestRevision, disposition, status, blocker_code AS blockerCode, developer_execution_id AS developerExecutionId, branch_name AS branchName, base_sha AS baseSha, head_sha AS headSha, tree_sha AS treeSha, exact_base_sha AS exactBaseSha, authorized_plan_revision AS authorizedPlanRevision, reason_artifact_id AS reasonArtifactId, created_at AS createdAt, updated_at AS updatedAt FROM forge_plan_revision_requests WHERE task_id = ? AND company_id = ? ORDER BY request_revision, created_at, id").all(row.id, row.company_id) as TaskRevisionHistoryEntry[]);
     const developerExecutionHistory = this.database.authQuery((db) => db.prepare("SELECT id, plan_revision AS planRevision, attempt, status, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree, dirty_state AS dirtyState, delivery_artifact_id AS deliveryArtifactId, evidence_artifact_id AS evidenceArtifactId, failure_code AS failureCode, failure_summary AS failureSummary, started_at AS startedAt, finished_at AS finishedAt FROM forge_developer_executions WHERE task_id = ? AND company_id = ? ORDER BY plan_revision, attempt, started_at, id").all(row.id, row.company_id) as TaskDeveloperExecutionHistoryEntry[]);

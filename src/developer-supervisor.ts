@@ -48,7 +48,10 @@ async function rejectSymlinks(root: string, target: string): Promise<void> {
 
 async function atomicWriteJson(path: string, value: unknown): Promise<void> {
   const temporary = `${path}.tmp-${process.pid}`;
-  const handle = await open(temporary, "wx", 0o600);
+  // "w", not "wx": the temp name is pid-scoped, so a leftover from a failed
+  // write (ENOSPC mid-fsync) is this process's own debris. Failing every
+  // later write with EEXIST would wedge heartbeats permanently.
+  const handle = await open(temporary, "w", 0o600);
   try {
     await handle.writeFile(`${JSON.stringify(value)}\n`, "utf8");
     await handle.sync();
@@ -342,7 +345,11 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
     await writeSnapshot(state);
     await writeHeartbeat(state);
     server = await startSocket(state);
-    const heartbeat = setInterval(() => void writeHeartbeat(state), 2_000);
+    // A heartbeat write failure (a full disk, most likely) must not become an
+    // unhandled rejection: that kills the supervisor and orphans a live child,
+    // which callers can only report as unprovable ownership. The next tick
+    // retries, and result.json stays the durable completion authority.
+    const heartbeat = setInterval(() => void writeHeartbeat(state).catch(() => undefined), 2_000);
     heartbeat.unref();
     let eventWrite = Promise.resolve();
     const writeEvent = (stream: "stdout" | "stderr", line: string): Promise<void> => {

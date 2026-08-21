@@ -94,3 +94,43 @@ test("INV-11/INV-12 PID reuse during cancellation is ambiguous, never exited", a
   }, child);
   expect(observation).toBe("ownership_ambiguous");
 });
+
+test("a failing heartbeat write does not kill the supervisor or orphan the child", async () => {
+  const root = await mkdtemp(join("/tmp", "fg-sup-hb-"));
+  const executionId = `developer_${"c".repeat(24)}`;
+  const executionRoot = join(root, "developer-executions", executionId);
+  try {
+    const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId, command: process.execPath, args: ["-e", "setTimeout(() => process.stdout.write('done\\n'), 5_000);"], cwd: root, env: {} });
+    await mkdir(executionRoot, { recursive: true, mode: 0o700 });
+    await writeFile(join(executionRoot, "invocation.json"), JSON.stringify(invocation));
+    const source = fileURLToPath(new URL("../src/developer-supervisor.ts", import.meta.url));
+    const child = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "pipe", "pipe", "pipe"] });
+    let stderr = "";
+    let exited: number | null = null;
+    child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
+    child.on("exit", (code) => { exited = code; });
+    const tokenPipe = child.stdio[3];
+    if (!tokenPipe || typeof tokenPipe === "string" || !("end" in tokenPipe)) throw new Error("supervisor token pipe unavailable");
+    tokenPipe.end("supervisor-test-token");
+    const heartbeatPath = join(executionRoot, "heartbeat.json");
+    // Make every later heartbeat write fail the way a full disk does: the
+    // atomic rename cannot replace a directory.
+    let wedged = false;
+    for (let attempt = 0; attempt < 200 && !wedged; attempt += 1) {
+      try {
+        // Wait for the supervisor to be fully up: the awaited startup
+        // heartbeat is a deliberate fail-fast, the periodic one is not.
+        if (!(await readFile(heartbeatPath, "utf8")).includes('"running"')) throw new Error("not running yet");
+        await rm(heartbeatPath, { force: true });
+        await mkdir(heartbeatPath);
+        wedged = true;
+      } catch { await new Promise((resolve) => setTimeout(resolve, 25)); }
+    }
+    expect(wedged).toBe(true);
+    let result: ReturnType<typeof DeveloperSupervisorResultSchema.parse> | undefined;
+    for (let attempt = 0; attempt < 300 && !result; attempt += 1) {
+      try { result = DeveloperSupervisorResultSchema.parse(JSON.parse(await readFile(join(executionRoot, "result.json"), "utf8"))); } catch { await new Promise((resolve) => setTimeout(resolve, 50)); }
+    }
+    expect(result?.exitCode, `${stderr} (exit=${exited})`).toBe(0);
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 3 }); }
+}, 30_000);

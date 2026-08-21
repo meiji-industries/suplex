@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -1394,11 +1394,11 @@ export class TaskService {
     };
     if (command === "approve_plan" || command === "request_plan_revision" || command === "respond_plan_blocker") return this.exactDecisionCommand(actorUserId, taskId, planInput, command);
     const input: StartPlanningInput | PlanCommandInput = descriptor.family === "start"
-      ? { expectedRevision, actorUserId, ...(payload.commandId !== undefined ? { commandId: payload.commandId } : {}), ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
+      ? { expectedRevision, actorUserId, commandId: payload.commandId ?? randomUUID(), ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
       : planInput;
     try {
       const state = command === "start_planning" && this.workflow.acceptPlanning
-        ? await this.workflow.acceptPlanning(task.workflowId, { expectedRevision, actorUserId })
+        ? await this.workflow.acceptPlanning(task.workflowId, input as StartPlanningInput)
         : (command === "start_development" || command === "retry_development") && this.workflow.acceptDevelopment
           ? await this.workflow.acceptDevelopment(task.workflowId, input as StartPlanningInput, command)
           : await this.workflow.execute(command, task.workflowId, input);

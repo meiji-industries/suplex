@@ -58,6 +58,7 @@ export interface IssueWorkflowContext {
   readonly withStateMutation: <T>(operation: () => T) => Promise<T>;
   readonly commandAlreadyProcessed: (commandId: string) => boolean;
   readonly markCommandProcessed: (commandId: string) => void;
+  readonly recordHandlerNoop: (command: string, reason: string) => Promise<void>;
   readonly applyTargetBaseBlocked: (result: Extract<ReconcileTargetBaseActivityResult, { outcome: "blocked" }>) => void;
   readonly runTargetBaseCheckpoint: (checkpoint: TargetBaseCheckpoint, verificationOnly?: boolean) => Promise<boolean>;
   readonly recoveryFields: (status: RecoveryStatus | null, reasonCode: string | null, summary: string | null, heartbeatAt: string | null) => Record<string, unknown>;

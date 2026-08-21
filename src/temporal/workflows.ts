@@ -161,6 +161,10 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const processed = state.processedCommandIds ?? [];
     if (commandId !== "legacy-command" && !processed.includes(commandId)) state = IssueWorkflowStateSchema.parse({ ...state, processedCommandIds: [...processed, commandId].slice(-64) });
   };
+  const recordHandlerNoop = async (command: string, reason: string): Promise<void> => {
+    state = IssueWorkflowStateSchema.parse({ ...state, lastHandlerError: { command, reason: reason.slice(0, 256), at: new Date().toISOString() } });
+    await projectIssueState(state);
+  };
   const applyTargetBaseBlocked = (result: Extract<ReconcileTargetBaseActivityResult, { outcome: "blocked" }>): void => {
     const verification = result.code === "verification_failed" || result.code === "verification_timed_out" || result.code === "verification_evidence_too_large";
     const retryable = result.retryable || (result.code === "merge_state_ownership_mismatch" && Boolean(state.forwardMergeId));
@@ -309,6 +313,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     withStateMutation,
     commandAlreadyProcessed,
     markCommandProcessed,
+    recordHandlerNoop,
     applyTargetBaseBlocked,
     runTargetBaseCheckpoint,
     recoveryFields,

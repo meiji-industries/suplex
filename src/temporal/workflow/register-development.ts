@@ -7,7 +7,10 @@ import { developerExecutionId } from "../deterministic-id.js";
 import { issueUpdates } from "../issue-updates.js";
 import type { IssueWorkflowContext } from "./context.js";
 export async function startDevelopment(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
-    if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
+    if (ctx.commandAlreadyProcessed(command.commandId)) {
+      await ctx.recordHandlerNoop("start_development", "This development command was already processed.");
+      return ctx.state;
+    }
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
     const executionId = ctx.supervisedDeveloperTurns ? developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "implementation") : `developer_${ctx.state.workflowId}_${command.commandId}`.slice(0, 256);
@@ -30,7 +33,10 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
         (value) => value.status === "completed" ? value.result.developerExecutionId : value.developerExecutionId,
       );
     } catch (error) {
-      if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return ctx.state;
+      if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") {
+        await ctx.recordHandlerNoop("start_development", "Development was superseded before the Developer result could be applied.");
+        return ctx.state;
+      }
       if (ctx.supervisedDeveloperTurns || !recoverDeveloperFailures) throw error;
       const recovered = await ctx.withStateMutation(() => {
         if (ctx.state.activeOperation?.commandId !== command.commandId || ctx.state.phase !== "development") return false;
@@ -82,7 +88,10 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
   setHandler(issueUpdates.retry_development, ctx.guarded(async (rawInput) => {
     assertPayloadWithinLimit("retry development command", rawInput);
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
-    if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
+    if (ctx.commandAlreadyProcessed(command.commandId)) {
+      await ctx.recordHandlerNoop("retry_development", "This retry command was already processed.");
+      return ctx.state;
+    }
     if (ctx.state.phase === "delivery_blocked" && ctx.state.developerExecutionId && ctx.patched(ctx.developerReconciliationRecoveryPatch)) {
       const priorExecutionId = ctx.state.developerExecutionId;
       const reconciled = await activityProxies.reconcileDeveloperDeliveryEvidence({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, developerExecutionId: priorExecutionId });
@@ -94,9 +103,13 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
           return true;
         });
         if (applied) await ctx.project();
+        else await ctx.recordHandlerNoop("retry_development", "Developer delivery reconciliation was superseded by another command.");
         return ctx.state;
       }
-      if (command.reconcileOnly) return ctx.state;
+      if (command.reconcileOnly) {
+        await ctx.recordHandlerNoop("retry_development", "Stored Developer evidence did not complete reconciliation.");
+        return ctx.state;
+      }
     }
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
@@ -131,6 +144,7 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
       return true;
     });
     if (applied) await ctx.project();
+    else await ctx.recordHandlerNoop("retry_development", "Developer retry was superseded before the result could be applied.");
     void command;
     return ctx.state;
   }), { validator(rawInput) {

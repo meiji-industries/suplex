@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import { type ZodTypeProvider } from "@fastify/type-provider-zod";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 
 import type { TaskEvent } from "../../tasks.js";
@@ -85,7 +86,9 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
       const body = request.body as Record<string, unknown>;
       return reply.send(await tasks.executeCommand(request.forgeUser.id, request.params.taskId, descriptor.name as IssueCommand, {
         expectedRevision: (body.expectedRevision ?? body.expectedWorkflowRevision) as number,
-        ...(body.commandId !== undefined ? { commandId: body.commandId as string } : {}),
+        // Human-issued commands always get a unique durable ID. Never allow
+        // them to inherit the workflow schema's legacy sentinel.
+        commandId: (body.commandId as string | undefined) ?? randomUUID(),
         ...(body.note !== undefined ? { note: body.note as string } : {}),
         ...(body.answer !== undefined ? { note: body.answer as string } : {}),
         ...(body.idempotencyKey !== undefined ? { idempotencyKey: body.idempotencyKey as string } : {}),

@@ -256,7 +256,7 @@ export async function executeIssueCommand(config: ForgeConfig, workflowId: strin
 export async function acceptIssuePlanning(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
   if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
-  const validatedInput = StartPlanningInputSchema.parse(input);
+  const validatedInput = StartPlanningInputSchema.parse(durableCommand(workflowId, issueCommands.start_planning.durableCommandKind!, input));
   assertPayloadWithinLimit("startPlanning command", validatedInput);
   const temporalClient = await connectTemporal(config);
   try {
@@ -276,7 +276,7 @@ export async function acceptIssuePlanning(config: ForgeConfig, workflowId: strin
 export async function acceptIssueDevelopment(config: ForgeConfig, workflowId: string, input: StartPlanningInput, command: "start_development" | "retry_development" = "start_development"): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
   if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
-  const validatedInput = StartPlanningInputSchema.parse(input);
+  const validatedInput = StartPlanningInputSchema.parse(durableCommand(workflowId, issueCommands[command].durableCommandKind!, input));
   assertPayloadWithinLimit(issueCommands[command].payloadLabel, validatedInput);
   const temporalClient = await connectTemporal(config);
   try {

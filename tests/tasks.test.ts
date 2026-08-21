@@ -259,8 +259,10 @@ test("failed tasks with a plan expose and accept Developer retry", async () => {
     value.stateByTask.set(created.task.id, failed);
     projectState(value.database, failed);
     let acceptedCommand: string | undefined;
+    let acceptedCommandId: string | undefined;
     value.workflow.acceptDevelopment = async (workflowId, input, command) => {
       acceptedCommand = command;
+      acceptedCommandId = input.commandId;
       const next = IssueWorkflowStateSchema.parse({ ...failed, revision: input.expectedRevision + 1, phase: "development", owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer retry", lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
       value.stateByTask.set(created.task.id, next);
       projectState(value.database, next);
@@ -270,6 +272,8 @@ test("failed tasks with a plan expose and accept Developer retry", async () => {
     expect(value.tasks.getTask(value.adminId, created.task.id).allowedCommands).toContain("retry_development");
     await expect(value.tasks.executeCommand(value.adminId, created.task.id, "retry_development", { expectedRevision: 1 })).resolves.toMatchObject({ phase: "development", revision: 2 });
     expect(acceptedCommand).toBe("retry_development");
+    expect(acceptedCommandId).toMatch(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+    expect(acceptedCommandId).not.toBe("legacy-command");
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

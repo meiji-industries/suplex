@@ -223,8 +223,6 @@ const modelIdPattern = /^[a-z0-9][a-z0-9._-]{1,119}$/;
 const avatarSeedPattern = /^[a-f0-9]{32}$/;
 // Agent names also carry duplication suffixes such as "Planner (copy 2)".
 const agentNamePattern = /^[\p{L}\p{N}](?:[\p{L}\p{N} ._'()-]{0,78}[\p{L}\p{N})])?$/u;
-const approvedSetupCommands = new Set(["pnpm install", "pnpm install --frozen-lockfile", "npm install", "npm ci", "yarn install", "yarn install --immutable", "bun install", "mise run setup", "cargo fetch --locked"]);
-const approvedVerificationCommands = new Set(["pnpm test", "pnpm typecheck", "pnpm lint", "npm test", "npm run typecheck", "npm run lint", "yarn test", "yarn typecheck", "yarn lint", "bun test", "mise run test", "mise run typecheck", "mise run lint", "cargo test", "make test", "make check"]);
 
 export const AcceptedProjectRevisionSchema = z.object({
   repositoryPath: z.string().min(1).max(1_000),
@@ -234,8 +232,8 @@ export const AcceptedProjectRevisionSchema = z.object({
   targetBranch: z.string().min(1).max(256),
   baseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
   targetSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  setupCommand: z.string().refine((value) => approvedSetupCommands.has(value), "Setup command is not an accepted project command"),
-  verificationCommand: z.string().refine((value) => approvedVerificationCommands.has(value), "Verification command is not an accepted project command"),
+  setupCommand: z.string().refine(isUsableCommand, "Command must be a single non-empty line without secrets"),
+  verificationCommand: z.string().refine(isUsableCommand, "Command must be a single non-empty line without secrets"),
   requiredChecks: z.array(z.string().min(1).max(120)).max(32),
 });
 export type AcceptedProjectRevision = z.infer<typeof AcceptedProjectRevisionSchema>;
@@ -365,8 +363,9 @@ function finding(code: string, field: string, message: string): ProjectFinding {
   return { code, field, message };
 }
 
-function isApprovedCommand(command: string, kind: "setup" | "verification"): boolean {
-  return (kind === "setup" ? approvedSetupCommands : approvedVerificationCommands).has(command.trim()) && !secretPattern.test(command);
+function isUsableCommand(command: string): boolean {
+  const trimmed = command.trim();
+  return trimmed.length > 0 && trimmed.length <= 500 && !/[\r\n]/.test(command) && !secretPattern.test(command);
 }
 
 async function readableFile(path: string): Promise<string | undefined> {
@@ -893,8 +892,8 @@ export class ProjectService {
     if (!repositoryPattern.test(project.repository ?? "")) findings.push(finding("repository-identity", "repository", "Repository must use owner/name identity without credentials"));
     if (!branchPattern.test(project.baseBranch)) findings.push(finding("unsafe-branch", "baseBranch", "Base branch is unsafe"));
     if (!branchPattern.test(project.targetBranch)) findings.push(finding("unsafe-branch", "targetBranch", "Target branch is unsafe"));
-    if (!isApprovedCommand(project.setupCommand, "setup")) findings.push(finding("unapproved-command", "setupCommand", "Setup must be one approved literal command"));
-    if (!isApprovedCommand(project.verificationCommand, "verification")) findings.push(finding("unapproved-command", "verificationCommand", "Verification must be one approved literal command"));
+    if (!isUsableCommand(project.setupCommand)) findings.push(finding("unapproved-command", "setupCommand", "Command must be a single non-empty line without secrets"));
+    if (!isUsableCommand(project.verificationCommand)) findings.push(finding("unapproved-command", "verificationCommand", "Command must be a single non-empty line without secrets"));
     if (project.requiredChecks.length === 0 || project.requiredChecks.some((check) => !checkPattern.test(check))) findings.push(finding("invalid-check", "requiredChecks", "At least one safe required check is required"));
     let inspection: LocalRepositoryInspection | undefined;
     if (findings.length === 0) {
@@ -1002,8 +1001,8 @@ export class ProjectService {
     if (!repositoryPattern.test(input.repository.trim().toLowerCase())) findings.push(finding("repository-identity", "repository", "Repository must use owner/name identity without credentials"));
     if (!branchPattern.test(input.baseBranch.trim())) findings.push(finding("unsafe-branch", "baseBranch", "Base branch is unsafe"));
     if (!branchPattern.test(input.targetBranch.trim())) findings.push(finding("unsafe-branch", "targetBranch", "Target branch is unsafe"));
-    if (!isApprovedCommand(input.setupCommand, "setup")) findings.push(finding("unapproved-command", "setupCommand", "Setup must be one approved literal command"));
-    if (!isApprovedCommand(input.verificationCommand, "verification")) findings.push(finding("unapproved-command", "verificationCommand", "Verification must be one approved literal command"));
+    if (!isUsableCommand(input.setupCommand)) findings.push(finding("unapproved-command", "setupCommand", "Command must be a single non-empty line without secrets"));
+    if (!isUsableCommand(input.verificationCommand)) findings.push(finding("unapproved-command", "verificationCommand", "Command must be a single non-empty line without secrets"));
     if (secretPattern.test(input.repository) || secretPattern.test(input.baseBranch) || secretPattern.test(input.targetBranch)) findings.push(finding("secret-shaped-value", "configuration", "Secret-shaped configuration values are not accepted"));
     if (!Array.isArray(input.requiredChecks) || (!allowIncompleteDraft && input.requiredChecks.length === 0) || input.requiredChecks.length > 32 || input.requiredChecks.some((check) => !checkPattern.test(check.trim()))) findings.push(finding("invalid-check", "requiredChecks", "At least one safe required check is required"));
     if (worktree.path) {

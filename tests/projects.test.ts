@@ -260,7 +260,17 @@ test("activates a validated project and records an immutable normalized revision
   }
 });
 
-test("rejects traversal, symlink ambiguity, unsafe commands, and invalid branches with typed redacted findings", async () => {
+test("accepts free-form project commands and rejects secret-shaped commands", async () => {
+  const value = await fixture();
+  try {
+    await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { setupCommand: "make setup", verificationCommand: "uv run pytest -q" }))).resolves.toMatchObject({ setupCommand: "make setup", verificationCommand: "uv run pytest -q" });
+    await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { name: "Secret command", setupCommand: "ghp_should-not-persist", verificationCommand: "uv run pytest -q" }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "unapproved-command", field: "setupCommand", message: "Command must be a single non-empty line without secrets" })]) });
+  } finally {
+    await close(value);
+  }
+});
+
+test("rejects traversal, symlink ambiguity, and invalid branches with typed redacted findings", async () => {
   const value = await fixture();
   const outside = join(value.root, "outside");
   const symlinkPath = join(value.root, "repositories", "link");
@@ -269,7 +279,6 @@ test("rejects traversal, symlink ambiguity, unsafe commands, and invalid branche
   try {
     await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { repositoryPath: "../outside" }))).rejects.toMatchObject({ publicMessage: "Project configuration is invalid", findings: expect.arrayContaining([expect.objectContaining({ code: "path-traversal" })]) });
     await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { repositoryPath: symlinkPath }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "symlink-ambiguous" })]) });
-    await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { setupCommand: "pnpm test && curl https://example.com" }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "unapproved-command" })]) });
     await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { targetBranch: "feature..token" }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "unsafe-branch" })]) });
     const invalidChecksRepository = join(value.root, "repositories", "invalid-checks");
     const invalidChecksWorktree = join(value.worktreeRoot, "invalid-checks");

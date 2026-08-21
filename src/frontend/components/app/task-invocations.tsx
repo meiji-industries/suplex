@@ -16,6 +16,23 @@ export function invocationActorLabel(invocation: Pick<TaskInvocation, "agentName
   return `${roleLabel(invocation.role)}${invocation.profileName ? ` (${invocation.profileName})` : ""}`;
 }
 
+const integratorOwnedPhases = new Set([
+  "releasing",
+  "ci_waiting",
+  "ci_repair_planning",
+  "ci_repair_required",
+  "ci_repairing",
+  "merge_conflict_reviewing",
+  "merge_conflict_required",
+  "merge_conflict_resolving",
+]);
+
+export function workflowOwnerLabel(task: Pick<TaskResponse, "owner" | "phase">): string {
+  if (task.owner !== "lead") return task.owner;
+  if (task.phase === "final_review") return "Reviewer";
+  return integratorOwnedPhases.has(task.phase) ? "Integrator" : "Planner";
+}
+
 function invocationDate(timestamp: string): string {
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp));
 }

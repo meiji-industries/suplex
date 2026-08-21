@@ -15,9 +15,9 @@ const evaluate = (overrides: Record<string, unknown> = {}) => evaluateExactHead(
 
 describe("exact-head CI evaluator", () => {
   it("updates an advanced base before planning a repair, with a bounded cycle limit", () => {
-    expect(shouldUpdateFromBaseBeforeCiRepair({ outcome: "failed", repairable: true, owner: "lead", baseUpdateCount: 0 })).toBe(true);
-    expect(shouldUpdateFromBaseBeforeCiRepair({ outcome: "failed", repairable: true, owner: "lead", baseUpdateCount: 2 })).toBe(false);
-    expect(shouldUpdateFromBaseBeforeCiRepair({ outcome: "failed", repairable: false, owner: "lead", baseUpdateCount: 0 })).toBe(false);
+    expect(shouldUpdateFromBaseBeforeCiRepair({ outcome: "failed", repairable: true, owner: "integrator", baseUpdateCount: 0 })).toBe(true);
+    expect(shouldUpdateFromBaseBeforeCiRepair({ outcome: "failed", repairable: true, owner: "integrator", baseUpdateCount: 2 })).toBe(false);
+    expect(shouldUpdateFromBaseBeforeCiRepair({ outcome: "failed", repairable: false, owner: "integrator", baseUpdateCount: 0 })).toBe(false);
   });
   it.each([
     ["success", "passed", false],
@@ -85,7 +85,7 @@ describe("exact-head CI evaluator", () => {
       check({ providerCheckId: "10", name: "CI (Linux)", conclusion: "success" }),
       check({ providerCheckId: "11", name: "CI (Windows)", conclusion: "failure" }),
     ];
-    expect(evaluate({ observedPullRequest: pullRequest({ mergeStateStatus: "UNSTABLE" }), requiredChecks: required, checks, now })).toMatchObject({ outcome: "failed", reason: "required_check_failed", owner: "lead", repairable: true });
+    expect(evaluate({ observedPullRequest: pullRequest({ mergeStateStatus: "UNSTABLE" }), requiredChecks: required, checks, now })).toMatchObject({ outcome: "failed", reason: "required_check_failed", owner: "integrator", repairable: true });
   });
 
   it("keeps observing after the initial CI window instead of stranding a merged PR", () => {

@@ -16,7 +16,7 @@ export interface ReconcileCiActivityResult {
   evidenceArtifactSha256?: string;
   outcome: "waiting" | "passed" | "failed" | "missing_required" | "cancelled" | "timed_out" | "non_success" | "stale_head" | "rate_limited" | "provider_unavailable" | "invalid_provider_response";
   reason: string;
-  owner: "system" | "lead" | "human" | null;
+  owner: "system" | "integrator" | "human" | null;
   repairable: boolean;
   summary: string;
   retryAt: string | null;

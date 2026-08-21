@@ -15,7 +15,7 @@ import { getWorkerHealthFailure, useSystemHealth } from "../components/app/syste
 import { TaskActivity, TaskHistory } from "../components/app/task-history.js";
 import DeveloperDiff, { useAppThemeType } from "../components/app/developer-diff.js";
 import { TaskLeadPlan } from "../components/app/task-lead-plan.js";
-import { invocationActorLabel } from "../components/app/task-invocations.js";
+import { invocationActorLabel, workflowOwnerLabel } from "../components/app/task-invocations.js";
 import { TaskProgress } from "../components/app/task-progress.js";
 import { taskIsProcessing, taskPresentationPhase, TaskStatus } from "../components/app/task-status.js";
 import { DeveloperRecoveryStatus } from "../components/app/developer-recovery-status.js";
@@ -383,7 +383,7 @@ function CiDiagnostics({ task, ci }: { task: ApiTask; ci: ApiCi }): ReactElement
         <CardDescription>Retry window, deadlines, ownership, and evidence</CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span>Next retry {ci.nextRetryAt ? adminDate(ci.nextRetryAt) : "—"}</span><span>Propagation {ci.propagationDeadline ? adminDate(ci.propagationDeadline) : "—"}</span><span>Overall deadline {ci.overallDeadline ? adminDate(ci.overallDeadline) : "—"}</span><span>Owner {ci.owner ?? "—"}</span></div>
+        <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span>Next retry {ci.nextRetryAt ? adminDate(ci.nextRetryAt) : "—"}</span><span>Propagation {ci.propagationDeadline ? adminDate(ci.propagationDeadline) : "—"}</span><span>Overall deadline {ci.overallDeadline ? adminDate(ci.overallDeadline) : "—"}</span><span>Owner {ci.owner === "system" ? "Forge" : ci.owner === "integrator" ? "Integrator" : ci.owner ?? "—"}</span></div>
         {ci.reason || latestAttempt?.summary ? <p className="break-words text-[12px]">{ci.reason ? `${ci.reason}: ` : ""}{latestAttempt?.summary ?? ""}</p> : null}
       </CardContent>
       <CardFooter>
@@ -676,7 +676,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
             <dl className="space-y-4 text-xs">
               <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary" data-status={task.phase}><TaskStatus phase={task.phase} presentationPhase={taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands })} processing={taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status })} /></Badge></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
-              <div className="space-y-1"><dt className="text-muted-foreground">Owner</dt><dd>{task.owner}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Owner</dt><dd>{workflowOwnerLabel(task)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approve" : "Manual approval"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Pull request</dt><dd>{task.pullRequestMode === "auto_merge" ? "Auto-merge" : task.pullRequestMode === "ready" ? "Ready for review" : "Draft"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd><NextAction value={task.pendingAction} /></dd></div>

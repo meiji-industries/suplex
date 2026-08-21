@@ -3,13 +3,19 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import { TaskLeadPlan } from "../src/frontend/components/app/task-lead-plan.js";
 import { activityRelativeDate, extractAgentTranscript, harnessSummary, TaskActivity } from "../src/frontend/components/app/task-history.js";
-import { invocationActorLabel } from "../src/frontend/components/app/task-invocations.js";
+import { invocationActorLabel, workflowOwnerLabel } from "../src/frontend/components/app/task-invocations.js";
 import { DeveloperEvidence, type DeveloperExecutionView } from "../src/frontend/components/tasks/developer-evidence.js";
 import type { TaskResponse } from "../src/http/contracts/tasks.js";
 
 test("labels an agent with its execution profile", () => {
   expect(invocationActorLabel({ agentName: "Planner", profileName: "Smart", role: "planner" })).toBe("Planner (Smart)");
   expect(invocationActorLabel({ agentName: "Planner", profileName: "Fast", role: "integrator" })).toBe("Integrator (Fast)");
+});
+
+test("labels post-approval ownership and system CI work accurately", () => {
+  expect(workflowOwnerLabel({ owner: "lead", phase: "releasing" } as TaskResponse)).toBe("Integrator");
+  expect(workflowOwnerLabel({ owner: "lead", phase: "final_review" } as TaskResponse)).toBe("Reviewer");
+  expect(workflowOwnerLabel({ owner: "human", phase: "accepted" } as TaskResponse)).toBe("human");
 });
 
 test("makes conflict summaries easy to scan", () => {

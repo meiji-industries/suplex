@@ -1099,10 +1099,11 @@ export class AgentService {
         throw failure;
       }
     }
+    const reviewRole: "planner" | "reviewer" = isFinalReview && input.roleProfiles.reviewer ? "reviewer" : "planner";
     let leadProfile: Awaited<ReturnType<AgentService["resolveTurnProfile"]>>;
     let rawSessionId: string;
     try {
-      leadProfile = await this.resolveTurnProfile(input.roleProfiles.planner, leadSessionRef, "Lead review");
+      leadProfile = await this.resolveTurnProfile(input.roleProfiles[reviewRole], leadSessionRef, reviewRole === "reviewer" ? "Final reviewer" : "Lead review", reviewRole);
       rawSessionId = await this.sessionStore.read(leadSessionRef);
       if (!rawSessionId) throw new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
     } catch (error) {
@@ -1111,13 +1112,13 @@ export class AgentService {
       throw failure;
     }
     const schemaPath = await this.ensureDeliveryReviewSchema();
-    const active = this.activeCapacityExecution(input, "planner");
+    const active = this.activeCapacityExecution(input, reviewRole);
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     const activeAttempt = active && !isFinalReview ? this.database.authQuery((db) => db.prepare("SELECT id FROM forge_delivery_review_attempts WHERE lead_execution_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(executionId, input.taskId, input.companyId, input.workflowId) as { id: string } | undefined) : undefined;
     const attemptId = activeAttempt?.id ?? `review_attempt_${randomBytes(12).toString("hex")}`;
     if (!active) this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:delivery-review:${subjectCommit}:${attemptId}`, input.planRevision, isFinalReview ? "final-delivery-review" : "delivery-review", leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, leadSessionRef, startedAt);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, ?, 'starting', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, reviewRole, `${input.workflowId}:delivery-review:${subjectCommit}:${attemptId}`, input.planRevision, isFinalReview ? "final-delivery-review" : "delivery-review", leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, leadSessionRef, startedAt);
       if (!isFinalReview) db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id, lead_execution_id, lead_session_ref, developer_session_ref, status, correction_attempts, supersedes_review_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 0, ?, ?)").run(attemptId, input.taskId, input.companyId, input.workflowId, subject.planRevision, targetBaseSha, subjectCommit, subjectTree, subject.developerExecutionId, subject.deliveryArtifactId, subject.developerEvidenceArtifactId, executionId, leadSessionRef, context.developerSessionRef ?? subject.developerSessionRef, input.supersedesReviewId, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, leadSessionRef, input.worktreePath);
     });
@@ -1467,7 +1468,7 @@ export class AgentService {
     return () => signal.removeEventListener("abort", mark);
   }
 
-  private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string, role: "planner" | "integrator" = "planner"): Promise<{ id: string; model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }> {
+  private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string, role: "planner" | "reviewer" | "integrator" = "planner"): Promise<{ id: string; model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }> {
     const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND role = ? AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(sessionRef, role) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const profile = pinned ? undefined : this.database.authQuery((db) => (profileId
       ? db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId)

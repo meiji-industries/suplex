@@ -3,6 +3,8 @@ import { expect, test } from "vitest";
 import { DeliveryReviewActivityResultSchema, DeveloperRepairActivityResultSchema, IssueWorkflowStateSchema, SafeSummarySchema, normalizeSafeSummary, toSafeSummary } from "../src/temporal/issue-contracts.js";
 import { ISSUE_PHASES, TERMINAL_PHASES } from "../src/issue-phases.js";
 import { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "../src/temporal/workflows.js";
+import { finalReviewerTurn } from "../src/temporal/workflow/state-transitions.js";
+import type { IssueWorkflowContext } from "../src/temporal/workflow/context.js";
 
 const subject = { planRevision: 1, targetBaseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40), developerExecutionId: "developer_1", deliveryArtifactId: "artifact_delivery", developerEvidenceArtifactId: "artifact_evidence", leadSessionRef: "session_lead", developerSessionRef: "session_developer" };
 const blockingFinding = { findingId: "finding_blocking", severity: "blocking" as const, rationale: "The controlled defect remains.", evidenceRef: "fixture", disposition: "open" as const, repairInstruction: "Fix the controlled defect." };
@@ -17,6 +19,12 @@ test("state parsing always offers cancellation outside terminal phases", () => {
     if (TERMINAL_PHASES.has(phase)) expect(parsed.allowedCommands).not.toContain("cancel_issue");
     else expect(parsed.allowedCommands).toContain("cancel_issue");
   }
+});
+
+test("assigns final review to the Reviewer, with Planner fallback", () => {
+  const context = { input: { roleProfiles: { planner: "planner-profile", reviewer: "reviewer-profile" } } } as IssueWorkflowContext;
+  expect(finalReviewerTurn(context)).toEqual({ role: "reviewer", profileId: "reviewer-profile" });
+  expect(finalReviewerTurn({ ...context, input: { ...context.input, roleProfiles: { planner: "planner-profile" } } })).toEqual({ role: "planner", profileId: "planner-profile" });
 });
 
 test("safe summaries are normalized before entering workflow state", () => {

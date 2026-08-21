@@ -153,10 +153,16 @@ export function reviewApprovedState(state: IssueWorkflowState, result: Completed
   return repairRequiredState(state, result, state.repairCycle ?? 0);
 }
 
-// The Integrator owns getting the Builder's branch merged: publish, CI repair, merge
-// conflicts, final review. Gated so replayed histories keep their original role/profile.
+// The Integrator owns getting the Builder's branch merged: publish, CI repair, and merge
+// conflicts. Gated so replayed histories keep their original role/profile.
 export const optionalRolesPatch = "forge-optional-roles-v1";
 export function integratorTurn(ctx: IssueWorkflowContext, legacyRole: "planner" | "builder"): { role: CapacityRole; profileId: string | undefined } {
   if (!ctx.patched(optionalRolesPatch)) return { role: legacyRole, profileId: ctx.input.roleProfiles[legacyRole] };
   return { role: "integrator", profileId: ctx.input.roleProfiles.integrator ?? ctx.input.roleProfiles[legacyRole] };
+}
+
+export function finalReviewerTurn(ctx: IssueWorkflowContext): { role: CapacityRole; profileId: string | undefined } {
+  return ctx.input.roleProfiles.reviewer
+    ? { role: "reviewer", profileId: ctx.input.roleProfiles.reviewer }
+    : { role: "planner", profileId: ctx.input.roleProfiles.planner };
 }

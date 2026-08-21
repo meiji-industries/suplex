@@ -37,10 +37,10 @@ export type CiOutcome =
   | "provider_unavailable"
   | "invalid_provider_response";
 
-export type CiOwner = "system" | "lead" | "human" | null;
+export type CiOwner = "system" | "integrator" | "human" | null;
 
 export function shouldUpdateFromBaseBeforeCiRepair(input: { outcome: CiOutcome; repairable: boolean; owner: CiOwner; baseUpdateCount: number }): boolean {
-  return input.outcome === "failed" && input.repairable && input.owner === "lead" && input.baseUpdateCount < CI_BASE_UPDATE_LIMIT;
+  return input.outcome === "failed" && input.repairable && input.owner === "integrator" && input.baseUpdateCount < CI_BASE_UPDATE_LIMIT;
 }
 export type CheckStatus = "queued" | "in_progress" | "completed";
 export type CheckConclusion = "success" | "failure" | "cancelled" | "timed_out" | "action_required" | "neutral" | "skipped" | "stale" | null;
@@ -217,7 +217,7 @@ export function evaluateExactHead(input: CiEvaluationInput): CiEvaluationResult 
   const missing = input.requiredChecks.filter((name) => !exactSelected.some((check) => check.name === name));
   const notApplicable = missing.length > 0 && pr.mergeStateStatus === "CLEAN" && exactSelected.length > 0 && exactSelected.every((check) => check.status === "completed");
   const failed = exactSelected.filter((check) => check.conclusion === "failure");
-  if (failed.length) return evaluation("required_check_failed", "failed", "lead", true, selectedChecks, `Required checks failed: ${failed.map((check) => check.name).join(", ")}`);
+  if (failed.length) return evaluation("required_check_failed", "failed", "integrator", true, selectedChecks, `Required checks failed: ${failed.map((check) => check.name).join(", ")}`);
   if (missing.length && !notApplicable && Date.parse(input.now) < Date.parse(input.propagationDeadline)) return evaluation("checks_propagating", "waiting", "system", false, selectedChecks, "Required checks are still propagating", new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
   if (notApplicable && exactSelected.every((check) => check.conclusion === "success" || check.conclusion === "skipped")) return evaluation("checks_passed_not_applicable", "passed", null, false, selectedChecks, `All reporting required checks passed; not applicable: ${missing.join(", ")} (did not report; GitHub merge state CLEAN)`);
   if (missing.length && !notApplicable && Date.parse(input.now) >= Date.parse(input.overallDeadline)) return evaluation("poll_window_exhausted", "waiting", "system", false, selectedChecks, `Waiting for required checks after the initial CI window: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_MERGE_OBSERVATION_INTERVAL_MS).toISOString());

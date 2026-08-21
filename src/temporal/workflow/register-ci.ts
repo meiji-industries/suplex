@@ -103,7 +103,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
         return ctx.state;
       }
     }
-    if (result.outcome === "failed" && result.repairable && result.owner === "lead" && result.evidenceArtifactId && ctx.state.leadSessionRef && ctx.state.ciAttemptId) {
+    if (result.outcome === "failed" && result.repairable && result.owner === "integrator" && result.evidenceArtifactId && ctx.state.leadSessionRef && ctx.state.ciAttemptId) {
       const leadSessionRef = ctx.state.leadSessionRef;
       const ciAttemptId = ctx.state.ciAttemptId;
       const evidenceArtifactId = result.evidenceArtifactId;

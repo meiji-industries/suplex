@@ -265,6 +265,10 @@ export class CapacityManager {
   bindExecutionInTransaction(db: import("better-sqlite3").Database, requestId: string, owner: CapacityExecutionOwner): CapacityRequestSnapshot {
     const validated = CapacityExecutionOwnerSchema.parse(owner);
     const request = this.inspectInTransaction(db, requestId);
+    // A reconciler can release a request after the external turn has started
+    // but before its activity records the owner.  Binding that obsolete slot
+    // must not turn a completed retry into a workflow failure.
+    if (["released", "cancelled", "stale", "exhausted"].includes(request.status)) return request;
     if (request.status !== "active") throw new CapacityFailure("invalid-status");
     const now = new Date().toISOString();
     db.prepare("UPDATE forge_capacity_requests SET execution_kind = ?, execution_id = ?, session_ref = ?, worktree_path = ?, heartbeat_at = ?, updated_at = ? WHERE id = ? AND status = 'active'").run(validated.executionKind, validated.executionId, validated.sessionRef ?? null, validated.worktreePath ?? null, now, now, requestId);

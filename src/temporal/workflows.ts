@@ -100,6 +100,7 @@ const durableCapacityPatch = "durable-capacity-v1";
 const decisionResolutionProjectionPatch = "forge-decision-resolution-projection-v1";
 const exhaustedActivityRecoveryPatch = "forge-exhausted-activity-recovery-v1";
 const capacityFinalizationOwnershipPatch = "forge-capacity-finalization-ownership-v1";
+const capacityReadmissionPatch = "forge-capacity-readmit-v1";
 const guardedHandlersPatch = "forge-guarded-handlers-v1";
 const autoChainLeadPhasesPatch = "forge-auto-chain-lead-phases-v1";
 const unconditionalCancelPatch = "forge-unconditional-cancel-v1";
@@ -253,7 +254,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await projectIssueState(state);
     return projectedRevision;
   };
-  const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: projectIssueState, projectCapacityState, patched, durableCapacityPatch, capacityFinalizationOwnershipPatch });
+  const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: projectIssueState, projectCapacityState, patched, durableCapacityPatch, capacityFinalizationOwnershipPatch, capacityReadmissionPatch });
   const guarded = createGuarded({ get: () => state, set: (next) => { state = next; } }, { enabled: guardedHandlersEnabled, reviseContinueEnabled, project: projectIssueState });
   const workflowContext = createIssueWorkflowContext(validatedInput, state, {
     project: () => projectIssueState(state),

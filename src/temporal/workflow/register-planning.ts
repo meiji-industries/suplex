@@ -118,15 +118,16 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
         const summary = failure.code === "activity-failed" ? "Planning failed; retry is available" : failure.summary;
         const failureBase = durablePlanningCapacity ? ctx.state : next;
         const failureRevision = failureBase.revision + 1;
+        const capacityFailure = ["not-found", "not-owner", "duplicate", "conflict", "stale-revision", "profile-unavailable", "invalid-status", "deadline-exhausted"].includes(failure.code);
         ctx.state = IssueWorkflowStateSchema.parse({
           ...failureBase,
           capacity: null,
           capacityBlocker: null,
-          phase: "failed",
+          phase: capacityFailure ? "backlog" : "failed",
           revision: failureRevision,
           owner: "human",
-          allowedCommands: ctx.reviseContinueEnabled ? ["start_planning", "continue_work", "cancel_issue"] : ["start_planning", "cancel_issue"],
-          pendingAction: summary,
+          allowedCommands: capacityFailure ? ["start_planning", "cancel_issue"] : ctx.reviseContinueEnabled ? ["start_planning", "continue_work", "cancel_issue"] : ["start_planning", "cancel_issue"],
+          pendingAction: capacityFailure ? `${summary} Forge reconciled the capacity record; retry planning.` : summary,
           blocker: failure.category ? humanBlocker(failure.category, summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : null,
           stateChangedAt: new Date().toISOString(),
           lastEventId: `${ctx.state.workflowId}:${failureRevision}`,

@@ -85,6 +85,28 @@ test("releases an unbound admission when ownership is no longer observable", asy
   }
 });
 
+test("binding a terminal request is a no-op so a retry can admit a fresh request", async () => {
+  const value = await fixture();
+  try {
+    const capacity = new CapacityManager(value.database, value.config);
+    const released = capacity.request(input("task-a", "released-bind"));
+    expect(capacity.tryAcquire(released.id, 0).status).toBe("active");
+    capacity.markOwnershipAmbiguous(released.id, "Developer process was interrupted");
+
+    expect(capacity.bindExecution(released.id, { executionKind: "developer", executionId: "developer-late" })).toMatchObject({
+      id: released.id,
+      status: "released",
+      terminalReason: "process_failed",
+    });
+
+    const retry = capacity.request(input("task-a", "fresh-retry"));
+    expect(capacity.tryAcquire(retry.id, 0)).toMatchObject({ status: "active", acquired: true });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("skips a same-issue head while an independent request uses the free lane slot", async () => {
   const value = await fixture();
   try {

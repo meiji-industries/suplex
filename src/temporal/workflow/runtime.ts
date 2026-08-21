@@ -146,11 +146,19 @@ export function createAcquireExternalTurn(
     patched: (patchId: string) => boolean;
     durableCapacityPatch: string;
     capacityFinalizationOwnershipPatch: string;
+    capacityReadmissionPatch: string;
   },
 ): IssueWorkflowContext["acquireExternalTurn"] {
   return async <T>(spec: { operation: CapacityOperation; role: CapacityRole; profileId?: string | undefined; sessionRef?: string | null | undefined; worktreePath?: string | null | undefined }, run: (capacityRequestId?: string) => Promise<T>, executionId: (result: T) => string | undefined, durableCapacityEnabled = options.patched(options.durableCapacityPatch)): Promise<T> => {
     if (!durableCapacityEnabled) return run(undefined);
     if (!spec.profileId) throw ApplicationFailure.nonRetryable("profile_unavailable", "profile_unavailable", { operation: spec.operation, role: spec.role });
+    // A cancelled/interrupted turn can leave its released request in durable
+    // workflow state.  Never carry that terminal id into the next admission.
+    const storedCapacity = stateRef.get().capacity;
+    if (options.patched(options.capacityReadmissionPatch) && storedCapacity) {
+      const stored = await inspectCapacity({ requestId: storedCapacity.requestId });
+      if (stored.status !== "active") await options.projectCapacityState(null);
+    }
     const turnRevision = stateRef.get().revision;
     const expectedPhase = stateRef.get().phase;
     const commandsBeforeWait = stateRef.get().allowedCommands;
@@ -193,6 +201,10 @@ export function createAcquireExternalTurn(
           if (current.executionId && resultExecutionId && current.executionId !== resultExecutionId) throw ApplicationFailure.nonRetryable("capacity_owner_mismatch", "capacity_owner_mismatch", { requestId: request.id });
           if (current.status === "ownership_ambiguous") {
             observedRevision = await options.projectCapacityState({ ...admission.publicState, status: "ownership_ambiguous", position: null, reason: null, retryAt: null }, "Ownership verification required");
+            return result;
+          }
+          if (["released", "cancelled", "stale", "exhausted"].includes(current.status) && options.patched(options.capacityReadmissionPatch)) {
+            observedRevision = await options.projectCapacityState(null);
             return result;
           }
           const ownerId = current.executionId;
@@ -253,6 +265,7 @@ const haltedChains = new Set<string>();
 // Human decision gates: the member is choosing, not handing work to an agent, so a failure inside one of
 // these is retried in place by the guarded fallback below.
 const DECISION_COMMANDS = new Set(["approve_plan", "accept_delivery", "request_delivery_changes", "record_delivery_decision", "reconcile_acceptance", "reconcile_merge"]);
+const CAPACITY_FAILURE_CODES = new Set(["not-found", "not-owner", "duplicate", "conflict", "stale-revision", "profile-unavailable", "invalid-status", "deadline-exhausted"]);
 
 export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): { command: string; commandId: string } | null {
   const command = AUTO_CHAINED_COMMANDS[ctx.state.phase as keyof typeof AUTO_CHAINED_COMMANDS];
@@ -315,6 +328,32 @@ export function createGuarded(
         });
         store.set(reverted);
         await options.project(reverted);
+        throw error;
+      }
+      // Capacity ledger conflicts are Forge bookkeeping failures.  They must
+      // always land on an actionable retry, never the terminal failed phase.
+      if (failure && CAPACITY_FAILURE_CODES.has(failure.code)) {
+        const retryDevelopment = command === "start_development" || command === "retry_development";
+        const retryCi = command === "repair_ci";
+        const phase = retryDevelopment ? "delivery_blocked" : retryCi ? "ci_repair_required" : "backlog";
+        const allowedCommands = retryDevelopment ? ["retry_development", "cancel_issue"] : retryCi ? ["repair_ci", "cancel_issue"] : ["start_planning", "cancel_issue"];
+        const nextAction = retryDevelopment ? "retry development" : retryCi ? "retry CI repair" : "retry planning";
+        const pendingAction = `${failure.summary} Forge reconciled the capacity record; ${nextAction}.`;
+        const retryable = IssueWorkflowStateSchema.parse({
+          ...state,
+          capacity: null,
+          capacityBlocker: null,
+          phase,
+          revision,
+          owner: "human",
+          allowedCommands,
+          pendingAction,
+          blocker: null,
+          stateChangedAt: new Date().toISOString(),
+          lastEventId: `${state.workflowId}:${revision}`,
+        });
+        store.set(retryable);
+        await options.project(retryable);
         throw error;
       }
       const next = IssueWorkflowStateSchema.parse({

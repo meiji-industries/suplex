@@ -331,8 +331,11 @@ export class WorktreeManager {
       catch { throw new WorktreeFailure("worktree-registry-ambiguous", "Active worktree no longer descends from its reserved base"); }
       return before;
     }
-    if (!before?.pathExists && !before?.branchHead) {
-      try { await this.git.run(["worktree", "add", "-b", validated.branchName, validated.worktreePath, validated.startingSha], repositoryPath); } catch {
+    const branchAtBase = Boolean(before?.branchHead && before.branchHead.toLowerCase() === validated.startingSha.toLowerCase());
+    if (!before?.pathExists && (!before?.branchHead || branchAtBase)) {
+      // A branch already parked at the reserved sha (a previous attempt created it but the worktree add did not stick) is not ambiguous: attach to it.
+      const add = branchAtBase ? ["worktree", "add", validated.worktreePath, validated.branchName] : ["worktree", "add", "-b", validated.branchName, validated.worktreePath, validated.startingSha];
+      try { await this.git.run(add, repositoryPath); } catch {
         const afterFailure = await this.inspectOwned(validated, repositoryPath).catch(() => undefined);
         if (!afterFailure?.head || afterFailure.branch !== validated.branchName || afterFailure.head.toLowerCase() !== validated.startingSha.toLowerCase()) throw new WorktreeFailure("worktree-registry-ambiguous", "Git worktree creation failed with an unresolved registry state");
       }

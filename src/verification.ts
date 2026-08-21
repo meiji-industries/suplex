@@ -54,6 +54,8 @@ const commands = new Map<string, readonly string[]>([
   ["mise run lint", ["mise", "run", "lint"]],
   ["cargo test", ["cargo", "test"]],
   ["make test", ["make", "test"]],
+  ["make setup", ["make", "setup"]],
+  ["make test-local", ["make", "test-local"]],
   ["make check", ["make", "check"]],
 ] as const);
 

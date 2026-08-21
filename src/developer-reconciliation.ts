@@ -55,6 +55,7 @@ export interface DeveloperReconciliationInput {
   leadSessionId: string | null;
   authorization: AuthorizedPlanSubject;
   manifest: EvidenceManifest;
+  verificationProjectRevisionId?: string;
 }
 
 export interface DeveloperReconciliation {
@@ -68,6 +69,7 @@ export interface DeveloperReconciliation {
   report: DeveloperDelivery | null;
   authorization: AuthorizedPlanSubject;
   manifest: EvidenceManifest;
+  verificationProjectRevisionId?: string;
   independentVerification: IndependentVerification | null;
   git: DeveloperGitObservation;
   provider: { beforeSha256: string | null; afterSha256: string | null; matching: boolean };
@@ -125,6 +127,7 @@ export const DeveloperReconciliationArtifactSchema = z.object({
   report: z.unknown().nullable(),
   authorization: AuthorizedPlanSubjectSchema,
   manifest: EvidenceManifestSchema,
+  verificationProjectRevisionId: z.string().min(1).optional(),
   independentVerification: IndependentVerificationSchema.nullable().optional(),
   receipts: z.array(ExecutionReceiptSchema).optional(),
   receiptCount: z.number().int().nonnegative().optional(),
@@ -236,6 +239,7 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
     report,
     authorization: rawInput.authorization,
     manifest: rawInput.manifest,
+    ...(rawInput.verificationProjectRevisionId ? { verificationProjectRevisionId: rawInput.verificationProjectRevisionId } : {}),
     independentVerification,
     git: rawInput.git,
     provider: { beforeSha256: rawInput.providerBeforeSha256, afterSha256: rawInput.providerAfterSha256, matching: rawInput.providerBeforeSha256 !== null && rawInput.providerBeforeSha256 === rawInput.providerAfterSha256 },

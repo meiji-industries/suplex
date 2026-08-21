@@ -237,10 +237,6 @@ function safeJsonLine(line: string): string {
   try { return JSON.stringify(redact(JSON.parse(line))) ?? JSON.stringify({ type: "empty" }); } catch { return JSON.stringify({ type: "text", text: redact(line) }); }
 }
 
-function verificationPolicyHash(revision: { setupCommand: string; verificationCommand: string; requiredChecks: string[] }): string {
-  return createHash("sha256").update(JSON.stringify({ setupCommand: revision.setupCommand, verificationCommand: revision.verificationCommand, requiredChecks: revision.requiredChecks }, ["requiredChecks", "setupCommand", "verificationCommand"])).digest("hex");
-}
-
 function parseDeliveryReport(lines: string[], provider: AgentProvider): DeveloperDeliveryReport {
   const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-delivery-report", "Codex Developer did not return a delivery report");
@@ -345,10 +341,10 @@ export class DeveloperService {
     const input = rawInput;
     if (input.authorization) return this.runAuthorized(input as DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity> & { authorization: NonNullable<DeveloperExecutionActivityInput["authorization"]> });
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256, io.id AS outputId, io.original_plan_revision AS originalPlanRevision, io.revision AS outputRevision, io.final_version AS finalVersion, io.output_artifact_id AS artifactId, io.artifact_sha256 AS artifactSha256, io.session_ref AS leadSessionRef, io.execution_id AS leadExecutionId, io.evidence_manifest_artifact_id AS evidenceManifestArtifactId, io.evidence_manifest_sha256 AS evidenceManifestSha256
-      FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
+      FROM forge_tasks t JOIN forge_project_revisions r ON r.id = (SELECT current.id FROM forge_project_revisions current WHERE current.project_id = t.project_id AND current.state = 'accepted' ORDER BY current.revision DESC LIMIT 1)
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_issue_outputs io ON io.output_artifact_id = ? AND io.task_id = t.id AND io.workflow_id = t.workflow_id
       JOIN forge_artifacts pa ON pa.id = io.output_artifact_id JOIN forge_artifacts ea ON ea.id = io.evidence_artifact_id
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId) as DeveloperContext & { outputId?: string; originalPlanRevision?: number; outputRevision?: number; finalVersion?: number; artifactId?: string; artifactSha256?: string; leadSessionRef?: string; leadExecutionId?: string; evidenceManifestArtifactId?: string; evidenceManifestSha256?: string } | undefined);
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId) as DeveloperContext & { outputId?: string; originalPlanRevision?: number; outputRevision?: number; finalVersion?: number; artifactId?: string; artifactSha256?: string; leadSessionRef?: string; leadExecutionId?: string; evidenceManifestArtifactId?: string; evidenceManifestSha256?: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Authorized Lead delivery evidence is unavailable");
     if (!input.finalPlanSubject) throw new AgentFailure("plan-authority-missing", "Developer execution requires the final Lead plan subject");
     const projectRevision = ProjectRevisionSchema.safeParse(JSON.parse(context.normalizedJson));
@@ -566,7 +562,7 @@ export class DeveloperService {
       const independentVerification = await runPinnedVerification({ worktreePath: owned.worktreePath, setupCommand: acceptedRevision.setupCommand, verificationCommand: acceptedRevision.verificationCommand }, { guard });
       const git = await collectDeveloperGitObservation(owned.worktreePath, owned.startingSha);
       const after = await this.observeProvider({ companyId: input.companyId, executionId: input.developerExecutionId, phase: "after", cwd: owned.repositoryRoot, repository: manifest!.projectRevision.repositoryIdentity });
-      const reconciliation = reconcileDeveloperDelivery({ executionId: input.developerExecutionId, companyId: input.companyId, report: rawReport, independentVerification, git, startingSha: stored!.observations.startingSha, neutralBranch: stored!.observations.neutralBranch, providerBeforeSha256: row.beforeProviderSha256, providerAfterSha256: after.observation?.sha256 ?? null, processExitCode: stored!.observations.processExitCode, developerSessionId: stored!.observations.developerSessionId, leadSessionId: stored!.observations.leadSessionId, authorization: authorization!, manifest: manifest! });
+      const reconciliation = reconcileDeveloperDelivery({ executionId: input.developerExecutionId, companyId: input.companyId, report: rawReport, independentVerification, git, startingSha: stored!.observations.startingSha, neutralBranch: stored!.observations.neutralBranch, providerBeforeSha256: row.beforeProviderSha256, providerAfterSha256: after.observation?.sha256 ?? null, processExitCode: stored!.observations.processExitCode, developerSessionId: stored!.observations.developerSessionId, leadSessionId: stored!.observations.leadSessionId, authorization: authorization!, manifest: manifest!, verificationProjectRevisionId: acceptedRevision.projectRevisionId });
       if (reconciliation.outcome !== "completed") return null;
       const artifact = await this.artifacts.putIdempotent(input.companyId, "developer-reconciliation", `${input.developerExecutionId}:reconciliation:v3:recovery:${reconciliation.sha256}`, { filename: `${input.developerExecutionId}-recovery.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(reconciliation), "utf8") });
       this.database.authTransaction((db) => {
@@ -610,18 +606,14 @@ export class DeveloperService {
   }
 
   private loadAcceptedVerificationRevision(input: { taskId: string; companyId: string; workflowId: string }, manifest: EvidenceManifest) {
-    const row = this.database.authQuery((db) => db.prepare(`SELECT r.normalized_json AS normalizedJson
+    const row = this.database.authQuery((db) => db.prepare(`SELECT r.id AS projectRevisionId, r.normalized_json AS normalizedJson
       FROM forge_tasks t
-      JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
-      WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND r.id = ? AND r.project_id = ?`).get(input.taskId, input.companyId, input.workflowId, manifest.projectRevision.projectRevisionId, manifest.projectRevision.projectId) as { normalizedJson: string } | undefined);
+      JOIN forge_project_revisions r ON r.id = (SELECT current.id FROM forge_project_revisions current WHERE current.project_id = t.project_id AND current.state = 'accepted' ORDER BY current.revision DESC LIMIT 1)
+      WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_id = ?`).get(input.taskId, input.companyId, input.workflowId, manifest.projectRevision.projectId) as { projectRevisionId: string; normalizedJson: string } | undefined);
     if (!row) throw new AgentFailure("pinned-revision-missing", "The accepted project revision is unavailable for deterministic verification");
     let revision;
     try { revision = parseAcceptedProjectRevision(row.normalizedJson); } catch { throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain valid pinned verification commands"); }
-    const expected = manifest.projectRevision;
-    if (revision.repository !== expected.repositoryIdentity || revision.repositoryPath !== expected.repositoryPath || revision.worktreeRoot !== expected.worktreeRoot || revision.baseBranch !== expected.baseBranch || revision.targetBranch !== expected.targetBranch || revision.baseSha.toLowerCase() !== expected.baseSha.toLowerCase() || revision.targetSha.toLowerCase() !== expected.targetSha.toLowerCase() || verificationPolicyHash(revision) !== expected.setupVerificationPolicySha256) {
-      throw new AgentFailure("pinned-revision-mismatch", "The accepted project revision changed after the Developer evidence manifest was created");
-    }
-    return revision;
+    return { ...revision, projectRevisionId: row.projectRevisionId };
   }
 
   private async runAuthorized(input: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity> & { authorization: NonNullable<DeveloperExecutionActivityInput["authorization"]> }): Promise<DeveloperExecutionResult> {
@@ -701,7 +693,7 @@ export class DeveloperService {
       const gitArtifact = await this.artifacts.put(input.companyId, "developer-git-snapshot", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(git), "utf8") });
       const receipts = parsed.receipts.map((receipt) => ExecutionReceiptSchema.parse(receipt));
       receipts.push(ExecutionReceiptSchema.parse({ eventId: `receipt_${createHash("sha256").update(`${executionId}:git-snapshot`).digest("hex").slice(0, 32)}`, executionId, attempt, sequence: Math.max(0, ...receipts.map((receipt) => receipt.sequence)) + 1, kind: "git_snapshot", stepNumber: null, sourceItemId: null, occurredAt: this.now().toISOString(), summary: "Final Git snapshot", exitCode: null, artifactId: gitArtifact.id, artifactSha256: gitArtifact.sha256, idempotencyKey: `git-snapshot:${gitArtifact.id}` }));
-      const reconciliation = reconcileDeveloperDelivery({ executionId, companyId: input.companyId, report: parsed.finalReport, independentVerification, git, startingSha: activeWorktree.startingSha, neutralBranch: activeWorktree.branchName, providerBeforeSha256: beforeObservation?.sha256 ?? null, providerAfterSha256: after.observation?.sha256 ?? null, processExitCode: result.exitCode, malformedLines: parsed.malformedLines, developerSessionId: rawSessionId ?? null, leadSessionId: leadSessionId ?? null, authorization, manifest: evidence.manifest });
+      const reconciliation = reconcileDeveloperDelivery({ executionId, companyId: input.companyId, report: parsed.finalReport, independentVerification, git, startingSha: activeWorktree.startingSha, neutralBranch: activeWorktree.branchName, providerBeforeSha256: beforeObservation?.sha256 ?? null, providerAfterSha256: after.observation?.sha256 ?? null, processExitCode: result.exitCode, malformedLines: parsed.malformedLines, developerSessionId: rawSessionId ?? null, leadSessionId: leadSessionId ?? null, authorization, manifest: evidence.manifest, verificationProjectRevisionId: acceptedRevision.projectRevisionId });
       const deliverySummary = developerReconciliationSummary(reconciliation);
       const reconciliationArtifact = await this.artifacts.putIdempotent(input.companyId, "developer-reconciliation", `${executionId}:reconciliation:v3`, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(reconciliation), "utf8") });
       this.database.authTransaction((db) => {
@@ -789,7 +781,7 @@ export class DeveloperService {
       if (gitState.branchName !== input.branchName || gitState.dirtyState !== "clean" || gitState.headSha.toLowerCase() !== report.resultCommit.toLowerCase() || gitState.treeSha.toLowerCase() !== report.resultTree.toLowerCase() || parents.length !== 3 || (parents[1] ?? "").toLowerCase() !== input.priorHead.toLowerCase() || (parents[2] ?? "").toLowerCase() !== input.targetBaseSha.toLowerCase()) {
         throw new AgentFailure("merge-resolution-revision-invalid", "Developer resolution did not produce the required clean two-parent merge commit");
       }
-      const revision = this.database.authQuery((db) => db.prepare("SELECT r.normalized_json FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?").get(input.taskId, input.companyId, input.workflowId) as { normalized_json: string } | undefined);
+      const revision = this.database.authQuery((db) => db.prepare("SELECT r.normalized_json FROM forge_tasks t JOIN forge_project_revisions r ON r.id = (SELECT current.id FROM forge_project_revisions current WHERE current.project_id = t.project_id AND current.state = 'accepted' ORDER BY current.revision DESC LIMIT 1) WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?").get(input.taskId, input.companyId, input.workflowId) as { normalized_json: string } | undefined);
       if (!revision) throw new AgentFailure("artifact_unavailable", "The accepted project revision is unavailable for deterministic verification");
       let parsed;
       try { parsed = parseAcceptedProjectRevision(revision.normalized_json); } catch { throw new AgentFailure("artifact_unavailable", "The accepted project revision does not contain valid pinned verification commands"); }

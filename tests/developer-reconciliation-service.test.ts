@@ -67,6 +67,7 @@ async function recoveryFixture(options: { verificationFails?: boolean } = {}): P
     : `node -e \"require('fs').appendFileSync('${verifierCounterPath}', '1')\"`;
   await writeFile(join(repositoryPath, "README.md"), "base\n");
   await writeFile(join(repositoryPath, ".gitignore"), "node_modules/\n");
+  await writeFile(join(repositoryPath, "Makefile"), `setup:\n\t@node -e \"require('fs').appendFileSync('${verifierCounterPath}', 'S')\"\ntest-local:\n\t@node -e \"require('fs').appendFileSync('${verifierCounterPath}', 'B')\"\n`);
   await writeFile(join(repositoryPath, "package.json"), JSON.stringify({ name: "recovery-proof", version: "1.0.0", scripts: { test: testScript } }));
   await execFileAsync("npm", ["install", "--package-lock-only", "--ignore-scripts"], { cwd: repositoryPath });
   await execFileAsync("git", ["init", "-b", "main"], { cwd: repositoryPath });
@@ -190,6 +191,23 @@ test("keeps the original authority when fresh verification fails", async () => {
   expect(await value.service.reconcileStoredDelivery(value.input)).toBeNull();
   expect(value.counters).toEqual({ provider: 1, process: 0 });
   expect(truth(value.database)).toMatchObject({ status: "blocked", failureCode: "delivery-reconciliation-failed", reconciliationArtifactId: value.legacyArtifact.id });
+  value.database.close();
+});
+
+test("uses a newer accepted revision's setup and verification commands for a manifest pinned to an older revision", async () => {
+  const value = await recoveryFixture();
+  const currentRevision = { repository: "acme/forge", repositoryPath: join(value.root, "repositories", "repo"), worktreeRoot: join(value.root, "worktrees"), baseBranch: "main", targetBranch: "main", baseSha: value.baseSha, targetSha: value.baseSha, setupCommand: "make setup", verificationCommand: "make test-local", requiredChecks: [] };
+  value.database.authTransaction((db) => {
+    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, state, created_at) VALUES ('revision_2', 'project_1', 2, 'identity_2', ?, ?, ?, 'user_1', 'accepted', ?)").run(JSON.stringify(currentRevision), value.baseSha, value.baseSha, "2026-08-16T12:01:00.000Z");
+    db.prepare("UPDATE forge_projects SET active_revision_id = 'revision_2' WHERE id = 'project_1'").run();
+  });
+
+  expect(await value.service.reconcileStoredDelivery(value.input)).toMatchObject({ outcome: "completed" });
+  expect(await readFile(value.verifierCounterPath, "utf8")).toBe("SB");
+  const artifactId = truth(value.database).reconciliationArtifactId!;
+  const artifactRow = value.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(artifactId) as { storagePath: string; sha256: string });
+  const artifact = DeveloperReconciliationArtifactSchema.parse(JSON.parse((await value.artifacts.read({ companyId: "company_1", ...artifactRow })).toString("utf8")));
+  expect(artifact.verificationProjectRevisionId).toBe("revision_2");
   value.database.close();
 });
 

@@ -1033,7 +1033,7 @@ export class DeveloperService {
     // A previously failed repair attempt can leave its own unpushed commit on HEAD.
     // Discard it and retry the same exact repair instead of refusing forever.
     if (current.headSha.toLowerCase() !== input.priorCommit.toLowerCase() && await rollbackUnpushedRepairCommits(worktreePath, input.branchName, input.priorCommit)) current = await this.worktrees.inspectDelivery(worktreePath);
-    if (current.branchName !== input.branchName || current.headSha.toLowerCase() !== input.priorCommit.toLowerCase() || current.treeSha.toLowerCase() !== input.priorTree.toLowerCase() || current.dirtyState !== "clean") throw new AgentFailure("ci-repair-subject-changed", "The CI repair worktree is not the original clean failed revision");
+    if (current.branchName !== input.branchName || current.dirtyState !== "clean") throw new AgentFailure("ci-repair-subject-changed", "The CI repair worktree is not a clean task branch");
     const rawSessionId = await this.sessionStore.read(input.priorDeveloperSessionRef);
     if (!rawSessionId) throw new AgentFailure("invalid-session-reference", "Developer session reference is invalid");
     const planText = (await this.artifacts.read({ companyId: input.companyId, storagePath: plan.planStoragePath, sha256: plan.planSha256 })).toString("utf8");
@@ -1055,8 +1055,7 @@ export class DeveloperService {
       if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, outputLines);
       const report = parseRepairReport(outputLines, this.provider);
       const gitState = await this.worktrees.inspectDelivery(worktreePath);
-      const parent = (await execFileAsync("git", ["rev-parse", "HEAD^"], { cwd: worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
-      if (gitState.branchName !== input.branchName || gitState.headSha.toLowerCase() === input.priorCommit.toLowerCase() || gitState.treeSha.toLowerCase() === input.priorTree.toLowerCase() || parent.toLowerCase() !== input.priorCommit.toLowerCase() || gitState.dirtyState !== "clean" || report.resultCommit.toLowerCase() !== gitState.headSha.toLowerCase() || report.resultTree.toLowerCase() !== gitState.treeSha.toLowerCase()) throw new AgentFailure("ci-repair-revision-invalid", "CI repair must create one clean ordinary child commit");
+      if (gitState.branchName !== input.branchName || gitState.dirtyState !== "clean" || report.resultCommit.toLowerCase() !== gitState.headSha.toLowerCase() || report.resultTree.toLowerCase() !== gitState.treeSha.toLowerCase()) throw new AgentFailure("ci-repair-revision-invalid", "CI repair did not leave a clean task branch");
       const delivery = await this.artifacts.put(input.companyId, "developer-repair", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, priorCommit: input.priorCommit, priorTree: input.priorTree }, null, 2), "utf8") });
       const evidence = await this.artifacts.put(input.companyId, "ci-repair-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
       const now = this.now().toISOString();

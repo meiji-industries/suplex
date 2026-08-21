@@ -1,4 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 
 import { ApplicationFailure, CancelledFailure, Context } from "@temporalio/activity";
 import { z } from "zod";
@@ -13,6 +15,7 @@ import { cancelDeveloperExecution, reconcileDeveloperExecutions } from "../../de
 import { cancelAgentExecution, reconcileAgentExecutions } from "../../agent-recovery.js";
 import { DeveloperExecutionLeaseRepository } from "../../developer-execution-leases.js";
 import { runDeveloperTurn, type DeveloperTurnRunResult } from "../../developer-turn-runner.js";
+import { validateSupervisorResult } from "../../developer-supervisor-protocol.js";
 import { AcceptanceFailure, AcceptanceService } from "../../acceptance.js";
 import { CiFailure, CiProviderFailure, CiService, createGithubCiProvider, type CiProvider } from "../../ci.js";
 import { createGithubReleasePort, GithubReleaseFailure, ReleaseService, type GithubReleaseAdapter } from "../../github-release.js";
@@ -256,7 +259,19 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   };
   const recoverFinalizedDeveloperResult = async <T>(input: { taskId: string; companyId: string; workflowId: string; planRevision: number } & DeveloperSupervisorActivityIdentity): Promise<{ result: T; resultHash: string } | undefined> => {
     const lease = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).get(input.developerTurnExecutionId);
-    if (!lease?.resultHash) return undefined;
+    // The supervisor atomically publishes result.json before the worker can
+    // perform post-exit verification.  A restart in that gap leaves the SQL
+    // row running, so promote the authenticated on-disk result first.
+    if (lease && !lease.resultHash) {
+      try {
+        const result = validateSupervisorResult(JSON.parse(await readFile(join(lease.executionRoot, lease.resultPath), "utf8")));
+        if (result.executionId === lease.executionId && result.leaseTokenHash === lease.leaseTokenHash) {
+          new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).recordResultReady(lease.executionId, result);
+        }
+      } catch { /* No complete supervisor result is available yet. */ }
+    }
+    const finalizedLease = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).get(input.developerTurnExecutionId);
+    if (!finalizedLease?.resultHash) return undefined;
     const row = database.authQuery((db) => db.prepare(`SELECT d.status, d.session_ref AS sessionRef, d.branch_name AS branchName, d.worktree_path AS worktreePath, d.target_base_sha AS targetBaseSha, d.current_step AS currentStep, d.result_commit AS resultCommit, d.result_tree AS resultTree, d.dirty_state AS dirtyState, d.delivery_artifact_id AS deliveryArtifactId, d.evidence_artifact_id AS evidenceArtifactId, a.storage_path AS deliveryStoragePath, a.sha256 AS deliverySha, e.sha256 AS evidenceSha
       FROM forge_developer_executions d
       JOIN forge_artifacts a ON a.id = d.delivery_artifact_id AND a.company_id = d.company_id
@@ -282,7 +297,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       if (!verification) return undefined;
       result = { developerExecutionId: input.developerTurnExecutionId, developerSessionRef: row.sessionRef, resultCommit: row.resultCommit, resultTree: row.resultTree, deliveryArtifactId: row.deliveryArtifactId, deliveryArtifactSha256: row.deliverySha, evidenceArtifactId: row.evidenceArtifactId, evidenceArtifactSha256: row.evidenceSha, verificationArtifactId: delivery.verificationArtifactId, verificationArtifactSha256: verification.sha256, summary: artifactPayload.summary } satisfies MergeConflictResolutionActivityResult;
     }
-    return { result: result as T, resultHash: lease.resultHash };
+    return { result: result as T, resultHash: finalizedLease.resultHash };
   };
   const runSupervised = async <T extends { developerExecutionId: string; evidenceArtifactId: string | null; deliveryArtifactId?: string; verificationArtifact?: { id: string } }>(
     input: { taskId: string; companyId: string; workflowId: string; planRevision: number; capacityRequestId?: string } & DeveloperSupervisorActivityIdentity,
@@ -333,14 +348,15 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       const service = options.developer ? developer as DeveloperService : new DeveloperService(database, config, { github: githubRelease, processRunner });
       const result = await operation(service);
       await bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId }, result);
-      if (!terminal) {
+      const persistedResultHash = leases.get(input.developerTurnExecutionId)?.resultHash;
+      if (!terminal && !persistedResultHash) {
         // Explicitly injected Developer ports are test seams and do not launch
         // an external process. They retain their existing direct behavior.
         return { status: "completed", result, resultHash: createHash("sha256").update(JSON.stringify(result)).digest("hex") };
       }
       const deliveryArtifactId = result.deliveryArtifactId ?? result.verificationArtifact?.id;
       if (!deliveryArtifactId || !result.evidenceArtifactId) throw new Error("A supervised Developer result requires durable result and evidence artifacts");
-      const claim = leases.claim({ executionId: input.developerTurnExecutionId, resultHash: terminal.resultHash, activityResultJson: JSON.stringify(result), deliveryArtifactId, evidenceArtifactId: result.evidenceArtifactId });
+      const claim = leases.claim({ executionId: input.developerTurnExecutionId, resultHash: terminal?.resultHash ?? persistedResultHash!, activityResultJson: JSON.stringify(result), deliveryArtifactId, evidenceArtifactId: result.evidenceArtifactId });
       if (claim.conflict) {
         return { status: "ownership_ambiguous", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: terminal.lastHeartbeatAt };
       }

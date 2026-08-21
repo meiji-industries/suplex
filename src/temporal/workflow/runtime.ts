@@ -11,6 +11,7 @@ import { cancelCapacityExecution, finalizeCapacity, inspectCapacity, rateLimitCa
 import { repairDelivery, reviewDelivery } from "./register-delivery-review.js";
 import { resolveMergeConflict } from "./register-merge.js";
 import { evidencePointer, humanBlocker } from "./state-transitions.js";
+import { TERMINAL_PHASES } from "../../issue-phases.js";
 import type { IssueWorkflowContext, StateRef } from "./context.js";
 
 export function compactStateForContinuation(state: IssueWorkflowState): IssueWorkflowState {
@@ -248,6 +249,10 @@ const AUTO_CHAINED_COMMANDS = { delivery_ready: "review_delivery", delivery_revi
 // (plan conflict -> required -> resolve throws -> plan conflict ...) and each pass has a new revision.
 const haltedChains = new Set<string>();
 
+// Human decision gates: the member is choosing, not handing work to an agent, so a failure inside one of
+// these is retried in place by the guarded fallback below.
+const DECISION_COMMANDS = new Set(["approve_plan", "accept_delivery", "request_delivery_changes", "record_delivery_decision", "reconcile_acceptance", "reconcile_merge"]);
+
 export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): { command: string; commandId: string } | null {
   const command = AUTO_CHAINED_COMMANDS[ctx.state.phase as keyof typeof AUTO_CHAINED_COMMANDS];
   if (!command || !ctx.state.allowedCommands.includes(command) || !ctx.patched(patchId)) return null;
@@ -286,6 +291,24 @@ export function createGuarded(
       const failure = permanentActivityFailure(error, true);
       const summary = failure?.summary ?? "The command failed; retry is available";
       const revision = state.revision + 1;
+      // A failed human decision gate returns the member to that same decision so the command can be retried,
+      // instead of collapsing a late-stage failure (e.g. a rejected GitHub merge) into "re-plan from scratch".
+      // Commands that hand the task to an agent turn (respond_plan_blocker, start_planning) still collapse to failed:
+      // their input was consumed by the turn, so the prior state is no longer actionable.
+      if (before.owner === "human" && !TERMINAL_PHASES.has(before.phase) && before.allowedCommands.some((command) => DECISION_COMMANDS.has(command))) {
+        const retry = before.allowedCommands.filter((command) => command !== "cancel_issue").map((command) => ({ command, label: `Retry ${command.replace(/_/g, " ")}`, requiresNote: ["reject_plan", "record_delivery_decision", "request_delivery_changes"].includes(command), destructive: false }));
+        const reverted = IssueWorkflowStateSchema.parse({
+          ...before,
+          revision,
+          pendingAction: summary,
+          blocker: failure?.category ? humanBlocker(failure.category, summary, [...retry, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : before.blocker,
+          stateChangedAt: new Date().toISOString(),
+          lastEventId: `${state.workflowId}:${revision}`,
+        });
+        store.set(reverted);
+        await options.project(reverted);
+        throw error;
+      }
       const next = IssueWorkflowStateSchema.parse({
         ...state,
         capacity: null,

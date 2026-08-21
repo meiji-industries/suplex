@@ -7,7 +7,7 @@ import { afterEach, expect, test } from "vitest";
 
 import type { PlanBlockerSubject, PlanSubject } from "../src/plan-governance.js";
 import type { IssueActivities, IssueWorkflowInput, IssueWorkflowState } from "../src/temporal/issue-contracts.js";
-import { issueStateQuery, issueWorkflow, respondPlanBlockerUpdate } from "../src/temporal/workflows.js";
+import { acceptDeliveryUpdate, issueStateQuery, issueWorkflow, respondPlanBlockerUpdate } from "../src/temporal/workflows.js";
 import { createIssueActivitiesFake } from "./fakes/issue-activities.js";
 import { createImmediateCapacityActivities } from "./immediate-capacity-activities.js";
 
@@ -227,6 +227,92 @@ test("a task created with auto-approve and auto-merge reaches done without anoth
       "planning", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "delivery_reviewed",
       "releasing", "ci_waiting", "final_review", "accepted", "manual_merge", "done",
     ]);
+
+    const history = await handle.fetchHistory();
+    await Worker.runReplayHistory({ workflowsPath }, history, workflowId);
+  } finally {
+    worker.shutdown();
+    await workerRun;
+  }
+});
+
+test("a failed acceptance returns the member to the accepted decision instead of collapsing to failed", { timeout: 120_000 }, async () => {
+  environment = await TestWorkflowEnvironment.createTimeSkipping();
+  const projections: IssueWorkflowState[] = [];
+  const commit = "b".repeat(40);
+  const activities: Partial<IssueActivities> = {
+    projectIssueState: async (event) => { projections.push(structuredClone(event.state)); return event.state; },
+    reconcileTargetBase: async (input) => ({ outcome: "no_drift", checkId: `target_base_${input.checkpoint}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: input.expectedBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree }),
+    // The live failure this guards: GitHub rejects the merge method. The delivery is still accepted work,
+    // so the member must land back on "Accept delivery", not on "re-plan from scratch".
+    acceptDelivery: async () => {
+      throw ApplicationFailure.create({ message: "Merge commits are not allowed on this repository", type: "github-merge-method-rejected", nonRetryable: true, details: [{ code: "github-merge-method-rejected", summary: "Merge commits are not allowed on this repository", category: "member_authorization", evidenceArtifactId: "merge_method_evidence", evidenceSha256: sha }] });
+    },
+  };
+  const worker = await Worker.create({ connection: environment.nativeConnection, namespace: environment.namespace ?? "default", taskQueue, workflowsPath, activities: createIssueActivitiesFake(activities) as unknown as Record<string, (...args: never[]) => unknown> });
+  const workerRun = worker.run();
+  try {
+    const input: IssueWorkflowInput = {
+      workflowId,
+      companyId,
+      projectId: "project_guarded",
+      issueId,
+      projectRevisionId: "revision_guarded",
+      briefArtifactId: "brief_guarded",
+      briefSha256: "0".repeat(64),
+      imageArtifactIds: [],
+      roleProfiles: { planner: "profile", builder: "profile" },
+      supplementalReview: false,
+      pullRequestMode: "auto_merge",
+      autoMergeActorUserId: "member_guarded",
+      continuationState: {
+        phase: "accepted",
+        revision: 30,
+        owner: "human",
+        allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"],
+        pendingAction: "Member acceptance required",
+        lastEventId: `${workflowId}:30`,
+        continuationCount: 0,
+        lastSummaryHash: null,
+        leadSessionRef: "lead_session",
+        leadExecutionId: "lead_execution",
+        leadOutputArtifactId: "plan_artifact",
+        planRevision: 11,
+        branchName: "forge/issue/guarded",
+        targetBaseSha: "a".repeat(40),
+        resultCommit: commit,
+        resultTree: commit,
+        dirtyState: "clean",
+        deliveryArtifactId: "delivery_artifact",
+        developerExecutionId: "developer_execution_guarded",
+        developerEvidenceArtifactId: "developer_evidence",
+        deliveryReviewId: "delivery_review_guarded",
+        releaseId: "release_guarded",
+        releaseRepository: "acme/forge",
+        baseBranch: "main",
+        pullRequestNumber: 478,
+        pullRequestUrl: "https://github.com/acme/forge/pull/478",
+        expectedHeadSha: commit,
+        expectedHeadTree: commit,
+        ciRunId: "ci_guarded",
+        ciAttempt: 1,
+        ciOutcome: "passed",
+        finalReviewId: "final_review_guarded",
+        finalReviewOutcome: "approved",
+      },
+    };
+    const handle = await environment.client.workflow.start(issueWorkflow, { workflowId, taskQueue, args: [input] });
+    await expect(handle.executeUpdate(acceptDeliveryUpdate, {
+      args: [{ expectedRevision: 30, actorUserId: "member_guarded", commandId: "guarded-accept-1" }],
+      updateId: "guarded-accept",
+    })).rejects.toThrow();
+
+    const projected = projections.at(-1)!;
+    expect(projected).toMatchObject({ phase: "accepted", owner: "human", pendingAction: "Merge commits are not allowed on this repository" });
+    expect(projected.allowedCommands).toContain("accept_delivery");
+    expect(projected.blocker?.actions.map((action) => action.label)).toContain("Retry accept delivery");
+    // The invariant: the Workflow never keeps a revision the projection never saw.
+    expect(projected.revision).toBe((await handle.query(issueStateQuery)).revision);
 
     const history = await handle.fetchHistory();
     await Worker.runReplayHistory({ workflowsPath }, history, workflowId);

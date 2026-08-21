@@ -6,7 +6,11 @@ import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
 import { DeveloperSupervisorInvocationSchema, DeveloperSupervisorResultSchema } from "../src/developer-supervisor-protocol.js";
-import { developerSupervisorSocketPath, observeOwnedProcessExit } from "../src/developer-supervisor.js";
+import { developerSupervisorSocketPath, developerSupervisorSpawnOptions, observeOwnedProcessExit } from "../src/developer-supervisor.js";
+
+test("supervisor spawn is detached and has no worker-owned stdio pipes", () => {
+  expect(developerSupervisorSpawnOptions()).toMatchObject({ detached: true, stdio: "ignore" });
+});
 
 test("uses a short deterministic socket for long runtime paths", () => {
   const executionRoot = "/Users/dev/conductor/workspaces/forge/curitiba-v1/.forge/data/runtime/developer-executions/developer_aaaaaaaaaaaaaaaaaaaaaaaa";
@@ -24,15 +28,13 @@ test("INV-06 real supervisor writes one bounded, hashed result envelope", async 
     const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId: `developer_${"a".repeat(24)}`, command: process.execPath, args: ["--input-type=module", "-e", "for (let i = 0; i < 20; i += 1) { process.stdout.write('out-' + i + '\\n'); process.stderr.write('err-' + i + '\\n'); } setTimeout(() => undefined, 1_000);", longPrompt], cwd: process.cwd(), env: {} });
     await mkdir(executionRoot, { recursive: true, mode: 0o700 });
     await writeFile(join(executionRoot, "invocation.json"), JSON.stringify(invocation));
+    await writeFile(join(executionRoot, "lease-token"), token, { mode: 0o600 });
     const source = fileURLToPath(new URL("../src/developer-supervisor.ts", import.meta.url));
-    const child = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "pipe", "pipe", "pipe"] });
+    const child = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     let exitCode: number | null = null;
     child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
     child.on("exit", (code) => { exitCode = code; });
-    const tokenPipe = child.stdio[3];
-    if (!tokenPipe || typeof tokenPipe === "string" || !("end" in tokenPipe)) throw new Error("supervisor token pipe unavailable");
-    tokenPipe.end(token);
     const resultPath = join(executionRoot, "result.json");
     let result: ReturnType<typeof DeveloperSupervisorResultSchema.parse> | undefined;
     for (let attempt = 0; attempt < 100 && !result; attempt += 1) {
@@ -68,13 +70,11 @@ test("supervisor failure after spawn writes a failed snapshot instead of dying s
     const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId: `developer_${"b".repeat(24)}`, command: join(root, "missing-binary"), args: ["run"], cwd: root, env: {} });
     await mkdir(executionRoot, { recursive: true, mode: 0o700 });
     await writeFile(join(executionRoot, "invocation.json"), JSON.stringify(invocation));
+    await writeFile(join(executionRoot, "lease-token"), "supervisor-test-token", { mode: 0o600 });
     const source = fileURLToPath(new URL("../src/developer-supervisor.ts", import.meta.url));
-    const child = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "pipe", "pipe", "pipe"] });
+    const child = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "pipe", "pipe"] });
     let exitCode: number | null = null;
     child.on("exit", (code) => { exitCode = code; });
-    const tokenPipe = child.stdio[3];
-    if (!tokenPipe || typeof tokenPipe === "string" || !("end" in tokenPipe)) throw new Error("supervisor token pipe unavailable");
-    tokenPipe.end("supervisor-test-token");
     let snapshot: { status?: string } = {};
     for (let attempt = 0; attempt < 200 && snapshot.status !== "failed"; attempt += 1) {
       try { snapshot = JSON.parse(await readFile(join(executionRoot, "supervisor.json"), "utf8")) as { status?: string }; } catch { /* not yet written */ }
@@ -103,15 +103,13 @@ test("a failing heartbeat write does not kill the supervisor or orphan the child
     const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId, command: process.execPath, args: ["-e", "setTimeout(() => process.stdout.write('done\\n'), 5_000);"], cwd: root, env: {} });
     await mkdir(executionRoot, { recursive: true, mode: 0o700 });
     await writeFile(join(executionRoot, "invocation.json"), JSON.stringify(invocation));
+    await writeFile(join(executionRoot, "lease-token"), "supervisor-test-token", { mode: 0o600 });
     const source = fileURLToPath(new URL("../src/developer-supervisor.ts", import.meta.url));
-    const child = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "pipe", "pipe", "pipe"] });
+    const child = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "pipe", "pipe"] });
     let stderr = "";
     let exited: number | null = null;
     child.stderr?.on("data", (chunk) => { stderr += chunk.toString(); });
     child.on("exit", (code) => { exited = code; });
-    const tokenPipe = child.stdio[3];
-    if (!tokenPipe || typeof tokenPipe === "string" || !("end" in tokenPipe)) throw new Error("supervisor token pipe unavailable");
-    tokenPipe.end("supervisor-test-token");
     const heartbeatPath = join(executionRoot, "heartbeat.json");
     // Make every later heartbeat write fail the way a full disk does: the
     // atomic rename cannot replace a directory.

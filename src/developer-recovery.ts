@@ -39,6 +39,14 @@ export interface RestoredDeveloperRecoveryReport {
   reason: "stored-delivery-result" | "restore-invalidated-process-ownership";
 }
 
+// Keep this aligned with the supervised Activity heartbeatTimeout. A new
+// worker may start while an old activity is still publishing its last beat.
+const developerLeaseTimeoutMs = 15_000;
+
+function heartbeatExpired(heartbeatAt: string | null): boolean {
+  return !heartbeatAt || Date.now() - Date.parse(heartbeatAt) > developerLeaseTimeoutMs;
+}
+
 export const DeveloperRecoveryObservationSchema = z.object({
   executionId: z.string().regex(/^developer_[a-f0-9]{24}$/),
   status: z.enum(["active", "result_ready", "interrupted", "ownership_ambiguous"]),
@@ -78,6 +86,36 @@ function activeLeases(database: ForgeDatabase): DeveloperExecutionLease[] {
   return new DeveloperExecutionLeaseRepository(database, "").listActive();
 }
 
+interface LegacyRunningDeveloperExecution {
+  id: string;
+  heartbeatAt: string | null;
+  processPid: number;
+  processStartIdentity: string;
+}
+
+async function reconcileStaleLegacyDeveloperExecutions(database: ForgeDatabase, controller: DeveloperProcessController): Promise<DeveloperRecoveryOutcome[]> {
+  const rows = database.authQuery((db) => db.prepare(`SELECT d.id, d.heartbeat_at AS heartbeatAt, d.process_pid AS processPid, d.process_start_identity AS processStartIdentity
+    FROM forge_developer_executions d
+    LEFT JOIN forge_developer_execution_leases l ON l.execution_id = d.id
+    WHERE l.execution_id IS NULL
+      AND d.status IN ('starting', 'running', 'cancelling')
+      AND d.process_pid IS NOT NULL
+      AND d.process_start_identity IS NOT NULL`).all() as LegacyRunningDeveloperExecution[]);
+  const outcomes: DeveloperRecoveryOutcome[] = [];
+  for (const row of rows) {
+    if (!heartbeatExpired(row.heartbeatAt)) continue;
+    const inspection = await controller.inspect(row.processPid);
+    const matchingIdentity = inspection && `${inspection.pid}:${inspection.processStartIdentity}` === row.processStartIdentity;
+    if (matchingIdentity) {
+      outcomes.push({ executionId: row.id, status: "active", reason: "legacy-process-identity-match" });
+      continue;
+    }
+    markExecutionTerminal(database, row.id, "interrupted", "worker-restart", "The stale recorded Developer process is gone; Forge marked the turn interrupted so the workflow can retry.");
+    outcomes.push({ executionId: row.id, status: "interrupted", reason: inspection ? "legacy-process-identity-mismatch" : "legacy-process-missing" });
+  }
+  return outcomes;
+}
+
 function markExecutionTerminal(database: ForgeDatabase, executionId: string, status: "cancelled" | "interrupted", failureCode: string | null, failureSummary: string | null): void {
   const now = new Date().toISOString();
   database.authTransaction((db) => {
@@ -105,10 +143,17 @@ export function reconcileRestoredDeveloperExecutions(database: ForgeDatabase): R
 
 export async function reconcileDeveloperExecutions(database: ForgeDatabase, controller: DeveloperProcessController = legacyController): Promise<DeveloperRecoveryOutcome[]> {
   const rows = activeLeases(database);
-  const outcomes: DeveloperRecoveryOutcome[] = [];
+  const outcomes = await reconcileStaleLegacyDeveloperExecutions(database, controller);
   for (const lease of rows) {
     if (resultHashFromClaim(database, lease.executionId)) {
       outcomes.push({ executionId: lease.executionId, status: "recovered", reason: "stored-delivery-result" });
+      continue;
+    }
+    // A turn that finished just before the restart has a durable result but no
+    // claim yet. Its child is legitimately gone; marking it interrupted here
+    // would discard a completed turn instead of letting the Activity claim it.
+    if (lease.resultHash || await readResult(lease)) {
+      outcomes.push({ executionId: lease.executionId, status: "recovered", reason: "stored-supervisor-result" });
       continue;
     }
     if (!lease.supervisor || !lease.child) {
@@ -118,12 +163,16 @@ export async function reconcileDeveloperExecutions(database: ForgeDatabase, cont
     const supervisorInspection = await controller.inspect(lease.supervisor.pid);
     const supervisorComparison = supervisorInspection ? compareProcessIdentity({ name: "developer-supervisor", pid: lease.supervisor.pid, command: lease.supervisor.argv.join(" "), startedAt: lease.supervisor.startTime, processGroup: lease.supervisor.processGroup, startTime: lease.supervisor.startTime, executable: lease.supervisor.executable, argv: lease.supervisor.argv, ...(lease.supervisor.ownerUid !== null ? { ownerUid: lease.supervisor.ownerUid } : {}) }, toInspection(supervisorInspection)) : { kind: "not_running" as const };
     const inspection = await controller.inspect(lease.child.pid);
-    if (!inspection) {
+    if (!inspection && heartbeatExpired(lease.heartbeatAt)) {
       // Release the lease too: the active-worktree unique index otherwise keeps
       // blocking every retry on this worktree with "lease was not created".
       new DeveloperExecutionLeaseRepository(database, "").setStatus(lease.executionId, "interrupted", ["reserved", "supervisor_starting", "running", "result_ready", "cancel_requested", "cancelling"]);
       markExecutionTerminal(database, lease.executionId, "interrupted", "worker-restart", "The recorded Developer process is gone; Forge marked the turn interrupted so the workflow can retry.");
       outcomes.push({ executionId: lease.executionId, status: "interrupted", reason: supervisorComparison.kind === "exact_match" ? "process-missing" : "supervisor-and-process-missing" });
+      continue;
+    }
+    if (!inspection) {
+      outcomes.push({ executionId: lease.executionId, status: "ownership_ambiguous", reason: "process-recently-unavailable" });
       continue;
     }
     const comparison = compareProcessIdentity({ name: "developer", pid: lease.child.pid, command: lease.child.argv.join(" "), startedAt: lease.child.startTime, processGroup: lease.child.processGroup, startTime: lease.child.startTime, executable: lease.child.executable, argv: lease.child.argv, ...(lease.child.ownerUid !== null ? { ownerUid: lease.child.ownerUid } : {}) }, toInspection(inspection));

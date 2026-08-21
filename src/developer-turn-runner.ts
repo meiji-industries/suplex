@@ -86,6 +86,18 @@ async function readEvents(root: string): Promise<string[]> {
   } catch { return []; }
 }
 
+/**
+ * A worker restart (a `tsx watch` hot reload, a deploy) cancels every running
+ * Activity. The Developer supervisor is detached in its own process group and
+ * survives that restart, so cancelling the turn here would throw away a live
+ * agent turn. Only an operator's cancel request may signal the Developer.
+ */
+function cancelledByWorkerRestart(error: CancelledFailure): boolean {
+  // Temporal sends this exact reason during Worker.shutdown(); cancellation
+  // details describe workflow-level requests and do not contain this reason.
+  return error.message === "WORKER_SHUTDOWN";
+}
+
 async function activitySleep(ms: number): Promise<void> {
   try { await Context.current().sleep(ms); } catch (error) { if (error instanceof CancelledFailure) throw error; await new Promise((resolve) => setTimeout(resolve, ms)); }
 }
@@ -224,6 +236,9 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
     }
   } catch (error) {
     if (!(error instanceof CancelledFailure)) throw error;
+    // Fail retryably instead of cancelling: the next Activity attempt reattaches
+    // to the still-running supervisor and keeps polling its durable spool.
+    if (cancelledByWorkerRestart(error)) throw ApplicationFailure.retryable("Forge restarted its worker while the Developer turn was running; the next attempt reattaches to the live supervisor.", "developer-worker-restart", { executionId: input.executionId });
     const cancellationController = {
       inspect: async (pid: number) => {
         const inspected = await controller.inspect(pid);

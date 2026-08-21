@@ -70,8 +70,11 @@ function tokenMatches(actual: string, expected: string): boolean {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 
-function readSupervisorToken(): string {
-  const token = readFileSync(3, "utf8").trim();
+function readSupervisorToken(executionRoot: string): string {
+  // The Activity writes this 0600 file before it detaches us. Reading it here
+  // avoids retaining an inherited token pipe whose parent disappears on a
+  // tsx-watch restart.
+  const token = readFileSync(join(executionRoot, "lease-token"), "utf8").trim();
   if (!token || token.length > 256) throw new Error("Developer supervisor lease token is invalid");
   return token;
 }
@@ -241,13 +244,17 @@ export function developerSupervisorCommand(): { command: string; args: string[] 
   return { command: process.execPath, args: [fileURLToPath(new URL("./developer-supervisor.js", import.meta.url))] };
 }
 
+export function developerSupervisorSpawnOptions(): { detached: true; stdio: "ignore"; env: NodeJS.ProcessEnv } {
+  return { detached: true, stdio: "ignore", env: process.env };
+}
+
 export function spawnDeveloperSupervisor(executionRoot: string, token: string, invocation: DeveloperSupervisorInvocation): ChildProcess {
   const command = developerSupervisorCommand();
-  const child = spawn(command.command, [...command.args, executionRoot], { detached: true, stdio: ["ignore", "ignore", "ignore", "pipe"], env: process.env });
-  const tokenStream = child.stdio[3];
-  if (!tokenStream || typeof tokenStream === "string" || !("end" in tokenStream)) throw new Error("Developer supervisor token pipe was not created");
-  tokenStream.end(token);
+  const child = spawn(command.command, [...command.args, executionRoot], developerSupervisorSpawnOptions());
   child.unref();
+  // `token` and `invocation` are persisted by the turn runner before spawn.
+  // Keep the parameters so callers cannot accidentally bypass that protocol.
+  void token;
   void invocation;
   return child;
 }
@@ -296,7 +303,7 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
   if (!executionIdPattern.test(executionId) || basename(dirname(root)) !== "developer-executions") throw new Error("Developer supervisor execution root is invalid");
   await rejectSymlinks(dirname(dirname(root)), root);
   await mkdir(root, { recursive: true, mode: 0o700 });
-  const token = readSupervisorToken();
+  const token = readSupervisorToken(root);
   const tokenHash = createHash("sha256").update(token).digest("hex");
   const controller = options.controller ?? defaultProcessController;
   const supervisorInspection = await inspect(controller, process.pid);

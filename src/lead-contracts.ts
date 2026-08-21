@@ -204,7 +204,7 @@ export const LeadResumeDescriptorSchema = z.object({
   leadSessionRef: durableId,
   reason: z.enum(["member_revision", "decision_resolution"]),
   instructionArtifactId: durableId,
-  instructionSha256: z.string().regex(/^[a-f0-9]{64}$/),
+  instructionSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
 
 export const LeadPlanningActivityInputSchema = z.object({

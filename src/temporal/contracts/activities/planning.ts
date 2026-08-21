@@ -17,7 +17,7 @@ export interface SupplementalReviewActivityInput {
   leadEvidenceArtifactId: string;
   capacityRequestId?: string;
   evidenceManifestArtifactId?: string;
-  evidenceManifestSha256?: string;
+  evidenceManifestSha256?: string | undefined;
   primaryLeadSessionRef?: string;
   originalPlanSubject?: PlanSubject;
 }
@@ -32,7 +32,7 @@ export interface SupplementalReviewResult {
   subject?: SupplementalReviewSubject;
   reviewArtifactSha256?: string;
   evidenceManifestArtifactId?: string;
-  evidenceManifestSha256?: string;
+  evidenceManifestSha256?: string | undefined;
 }
 
 export interface ConsolidateLeadPlanActivityInput {
@@ -50,7 +50,7 @@ export interface ConsolidateLeadPlanActivityInput {
   supplementalReviewArtifactId: string;
   capacityRequestId?: string;
   evidenceManifestArtifactId?: string;
-  evidenceManifestSha256?: string;
+  evidenceManifestSha256?: string | undefined;
   originalPlanSubject?: PlanSubject;
 }
 

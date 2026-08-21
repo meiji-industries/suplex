@@ -1890,8 +1890,8 @@ export class TaskService {
   }
 
   private materialityView(companyId: string, subject: MaterialityEvidenceSubject): MaterialityView {
-    const row = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND sha256 = ? AND kind = 'materiality-evidence'").get(subject.artifactId, companyId, subject.artifactSha256) as { storagePath: string; sha256: string } | undefined);
-    if (!row) return { categories: subject.categories, evidenceArtifactId: subject.artifactId, evidenceArtifactSha256: subject.artifactSha256, evidence: [] };
+    const row = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'materiality-evidence'").get(subject.artifactId, companyId) as { storagePath: string; sha256: string } | undefined);
+    if (!row) return { categories: subject.categories, evidenceArtifactId: subject.artifactId, evidenceArtifactSha256: subject.artifactSha256 ?? "", evidence: [] };
     try {
       const artifact = MaterialityEvidenceArtifactSchema.parse(JSON.parse(this.artifacts.readSync({ companyId, storagePath: row.storagePath, sha256: row.sha256 }).toString("utf8")));
       const evidence: MaterialityView["evidence"] = artifact.evidence.map((entry) => ({ category: entry.category, source: "lead" as const, refs: entry.evidenceRefs, rationale: entry.rationale }));
@@ -1899,9 +1899,9 @@ export class TaskService {
       for (const category of deterministicMaterialCategories(artifact.affectedPaths)) {
         if (!leadCategories.has(category)) evidence.push({ category, source: "deterministic", refs: artifact.affectedPaths, rationale: "Affected repository paths deterministically require this category." });
       }
-      return { categories: subject.categories, evidenceArtifactId: subject.artifactId, evidenceArtifactSha256: subject.artifactSha256, evidence };
+      return { categories: subject.categories, evidenceArtifactId: subject.artifactId, evidenceArtifactSha256: row.sha256, evidence };
     } catch {
-      return { categories: subject.categories, evidenceArtifactId: subject.artifactId, evidenceArtifactSha256: subject.artifactSha256, evidence: [] };
+      return { categories: subject.categories, evidenceArtifactId: subject.artifactId, evidenceArtifactSha256: row.sha256, evidence: [] };
     }
   }
 

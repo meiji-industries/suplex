@@ -141,7 +141,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
   }));
   setHandler(issueUpdates.record_progress, ctx.guarded(async (rawInput) => {
     assertPayloadWithinLimit("recordProgress command", rawInput);
-    const command = contracts.RecordProgressInputSchema.parse(rawInput);
+    contracts.RecordProgressInputSchema.parse(rawInput);
     const next = contracts.IssueWorkflowStateSchema.parse({
       ...ctx.state,
       revision: ctx.state.revision + 1,

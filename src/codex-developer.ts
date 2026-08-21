@@ -20,7 +20,7 @@ import type { GithubReleasePort } from "./github-release.js";
 import { createGitCommandGuard, withWorktreeMiseTrust, WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { activateOwnedWorktree, reserveOwnedWorktree } from "./worktrees.js";
 import { DeveloperEvidenceBuilder } from "./developer-evidence.js";
-import { releaseDeveloperExecutionLease } from "./developer-execution-leases.js";
+import { DeveloperExecutionLeaseRepository, releaseDeveloperExecutionLease } from "./developer-execution-leases.js";
 import { collectDeveloperGitObservation, developerReconciliationSummary, isLegacyReceiptOnlyRecovery, reconcileDeveloperDelivery, DeveloperReconciliationArtifactSchema } from "./developer-reconciliation.js";
 import { AuthorizedPlanSubjectSchema, EvidenceManifestSchema, ExecutionReceiptSchema, OwnedWorktreeSchema, type ExecutionReceipt, type EvidenceManifest } from "./developer-contracts.js";
 import { createGithubAdapter, type GithubAdapter, type GithubMutationSurface } from "./github.js";
@@ -647,10 +647,13 @@ export class DeveloperService {
     const staged = await evidenceBuilder.stage(evidence.manifest, activeWorktree.worktreePath, executionId);
     const guard = await createGitCommandGuard(this.config.runtimeRoot);
     const startedAt = this.now().toISOString();
+    const supervisorLeases = new DeveloperExecutionLeaseRepository(this.database, this.config.runtimeRoot);
+    const leaseToken = await supervisorLeases.ensureLeaseToken(executionId);
     this.database.authTransaction((db) => {
       registerArtifact(db, before.artifact);
       db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, NULL)").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, activeWorktree.branchName, activeWorktree.worktreePath, activeWorktree.startingSha, `wrapper_${randomBytes(12).toString("hex")}`, guard.directory, input.supersedesExecutionId ?? null, startedAt, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, undefined, activeWorktree.worktreePath);
+      supervisorLeases.reserveInTransaction(db, { executionId, companyId: input.companyId, taskId: input.taskId, workflowId: input.workflowId, attempt, turnKind: "implementation", canonicalWorktreePath: activeWorktree.worktreePath, worktreeIdentityHash: createHash("sha256").update(`${input.companyId}\0${input.workflowId}\0${activeWorktree.worktreePath}`).digest("hex"), leaseToken });
       db.prepare("INSERT OR IGNORE INTO forge_developer_execution_truth (execution_id, authorization_id, worktree_lease_id, manifest_artifact_id, manifest_sha256, boundary_mode, before_provider_artifact_id, before_provider_sha256, starting_commit, starting_tree) VALUES (?, ?, ?, ?, ?, 'owner_controlled_observed', ?, ?, ?, ?)").run(executionId, authorization.authorizationId, activeWorktree.leaseId, evidence.artifact.id, evidence.artifact.sha256, before.artifact.id, beforeObservation?.sha256 ?? null, inspection.head ?? activeWorktree.startingSha, startingTree);
     });
     const steps = evidence.manifest.verificationCommands.map((step) => `${step.stepNumber}: ${step.commands.join(" && ") || "(file/Git state verification)"}`).join("\n");

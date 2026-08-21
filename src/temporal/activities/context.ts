@@ -92,8 +92,9 @@ export function asNonRetryableApplicationFailure(error: unknown): ApplicationFai
   if (error instanceof PlanGovernanceConflict) {
     return ApplicationFailure.nonRetryable(error.message, error.code);
   }
-  if (error instanceof Error && error.name === "SqliteError" && /UNIQUE constraint failed/.test(error.message)) {
-    return ApplicationFailure.nonRetryable(error.message, "sqlite-unique-constraint");
+  if (error instanceof Error && error.name === "SqliteError") {
+    const code = /UNIQUE constraint failed/.test(error.message) ? "sqlite-unique-constraint" : "sqlite-error";
+    return ApplicationFailure.nonRetryable(error.message, code, { code, summary: error.message });
   }
   if (!(error instanceof AgentFailure) || !error.nonRetryable) return undefined;
   return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });

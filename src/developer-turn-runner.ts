@@ -1,6 +1,6 @@
 import { ApplicationFailure, Context, CancelledFailure } from "@temporalio/activity";
 import { constants } from "node:fs";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { open, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -125,15 +125,7 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
   }
   const controller = input.controller ?? defaultProcessController;
   const root = await repo.ensureExecutionRoot(input.executionId);
-  let token = await repo.readLeaseToken(input.executionId).catch(() => undefined);
-  if (!token) {
-    const candidate = randomBytes(32).toString("base64url");
-    try { await writeExclusive(join(root, "lease-token"), candidate); token = candidate; }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      token = await repo.readLeaseToken(input.executionId);
-    }
-  }
+  const token = await repo.ensureLeaseToken(input.executionId);
   const leaseResult = repo.reserve({ executionId: input.executionId, companyId: input.companyId, taskId: input.taskId, workflowId: input.workflowId, attempt: input.developerAttempt, turnKind: input.turnKind, canonicalWorktreePath: input.canonicalWorktreePath, worktreeIdentityHash: input.worktreeIdentityHash, leaseToken: token });
   const lease = leaseResult.lease;
   const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId: lease.executionId, command: input.command, args: input.args, cwd: input.cwd, env: Object.fromEntries(Object.entries(input.env).filter(([key]) => key === "PATH" || key === "FORGE_GIT_REAL_BIN" || key === "FORGE_GIT_GUARD_DIR" || key === "MISE_TRUSTED_CONFIG_PATHS")) });

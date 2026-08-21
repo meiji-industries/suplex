@@ -155,6 +155,24 @@ export class DeveloperExecutionLeaseRepository {
     return root;
   }
 
+  async ensureLeaseToken(executionId: string): Promise<string> {
+    const root = await this.ensureExecutionRoot(executionId);
+    try { return await this.readLeaseToken(executionId); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    const token = randomBytes(32).toString("base64url");
+    const path = join(root, "lease-token");
+    try {
+      const handle = await open(path, "wx", 0o600);
+      try { await handle.writeFile(token, "utf8"); } finally { await handle.close(); }
+      return token;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      return this.readLeaseToken(executionId);
+    }
+  }
+
   async readLeaseToken(executionId: string): Promise<string> {
     const path = join(this.executionRoot(executionId), "lease-token");
     await rejectSymlinkComponents(this.runtimeRoot, path);
@@ -163,39 +181,41 @@ export class DeveloperExecutionLeaseRepository {
   }
 
   reserve(input: { executionId: string; companyId: string; taskId: string; workflowId: string; attempt: number; turnKind: DeveloperTurnKind; canonicalWorktreePath: string; worktreeIdentityHash: string; executionRoot?: string; leaseToken?: string; }): { lease: DeveloperExecutionLease; leaseToken: string | null; created: boolean } {
+    return this.database.authTransaction((db) => this.reserveInTransaction(db, input));
+  }
+
+  reserveInTransaction(db: Database.Database, input: { executionId: string; companyId: string; taskId: string; workflowId: string; attempt: number; turnKind: DeveloperTurnKind; canonicalWorktreePath: string; worktreeIdentityHash: string; executionRoot?: string; leaseToken?: string; }): { lease: DeveloperExecutionLease; leaseToken: string | null; created: boolean } {
     requireExecutionId(input.executionId);
     const executionRoot = input.executionRoot ?? this.executionRoot(input.executionId);
     if (resolve(executionRoot) !== this.executionRoot(input.executionId)) throw new DeveloperLeaseFailure("invalid-execution-root", "Developer execution root is not canonical");
     const createdAt = now();
     const token = input.leaseToken ?? randomBytes(32).toString("base64url");
     const tokenHash = sha256(token);
-    return this.database.authTransaction((db) => {
-      // The partial unique index only protects active leases.  Older database
-      // rows may still say active after their execution became terminal, so
-      // release those stale slots before trying the new attempt.
-      db.prepare(`UPDATE forge_developer_execution_leases
+    // The partial unique index only protects active leases.  Older database
+    // rows may still say active after their execution became terminal, so
+    // release those stale slots before trying the new attempt.
+    db.prepare(`UPDATE forge_developer_execution_leases
         SET status = 'interrupted', updated_at = ?
         WHERE canonical_worktree_path = ?
           AND status IN (${activeStatuses.map(() => "?").join(",")})
           AND EXISTS (SELECT 1 FROM forge_developer_executions
             WHERE id = forge_developer_execution_leases.execution_id
               AND status IN (${terminalExecutionStatuses.map(() => "?").join(",")}))`)
-        .run(createdAt, input.canonicalWorktreePath, ...activeStatuses, ...terminalExecutionStatuses);
-      const insert = db.prepare(`INSERT OR IGNORE INTO forge_developer_execution_leases (execution_id, company_id, task_id, workflow_id, attempt, turn_kind, lease_token_hash, execution_root, canonical_worktree_path, worktree_identity_hash, status, created_at, updated_at)
+      .run(createdAt, input.canonicalWorktreePath, ...activeStatuses, ...terminalExecutionStatuses);
+    const insert = db.prepare(`INSERT OR IGNORE INTO forge_developer_execution_leases (execution_id, company_id, task_id, workflow_id, attempt, turn_kind, lease_token_hash, execution_root, canonical_worktree_path, worktree_identity_hash, status, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, ?)`);
-      const result = insert.run(input.executionId, input.companyId, input.taskId, input.workflowId, input.attempt, input.turnKind, tokenHash, executionRoot, input.canonicalWorktreePath, input.worktreeIdentityHash, createdAt, createdAt);
-      const existing = db.prepare("SELECT * FROM forge_developer_execution_leases WHERE execution_id = ? OR (workflow_id = ? AND attempt = ? AND turn_kind = ?)").get(input.executionId, input.workflowId, input.attempt, input.turnKind) as Record<string, unknown> | undefined;
-      if (!existing) {
-        const busy = db.prepare(`SELECT execution_id FROM forge_developer_execution_leases
+    const result = insert.run(input.executionId, input.companyId, input.taskId, input.workflowId, input.attempt, input.turnKind, tokenHash, executionRoot, input.canonicalWorktreePath, input.worktreeIdentityHash, createdAt, createdAt);
+    const existing = db.prepare("SELECT * FROM forge_developer_execution_leases WHERE execution_id = ? OR (workflow_id = ? AND attempt = ? AND turn_kind = ?)").get(input.executionId, input.workflowId, input.attempt, input.turnKind) as Record<string, unknown> | undefined;
+    if (!existing) {
+      const busy = db.prepare(`SELECT execution_id FROM forge_developer_execution_leases
           WHERE worktree_identity_hash = ? AND status IN (${activeStatuses.map(() => "?").join(",")})
-          ORDER BY created_at LIMIT 1`).get(input.worktreeIdentityHash, ...activeStatuses) as { execution_id: string } | undefined;
-        if (busy) throw new DeveloperLeaseFailure("worktree-busy", `Developer execution ${busy.execution_id} is still running on this worktree`);
-        throw new DeveloperLeaseFailure("lease-conflict", "Developer execution lease conflicts with an existing lease");
-      }
-      const parsed = row(existing);
-      if (parsed.executionId !== input.executionId || parsed.companyId !== input.companyId || parsed.taskId !== input.taskId || parsed.workflowId !== input.workflowId || parsed.attempt !== input.attempt || parsed.turnKind !== input.turnKind || parsed.canonicalWorktreePath !== input.canonicalWorktreePath || parsed.worktreeIdentityHash !== input.worktreeIdentityHash || (input.leaseToken !== undefined && parsed.leaseTokenHash !== tokenHash)) throw new DeveloperLeaseFailure("lease-conflict", "Developer execution lease identity conflicts with an existing attempt");
-      return { lease: parsed, leaseToken: result.changes === 1 ? token : null, created: result.changes === 1 };
-    });
+        ORDER BY created_at LIMIT 1`).get(input.worktreeIdentityHash, ...activeStatuses) as { execution_id: string } | undefined;
+      if (busy) throw new DeveloperLeaseFailure("worktree-busy", `Developer execution ${busy.execution_id} is still running on this worktree`);
+      throw new DeveloperLeaseFailure("lease-conflict", "Developer execution lease conflicts with an existing lease");
+    }
+    const parsed = row(existing);
+    if (parsed.executionId !== input.executionId || parsed.companyId !== input.companyId || parsed.taskId !== input.taskId || parsed.workflowId !== input.workflowId || parsed.attempt !== input.attempt || parsed.turnKind !== input.turnKind || parsed.canonicalWorktreePath !== input.canonicalWorktreePath || parsed.worktreeIdentityHash !== input.worktreeIdentityHash || (input.leaseToken !== undefined && parsed.leaseTokenHash !== tokenHash)) throw new DeveloperLeaseFailure("lease-conflict", "Developer execution lease identity conflicts with an existing attempt");
+    return { lease: parsed, leaseToken: result.changes === 1 ? token : null, created: result.changes === 1 };
   }
 
   get(executionId: string): DeveloperExecutionLease | undefined {

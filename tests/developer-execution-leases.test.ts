@@ -6,6 +6,7 @@ import { expect, test } from "vitest";
 
 import { ForgeDatabase } from "../src/database.js";
 import { DeveloperExecutionLeaseRepository, DeveloperLeaseFailure, claimKey, deriveDeveloperExecutionId } from "../src/developer-execution-leases.js";
+import { developerExecutionId } from "../src/temporal/deterministic-id.js";
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), "forge-developer-lease-test-"));
@@ -73,5 +74,20 @@ test("a terminal execution's stale active lease is released before its worktree 
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, 'task_1', 'company_1', 'workflow_1', 1, 2, 'starting', 'forge/issue/task_1', ?, ?, ?, ?)").run(nextId, worktree, "a".repeat(40), new Date().toISOString(), new Date().toISOString()));
     expect(repo.reserve({ executionId: nextId, companyId: "company_1", taskId: "task_1", workflowId: "workflow_1", attempt: 2, turnKind: "implementation", canonicalWorktreePath: worktree, worktreeIdentityHash: "w".repeat(64) }).created).toBe(true);
     expect(repo.get(value.executionId)?.status).toBe("interrupted");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("a command-hashed Developer execution and its supervisor lease insert in one transaction", async () => {
+  const value = await fixture();
+  try {
+    const executionId = developerExecutionId("workflow_1", 1, 2, "implementation", "start-development-command");
+    const worktree = join(value.root, "worktree-command-hashed");
+    const repo = new DeveloperExecutionLeaseRepository(value.database, value.root);
+    value.database.authTransaction((db) => {
+      db.prepare("UPDATE forge_developer_executions SET status = 'blocked' WHERE id = ?").run(value.executionId);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, 'task_1', 'company_1', 'workflow_1', 1, 2, 'starting', 'forge/issue/task_1', ?, ?, ?, ?)").run(executionId, worktree, "a".repeat(40), new Date().toISOString(), new Date().toISOString());
+      repo.reserveInTransaction(db, { executionId, companyId: "company_1", taskId: "task_1", workflowId: "workflow_1", attempt: 2, turnKind: "implementation", canonicalWorktreePath: worktree, worktreeIdentityHash: "h".repeat(64), leaseToken: "command-hashed-token" });
+    });
+    expect(repo.get(executionId)).toMatchObject({ executionId, status: "reserved" });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

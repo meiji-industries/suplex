@@ -112,3 +112,19 @@ test("INV-09 restore recovery is projection-read-only and invalidates local proc
     expect(value.database.authQuery((db) => db.prepare("SELECT revision, phase, allowed_commands_json, pending_action FROM forge_issue_projections WHERE task_id = 'task_1'").get())).toEqual(before);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
+
+test("an interrupted reconcile releases the lease so the next attempt can reserve the same worktree", async () => {
+  const value = await fixture();
+  try {
+    const id = `developer_${"e".repeat(24)}`;
+    const repository = lease(value.database, value.root, id, 1);
+    repository.setSupervisorIdentity(id, identity(201));
+    repository.setChildIdentity(id, identity(202));
+    const outcomes = await reconcileDeveloperExecutions(value.database, controller(new Map([[201, inspection(identity(201))]]), []));
+    expect(outcomes).toEqual([{ executionId: id, status: "interrupted", reason: "process-missing" }]);
+    expect(repository.get(id)?.status).toBe("interrupted");
+    const next = `developer_${"f".repeat(24)}`;
+    execution(value.database, next, 2);
+    expect(repository.reserve({ executionId: next, companyId: "company_1", taskId: "task_1", workflowId: "workflow_1", attempt: 2, turnKind: "implementation", canonicalWorktreePath: "/tmp/forge-worktree-task_1", worktreeIdentityHash: "worktree-1" }).created).toBe(true);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});

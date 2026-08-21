@@ -202,6 +202,8 @@ test("a dead agent process fails its execution and frees the ambiguous capacity 
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, process_pid, process_start_identity, started_at) VALUES ('agent-dead', 'task-a', 'company', 'workflow-task-a', 'planner', 'running', 1, 424242, '424242:Fri 21 Aug 00:47:24 2026', ?)").run(now));
     capacity.bindExecution(request.id, { executionKind: "agent", executionId: "agent-dead", sessionRef: "session-dead" });
     capacity.markOwnershipAmbiguous(request.id, "operator killed the stack mid-turn");
+    // A prior pass already demoted the execution: a dead pid must still resolve.
+    value.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'ownership_ambiguous', failure_code = 'ownership-ambiguous' WHERE id = 'agent-dead'").run());
 
     expect(await reconcileAgentExecutions(value.database, deadProcess)).toEqual([{ executionId: "agent-dead", status: "failed", reason: "process-gone" }]);
     capacity.reconcileFromLedgers();

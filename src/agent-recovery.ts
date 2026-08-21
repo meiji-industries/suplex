@@ -24,12 +24,12 @@ export interface AgentRecoveryOutcome {
 const EXECUTION_COLUMNS = "id, task_id, status, process_pid, process_group_id, process_start_identity, wrapper_id, wrapper_path, wrapper_pid, wrapper_start_identity";
 
 function rows(database: ForgeDatabase): AgentExecutionRow[] {
-  return database.authQuery((db) => db.prepare(`SELECT ${EXECUTION_COLUMNS} FROM forge_agent_executions WHERE status IN ('starting', 'running', 'cancelling') ORDER BY started_at, id`).all() as AgentExecutionRow[]);
+  return database.authQuery((db) => db.prepare(`SELECT ${EXECUTION_COLUMNS} FROM forge_agent_executions WHERE status IN ('starting', 'running', 'cancelling', 'ownership_ambiguous') ORDER BY started_at, id`).all() as AgentExecutionRow[]);
 }
 
 function markFailed(database: ForgeDatabase, row: AgentExecutionRow, summary: string): void {
   const now = new Date().toISOString();
-  database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = 'worker-restart', failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(now, now, summary, row.id));
+  database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = 'worker-restart', failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling', 'ownership_ambiguous')").run(now, now, summary, row.id));
 }
 
 function heartbeat(database: ForgeDatabase, row: AgentExecutionRow): void {
@@ -55,7 +55,7 @@ async function recordedProcessLiveness(controller: ProcessController, row: Agent
 function markAmbiguous(database: ForgeDatabase, row: AgentExecutionRow, reason: string): void {
   database.authTransaction((db) => {
     db.prepare("UPDATE forge_agent_executions SET status = 'ownership_ambiguous', finished_at = ?, heartbeat_at = ?, failure_code = 'ownership-ambiguous', failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(new Date().toISOString(), new Date().toISOString(), reason, row.id);
-    db.prepare("UPDATE forge_issue_projections SET owner = 'human', allowed_commands_json = '[]', pending_action = ?, updated_at = ? WHERE task_id = ?").run("Operator must verify Agent ownership", new Date().toISOString(), row.task_id);
+    db.prepare("UPDATE forge_issue_projections SET owner = 'human', allowed_commands_json = ?, pending_action = ?, updated_at = ? WHERE task_id = ?").run(JSON.stringify(["retry_capacity", "cancel_issue"]), "Operator must verify Agent ownership", new Date().toISOString(), row.task_id);
   });
 }
 

@@ -37,7 +37,6 @@ const expectedActivityKeys = [
   "finalizeCapacity",
   "findActiveDeveloperExecution",
   "inspectCapacity",
-  "observeDeveloperExecution",
   "planCiRepair",
   "planDeliveryRepair",
   "planMergeConflict",

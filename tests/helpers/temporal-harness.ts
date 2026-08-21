@@ -38,6 +38,7 @@ export type TemporalHarnessState = {
   permanentPlanningFailure: boolean;
   permanentPlanningCalls: number;
   developerFailure: boolean;
+  deadBuilderOnce: boolean;
   planningMaterial: boolean;
   preservedWorktreeCompatibility: boolean | null;
   revisionDisposition: "reuse" | "new";
@@ -88,7 +89,7 @@ export function createTemporalHarness(): TemporalHarness {
   let restartActivitiesFactory: ((database: ForgeDatabase) => ReturnType<typeof createActivities>) | undefined;
   let started = false;
   const issueRoleProfiles = { planner: "profile", builder: "profile" };
-  const state: TemporalHarnessState = { planningFailure: false, permanentPlanningFailure: false, permanentPlanningCalls: 0, developerFailure: false, planningMaterial: true, preservedWorktreeCompatibility: null, revisionDisposition: "new", revisionAuthorizationCalls: 0, holdPlanning: false, releasePlanning: () => {}, planningGate: Promise.resolve(), holdDeveloper: false, releaseDeveloper: () => {}, developerGate: Promise.resolve() };
+  const state: TemporalHarnessState = { planningFailure: false, permanentPlanningFailure: false, permanentPlanningCalls: 0, developerFailure: false, deadBuilderOnce: false, planningMaterial: true, preservedWorktreeCompatibility: null, revisionDisposition: "new", revisionAuthorizationCalls: 0, holdPlanning: false, releasePlanning: () => {}, planningGate: Promise.resolve(), holdDeveloper: false, releaseDeveloper: () => {}, developerGate: Promise.resolve() };
   const ciCalls = new Map<string, number>();
   const ciPlanInputs: Array<{ leadSessionRef: string; ciAttemptId: string }> = [];
   const ciRepairInputs: Array<{ priorDeveloperSessionRef: string; ciAttemptId: string }> = [];
@@ -206,6 +207,10 @@ export function createTemporalHarness(): TemporalHarness {
       },
       async runDeveloperExecutionSupervised(input: Parameters<typeof baseActivities.runDeveloperExecutionSupervised>[0]) {
         if (!input.taskId.startsWith("ci-")) return baseActivities.runDeveloperExecutionSupervised(input);
+        if (state.deadBuilderOnce) {
+          state.deadBuilderOnce = false;
+          return { status: "interrupted" as const, developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-child-missing", summary: "The recorded Builder PID is no longer running." };
+        }
         const { worktreePath: _worktreePath, ...result } = await integrationDeveloper.run({ executionId: input.developerTurnExecutionId });
         return { status: "completed" as const, result, resultHash: "a".repeat(64) };
       },

@@ -63,19 +63,19 @@ test("INV-09 recovery observation reattaches an exact lease without starting a d
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("INV-12 missing lease identity is ownership ambiguous and never signals", async () => {
+test("missing lease identity is interrupted and released for a fresh turn", async () => {
   const value = await fixture();
   try {
     const id = `developer_${"b".repeat(24)}`;
     lease(value.database, value.root, id, 1);
     const calls: Array<[number, "SIGTERM" | "SIGKILL"]> = [];
-    expect(await reconcileDeveloperExecutions(value.database, controller(new Map(), calls))).toEqual([{ executionId: id, status: "ownership_ambiguous", reason: "ownership-missing" }]);
-    expect(await cancelDeveloperExecution(value.database, id, controller(new Map(), calls))).toMatchObject({ status: "ownership_ambiguous", reasonCode: "developer-ownership-incomplete" });
+    expect(await reconcileDeveloperExecutions(value.database, controller(new Map(), calls))).toEqual([{ executionId: id, status: "interrupted", reason: "process-metadata-missing" }]);
+    expect(await cancelDeveloperExecution(value.database, id, controller(new Map(), calls))).toMatchObject({ status: "interrupted", reasonCode: "developer-child-missing" });
     expect(calls).toEqual([]);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("INV-04 PID/start mismatch blocks cancellation without a signal", async () => {
+test("PID/start mismatch is interrupted without a human ownership verdict", async () => {
   const value = await fixture();
   try {
     const id = `developer_${"c".repeat(24)}`;
@@ -84,8 +84,8 @@ test("INV-04 PID/start mismatch blocks cancellation without a signal", async () 
     repository.setChildIdentity(id, identity(202));
     const calls: Array<[number, "SIGTERM" | "SIGKILL"]> = [];
     const result = await cancelDeveloperExecution(value.database, id, controller(new Map([[201, inspection(identity(201))], [202, inspection(identity(202, "reused"))]]), calls));
-    expect(result).toMatchObject({ status: "ownership_ambiguous", reasonCode: "developer-wrong_start_time" });
-    expect(calls).toEqual([]);
+    expect(result).toMatchObject({ status: "interrupted", reasonCode: "developer-lease-token-missing" });
+    expect(calls).toEqual([[202, "SIGTERM"]]);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 

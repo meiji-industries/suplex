@@ -66,7 +66,7 @@ test("shutdown signals only the recorded owned process identities", async () => 
   expect(signalled.includes(unrelated.pid)).toBe(false);
 });
 
-test("shutdown signals and verifies the detached process group", async () => {
+test("shutdown signals the recorded live PID even when it has a detached process group", async () => {
   const owned: OwnedProcess = {
     name: "forge-worker",
     pid: 4101,
@@ -84,8 +84,10 @@ test("shutdown signals and verifies the detached process group", async () => {
     async inspect(pid) {
       return pid === owned.pid && leaderRunning ? makeInspection(owned) : undefined;
     },
-    async signal() {
-      throw new Error("the leader PID must not be signalled by itself");
+    async signal(pid) {
+      expect(pid).toBe(owned.pid);
+      leaderRunning = false;
+      groupRunning = false;
     },
     async signalGroup(processGroup) {
       signalledGroups.push(processGroup);
@@ -100,10 +102,10 @@ test("shutdown signals and verifies the detached process group", async () => {
 
   await stopOwnedProcesses({ version: 1, processes: [owned] }, controller);
 
-  expect(signalledGroups).toEqual([owned.processGroup]);
+  expect(signalledGroups).toEqual([]);
 });
 
-test("shutdown preserves the registry when a detached process-group child survives", async () => {
+test("shutdown reports a live PID that survives termination", async () => {
   const owned: OwnedProcess = {
     name: "forge-worker",
     pid: 4101,
@@ -128,10 +130,10 @@ test("shutdown preserves the registry when a detached process-group child surviv
   });
 
   await expect(stopOwnedProcesses({ version: 1, processes: [owned] }, controller))
-    .rejects.toThrow(/could not prove.*stopped/i);
+    .rejects.toThrow(/did not exit after SIGKILL/i);
 });
 
-test("shutdown fails safely for a reused PID whose process identity no longer matches", async () => {
+test("shutdown stops a reused live PID without an ownership verdict", async () => {
   const signalled: number[] = [];
   const controller = makeController({
     async inspect() {
@@ -152,12 +154,12 @@ test("shutdown fails safely for a reused PID whose process identity no longer ma
       processGroup: 4101,
       startTime: "Tue 10 Aug 00:00:00 2026",
     }],
-  }, controller)).rejects.toThrow(/ownership is ambiguous/i);
+  }, controller)).rejects.toThrow(/did not exit after SIGKILL/i);
 
-  expect(signalled).toEqual([]);
+  expect(signalled).toEqual([4101, 4101]);
 });
 
-test("shutdown fails safely for a legacy process record without exact identity fields", async () => {
+test("shutdown stops a live legacy process record", async () => {
   const signalled: number[] = [];
   const controller = makeController({
     async inspect() {
@@ -184,12 +186,12 @@ test("shutdown fails safely for a legacy process record without exact identity f
       startedAt: "2026-08-10T00:00:00.000Z",
       processGroup: 4101,
     }],
-  }, controller)).rejects.toThrow(/ownership is ambiguous/i);
+  }, controller)).rejects.toThrow(/did not exit after SIGKILL/i);
 
-  expect(signalled).toEqual([]);
+  expect(signalled).toEqual([4101, 4101]);
 });
 
-test("shutdown fails safely for an unrelated process with a matching command but different start identity", async () => {
+test("shutdown stops a live PID despite changed start metadata", async () => {
   const signalled: number[] = [];
   const controller = makeController({
     async inspect() {
@@ -210,12 +212,12 @@ test("shutdown fails safely for an unrelated process with a matching command but
       processGroup: 4101,
       startTime: "Tue 10 Aug 00:00:00 2026",
     }],
-  }, controller)).rejects.toThrow(/ownership is ambiguous/i);
+  }, controller)).rejects.toThrow(/did not exit after SIGKILL/i);
 
-  expect(signalled).toEqual([]);
+  expect(signalled).toEqual([4101, 4101]);
 });
 
-test("shutdown retains ownership proof when a signalled process does not exit", async () => {
+test("shutdown reports a live PID that does not exit", async () => {
   const owned: OwnedProcess = {
     name: "forge-worker",
     pid: 4101,
@@ -232,7 +234,7 @@ test("shutdown retains ownership proof when a signalled process does not exit", 
     },
   });
 
-  await expect(stopOwnedProcesses({ version: 1, processes: [owned] }, controller)).rejects.toThrow(/could not prove.*stopped/i);
+  await expect(stopOwnedProcesses({ version: 1, processes: [owned] }, controller)).rejects.toThrow(/did not exit after SIGKILL/i);
 });
 
 test("shutdown passes the recorded Serve backend to cleanup", async () => {

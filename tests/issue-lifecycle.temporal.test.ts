@@ -201,6 +201,22 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     state.holdDeveloper = false;
     await retryBlockedDevelopment;
 
+    const deadBuilderWorkflowId = `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-ci-dead-builder`;
+    state.deadBuilderOnce = true;
+    state.holdDeveloper = true;
+    state.developerGate = new Promise<void>((resolve) => { state.releaseDeveloper = resolve; });
+    await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "ci-dead-builder", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, repairCycleLimit: 0, continuationState: { phase: "ready_for_development", revision: 3, owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${deadBuilderWorkflowId}:3`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_integration", leadOutputArtifactId: "artifact_integration_output", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], supplementalReviewUsed: false, repairCycle: 0 } });
+    let deadBuilderRetry = await waitForPhase(deadBuilderWorkflowId, "development");
+    for (let attempt = 0; attempt < 100 && deadBuilderRetry.developerAttempt !== 2; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      deadBuilderRetry = await queryIssueWorkflow(config, deadBuilderWorkflowId);
+    }
+    expect(deadBuilderRetry).toMatchObject({ phase: "development", owner: "lead", developerAttempt: 2, developerRecoveryStatus: "starting" });
+    expect(deadBuilderRetry.allowedCommands).not.toContain("retry_development");
+    state.releaseDeveloper();
+    state.holdDeveloper = false;
+    await waitForPhase(deadBuilderWorkflowId, "delivery_blocked");
+
     state.planningFailure = true;
     const startedPlanningFailure = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "ci-planning-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false });
     const retryablePlanningFailure = await executeIssueCommand(config, startedPlanningFailure.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "issue-admin" });

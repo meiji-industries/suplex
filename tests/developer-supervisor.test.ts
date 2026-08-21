@@ -112,13 +112,13 @@ test("supervisor failure before child spawn writes a failed snapshot instead of 
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 3 }); }
 }, 20_000);
 
-test("INV-11/INV-12 PID reuse during cancellation is ambiguous, never exited", async () => {
+test("PID reuse is live while cancellation observes process liveness", async () => {
   const child = { pid: 42, processGroup: 42, startTime: "original", executable: "/usr/bin/codex", argv: ["codex", "exec"], ownerUid: 501 };
   const observation = await observeOwnedProcessExit({
     async inspect() { return { pid: 42, processGroup: 42, startTime: "reused", command: "codex exec", executable: "/usr/bin/codex", argv: ["codex", "exec"], ownerUid: 501 }; },
     async signal() { throw new Error("must not signal"); },
   }, child);
-  expect(observation).toBe("ownership_ambiguous");
+  expect(observation).toBe("running");
 });
 
 test("a failing heartbeat write does not kill the supervisor or orphan the child", async () => {

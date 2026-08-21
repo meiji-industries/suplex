@@ -9,6 +9,7 @@ import {
 } from "../issue-contracts.js";
 import { cancelCapacityExecution, finalizeCapacity, inspectCapacity, rateLimitCapacity, requestCapacity, requeueCapacity, tryAcquireCapacity } from "./activity-proxies.js";
 import { repairDelivery, reviewDelivery } from "./register-delivery-review.js";
+import { startDevelopment } from "./register-development.js";
 import { resolveMergeConflict } from "./register-merge.js";
 import { evidencePointer, humanBlocker } from "./state-transitions.js";
 import { TERMINAL_PHASES } from "../../issue-phases.js";
@@ -243,7 +244,7 @@ export function createAcquireExternalTurn(
 
 // Forge is a single-operator tool: a phase whose next step is an agent turn must not park
 // on a button. The human gates stay plan approval and pull-request handling.
-const AUTO_CHAINED_COMMANDS = { delivery_ready: "review_delivery", delivery_reviewed: "publish_draft", repair_required: "repair_delivery", merge_conflict_required: "resolve_merge_conflict" } as const;
+const AUTO_CHAINED_COMMANDS = { delivery_ready: "review_delivery", delivery_reviewed: "publish_draft", repair_required: "repair_delivery", merge_conflict_required: "resolve_merge_conflict", ready_for_development: "start_development" } as const;
 
 // A chained step that threw is never chained again in this run: the phase may re-enter itself
 // (plan conflict -> required -> resolve throws -> plan conflict ...) and each pass has a new revision.
@@ -256,6 +257,9 @@ const DECISION_COMMANDS = new Set(["approve_plan", "accept_delivery", "request_d
 export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): { command: string; commandId: string } | null {
   const command = AUTO_CHAINED_COMMANDS[ctx.state.phase as keyof typeof AUTO_CHAINED_COMMANDS];
   if (!command || !ctx.state.allowedCommands.includes(command) || !ctx.patched(patchId)) return null;
+  // Routine (non-material) plans land in ready_for_development without going through autoApprovePlan's
+  // auto-start, so this table entry needs its own gate to keep old histories that parked here replayable.
+  if (ctx.state.phase === "ready_for_development" && !ctx.patched("forge-auto-start-routine-v1")) return null;
   if (haltedChains.has(command) && ctx.patched("forge-auto-chain-halt-v1")) return null;
   const commandId = `${ctx.state.workflowId}:auto-${command}:${ctx.state.revision}`;
   return ctx.commandAlreadyProcessed(commandId) ? null : { command, commandId };
@@ -263,12 +267,16 @@ export function autoChainedCommand(ctx: IssueWorkflowContext, patchId: string): 
 
 export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: { command: string; commandId: string }): Promise<void> {
   // Marked before the turn runs: a chained step that throws must not spin the Workflow loop.
-  ctx.markCommandProcessed(chained.commandId);
+  // start_development is the exception: it already gates on commandAlreadyProcessed at its own
+  // entry and marks itself once its state mutation lands, so pre-marking here would make it a
+  // silent no-op before it ever runs.
+  if (chained.command !== "start_development") ctx.markCommandProcessed(chained.commandId);
   const command = { expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId ?? ctx.input.autoApprovePlanActorUserId ?? "forge-auto-chain", commandId: chained.commandId };
   try {
     if (chained.command === "review_delivery") await reviewDelivery(ctx, command);
     else if (chained.command === "publish_draft") await ctx.runPublishTurn();
     else if (chained.command === "repair_delivery") await repairDelivery(ctx, command);
+    else if (chained.command === "start_development") await startDevelopment(ctx, command);
     else await resolveMergeConflict(ctx, command);
   } catch {
     haltedChains.add(chained.command); // the manual button stays in allowedCommands for a retry

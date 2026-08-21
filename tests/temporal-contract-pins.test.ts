@@ -10,7 +10,7 @@ const FROZEN_UPDATE_NAMES = [
   "finalReview", "publishDraft", "reconcileAcceptance", "reconcileCI", "reconcileMerge",
   "recordDeliveryDecision", "recordProgress", "rejectPlan", "repairCI", "repairDelivery",
   "requestDeliveryChanges", "requestPlanRevision", "requestSupplementalReview",
-  "resolveDecisionBlocker", "resolveMergeConflict", "respondPlanBlocker", "retryCapacity", "retryDevelopment",
+  "resolveDecisionBlocker", "resolveMergeConflict", "respondPlanBlocker", "resyncProjection", "retryCapacity", "retryDevelopment",
   "retryForwardMergeVerification", "retryTargetBaseReconciliation", "reviewDelivery", "revisePlan",
   "startDevelopment", "startPlanning", "verifyDeveloperOwnership",
 ];

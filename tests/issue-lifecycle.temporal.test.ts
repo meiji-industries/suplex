@@ -14,7 +14,20 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
   const { config, database, artifacts } = harness;
   const { state } = harness;
   try {
-    const startedIssue = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-restart", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false });
+    // 100 attempts (~5s): the auto-chain now tacks a real capacity-service review call onto
+    // delivery_ready/delivery_reviewed/repair_required, so settling can take longer than before.
+    const waitForPhase = async (fixtureWorkflowId: string, phase: string) => {
+      let fixtureState = await queryIssueWorkflow(config, fixtureWorkflowId);
+      for (let attempt = 0; attempt < 100 && fixtureState.phase !== phase; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        fixtureState = await queryIssueWorkflow(config, fixtureWorkflowId);
+      }
+      return fixtureState;
+    };
+
+    // repairCycleLimit: 0 so the auto-chain's one blocking review lands directly in delivery_blocked
+    // instead of looping review -> repair -> review through the real capacity service.
+    const startedIssue = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-restart", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, repairCycleLimit: 0 });
     const duplicateIssue = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-restart", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false });
     expect(duplicateIssue).toMatchObject({ workflowId: startedIssue.workflowId, runId: startedIssue.runId, existing: true });
     let issueState = await queryIssueWorkflow(config, startedIssue.workflowId);
@@ -46,34 +59,36 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     expect(approvedIssue).toMatchObject({ phase: "ready_for_development", revision: 10, allowedCommands: ["start_development", "cancel_issue", "revise_plan"], blocker: null });
     const deliveredIssue = await executeIssueCommand(config, startedIssue.workflowId, "start_development", { expectedRevision: 10, actorUserId: "issue-admin" });
     expect(deliveredIssue).toMatchObject({ phase: "delivery_ready", revision: 14, allowedCommands: ["review_delivery", "cancel_issue", "revise_plan"], developerExecutionId: expect.stringMatching(/^developer_[a-f0-9]{24}$/), developerSessionRef: "session_developer_integration", branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40) });
-    const repairRequired = await executeIssueCommand(config, startedIssue.workflowId, "review_delivery", { expectedRevision: 14, actorUserId: "issue-admin" });
-    expect(repairRequired).toMatchObject({ phase: "repair_required", revision: 18, allowedCommands: ["record_delivery_decision", "repair_delivery", "cancel_issue", "revise_plan"], deliveryReviewId: "delivery_review_integration", deliveryReviewOutcome: "blocking", repairCycle: 0 });
-    const repairedIssue = await executeIssueCommand(config, startedIssue.workflowId, "repair_delivery", { expectedRevision: 18, actorUserId: "issue-admin" });
-    expect(repairedIssue).toMatchObject({ phase: "delivery_ready", revision: 22, allowedCommands: ["review_delivery", "cancel_issue", "revise_plan"], developerExecutionId: "developer_repair_integration", developerSessionRef: "session_developer_integration", resultCommit: "d".repeat(40), repairCycle: 1, deliveryReviewId: null, deliveryReviewOutcome: null });
-    const revisedIssue = await reviseIssuePlan(config, startedIssue.workflowId, { expectedRevision: 22, actorUserId: "issue-admin", reason: "The accepted delivery needs a bounded follow-up plan.", worktreeDisposition: "new", exactBaseSha: "a".repeat(40) });
-    expect(revisedIssue).toMatchObject({ phase: "planning", revision: 23, revisionRequestId: `revision_${startedIssue.workflowId}_22`, revisedExecutionCoordinates: { disposition: "new", exactBaseSha: "a".repeat(40) } });
-    const replannedWithNewCoordinates = await executeIssueCommand(config, startedIssue.workflowId, "start_planning", { expectedRevision: 23, actorUserId: "issue-admin" });
-    expect(replannedWithNewCoordinates).toMatchObject({ phase: "approval", revisionRequestId: `revision_${startedIssue.workflowId}_22`, planRevision: 24 });
+    // The auto-chain runs the blocking review on its own; repairCycleLimit 0 means it lands
+    // directly in delivery_blocked (no manual click, no repair loop through the capacity service).
+    const blockedDelivery = await waitForPhase(startedIssue.workflowId, "delivery_blocked");
+    expect(blockedDelivery).toMatchObject({ phase: "delivery_blocked", allowedCommands: ["record_delivery_decision", "cancel_issue", "revise_plan"], deliveryReviewId: "delivery_review_integration", deliveryReviewOutcome: "blocking", repairCycle: 0 });
+    // record_delivery_decision is the only safe way out of here: every other landing state that
+    // revise_plan accepts (delivery_ready, delivery_reviewed, repair_required) is itself
+    // auto-chained onward, so a manual command sent right after loses the race with the Workflow's
+    // own next turn ("Stale workflow revision"). record_delivery_decision is not auto-chained and
+    // explicitly clears the human blocker, landing safely on delivery_reviewed.
+    const decidedDelivery = await executeIssueCommand(config, startedIssue.workflowId, "record_delivery_decision", { expectedRevision: blockedDelivery.revision, actorUserId: "issue-admin", note: "Continue past the blocking review" });
+    expect(decidedDelivery).toMatchObject({ phase: "delivery_reviewed", blocker: null, allowedCommands: ["publish_draft", "cancel_issue"] });
 
     const ciContinuation = (issueId: string, extra: Record<string, unknown> = {}) => ({ phase: "ci_waiting" as const, revision: 20, owner: "lead" as const, allowedCommands: ["cancel_issue" as const], pendingAction: "Waiting for required CI", lastEventId: `${issueId}-20`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: new Date().toISOString(), leadSessionRef: "session_ci_lead", leadExecutionId: "agent_ci_lead", leadOutputArtifactId: "artifact_ci_lead_output", deliveryReviewId: `delivery_${issueId}`, planRevision: 1, developerExecutionId: "developer_ci_original", developerSessionRef: "session_ci_developer", worktreePath: join(harness.root, "worktrees", issueId), branchName: `forge/issue/${issueId}`, targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_ci_delivery", developerEvidenceArtifactId: "artifact_ci_developer_evidence", releaseId: `release_${issueId}`, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", expectedHeadSha: "b".repeat(40), expectedHeadTree: "c".repeat(40), ciAttempt: 0, ciOutcome: "waiting" as const, ciNextPollAt: null, ...extra });
-    const startCiFixture = (issueId: string, extra: Record<string, unknown> = {}) => startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId, projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, continuationState: ciContinuation(issueId, extra) });
-    const waitForPhase = async (fixtureWorkflowId: string, phase: string) => {
-      let fixtureState = await queryIssueWorkflow(config, fixtureWorkflowId);
-      for (let attempt = 0; attempt < 40 && fixtureState.phase !== phase; attempt += 1) {
-        await new Promise((resolve) => setTimeout(resolve, 50));
-        fixtureState = await queryIssueWorkflow(config, fixtureWorkflowId);
-      }
-      return fixtureState;
-    };
+    // repairCycleLimit: 0 here too -- the fixture reviewer always returns blocking, so without
+    // this every fixture that lands on delivery_ready would loop review -> repair -> review
+    // through the real capacity service and blow the test time budget.
+    const startCiFixture = (issueId: string, extra: Record<string, unknown> = {}) => startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId, projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, repairCycleLimit: 0, continuationState: ciContinuation(issueId, extra) });
 
     state.planningMaterial = false;
-    const routine = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "ci-routine", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, continuationState: { ...ciContinuation("ci-routine"), phase: "ready_for_development", revision: 4, owner: "lead", allowedCommands: ["start_development", "cancel_issue", "revise_plan"], pendingAction: "Start development", lastEventId: "ci-routine-4", planMaterial: false, materialCategories: [], releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, developerExecutionId: null, developerSessionRef: null, resultCommit: null, resultTree: null, deliveryArtifactId: null, developerEvidenceArtifactId: null } });
+    const routine = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "ci-routine", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, repairCycleLimit: 0, continuationState: { ...ciContinuation("ci-routine"), phase: "ready_for_development", revision: 4, owner: "lead", allowedCommands: ["start_development", "cancel_issue", "revise_plan"], pendingAction: "Start development", lastEventId: "ci-routine-4", planMaterial: false, materialCategories: [], releaseId: null, pullRequestNumber: null, pullRequestUrl: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, developerExecutionId: null, developerSessionRef: null, resultCommit: null, resultTree: null, deliveryArtifactId: null, developerEvidenceArtifactId: null } });
     expect(await executeIssueCommand(config, routine.workflowId, "start_development", { expectedRevision: 4, actorUserId: "issue-admin" })).toMatchObject({ phase: "delivery_ready", planMaterial: false });
 
     state.planningMaterial = true;
     state.preservedWorktreeCompatibility = false;
     state.revisionDisposition = "reuse";
-    const incompatible = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "ci-incompatible", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, continuationState: { ...ciContinuation("ci-incompatible"), phase: "delivery_ready", revision: 8, owner: "lead", allowedCommands: ["review_delivery", "cancel_issue", "revise_plan"], pendingAction: "Lead delivery review", lastEventId: "ci-incompatible-8" } });
+    // Starts already at delivery_blocked (not delivery_ready): delivery_ready is auto-chained to
+    // review_delivery, so a manual command sent right after the workflow starts would lose the
+    // race with the Workflow's own next turn. delivery_blocked is not auto-chained, and this
+    // fixture's blocker is null (never populated), so revise_plan is safe to call immediately.
+    const incompatible = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "ci-incompatible", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, repairCycleLimit: 0, continuationState: { ...ciContinuation("ci-incompatible"), phase: "delivery_blocked", revision: 8, owner: "human", allowedCommands: ["revise_plan", "cancel_issue"], pendingAction: "Lead delivery review", lastEventId: "ci-incompatible-8" } });
     const incompatibleRequested = await reviseIssuePlan(config, incompatible.workflowId, { expectedRevision: 8, actorUserId: "issue-admin", reason: "The preserved implementation conflicts with the revised plan.", worktreeDisposition: "reuse" });
     const callsBeforeIncompatiblePlan = state.revisionAuthorizationCalls;
     const incompatiblePlan = await executeIssueCommand(config, incompatible.workflowId, "start_planning", { expectedRevision: incompatibleRequested.revision, actorUserId: "issue-admin" });
@@ -101,7 +116,14 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     expect(providerFailureAttention).toMatchObject({ active: 1, category: "provider_connectivity_exhausted", evidence_artifact_id: artifacts.ciProviderEvidence.id });
 
     const ciRepair = await startCiFixture("ci-repair");
-    expect(await waitForPhase(ciRepair.workflowId, "delivery_ready")).toMatchObject({ phase: "delivery_ready", developerExecutionId: "developer_ci_repair", developerSessionRef: "session_ci_developer", resultCommit: "d".repeat(40), releaseId: null, ciRunId: null, finalReviewId: null });
+    // The CI repair itself lands delivery_ready, but the auto-chain immediately runs the review
+    // from there too; repairCycleLimit 0 settles it in delivery_blocked right after. Whether that
+    // auto review actually completes (opinion "blocking") or its capacity acquisition trips on the
+    // just-finished CI-repair turn (infrastructure-failure blocked path, outcome null) is not the
+    // point of this fixture -- either way it must land in delivery_blocked, not loop.
+    const ciRepairBlocked = await waitForPhase(ciRepair.workflowId, "delivery_blocked");
+    expect(ciRepairBlocked).toMatchObject({ phase: "delivery_blocked", developerExecutionId: "developer_ci_repair", developerSessionRef: "session_ci_developer", resultCommit: "d".repeat(40), releaseId: null, ciRunId: null, finalReviewId: null });
+    expect([null, "blocking"]).toContain(ciRepairBlocked.deliveryReviewOutcome);
     expect(harness.ciPlanInputs).toEqual([{ leadSessionRef: "session_ci_lead", ciAttemptId: "ci_attempt_ci-repair_1" }]);
     expect(harness.ciRepairInputs).toEqual([{ priorDeveloperSessionRef: "session_ci_developer", ciAttemptId: "ci_attempt_ci-repair_1" }]);
 

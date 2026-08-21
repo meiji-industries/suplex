@@ -316,6 +316,17 @@ export async function resolveIssueDecisionBlocker(config: ForgeConfig, workflowI
   } finally { temporalClient.connection.close(); }
 }
 
+export async function resyncIssueProjection(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
+  const validatedInput = StartPlanningInputSchema.parse(input);
+  const temporalClient = await connectTemporal(config);
+  try {
+    const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
+    return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.resync_projection, { args: [validatedInput] }));
+  } finally { temporalClient.connection.close(); }
+}
+
 export async function rejectIssuePlan(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
   const identifiers = runtimeIdentifiers(config.installationId);
   if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");

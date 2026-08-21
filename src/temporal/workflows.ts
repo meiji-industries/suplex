@@ -1,4 +1,4 @@
-import { allHandlersFinished, CancellationScope, condition, continueAsNew, defineQuery, patched, setHandler, sleep, workflowInfo } from "@temporalio/workflow";
+import { allHandlersFinished, CancellationScope, condition, continueAsNew, defineQuery, isCancellation, patched, setHandler, sleep, workflowInfo } from "@temporalio/workflow";
 
 import { ProbeWorkflowInputSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import {
@@ -36,7 +36,7 @@ import { registerDevelopmentHandlers } from "./workflow/register-development.js"
 import { registerMergeHandlers, registerMergeReconciliationHandler } from "./workflow/register-merge.js";
 import { registerReleaseHandlers } from "./workflow/register-release.js";
 import { registerTargetBaseHandlers } from "./workflow/register-target-base.js";
-import { applyLeadResult, applyLegacyLeadResult, compactStateForContinuation, createAcquireExternalTurn, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure } from "./workflow/runtime.js";
+import { applyLeadResult, applyLegacyLeadResult, autoChainedCommand, compactStateForContinuation, createAcquireExternalTurn, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
 
 export * from "./issue-updates.js";
 export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
@@ -100,6 +100,8 @@ const durableCapacityPatch = "durable-capacity-v1";
 const decisionResolutionProjectionPatch = "forge-decision-resolution-projection-v1";
 const exhaustedActivityRecoveryPatch = "forge-exhausted-activity-recovery-v1";
 const capacityFinalizationOwnershipPatch = "forge-capacity-finalization-ownership-v1";
+const guardedHandlersPatch = "forge-guarded-handlers-v1";
+const autoChainLeadPhasesPatch = "forge-auto-chain-lead-phases-v1";
 
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
@@ -107,6 +109,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const continuation = validatedInput.continuationState;
   const continueAfter = validatedInput.continueAsNewAfter ?? 0;
   const reviseContinueEnabled = patched(reviseContinuePatch);
+  const guardedHandlersEnabled = patched(guardedHandlersPatch);
   const addRevisionCommand = (commands: IssueCommand[]): IssueCommand[] => reviseContinueEnabled && !commands.includes("revise_plan") ? [...commands, "revise_plan"] : commands;
   let state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState(validatedInput),
@@ -250,6 +253,34 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     return projectedRevision;
   };
   const acquireExternalTurn = createAcquireExternalTurn({ get: () => state, set: (next) => { state = next; } }, { projectState: projectIssueState, projectCapacityState, patched, durableCapacityPatch, capacityFinalizationOwnershipPatch });
+  // A rejected update handler must never leave the Workflow holding mutated state
+  // that the projection never saw: recover to a retryable failed state and project it.
+  const guarded = <A extends unknown[], R>(fn: (...args: A) => Promise<R>) => async (...args: A): Promise<R> => {
+    const before = state;
+    try {
+      return await fn(...args);
+    } catch (error) {
+      if (!guardedHandlersEnabled || state === before || isCancellation(error)) throw error;
+      const failure = permanentActivityFailure(error, true);
+      const summary = failure?.summary ?? "The command failed; retry is available";
+      const revision = state.revision + 1;
+      state = IssueWorkflowStateSchema.parse({
+        ...state,
+        capacity: null,
+        capacityBlocker: null,
+        phase: "failed",
+        revision,
+        owner: "human",
+        allowedCommands: reviseContinueEnabled ? ["start_planning", "continue_work", "cancel_issue"] : ["start_planning", "cancel_issue"],
+        pendingAction: summary,
+        blocker: failure?.category ? humanBlocker(failure.category, summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : null,
+        stateChangedAt: new Date().toISOString(),
+        lastEventId: `${state.workflowId}:${revision}`,
+      });
+      await projectIssueState(state);
+      throw error;
+    }
+  };
   const workflowContext = createIssueWorkflowContext(validatedInput, state, {
     project: () => projectIssueState(state),
     projectState: (value) => projectIssueState(value),
@@ -272,6 +303,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     initialProjectionBarrierEnabled,
     planApprovalBlockerEnabled,
     patched,
+    guarded,
     captureInitialProjectionState,
     initialProjectionState,
     initialProjection,
@@ -392,7 +424,12 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       if (workflowContext.state.phase === "manual_merge") await workflowContext.reconcileMergeTurn();
       continue;
     }
-    await condition(() => (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge");
+    const chained = allHandlersFinished() ? autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) : null;
+    if (chained) {
+      await runAutoChainedCommand(workflowContext, chained);
+      continue;
+    }
+    await condition(() => (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge" || (allHandlersFinished() && autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) !== null));
     if (workflowContext.continuationRequested && allHandlersFinished()) {
       if (workflowContext.stateMutationLocked || workflowContext.state.activeOperation !== null) continue;
       const compact = compactStateForContinuation(workflowContext.state);

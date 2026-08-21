@@ -50,7 +50,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     return "none";
   };
   const developerCancellationAvailable = (): boolean => ctx.state.phase === "development" || (ctx.state.phase === "delivery_blocked" && (ctx.state.developerRecoveryStatus === "cancellation_requested" || (ctx.state.developerRecoveryStatus === "interrupted" && ctx.state.capacity !== null)));
-  setHandler(issueUpdates.cancel_issue, async (rawInput) => {
+  setHandler(issueUpdates.cancel_issue, ctx.guarded(async (rawInput) => {
     if (!ctx.exactPlanAuthorityEnabled && ctx.captureInitialProjectionState) await condition(() => ctx.initialProjectionComplete);
     if (ctx.initialProjectionBarrierEnabled) await ctx.initialProjection;
     const command = PlanCommandInputSchema.parse(rawInput);
@@ -99,8 +99,8 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: ctx.reviseContinueEnabled ? ["continue_work"] : [], pendingAction: ownershipAmbiguous ? "Issue cancelled; operator must verify external ownership" : "Issue cancelled", acceptanceStatus, acceptanceReasonArtifactId, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     return ctx.state;
-  });
-  setHandler(issueUpdates.cancel_development, async (rawInput) => {
+  }));
+  setHandler(issueUpdates.cancel_development, ctx.guarded(async (rawInput) => {
     assertPayloadWithinLimit("cancel development command", rawInput);
     const command = StartPlanningInputSchema.parse(rawInput);
     if (!ctx.durablePlanningCapacityEnabled()) {
@@ -194,7 +194,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     if (!capacityStateProjected) await ctx.project();
     void command;
     return ctx.state;
-  }, { validator(rawInput) {
+  }), { validator(rawInput) {
     const command = StartPlanningInputSchema.parse(rawInput);
     if (ctx.commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
@@ -206,7 +206,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
 }
 
 export function registerLifecycleHandlersContinuation(ctx: IssueWorkflowContext): void {
-  setHandler(issueUpdates.continue_work, async (rawInput) => {
+  setHandler(issueUpdates.continue_work, ctx.guarded(async (rawInput) => {
     const command = ContinueWorkCommandSchema.parse(rawInput);
     const successorTaskId = `${ctx.input.issueId}-successor-${ctx.state.revision}`;
     const successorWorkflowId = `${ctx.input.workflowId}-successor-${ctx.state.revision}`;
@@ -215,13 +215,13 @@ export function registerLifecycleHandlersContinuation(ctx: IssueWorkflowContext)
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, successorTaskId: successor.successorTaskId, successorReference: successor, allowedCommands: [], pendingAction: "Successor created", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, revision: ctx.state.revision + 1 });
     await ctx.project();
     return ctx.state;
-  }, { validator(rawInput) {
+  }), { validator(rawInput) {
     const command = ContinueWorkCommandSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (!["done", "cancelled", "failed"].includes(ctx.state.phase)) throw new Error("Continue work is only available after a terminal issue state");
     if (!ctx.state.allowedCommands.includes("continue_work")) throw new Error("Continue work is not available in the current phase");
   } });
-  setHandler(issueUpdates.verify_developer_ownership, async (rawInput) => {
+  setHandler(issueUpdates.verify_developer_ownership, ctx.guarded(async (rawInput) => {
     const command = StartPlanningInputSchema.parse(rawInput);
     if (ctx.commandAlreadyProcessed(command.commandId)) return ctx.state;
     const executionId = ctx.state.developerExecutionId!;
@@ -236,9 +236,16 @@ export function registerLifecycleHandlersContinuation(ctx: IssueWorkflowContext)
     });
     await ctx.project();
     return ctx.state;
-  }, { validator(rawInput) {
+  }), { validator(rawInput) {
     const command = StartPlanningInputSchema.parse(rawInput);
     if (ctx.commandAlreadyProcessed(command.commandId)) return;
     if (command.expectedRevision !== ctx.state.revision || ctx.state.developerRecoveryStatus !== "ownership_ambiguous" || !ctx.state.developerExecutionId) throw new Error("Developer ownership verification is not available");
   } });
+  // Escape hatch: re-persist the projection from the workflow's current in-memory state.
+  // No revision check, no phase restriction — it must work even when the DB projection
+  // has drifted from ctx.state, which is exactly the situation this command repairs.
+  setHandler(issueUpdates.resync_projection, ctx.guarded(async () => {
+    await ctx.project();
+    return ctx.state;
+  }));
 }

@@ -30,7 +30,7 @@ export function createWorkflowPortFake(options: WorkflowPortFakeOptions): IssueW
     states.set(workflowId, projectState(state));
     return { workflowId, runId: "run" };
   };
-  const transitionBespoke = async (workflowId: string, input: PlanRevisionCommand | ContinueWorkCommand | ResolveDecisionBlockerInput | RecordProgressInput): Promise<IssueWorkflowState> => {
+  const transitionBespoke = async (workflowId: string, input: PlanRevisionCommand | ContinueWorkCommand | ResolveDecisionBlockerInput | RecordProgressInput | StartPlanningInput): Promise<IssueWorkflowState> => {
     const current = states.get(workflowId) ?? initialStateFixture();
     const state = IssueWorkflowStateSchema.parse({ ...current, revision: input.expectedRevision + 1, lastEventId: `${workflowId}:${input.expectedRevision + 1}` });
     states.set(workflowId, state);
@@ -43,6 +43,7 @@ export function createWorkflowPortFake(options: WorkflowPortFakeOptions): IssueW
     continueWork: transitionBespoke,
     resolveDecisionBlocker: transitionBespoke,
     recordProgress: transitionBespoke,
+    resyncProjection: transitionBespoke,
     query: async (workflowId) => states.get(workflowId) ?? initialStateFixture(),
     acceptPlanning: (workflowId, input) => execute("start_planning", workflowId, input),
     acceptDevelopment: (workflowId, input) => execute("start_development", workflowId, input),

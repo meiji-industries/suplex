@@ -35,6 +35,7 @@ type CommandInput<K extends IssueCommand> = {
   reconcile_merge: StartPlanningInput;
   continue_work: ContinueWorkCommand;
   retry_capacity: StartPlanningInput;
+  resync_projection: StartPlanningInput;
 }[K];
 
 type IssueUpdates = { [K in IssueCommand]: ReturnType<typeof defineUpdate<IssueWorkflowState, [CommandInput<K>]>> };

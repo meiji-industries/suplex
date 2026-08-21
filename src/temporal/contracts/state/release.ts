@@ -13,7 +13,7 @@ export const releaseStateFields = {
 };
 
 export const releaseStateFields2 = {
-  releaseStatus: z.enum(["reconciling", "draft", "blocked"]).nullable().optional(),
+  releaseStatus: z.enum(["reconciling", "draft", "blocked", "ready"]).nullable().optional(),
   releaseFailureCode: ReleaseFailureCodeSchema.nullable().optional(),
   releaseFailureSummary: z.string().max(500).nullable().optional(),
   releaseRetryAt: z.string().datetime().nullable().optional(),

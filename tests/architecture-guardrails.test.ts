@@ -9,7 +9,7 @@ import type { TaskService } from "../src/tasks.js";
 import taskRoutes from "../src/http/routes/tasks.js";
 import { issueUpdates } from "../src/temporal/issue-updates.js";
 
-const BESPOKE_COMMANDS = ["reject_plan", "revise_plan", "continue_work", "record_progress", "resolve_decision_blocker"] as const;
+const BESPOKE_COMMANDS = ["reject_plan", "revise_plan", "continue_work", "record_progress", "resolve_decision_blocker", "resync_projection"] as const;
 
 test("issue command registry stays complete across descriptors, updates, routes, and slugs", async () => {
   const entries = Object.entries(issueCommands);
@@ -66,6 +66,7 @@ test("issue command registry stays complete across descriptors, updates, routes,
         "resolve-decision-blocker",
         "resolve-merge-conflict",
         "respond-plan-blocker",
+        "resync-projection",
         "retry-capacity",
         "retry-development",
         "retry-forward-merge-verification",

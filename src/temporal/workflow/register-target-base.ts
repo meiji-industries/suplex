@@ -15,7 +15,7 @@ export function registerTargetBaseHandlers(ctx: IssueWorkflowContext): void {
     void command;
     return ctx.state;
   };
-  setHandler(issueUpdates.retry_target_base_reconciliation, (rawInput) => retryTargetBase(rawInput, false));
-  setHandler(issueUpdates.retry_forward_merge_verification, (rawInput) => retryTargetBase(rawInput, true));
+  setHandler(issueUpdates.retry_target_base_reconciliation, ctx.guarded((rawInput) => retryTargetBase(rawInput, false)));
+  setHandler(issueUpdates.retry_forward_merge_verification, ctx.guarded((rawInput) => retryTargetBase(rawInput, true)));
 
 }

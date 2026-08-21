@@ -7,7 +7,7 @@ import { recordDecisionBlockerResolution, runLeadPlanning } from "./activity-pro
 import type { IssueWorkflowContext } from "./context.js";
 
 export function registerGovernanceHandlers(ctx: IssueWorkflowContext): void {
-  setHandler(issueUpdates.resolve_decision_blocker, async (rawInput) => {
+  setHandler(issueUpdates.resolve_decision_blocker, ctx.guarded(async (rawInput) => {
     assertPayloadWithinLimit("decision blocker resolution command", rawInput);
     const command = rawInput;
     const blockedRevision = ctx.state.revision;
@@ -45,7 +45,7 @@ export function registerGovernanceHandlers(ctx: IssueWorkflowContext): void {
     }
     await ctx.project();
     return ctx.state;
-  }, { validator(rawInput) {
+  }), { validator(rawInput) {
     const command = rawInput;
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (ctx.state.phase !== "blocked" || ctx.state.blockedCategory !== "human_decision" || !ctx.state.allowedCommands.includes("resolve_decision_blocker")) throw new Error("Decision blocker resolution is not available in the current phase");

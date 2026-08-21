@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildCiPolicy, createGithubCiProvider, evaluateExactHead, selectLatestCheckRuns } from "../src/ci.js";
+import { buildCiPolicy, createGithubCiProvider, evaluateExactHead, selectLatestCheckRuns, shouldUpdateFromBaseBeforeCiRepair } from "../src/ci.js";
 
 const head = "a".repeat(40);
 const otherHead = "b".repeat(40);
@@ -14,6 +14,11 @@ const check = (overrides: Record<string, unknown> = {}) => ({ providerCheckId: "
 const evaluate = (overrides: Record<string, unknown> = {}) => evaluateExactHead({ repository: "acme/forge", pullRequestNumber: 7, expectedRepository: "acme/forge", expectedPullRequestNumber: 7, expectedHeadSha: head, expectedBaseBranch: "main", expectedHeadBranch: "feature/task", requiredChecks: ["Tests / unit"], observedPullRequest: pullRequest(), checks: [check()], now, propagationDeadline: propagation, overallDeadline: overall, ...overrides });
 
 describe("exact-head CI evaluator", () => {
+  it("updates an advanced base before planning a repair, with a bounded cycle limit", () => {
+    expect(shouldUpdateFromBaseBeforeCiRepair({ outcome: "failed", repairable: true, owner: "lead", baseUpdateCount: 0 })).toBe(true);
+    expect(shouldUpdateFromBaseBeforeCiRepair({ outcome: "failed", repairable: true, owner: "lead", baseUpdateCount: 2 })).toBe(false);
+    expect(shouldUpdateFromBaseBeforeCiRepair({ outcome: "failed", repairable: false, owner: "lead", baseUpdateCount: 0 })).toBe(false);
+  });
   it.each([
     ["success", "passed", false],
     ["failure", "failed", true],

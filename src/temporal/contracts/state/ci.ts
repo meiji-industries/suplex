@@ -23,4 +23,5 @@ export const ciStateFields = {
   ciRepairDeveloperSessionRef: durableId.nullable().optional(),
   ciNextPollAt: z.string().datetime().nullable().optional(),
   ciRerunCount: z.number().int().nonnegative().optional(),
+  ciBaseUpdateCount: z.number().int().nonnegative().optional(),
 };

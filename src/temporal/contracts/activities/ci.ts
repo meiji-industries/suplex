@@ -65,6 +65,24 @@ export interface RerunCiActivityResult {
   summary: string;
 }
 
+export interface UpdateCiFromBaseActivityInput {
+  taskId: string;
+  companyId: string;
+  workflowId: string;
+  projectRevisionId: string;
+  releaseId: string;
+  developerExecutionId: string;
+  branchName: string;
+  expectedBaseSha: string;
+  expectedHeadSha: string;
+  expectedHeadTree: string;
+  ciRunId: string;
+}
+
+export type UpdateCiFromBaseActivityResult =
+  | { outcome: "no_drift"; summary: string }
+  | { outcome: "updated"; baseSha: string; headSha: string; headTree: string; summary: string };
+
 export interface CiRepairActivityInput {
   taskId: string;
   companyId: string;
@@ -72,6 +90,7 @@ export interface CiRepairActivityInput {
   releaseId?: string;
   projectId: string;
   projectRevisionId: string;
+  planRevision: number;
   ciRunId: string;
   ciAttemptId: string;
   repairPlanId: string;
@@ -105,12 +124,13 @@ export interface CiRepairActivityResult {
   outcome: "completed" | "blocked";
 }
 
-export type WorkflowCiRepairActivityInput = Omit<CiRepairActivityInput, "worktreePath"> & { worktreePath?: string };
+export type WorkflowCiRepairActivityInput = Omit<CiRepairActivityInput, "worktreePath"> & import("./development.js").DeveloperSupervisorActivityIdentity & { worktreePath?: string };
 export type WorkflowCiRepairActivityResult = Omit<CiRepairActivityResult, "worktreePath">;
 
 export interface CiActivities {
   reconcileCi(input: ReconcileCiActivityInput): Promise<ReconcileCiActivityResult>;
   planCiRepair(input: CiRepairPlanActivityInput): Promise<CiRepairPlanActivityResult>;
   rerunCi(input: RerunCiActivityInput): Promise<RerunCiActivityResult>;
+  updateCiFromBase(input: UpdateCiFromBaseActivityInput): Promise<UpdateCiFromBaseActivityResult>;
   runCiRepair(input: WorkflowCiRepairActivityInput): Promise<WorkflowCiRepairActivityResult>;
 }

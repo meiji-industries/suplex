@@ -1,4 +1,4 @@
-import type { CiActivities, ReconcileCiActivityInput, WorkflowCiRepairActivityInput } from "../contracts/activities/ci.js";
+import type { CiActivities, ReconcileCiActivityInput, WorkflowCiRepairActivityInput, WorkflowCiRepairActivityResult } from "../contracts/activities/ci.js";
 import type { AttentionCategory } from "../contracts/primitives.js";
 import type { ActivityContext } from "./context.js";
 
@@ -31,18 +31,56 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
         return attentionFailure(input, category, "ci_rerun_failed", error instanceof Error ? error.message : "CI rerun failed.");
       }
     },
+    async updateCiFromBase(input) {
+      const context = database.authQuery((db) => db.prepare(`SELECT r.normalized_json AS normalizedJson, d.worktree_path AS worktreePath
+        FROM forge_tasks t
+        JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
+        JOIN forge_developer_executions d ON d.id = ? AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id
+        WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_revision_id = ?`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId) as { normalizedJson: string; worktreePath: string } | undefined);
+      if (!context) throw new Error("The exact CI delivery worktree is unavailable");
+      const pinned = parseAcceptedProjectRevision(context.normalizedJson);
+      const service = new ForwardMergeService(database, githubRelease, new ArtifactStore(config.artifactRoot));
+      const merge = await service.reconcile({
+        worktreePath: context.worktreePath,
+        repositoryPath: pinned.repositoryPath,
+        repository: pinned.repository,
+        baseBranch: pinned.baseBranch,
+        branchName: input.branchName,
+        expectedBaseSha: input.expectedBaseSha,
+        expectedHeadSha: input.expectedHeadSha,
+        expectedHeadTree: input.expectedHeadTree,
+        taskId: input.taskId,
+        companyId: input.companyId,
+        workflowId: input.workflowId,
+        projectRevisionId: input.projectRevisionId,
+        checkpoint: "ci_update_from_base",
+        developerExecutionId: input.developerExecutionId,
+        releaseId: input.releaseId,
+        ciRunId: input.ciRunId,
+      });
+      if (merge.status === "no_drift") return { outcome: "no_drift" as const, summary: "The pull request base has not advanced" };
+      if (merge.status !== "merged" || !merge.mergeCommit || !merge.tree) throw new Error("Updating the CI branch from its base requires conflict resolution");
+      await githubRelease.pushNormal({ cwd: context.worktreePath, branch: input.branchName });
+      const observedHead = await githubRelease.getBranchHead({ repository: pinned.repository, branch: input.branchName });
+      if (observedHead?.toLowerCase() !== merge.mergeCommit.toLowerCase()) throw new Error("The updated CI branch was not confirmed on the provider");
+      return { outcome: "updated" as const, baseSha: merge.targetBaseSha, headSha: merge.mergeCommit, headTree: merge.tree, summary: "Merged the latest base branch into the pull request and pushed it" };
+    },
     async runCiRepair(input: WorkflowCiRepairActivityInput) {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);
-      const operation = developer.runCiRepair ? developer.runCiRepair.bind(developer) : defaultDeveloper.runCiRepair.bind(defaultDeveloper);
-      const result = await invokeAgent(input, () => operation({ ...input, worktreePath }));
-      activityWorktrees.set(result.developerExecutionId, result.worktreePath);
-      activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
-      const { worktreePath: _worktreePath, ...safeResult } = result;
+      const supervised = await invokeAgent(input, () => runSupervised<WorkflowCiRepairActivityResult>(input, async (service) => {
+        const { worktreePath: _worktreePath, ...result } = await service.runCiRepair({ ...input, worktreePath });
+        return result;
+      }));
+      if (supervised.status !== "completed") throw ApplicationFailure.nonRetryable(supervised.summary, supervised.reasonCode, { executionId: supervised.developerExecutionId });
+      const result = supervised.result;
+      activityWorktrees.set(result.developerExecutionId, worktreePath);
+      activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, worktreePath);
+      const safeResult = result;
       if (safeResult.outcome === "blocked") {
         const attention = await putAttentionEvidence(input, "verification_unrecoverable", "ci_repair_blocked", safeResult.summary);
-        return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 });
+        return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath }, { ...safeResult, attentionEvidenceArtifactId: attention.artifactId, attentionEvidenceSha256: attention.sha256 });
       }
-      return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, safeResult);
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath }, safeResult);
     },
   };
 }

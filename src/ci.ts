@@ -16,6 +16,8 @@ export const CI_OVERALL_WINDOW_MS = 60 * 60_000;
 export const CI_MERGE_OBSERVATION_INTERVAL_MS = 5 * 60_000;
 export const CI_TRANSIENT_BACKOFF_MS = [15_000, 30_000, 60_000, 120_000, 240_000] as const;
 export const CI_MAX_CONSECUTIVE_PROVIDER_FAILURES = CI_TRANSIENT_BACKOFF_MS.length;
+/** A CI cycle may adopt a newly advanced base twice before it proceeds to repair. */
+export const CI_BASE_UPDATE_LIMIT = 2;
 export const CI_ACCEPTED_CONCLUSIONS = ["success"] as const;
 const CI_SUMMARY_MAX_LENGTH = 500;
 
@@ -36,6 +38,10 @@ export type CiOutcome =
   | "invalid_provider_response";
 
 export type CiOwner = "system" | "lead" | "human" | null;
+
+export function shouldUpdateFromBaseBeforeCiRepair(input: { outcome: CiOutcome; repairable: boolean; owner: CiOwner; baseUpdateCount: number }): boolean {
+  return input.outcome === "failed" && input.repairable && input.owner === "lead" && input.baseUpdateCount < CI_BASE_UPDATE_LIMIT;
+}
 export type CheckStatus = "queued" | "in_progress" | "completed";
 export type CheckConclusion = "success" | "failure" | "cancelled" | "timed_out" | "action_required" | "neutral" | "skipped" | "stale" | null;
 

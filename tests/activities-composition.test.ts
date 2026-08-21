@@ -71,6 +71,7 @@ const expectedActivityKeys = [
   "runLeadPlanning",
   "runSupplementalReview",
   "tryAcquireCapacity",
+  "updateCiFromBase",
 ].sort();
 
 test("activity factories compose the frozen activity key set without overlap", async () => {

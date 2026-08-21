@@ -219,6 +219,10 @@ export function createTemporalHarness(): TemporalHarness {
         if (input.taskId === "ci-repair") return { ...common, outcome: "failed" as const, reason: "required_check_failed", owner: "lead" as const, repairable: true, summary: "Required check failed", retryAt: null, nextPollAt: null };
         return { ...common, outcome: "passed" as const, reason: "checks_passed", owner: null, repairable: false, summary: "All required checks passed", retryAt: null, nextPollAt: null };
       },
+      async updateCiFromBase(input: Parameters<typeof baseActivities.updateCiFromBase>[0]) {
+        if (!input.taskId.startsWith("ci-")) return baseActivities.updateCiFromBase(input);
+        return { outcome: "no_drift" as const, summary: "The pull request base has not advanced" };
+      },
       async planCiRepair(input: Parameters<typeof baseActivities.planCiRepair>[0]) {
         ciPlanInputs.push({ leadSessionRef: input.leadSessionRef, ciAttemptId: input.ciAttemptId });
         return { planId: "ci_plan_integration", planArtifactId: "artifact_ci_plan", evidenceArtifactId: "artifact_ci_plan_evidence", leadExecutionId: "agent_ci_plan", leadSessionRef: input.leadSessionRef, summary: "Repair the exact failed check" };

@@ -3,12 +3,14 @@ import * as contracts from "../issue-contracts.js";
 import * as activityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
 import { issueUpdates } from "../issue-updates.js";
+import { developerExecutionId } from "../deterministic-id.js";
 import type { IssueBlocker } from "../issue-contracts.js";
 import type { IssueWorkflowContext } from "./context.js";
 
 /** Reruns are for flaky/unrelated failures; two per CI cycle, then repair the code. */
 export const CI_RERUN_LIMIT = 2;
 const CI_RERUN_POLL_DELAY_MS = 60_000;
+const shouldUpdateFromBaseBeforeCiRepair = (result: { outcome: string; repairable: boolean; owner: string | null }, baseUpdateCount: number): boolean => result.outcome === "failed" && result.repairable && result.owner === "lead" && baseUpdateCount < 2;
 
 export function registerCiHandlers(ctx: IssueWorkflowContext): void {
   const runExactCiRepairTurn = async (): Promise<contracts.IssueWorkflowState> => {
@@ -25,12 +27,15 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     const priorCommit = ctx.state.resultCommit;
     const priorTree = ctx.state.resultTree;
     const releaseId = ctx.state.releaseId;
-    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ci_repairing", owner: "lead", allowedCommands: [], pendingAction: "Developer repairing the exact failed CI result", blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
+    const planRevision = ctx.state.planRevision ?? ctx.state.revision;
+    const turnExecutionId = developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "repair");
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ci_repairing", owner: "lead", allowedCommands: [], pendingAction: "Developer repairing the exact failed CI result", developerExecutionId: ctx.supervisedDeveloperTurns ? turnExecutionId : priorDeveloperExecutionId, developerAttempt, developerTurnKind: "repair", ...ctx.recoveryFields("starting", null, "Starting Developer CI repair.", null), blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     try {
       const result = await ctx.acquireExternalTurn<contracts.WorkflowCiRepairActivityResult>(
         { operation: "ci_repair_execution", ...stateTransitions.integratorTurn(ctx, "builder"), sessionRef: priorDeveloperSessionRef, worktreePath: ctx.state.worktreePath },
-        (capacityRequestId) => activityProxies.runCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, ...(releaseId ? { releaseId } : {}), projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, ciRunId, ciAttemptId, repairPlanId, repairPlanArtifactId, repairPlanEvidenceArtifactId, failedHeadSha, priorDeveloperExecutionId, priorDeveloperSessionRef, branchName, priorCommit, priorTree, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (capacityRequestId) => activityProxies.runCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, ...(releaseId ? { releaseId } : {}), projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, ciRunId, ciAttemptId, repairPlanId, repairPlanArtifactId, repairPlanEvidenceArtifactId, failedHeadSha, priorDeveloperExecutionId, priorDeveloperSessionRef, branchName, priorCommit, priorTree, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "repair", ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (repair) => repair.developerExecutionId,
       );
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ctx.addRevisionCommand(["review_delivery", "cancel_issue"]) : ctx.addRevisionCommand(["request_delivery_changes", "cancel_issue"]), pendingAction: result.outcome === "completed" ? "Fresh Lead delivery review required after CI repair" : "CI repair is blocked", developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.outcome === "completed" ? "clean" : "dirty", deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.summary, developerOutcome: result.outcome === "completed" ? "completed" : "blocked", deliveryReviewId: result.outcome === "completed" ? null : ctx.state.deliveryReviewId, releaseId: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, ciRepairDeveloperExecutionId: result.developerExecutionId, ciRepairDeveloperSessionRef: result.developerSessionRef, blocker: result.outcome === "blocked" ? stateTransitions.humanBlocker("verification_unrecoverable", result.summary, [{ command: "request_delivery_changes", label: "Request delivery changes", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], stateTransitions.evidencePointer(result.attentionEvidenceArtifactId, result.attentionEvidenceSha256, "attention-evidence")) : null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
@@ -69,6 +74,15 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "final_review", owner: "lead", allowedCommands: [], pendingAction: "Final Lead review", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.runFinalReviewTurn();
+    }
+    const baseUpdateCount = ctx.state.ciBaseUpdateCount ?? 0;
+    if (ctx.patched("forge-ci-update-from-base-v1") && shouldUpdateFromBaseBeforeCiRepair(result, baseUpdateCount) && ctx.state.releaseId && ctx.state.developerExecutionId && ctx.state.branchName && ctx.state.targetBaseSha && ctx.state.expectedHeadTree && ctx.state.resultCommit && ctx.state.ciRunId) {
+      const update = await activityProxies.updateCiFromBase({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, releaseId: ctx.state.releaseId, developerExecutionId: ctx.state.developerExecutionId, branchName: ctx.state.branchName, expectedBaseSha: ctx.state.targetBaseSha, expectedHeadSha: ctx.state.resultCommit, expectedHeadTree: ctx.state.expectedHeadTree, ciRunId: ctx.state.ciRunId });
+      if (update.outcome === "updated") {
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ci_waiting", owner: "lead", allowedCommands: ["cancel_issue"], pendingAction: update.summary, targetBaseSha: update.baseSha, expectedHeadSha: update.headSha, resultCommit: update.headSha, resultTree: update.headTree, ciRunId: null, ciAttemptId: null, ciOutcome: "waiting", ciReason: null, ciEvidenceArtifactId: null, ciNextPollAt: null, ciBaseUpdateCount: baseUpdateCount + 1, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+        await ctx.project();
+        return ctx.state;
+      }
     }
     if (result.outcome === "failed" && result.repairable && result.owner === "lead" && result.evidenceArtifactId && ctx.state.leadSessionRef && ctx.state.ciAttemptId) {
       const leadSessionRef = ctx.state.leadSessionRef;

@@ -16,7 +16,7 @@ const branchPattern = /^(?![./])(?!.*(?:\.\.|\.lock$|\/\/|\s|[~^:?*\[\\]))[A-Za-
 
 export const ForwardMergeConflictArtifactSchema = z.object({
   version: z.literal(1),
-  checkpoint: z.enum(["pre_release", "pre_final_review", "pre_acceptance"]),
+  checkpoint: z.enum(["pre_release", "pre_final_review", "pre_acceptance", "ci_update_from_base"]),
   expectedBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
   observedBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
   priorHead: z.string().regex(/^[a-f0-9]{40,64}$/i),

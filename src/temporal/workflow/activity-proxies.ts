@@ -4,12 +4,30 @@ import { proxyActivities } from "@temporalio/workflow";
 import type { ProbeActivities } from "../contracts.js";
 import type { DeliveryBlockerActivities, IssueActivities } from "../issue-contracts.js";
 
+// Bookkeeping/DB activities: bounded retries so a failure surfaces as an
+// ActivityFailure -> `failed` state instead of retrying silently forever.
+// Only PlanGovernanceConflict is listed here: it's always a deterministic
+// idempotency-key reuse, unlike "SqliteError" (a bare class name that also
+// covers transient FK/lock errors during concurrent projection writes, which
+// must keep retrying). The deterministic UNIQUE-constraint case is instead
+// converted to ApplicationFailure.nonRetryable inside the activities
+// themselves (see asNonRetryableApplicationFailure), which bypasses this
+// policy entirely regardless of maximumAttempts.
+const BOOKKEEPING_RETRY_POLICY = {
+  maximumAttempts: 5,
+  initialInterval: "1 second",
+  maximumInterval: "15 seconds",
+  nonRetryableErrorTypes: ["PlanGovernanceConflict"],
+};
+
 export const { recordProbeStarted } = proxyActivities<ProbeActivities>({
   startToCloseTimeout: "1 minute",
+  retry: BOOKKEEPING_RETRY_POLICY,
 });
 
 export const { projectIssueState: projectIssueStateActivity } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
+  retry: BOOKKEEPING_RETRY_POLICY,
 });
 
 const EXTERNAL_AGENT_RETRY_POLICY = {
@@ -75,14 +93,17 @@ export const { cancelCapacityExecution } = proxyActivities<IssueActivities>({
 
 export const { recordPlanDecision } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
+  retry: BOOKKEEPING_RETRY_POLICY,
 });
 
 export const { authorizeFinalPlan } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
+  retry: BOOKKEEPING_RETRY_POLICY,
 });
 
 export const { authorizePlanRevision } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
+  retry: BOOKKEEPING_RETRY_POLICY,
 });
 
 export const { preparePlanRevision } = proxyActivities<IssueActivities>({ startToCloseTimeout: "10 minutes", retry: { maximumAttempts: 1 } });
@@ -90,10 +111,12 @@ export const { createSuccessor } = proxyActivities<IssueActivities>({ startToClo
 
 export const { recordPlanBlockerResponse } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
+  retry: BOOKKEEPING_RETRY_POLICY,
 });
 
 export const { recordDecisionBlockerResolution } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
+  retry: BOOKKEEPING_RETRY_POLICY,
 });
 
 export const { reviewDelivery } = proxyActivities<IssueActivities>({

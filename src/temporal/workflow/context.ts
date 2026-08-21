@@ -37,7 +37,7 @@ export interface IssueWorkflowContext {
   readonly initialProjectionBarrierEnabled: boolean;
   readonly planApprovalBlockerEnabled: boolean;
   readonly patched: (patchId: string) => boolean;
-  readonly guarded: <A extends unknown[], R>(fn: (...args: A) => Promise<R>) => (...args: A) => Promise<R>;
+  readonly guarded: <A extends unknown[], R>(fn: (...args: A) => Promise<R>, command?: string) => (...args: A) => Promise<R>;
   readonly captureInitialProjectionState: boolean;
   readonly initialProjectionState: IssueWorkflowState;
   readonly initialProjection: Promise<IssueWorkflowState>;

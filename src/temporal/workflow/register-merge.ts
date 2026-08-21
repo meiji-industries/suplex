@@ -124,5 +124,5 @@ export function registerMergeReconciliationHandler(ctx: IssueWorkflowContext): v
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "manual_merge") throw new Error("Merge reconciliation is not available in the current phase");
     return ctx.reconcileMergeTurn();
-  }));
+  }, "reconcile_merge"));
 }

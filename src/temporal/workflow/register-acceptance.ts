@@ -153,13 +153,13 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
     await ctx.project();
     return ctx.state;
   };
-  setHandler(issueUpdates.accept_delivery, ctx.guarded((rawInput) => accept(rawInput, "accept")));
-  setHandler(issueUpdates.request_delivery_changes, ctx.guarded((rawInput) => accept(rawInput, "request_changes")));
+  setHandler(issueUpdates.accept_delivery, ctx.guarded((rawInput) => accept(rawInput, "accept"), "accept_delivery"));
+  setHandler(issueUpdates.request_delivery_changes, ctx.guarded((rawInput) => accept(rawInput, "request_changes"), "request_delivery_changes"));
   setHandler(issueUpdates.reconcile_acceptance, ctx.guarded(async (rawInput) => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "ready_reconciliation" || !ctx.state.acceptanceId) throw new Error("Acceptance reconciliation is not available in the current phase");
     return reconcileAcceptanceTurn();
-  }));
+  }, "reconcile_acceptance"));
   ctx.runFinalReviewTurn = runFinalReviewTurn;
   ctx.reconcileAcceptanceTurn = reconcileAcceptanceTurn;
 }

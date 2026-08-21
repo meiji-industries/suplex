@@ -7,7 +7,7 @@ import { afterEach, expect, test } from "vitest";
 
 import type { PlanBlockerSubject, PlanSubject } from "../src/plan-governance.js";
 import type { IssueActivities, IssueWorkflowInput, IssueWorkflowState } from "../src/temporal/issue-contracts.js";
-import { acceptDeliveryUpdate, issueStateQuery, issueWorkflow, respondPlanBlockerUpdate } from "../src/temporal/workflows.js";
+import { acceptDeliveryUpdate, issueStateQuery, issueWorkflow, rejectPlanUpdate, respondPlanBlockerUpdate } from "../src/temporal/workflows.js";
 import { createIssueActivitiesFake } from "./fakes/issue-activities.js";
 import { createImmediateCapacityActivities } from "./immediate-capacity-activities.js";
 
@@ -227,6 +227,92 @@ test("a task created with auto-approve and auto-merge reaches done without anoth
       "planning", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "delivery_reviewed",
       "releasing", "ci_waiting", "final_review", "accepted", "manual_merge", "done",
     ]);
+
+    const history = await handle.fetchHistory();
+    await Worker.runReplayHistory({ workflowsPath }, history, workflowId);
+  } finally {
+    worker.shutdown();
+    await workerRun;
+  }
+});
+
+test("a non-decision command failing from a human-owned state that merely offers a decision command still collapses to failed", { timeout: 120_000 }, async () => {
+  environment = await TestWorkflowEnvironment.createTimeSkipping();
+  const projections: IssueWorkflowState[] = [];
+  const activities: Partial<IssueActivities> = {
+    projectIssueState: async (event) => { projections.push(structuredClone(event.state)); return event.state; },
+    recordPlanBlockerResponse: async () => ({ responseId: "blocker_response", subjectHash: sha, answerArtifactId: "answer_artifact", answerArtifactSha256: sha }),
+    // No planSubject on this result: exactSubject is false, so the landing "approval" state offers
+    // reject_plan (a non-decision command) alongside approve_plan (a decision command).
+    runLeadPlanning: async () => ({
+      leadSessionRef: "lead_session",
+      leadExecutionId: "lead_execution_2",
+      leadEvidenceArtifactId: "lead_evidence",
+      leadOutputArtifactId: "plan_artifact",
+      leadOutputArtifactSha256: sha,
+      leadOutputKind: "plan",
+      leadSummary: "Material plan after the blocker answer",
+      materialCategories: ["security_permissions"],
+      material: true,
+    }),
+    // reject_plan mutates state to "planning" and only then calls recordPlanDecision: the bug under
+    // test would see "approve_plan" in the prior allowedCommands and misfire the decision-gate revert
+    // instead of collapsing to the generic failed state.
+    recordPlanDecision: async () => { throw ApplicationFailure.nonRetryable("The plan decision service is unavailable", "plan-decision-unavailable"); },
+  };
+  const worker = await Worker.create({ connection: environment.nativeConnection, namespace: environment.namespace ?? "default", taskQueue, workflowsPath, activities: createIssueActivitiesFake(activities) as unknown as Record<string, (...args: never[]) => unknown> });
+  const workerRun = worker.run();
+  try {
+    const input: IssueWorkflowInput = {
+      workflowId,
+      companyId,
+      projectId: "project_guarded",
+      issueId,
+      projectRevisionId: "revision_guarded",
+      briefArtifactId: "brief_guarded",
+      briefSha256: "0".repeat(64),
+      imageArtifactIds: [],
+      roleProfiles: { planner: "profile", builder: "profile" },
+      supplementalReview: false,
+      continuationState: {
+        phase: "blocked",
+        revision: 10,
+        owner: "human",
+        allowedCommands: ["respond_plan_blocker", "cancel_issue"],
+        pendingAction: "Member decision required",
+        lastEventId: `${workflowId}:10`,
+        continuationCount: 0,
+        lastSummaryHash: null,
+        leadSessionRef: "lead_session",
+        leadExecutionId: "lead_execution",
+        leadOutputArtifactId: "blocker_artifact",
+        leadOutputKind: "decision_blocker",
+        blockedCategory: "human_decision",
+        blockedResumePhase: "planning",
+        planBlockerSubject: blockerSubject,
+      },
+    };
+    const handle = await environment.client.workflow.start(issueWorkflow, { workflowId, taskQueue, args: [input] });
+    const approval = await handle.executeUpdate(respondPlanBlockerUpdate, {
+      args: [{ expectedRevision: 10, expectedWorkflowRevision: 10, actorUserId: "member_guarded", answerStagingRef: "staging_answer", answerSha256: sha, idempotencyKey: "blocker-answer-1" }],
+      updateId: "non-decision-blocker-response",
+    });
+    expect(approval).toMatchObject({ phase: "approval", owner: "human" });
+    expect(approval.allowedCommands).toEqual(expect.arrayContaining(["approve_plan", "reject_plan"]));
+
+    await expect(handle.executeUpdate(rejectPlanUpdate, {
+      args: [{ expectedRevision: approval.revision, actorUserId: "member_guarded", note: "Requesting a revision" }],
+      updateId: "non-decision-reject-plan",
+    })).rejects.toThrow();
+
+    const projected = projections.at(-1)!;
+    expect(projected).toMatchObject({ phase: "failed", owner: "human" });
+    expect(projected.allowedCommands).toContain("start_planning");
+    // The bug under test: a misfire would instead revert to "approval" and re-offer approve_plan/reject_plan.
+    expect(projected.allowedCommands).not.toContain("approve_plan");
+    expect(projected.allowedCommands).not.toContain("reject_plan");
+    // The invariant: the Workflow never keeps a revision the projection never saw.
+    expect(projected.revision).toBe((await handle.query(issueStateQuery)).revision);
 
     const history = await handle.fetchHistory();
     await Worker.runReplayHistory({ workflowsPath }, history, workflowId);

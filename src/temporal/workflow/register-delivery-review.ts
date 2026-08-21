@@ -91,7 +91,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
     if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
     await ctx.project();
     return ctx.state;
-  }), { validator(rawInput) {
+  }, "record_delivery_decision"), { validator(rawInput) {
     const command = contracts.PlanCommandInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     const legacyRepairDecision = ctx.state.phase === "delivery_blocked" && ctx.state.allowedCommands.includes("repair_delivery");

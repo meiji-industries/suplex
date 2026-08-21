@@ -239,7 +239,7 @@ export function registerPlanningHandlersContinuation(ctx: IssueWorkflowContext):
       await ctx.project();
       return ctx.state;
     } finally { ctx.decisionInFlight = false; }
-  }), { validator(rawInput) { validatePlanCommand(rawInput); if (!ctx.state.planMaterial) throw new Error("Routine plans do not require approval"); } });
+  }, "approve_plan"), { validator(rawInput) { validatePlanCommand(rawInput); if (!ctx.state.planMaterial) throw new Error("Routine plans do not require approval"); } });
 
   setHandler(issueUpdates.request_plan_revision, ctx.guarded(async (rawInput) => {
     assertPayloadWithinLimit("exact plan revision command", rawInput);

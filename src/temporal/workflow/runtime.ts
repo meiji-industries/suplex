@@ -281,7 +281,7 @@ export function createGuarded(
   store: { get: () => IssueWorkflowState; set: (next: IssueWorkflowState) => void },
   options: { enabled: boolean; reviseContinueEnabled: boolean; project: (state: IssueWorkflowState) => Promise<unknown> },
 ) {
-  return <A extends unknown[], R>(fn: (...args: A) => Promise<R>) => async (...args: A): Promise<R> => {
+  return <A extends unknown[], R>(fn: (...args: A) => Promise<R>, command?: string) => async (...args: A): Promise<R> => {
     const before = store.get();
     try {
       return await fn(...args);
@@ -293,9 +293,9 @@ export function createGuarded(
       const revision = state.revision + 1;
       // A failed human decision gate returns the member to that same decision so the command can be retried,
       // instead of collapsing a late-stage failure (e.g. a rejected GitHub merge) into "re-plan from scratch".
-      // Commands that hand the task to an agent turn (respond_plan_blocker, start_planning) still collapse to failed:
-      // their input was consumed by the turn, so the prior state is no longer actionable.
-      if (before.owner === "human" && !TERMINAL_PHASES.has(before.phase) && before.allowedCommands.some((command) => DECISION_COMMANDS.has(command))) {
+      // Gated on the invoked command itself, not merely offered by the prior state: a Lead-turn command issued
+      // from a state that also offers a decision command must not revert and discard mutations it already made.
+      if (before.owner === "human" && !TERMINAL_PHASES.has(before.phase) && command !== undefined && DECISION_COMMANDS.has(command)) {
         const retry = before.allowedCommands.filter((command) => command !== "cancel_issue").map((command) => ({ command, label: `Retry ${command.replace(/_/g, " ")}`, requiresNote: ["reject_plan", "record_delivery_decision", "request_delivery_changes"].includes(command), destructive: false }));
         const reverted = IssueWorkflowStateSchema.parse({
           ...before,

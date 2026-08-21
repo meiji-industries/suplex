@@ -50,6 +50,7 @@ export const PullRequestObservationSchema = z.object({
   baseSha: CommitShaSchema,
   headBranch: z.string().min(1).max(256),
   headSha: CommitShaSchema,
+  mergeStateStatus: z.string().max(32).nullable().optional(),
 }).strict();
 export type PullRequestObservation = z.infer<typeof PullRequestObservationSchema>;
 
@@ -191,9 +192,11 @@ export function evaluateExactHead(input: CiEvaluationInput): CiEvaluationResult 
   if (pr.mergedAt) return evaluation("checks_passed_merged", "passed", null, false, selectedChecks, "The exact pull request was merged");
   const exactSelected = selectedChecks.filter((check) => check.selectedForEvaluation && check.headSha.toLowerCase() === input.expectedHeadSha.toLowerCase());
   const missing = input.requiredChecks.filter((name) => !exactSelected.some((check) => check.name === name));
-  if (missing.length && Date.parse(input.now) < Date.parse(input.propagationDeadline)) return evaluation("checks_propagating", "waiting", "system", false, selectedChecks, "Required checks are still propagating", new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
-  if (missing.length && Date.parse(input.now) >= Date.parse(input.overallDeadline)) return evaluation("poll_window_exhausted", "waiting", "system", false, selectedChecks, `Waiting for required checks after the initial CI window: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_MERGE_OBSERVATION_INTERVAL_MS).toISOString());
-  if (missing.length) return evaluation("required_check_missing", "waiting", "system", false, selectedChecks, `Required checks are still missing: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
+  const notApplicable = missing.length > 0 && pr.mergeStateStatus === "CLEAN" && exactSelected.length > 0 && exactSelected.every((check) => check.status === "completed");
+  if (missing.length && !notApplicable && Date.parse(input.now) < Date.parse(input.propagationDeadline)) return evaluation("checks_propagating", "waiting", "system", false, selectedChecks, "Required checks are still propagating", new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
+  if (notApplicable && exactSelected.every((check) => check.conclusion === "success" || check.conclusion === "skipped")) return evaluation("checks_passed_not_applicable", "passed", null, false, selectedChecks, `All reporting required checks passed; not applicable: ${missing.join(", ")} (did not report; GitHub merge state CLEAN)`);
+  if (missing.length && !notApplicable && Date.parse(input.now) >= Date.parse(input.overallDeadline)) return evaluation("poll_window_exhausted", "waiting", "system", false, selectedChecks, `Waiting for required checks after the initial CI window: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_MERGE_OBSERVATION_INTERVAL_MS).toISOString());
+  if (missing.length && !notApplicable) return evaluation("required_check_missing", "waiting", "system", false, selectedChecks, `Required checks are still missing: ${missing.join(", ")}`, new Date(Date.parse(input.now) + CI_POLL_INTERVAL_MS).toISOString());
   const active = exactSelected.filter((check) => check.status !== "completed");
   if (active.length) return evaluation("checks_queued", "waiting", "system", false, selectedChecks, "Required checks are queued or running", new Date(Date.parse(input.now) + (Date.parse(input.now) >= Date.parse(input.overallDeadline) ? CI_MERGE_OBSERVATION_INTERVAL_MS : CI_POLL_INTERVAL_MS)).toISOString());
   const failed = exactSelected.filter((check) => check.conclusion === "failure");
@@ -275,7 +278,7 @@ function parsePullRequest(value: unknown): PullRequestObservation {
   const head = githubPayload(row.head);
   const base = githubPayload(row.base);
   const repository = githubPayload(head.repo).full_name;
-  const parsed = PullRequestObservationSchema.safeParse({ repository, number: row.number, url: row.html_url, state: row.state, mergedAt: row.merged_at ?? null, draft: row.draft, baseBranch: base.ref, baseSha: base.sha, headBranch: head.ref, headSha: head.sha });
+  const parsed = PullRequestObservationSchema.safeParse({ repository, number: row.number, url: row.html_url, state: row.state, mergedAt: row.merged_at ?? null, draft: row.draft, baseBranch: base.ref, baseSha: base.sha, headBranch: head.ref, headSha: head.sha, mergeStateStatus: typeof row.mergeable_state === "string" ? row.mergeable_state.toUpperCase() : null });
   if (!parsed.success) throw new CiProviderFailure("invalid_response", null, "GitHub pull request identity is invalid");
   return parsed.data;
 }

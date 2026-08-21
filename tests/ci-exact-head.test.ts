@@ -59,6 +59,16 @@ describe("exact-head CI evaluator", () => {
     expect(evaluate({ observedPullRequest: merged, checks: [check({ conclusion: "failure" })] })).toMatchObject({ outcome: "passed", reason: "checks_passed_merged" });
   });
 
+  it("treats a configured check that never reports as not applicable once GitHub reports a clean merge state", () => {
+    const clean = pullRequest({ mergeStateStatus: "CLEAN" });
+    const required = ["Tests / unit", "Mintlify Deployment"];
+    expect(evaluate({ observedPullRequest: clean, requiredChecks: required, now: propagation })).toMatchObject({ outcome: "passed", reason: "checks_passed_not_applicable" });
+    expect(evaluate({ observedPullRequest: clean, requiredChecks: required, now: propagation }).summary).toContain("Mintlify Deployment");
+    expect(evaluate({ observedPullRequest: clean, requiredChecks: required, checks: [check({ conclusion: "failure" })], now: propagation })).toMatchObject({ outcome: "failed", reason: "required_check_failed" });
+    expect(evaluate({ observedPullRequest: clean, requiredChecks: required, checks: [], now: propagation })).toMatchObject({ outcome: "waiting", reason: "required_check_missing" });
+    expect(evaluate({ requiredChecks: required, now: propagation })).toMatchObject({ outcome: "waiting", reason: "required_check_missing" });
+  });
+
   it("keeps observing after the initial CI window instead of stranding a merged PR", () => {
     expect(evaluate({ checks: [], now: overall })).toMatchObject({ outcome: "waiting", reason: "poll_window_exhausted", owner: "system" });
   });

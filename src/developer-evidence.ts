@@ -123,9 +123,7 @@ export class DeveloperEvidenceBuilder {
       const artifact = this.database.authQuery((db) => db.prepare(`SELECT a.id, a.company_id, a.kind, a.filename, a.storage_path, a.sha256, a.byte_size
         FROM forge_artifacts a
         WHERE a.id = ? AND a.company_id = ? AND a.kind = 'supplemental-review'
-          AND EXISTS (SELECT 1 FROM forge_issue_governance g
-            WHERE g.task_id = ? AND g.company_id = ? AND g.plan_revision = ?
-              AND g.supplemental_review_used = 1 AND g.supplemental_review_artifact_id = a.id)`).get(artifactId, subject.companyId, subject.taskId, subject.companyId, subject.planRevision) as ArtifactRow | undefined);
+          AND EXISTS (SELECT 1 FROM forge_plan_reviews r WHERE r.opinion_artifact_id = a.id AND r.task_id = ? AND r.company_id = ?)`).get(artifactId, subject.companyId, subject.taskId, subject.companyId) as ArtifactRow | undefined);
       if (!artifact) throw new DeveloperEvidenceFailure("evidence-manifest-invalid", "The selected artifact was not available to the Lead that authored this final plan");
       await addArtifact(artifact, "evidence", referencedSteps(artifactId, true));
     }

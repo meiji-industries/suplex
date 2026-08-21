@@ -4,11 +4,10 @@ import { Send } from "lucide-react";
 import { Button } from "../ui/button.js";
 import { Field, FieldError, FieldLabel } from "../ui/field.js";
 import { Textarea } from "../ui/textarea.js";
-import type { PublicPlanDecisionSubject } from "../../../plan-governance.js";
 import type { TaskCommandEndpoint } from "../../../task-commands.js";
 import { useCommandForm } from "./use-command-form.js";
 
-export interface DecisionCommandView { endpoint: TaskCommandEndpoint; expectedRevision: number; subject: PublicPlanDecisionSubject; idempotency?: string }
+export interface DecisionCommandView { endpoint: TaskCommandEndpoint; expectedRevision: number; idempotency?: string }
 
 type DecisionPayload = { command: DecisionCommandView; note: string; idempotencyKey: string };
 type DecisionAction = "approve" | "reject" | "changes";

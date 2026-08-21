@@ -7,13 +7,11 @@ import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader,
 import { Field, FieldContent, FieldDescription, FieldError, FieldLabel, FieldLegend, FieldSet, FieldTitle } from "../ui/field.js";
 import { RadioGroup, RadioGroupItem } from "../ui/radio-group.js";
 import { Textarea } from "../ui/textarea.js";
-import type { PublicPlanBlockerSubject } from "../../../plan-governance.js";
 import { useCommandForm } from "./use-command-form.js";
 
 const OTHER = "__other__";
 
 type PlanBlockerPrompt = {
-  subject: PublicPlanBlockerSubject;
   header: string;
   question: string;
   evidence: string;
@@ -21,10 +19,10 @@ type PlanBlockerPrompt = {
   options: Array<{ label: string; description: string }>;
 };
 
-export function PlanBlockerResponseForm({ blocker, expectedRevision, busy, onSubmit, error }: { blocker: PlanBlockerPrompt; expectedRevision: number; busy: boolean; onSubmit: (payload: { subject: PublicPlanBlockerSubject; expectedWorkflowRevision: number; answer: string; idempotencyKey: string }) => Promise<void>; error?: string }) {
+export function PlanBlockerResponseForm({ blocker, expectedRevision, busy, onSubmit, error }: { blocker: PlanBlockerPrompt; expectedRevision: number; busy: boolean; onSubmit: (payload: { expectedWorkflowRevision: number; answer: string; idempotencyKey: string }) => Promise<void>; error?: string }) {
   const hasChoices = blocker.options.length > 0;
   const [selected, setSelected] = useState(blocker.options.length ? "" : OTHER);
-  const { value: answer, setValue: setAnswer, errorRef, submit } = useCommandForm({ error, onSubmit: (value, idempotencyKey) => onSubmit({ subject: blocker.subject, expectedWorkflowRevision: expectedRevision, answer: value, idempotencyKey }) });
+  const { value: answer, setValue: setAnswer, errorRef, submit } = useCommandForm({ error, onSubmit: (value, idempotencyKey) => onSubmit({ expectedWorkflowRevision: expectedRevision, answer: value, idempotencyKey }) });
   const select = (value: string) => { setSelected(value); setAnswer(value === OTHER ? "" : value); };
   const canSubmit = !busy && (!hasChoices || Boolean(selected)) && Boolean(answer.trim());
   const sendButton = <Button type="submit" size="icon-sm" disabled={!canSubmit} aria-label="Send response" title="Send response"><Send /></Button>;

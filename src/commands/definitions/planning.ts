@@ -35,10 +35,6 @@ export const planningCommands = {
     body: HttpSupplementalReviewBodySchema,
     note: "none",
     idempotency: "required",
-    uiSubject: (context) => {
-      if (!context.originalPlanSubject) return undefined;
-      return { subject: { kind: "supplemental_review", value: { originalPlan: context.originalPlanSubject, reviewerProfileId: context.reviewerProfileId ?? "reviewer", evidenceManifestArtifactId: context.originalPlanSubject.evidenceManifestArtifactId, evidenceManifestSha256: context.originalPlanSubject.evidenceManifestSha256 } } };
-    },
   }),
   revise_plan: defineIssueCommand({
     name: "revise_plan",

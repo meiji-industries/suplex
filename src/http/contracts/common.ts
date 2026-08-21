@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { PublicPlanBlockerSubjectSchema, PublicPlanDecisionSubjectSchema, PublicSupplementalReviewSubjectSchema } from "../../plan-governance.js";
 
 export const IdSchema = z.string().min(1).max(256);
 export const CompanyIdParamsSchema = z.object({ companyId: IdSchema });
@@ -17,9 +16,9 @@ export const ExpectedRevisionBodySchema = z.object({
 });
 export const ExpectedRevisionNoteBodySchema = ExpectedRevisionBodySchema.extend({ note: z.string().optional() });
 export const RequiredRevisionNoteBodySchema = ExpectedRevisionBodySchema.extend({ note: z.string().trim().min(1).max(4_000) });
-export const HttpPlanDecisionBodySchema = z.object({ subject: PublicPlanDecisionSubjectSchema, note: z.string().trim().min(1).max(1_000), idempotencyKey: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/) }).strict();
-export const HttpSupplementalReviewBodySchema = z.object({ expectedRevision: z.coerce.number().int().min(0), subject: PublicSupplementalReviewSubjectSchema, idempotencyKey: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/) }).strict();
-export const HttpPlanBlockerResponseBodySchema = z.object({ subject: PublicPlanBlockerSubjectSchema, expectedWorkflowRevision: z.number().int().nonnegative(), answer: z.string().trim().min(1).max(1_000), idempotencyKey: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/) }).strict();
+export const HttpPlanDecisionBodySchema = z.object({ note: z.string().trim().min(1).max(1_000), idempotencyKey: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/) }).strict();
+export const HttpSupplementalReviewBodySchema = z.object({ expectedRevision: z.coerce.number().int().min(0), idempotencyKey: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/) }).strict();
+export const HttpPlanBlockerResponseBodySchema = z.object({ expectedWorkflowRevision: z.number().int().nonnegative(), answer: z.string().trim().min(1).max(1_000), idempotencyKey: z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/) }).strict();
 export const ResolveDecisionBlockerBodySchema = ExpectedRevisionBodySchema.extend({ answer: z.string().min(1).max(8_000) });
 export const EmptyBodySchema = z.object({}).passthrough();
 export const TokenBodySchema = z.object({ token: z.string().default("") });

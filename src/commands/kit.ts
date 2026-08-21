@@ -1,22 +1,6 @@
 import type { z } from "zod";
 
-import type { MaterialityEvidenceSubject, PlanBlockerSubject, PlanDecisionSubject, PlanSubject, SupplementalReviewSubject } from "../plan-governance.js";
-
 export type CommandFamily = "start" | "plan" | "bespoke";
-
-export interface CommandUiContext {
-  expectedRevision: number;
-  reviewerProfileId?: string;
-  originalPlanSubject?: PlanSubject | null;
-  finalPlanSubject?: PlanSubject | null;
-  materialityEvidence?: MaterialityEvidenceSubject | null;
-  planBlockerSubject?: PlanBlockerSubject | null;
-}
-
-export type CommandSubject =
-  | { kind: "plan_decision"; value: PlanDecisionSubject }
-  | { kind: "supplemental_review"; value: SupplementalReviewSubject }
-  | { kind: "plan_blocker"; value: PlanBlockerSubject };
 
 export interface IssueCommandDescriptor<Name extends string = string, Body extends z.ZodType = z.ZodType> {
   name: Name;
@@ -35,12 +19,6 @@ export interface IssueCommandDescriptor<Name extends string = string, Body exten
   body: Body | null;
   note: "required" | "none";
   idempotency: "required" | "none";
-  /**
-   * UI availability + subject computation, transplanted verbatim from the matching
-   * `case` in src/task-commands.ts `descriptor()`. Return undefined to hide the command,
-   * or the subject payload to attach. Commands without a case body return {}.
-   */
-  uiSubject?: (context: CommandUiContext) => { subject?: CommandSubject } | undefined;
 }
 
 export function defineIssueCommand<Name extends string, Body extends z.ZodType>(descriptor: IssueCommandDescriptor<Name, Body>): IssueCommandDescriptor<Name, Body> {

@@ -2,7 +2,6 @@ import { createHash, randomBytes } from "node:crypto";
 
 import { canonicalJson } from "./canonical-json.js";
 import { redact } from "./logging.js";
-import { PlanMaterialCategorySchema, type PlanMaterialCategory } from "./plan-governance.js";
 import type { RoleAssignments } from "./projects.js";
 
 export interface TaskFinding {
@@ -50,11 +49,9 @@ export function shaAbbrev(value: string | null): string | null { return value ==
 export function finding(code: string, field: string, message: string): TaskFinding { return { code, field, message }; }
 export function parseImageIds(raw: string): string[] { return json<string[]>(raw, []).filter((value) => typeof value === "string"); }
 export function parseRoleAgents(raw: string): RoleAssignments { return json<RoleAssignments>(raw, {}); }
-export function parseMaterialCategories(raw: string | null): PlanMaterialCategory[] { const parsed = PlanMaterialCategorySchema.array().safeParse(json<unknown>(raw ?? "[]", [])); return parsed.success ? parsed.data : []; }
 export function parseMetadata(raw: string): Record<string, string | number | boolean> { return json<Record<string, string | number | boolean>>(raw, {}); }
 export function normalizeText(value: string): string { return value.trim().replace(/\r\n?/g, "\n"); }
 export function duplicateTitle(title: string, usedTitles: Set<string>): string { const match = title.match(/^(.*?)(?: \((\d+)\))?$/); const base = match?.[1]?.trimEnd() || title; let copyNumber = match?.[2] ? Number(match[2]) + 1 : 2; while (usedTitles.has(`${base} (${copyNumber})`)) copyNumber += 1; return `${base} (${copyNumber})`; }
-export function artifactSha256(value: string): string { return createHash("sha256").update(value, "utf8").digest("hex"); }
 export function creationRequestHash(input: { companyId: string; projectId: string; title: string; description: string; imageHashes: string[]; roleAgents: RoleAssignments; supplementalReview: boolean; autoApprovePlan: boolean; pullRequestMode: "draft" | "ready" | "auto_merge"; projectRevisionId: string; authorityKind?: string; creatorId?: string }): string {
   const roles = Object.fromEntries(Object.entries(input.roleAgents).sort(([left], [right]) => left.localeCompare(right)));
   return createHash("sha256").update(canonicalJson({ companyId: normalizeText(input.companyId), projectId: normalizeText(input.projectId), title: normalizeText(input.title), description: normalizeText(input.description), imageHashes: input.imageHashes, roleAgents: roles, supplementalReview: input.supplementalReview, autoApprovePlan: input.autoApprovePlan, pullRequestMode: input.pullRequestMode, projectRevisionId: normalizeText(input.projectRevisionId), ...(input.authorityKind ? { authorityKind: input.authorityKind } : {}), ...(input.creatorId ? { creatorId: input.creatorId } : {}) })).digest("hex");

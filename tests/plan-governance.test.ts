@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { expect, test } from "vitest";
 
-import { PlanDecisionSubjectSchema, PlanSubjectSchema, canonicalMaterialCategories, classifyPlanMateriality, deterministicMaterialCategories, routeLeadResult, samePlanSubject, validateAffectedPaths, validateMaterialityEvidence } from "../src/plan-governance.js";
+import { PlanDecisionSubjectSchema, PlanSubjectSchema, canonicalMaterialCategories, classifyPlanMateriality, deterministicMaterialCategories, routeLeadResult, validateAffectedPaths, validateMaterialityEvidence } from "../src/plan-governance.js";
 
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
 const subject = PlanSubjectSchema.parse({ companyId: "company-1", issueId: "issue-1", workflowId: "workflow-1", originalPlanRevision: 2, outputId: "output-1", outputRevision: 1, finalVersion: 1, artifactId: "artifact-plan", artifactSha256: sha("plan"), leadSessionRef: "session-1", leadExecutionId: "execution-1", evidenceManifestArtifactId: "artifact-manifest", evidenceManifestSha256: sha("manifest") });
@@ -31,12 +31,6 @@ test("affected paths reject traversal and duplicates", () => {
   expect(validateAffectedPaths(["src/a.ts", "src/b.ts"])).toEqual(["src/a.ts", "src/b.ts"]);
   expect(() => validateAffectedPaths(["../secret"])).toThrow();
   expect(() => validateAffectedPaths(["src/a.ts", "src/a.ts"])).toThrow();
-});
-
-test("exact plan subject compares every immutable field", () => {
-  expect(samePlanSubject(subject, { ...subject })).toBe(true);
-  expect(samePlanSubject(subject, { ...subject, finalVersion: 2 })).toBe(false);
-  expect(samePlanSubject(subject, { ...subject, artifactSha256: sha("other") })).toBe(false);
 });
 
 test("decision subjects bind the exact plan, materiality, and workflow revision", () => {

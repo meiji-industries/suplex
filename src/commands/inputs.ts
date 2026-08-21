@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { DecisionIdempotencyKeySchema, PlanBlockerSubjectSchema, PlanDecisionSubjectSchema, SupplementalReviewSubjectSchema } from "../plan-governance.js";
+import { DecisionIdempotencyKeySchema } from "../plan-governance.js";
 
 export const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 export const exactSha = z.string().regex(/^[a-f0-9]{40,64}$/i);
@@ -38,11 +38,9 @@ export const PlanCommandInputSchema = z.object({
   worktreeDecision: z.enum(["reuse", "new"]).optional(),
   exactBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i).optional(),
   decision: z.enum(["accept", "request_changes", "cancel"]).optional(),
-  subject: z.union([PlanDecisionSubjectSchema, SupplementalReviewSubjectSchema, PlanBlockerSubjectSchema]).optional(),
   idempotencyKey: DecisionIdempotencyKeySchema.optional(),
   noteStagingRef: durableId.optional(),
   noteSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  blockerSubject: PlanBlockerSubjectSchema.optional(),
   expectedWorkflowRevision: z.number().int().nonnegative().optional(),
   answerStagingRef: durableId.optional(),
   answerSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),

@@ -11,15 +11,6 @@ export const PlanMaterialCategorySchema = z.enum([
 
 export type PlanMaterialCategory = z.infer<typeof PlanMaterialCategorySchema>;
 
-export const PLAN_MATERIAL_CATEGORY_ORDER: readonly PlanMaterialCategory[] = [
-  "architecture_dependencies",
-  "schema_data_migration",
-  "security_permissions",
-  "external_integration",
-  "production_operation",
-  "user_visible_behavior",
-];
-
 const GovernanceIdSchema = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 
@@ -99,54 +90,14 @@ export type PlanBlockerSubject = z.infer<typeof PlanBlockerSubjectSchema>;
 // Session references are workflow-internal continuity data. They are bound by
 // the server when a member submits a command and never need to cross the API.
 export const PublicPlanSubjectSchema = PlanSubjectSchema.omit({ leadSessionRef: true }).strip();
-export const PublicPlanDecisionSubjectSchema = PlanDecisionSubjectSchema.extend({ plan: PublicPlanSubjectSchema }).strip();
-export const PublicSupplementalReviewSubjectSchema = SupplementalReviewSubjectSchema.extend({ originalPlan: PublicPlanSubjectSchema }).strip();
 export const PublicPlanBlockerSubjectSchema = PlanBlockerSubjectSchema.omit({ leadSessionRef: true }).strip();
 export type PublicPlanSubject = z.infer<typeof PublicPlanSubjectSchema>;
-export type PublicPlanDecisionSubject = z.infer<typeof PublicPlanDecisionSubjectSchema>;
-export type PublicSupplementalReviewSubject = z.infer<typeof PublicSupplementalReviewSubjectSchema>;
 export type PublicPlanBlockerSubject = z.infer<typeof PublicPlanBlockerSubjectSchema>;
 
-export const DecisionNoteSchema = z.string().trim().min(1).max(1_000);
 export const DecisionIdempotencyKeySchema = z.string().min(8).max(128).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
 export function canonicalMaterialCategories(categories: readonly PlanMaterialCategory[]): PlanMaterialCategory[] {
-  return [...new Set(categories)].sort((left, right) => PLAN_MATERIAL_CATEGORY_ORDER.indexOf(left) - PLAN_MATERIAL_CATEGORY_ORDER.indexOf(right));
-}
-
-export function samePlanSubject(left: PlanSubject, right: PlanSubject): boolean {
-  const parsedLeft = PlanSubjectSchema.safeParse(left);
-  const parsedRight = PlanSubjectSchema.safeParse(right);
-  if (!parsedLeft.success || !parsedRight.success) return false;
-  return JSON.stringify(parsedLeft.data) === JSON.stringify(parsedRight.data);
-}
-
-export function canonicalPlanDecisionSubject(subject: PlanDecisionSubject): string {
-  const value = PlanDecisionSubjectSchema.parse(subject);
-  const plan = value.plan;
-  const materiality = value.materiality;
-  return [
-    "plan",
-    plan.companyId,
-    plan.issueId,
-    plan.workflowId,
-    String(plan.originalPlanRevision),
-    plan.outputId,
-    String(plan.outputRevision),
-    String(plan.finalVersion),
-    plan.artifactId,
-    plan.artifactSha256,
-    plan.leadSessionRef,
-    plan.leadExecutionId,
-    plan.evidenceManifestArtifactId,
-    plan.evidenceManifestSha256,
-    "materiality",
-    ...materiality.categories,
-    materiality.artifactId,
-    materiality.artifactSha256,
-    "workflow-revision",
-    String(value.expectedWorkflowRevision),
-  ].join("\n");
+  return [...new Set(categories)].sort((left, right) => PlanMaterialCategorySchema.options.indexOf(left) - PlanMaterialCategorySchema.options.indexOf(right));
 }
 
 function deterministicCategoriesForPath(path: string): PlanMaterialCategory[] {

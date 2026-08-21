@@ -3,10 +3,16 @@ import { expect, test } from "vitest";
 import { ISSUE_COMMAND_NAMES } from "../src/commands/registry.js";
 import { taskCommandDescriptors } from "../src/task-commands.js";
 
-test("task command descriptors preserve the legacy public command projection", () => {
-  const actual = taskCommandDescriptors(ISSUE_COMMAND_NAMES, { expectedRevision: 7 });
+// Commands are shown whenever the workflow allows them; the descriptor no longer hides plan
+// commands behind an "exact subject" the client had to echo back.
+test("task command descriptors project every routed command", () => {
+  const actual = taskCommandDescriptors(ISSUE_COMMAND_NAMES, 7);
   expect(actual.map(({ name, label, endpoint, method, expectedRevision, note, idempotency }) => ({ name, label, endpoint, method, expectedRevision, note, idempotency }))).toEqual([
     { name: "start_planning", label: "Start planning", endpoint: "start-planning", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
+    { name: "request_supplemental_review", label: "Request supplemental review", endpoint: "request-supplemental-review", method: "POST", expectedRevision: 7, note: "none", idempotency: "required" },
+    { name: "approve_plan", label: "Approve plan", endpoint: "approve-plan", method: "POST", expectedRevision: 7, note: "required", idempotency: "required" },
+    { name: "request_plan_revision", label: "Request plan revision", endpoint: "request-plan-revision", method: "POST", expectedRevision: 7, note: "required", idempotency: "required" },
+    { name: "respond_plan_blocker", label: "Respond to blocker", endpoint: "respond-plan-blocker", method: "POST", expectedRevision: 7, note: "required", idempotency: "required" },
     { name: "revise_plan", label: "Revise plan", endpoint: "revise-plan", method: "POST", expectedRevision: 7, note: "required", idempotency: "none" },
     { name: "record_progress", label: "Record progress", endpoint: "record-progress", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "start_development", label: "Start development", endpoint: "start-development", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
@@ -31,5 +37,6 @@ test("task command descriptors preserve the legacy public command projection", (
     { name: "reconcile_merge", label: "Reconcile merge", endpoint: "reconcile-merge", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "continue_work", label: "Continue work", endpoint: "continue-work", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
     { name: "retry_capacity", label: "Retry capacity", endpoint: "retry-capacity", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
+    { name: "resync_projection", label: "Resync projection", endpoint: "resync-projection", method: "POST", expectedRevision: 7, note: "none", idempotency: "none" },
   ]);
 });

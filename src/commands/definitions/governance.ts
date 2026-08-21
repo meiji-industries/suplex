@@ -15,10 +15,6 @@ export const governanceCommands = {
     body: decisionBody,
     note: "required",
     idempotency: "required",
-    uiSubject: (context) => {
-      if (!context.finalPlanSubject || !context.materialityEvidence) return undefined;
-      return { subject: { kind: "plan_decision", value: { plan: context.finalPlanSubject, materiality: context.materialityEvidence, expectedWorkflowRevision: context.expectedRevision } } };
-    },
   }),
   request_plan_revision: defineIssueCommand({
     name: "request_plan_revision",
@@ -31,10 +27,6 @@ export const governanceCommands = {
     body: decisionBody,
     note: "required",
     idempotency: "required",
-    uiSubject: (context) => {
-      if (!context.finalPlanSubject || !context.materialityEvidence) return undefined;
-      return { subject: { kind: "plan_decision", value: { plan: context.finalPlanSubject, materiality: context.materialityEvidence, expectedWorkflowRevision: context.expectedRevision } } };
-    },
   }),
   reject_plan: defineIssueCommand({
     name: "reject_plan",
@@ -47,7 +39,6 @@ export const governanceCommands = {
     body: null,
     note: "none",
     idempotency: "none",
-    uiSubject: () => undefined,
   }),
   respond_plan_blocker: defineIssueCommand({
     name: "respond_plan_blocker",
@@ -60,7 +51,6 @@ export const governanceCommands = {
     body: HttpPlanBlockerResponseBodySchema,
     note: "required",
     idempotency: "required",
-    uiSubject: (context) => context.planBlockerSubject ? { subject: { kind: "plan_blocker", value: context.planBlockerSubject } } : undefined,
   }),
   resolve_decision_blocker: defineIssueCommand({
     name: "resolve_decision_blocker",

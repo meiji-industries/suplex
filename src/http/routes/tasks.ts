@@ -5,7 +5,6 @@ import { z } from "zod";
 import type { TaskEvent } from "../../tasks.js";
 import { TaskFailure, type TaskService } from "../../tasks.js";
 import { GithubReleaseFailure, type ReleaseService } from "../../github-release.js";
-import type { PlanCommandInput } from "../../temporal/issue-contracts.js";
 import { routedIssueCommands, type IssueCommand } from "../../commands/registry.js";
 import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, HttpPlanDecisionBodySchema, ResolveDecisionBlockerBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, DuplicateTaskBodySchema, PlanRevisionBodySchema, TaskAgentsBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskDeveloperDiffResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
@@ -63,15 +62,15 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
         expectedRevision: (body.expectedRevision ?? body.expectedWorkflowRevision) as number,
         ...(body.note !== undefined ? { note: body.note as string } : {}),
         ...(body.answer !== undefined ? { note: body.answer as string } : {}),
-        ...(body.subject !== undefined ? { subject: body.subject } : {}),
         ...(body.idempotencyKey !== undefined ? { idempotencyKey: body.idempotencyKey as string } : {}),
       }));
     });
   }
   typed.post("/api/tasks/:taskId/resolve-decision-blocker", { schema: { params: TaskIdParamsSchema, body: ResolveDecisionBlockerBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.resolveDecisionBlocker(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.answer)));
-  typed.post("/api/tasks/:taskId/reject-plan", { schema: { params: TaskIdParamsSchema, body: HttpPlanDecisionBodySchema.extend({ expectedRevision: ExpectedRevisionBodySchema.shape.expectedRevision }), response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.requestPlanRevision(request.forgeUser.id, request.params.taskId, { expectedRevision: request.body.expectedRevision, actorUserId: request.forgeUser.id, subject: request.body.subject as PlanCommandInput["subject"], note: request.body.note, idempotencyKey: request.body.idempotencyKey })));
+  typed.post("/api/tasks/:taskId/reject-plan", { schema: { params: TaskIdParamsSchema, body: HttpPlanDecisionBodySchema.extend({ expectedRevision: ExpectedRevisionBodySchema.shape.expectedRevision }), response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.requestPlanRevision(request.forgeUser.id, request.params.taskId, { expectedRevision: request.body.expectedRevision, actorUserId: request.forgeUser.id, note: request.body.note, idempotencyKey: request.body.idempotencyKey })));
   typed.post("/api/tasks/:taskId/revise-plan", { schema: { params: TaskIdParamsSchema, body: PlanRevisionBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.revisePlan(request.forgeUser.id, request.params.taskId, { ...request.body, actorUserId: request.forgeUser.id })));
   typed.post("/api/tasks/:taskId/continue-work", { schema: { params: TaskIdParamsSchema, body: ContinueWorkBodySchema, response: { 200: ContinueWorkResponseSchema } } }, async (request, reply) => reply.send(await tasks.continueWork(request.forgeUser.id, request.params.taskId, request.body.expectedRevision, request.body.reason)));
+  typed.post("/api/tasks/:taskId/resync-projection", { schema: { params: TaskIdParamsSchema, body: ExpectedRevisionBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => reply.send(await tasks.resyncProjection(request.forgeUser.id, request.params.taskId, request.body.expectedRevision)));
 
   typed.get("/api/tasks/:taskId/images/:artifactId", { schema: { params: TaskArtifactParamsSchema } }, async (request, reply) => {
     const image = await tasks.getTaskImage(request.forgeUser.id, request.params.taskId, request.params.artifactId);

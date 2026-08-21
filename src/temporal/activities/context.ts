@@ -358,7 +358,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       if (!deliveryArtifactId || !result.evidenceArtifactId) throw new Error("A supervised Developer result requires durable result and evidence artifacts");
       const claim = leases.claim({ executionId: input.developerTurnExecutionId, resultHash: terminal?.resultHash ?? persistedResultHash!, activityResultJson: JSON.stringify(result), deliveryArtifactId, evidenceArtifactId: result.evidenceArtifactId });
       if (claim.conflict) {
-        return { status: "ownership_ambiguous", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: terminal.lastHeartbeatAt };
+        return { status: "ownership_ambiguous", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: terminal?.lastHeartbeatAt ?? null };
       }
       return { status: "completed", result: JSON.parse(claim.claim.activityResultJson) as T, resultHash: claim.claim.resultHash };
     } catch (error) {

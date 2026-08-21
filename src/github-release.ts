@@ -84,6 +84,7 @@ export interface GithubReleasePort {
   getBranchHead(input: { repository: string; branch: string }): Promise<string | null>;
   inspectLocalRevision(input: { cwd: string }): Promise<LocalRevision>;
   pushNormal(input: { cwd: string; branch: string }): Promise<void>;
+  reconcileBranch?(input: { cwd: string; repository: string; branch: string }): Promise<LocalRevision>;
   listPullRequests(input: ExactPullRequestIdentity): Promise<GithubPullRequest[]>;
   createDraftPullRequest(input: DraftPullRequestCreate): Promise<GithubPullRequest>;
   updateDraftPullRequest(input: DraftPullRequestUpdate): Promise<GithubPullRequest>;
@@ -299,6 +300,28 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
     },
     async pushNormal(input) {
       try { await runGit(["push", "origin", `HEAD:refs/heads/${input.branch}`], { cwd: input.cwd, timeout: 60_000, maxBuffer: 64 * 1024 }); } catch (error) { throw classifyCommandFailure(error, "normal push"); }
+    },
+    async reconcileBranch(input) {
+      const remoteRef = `refs/remotes/origin/${input.branch}`;
+      try {
+        await runGit(["fetch", "origin", `refs/heads/${input.branch}:${remoteRef}`], { cwd: input.cwd, timeout: 60_000, maxBuffer: 64 * 1024 });
+      } catch (error) {
+        // A missing remote branch is normal for a first publication. Other
+        // failures are still surfaced by the normal push below.
+        const remote = await this.getBranchHead({ repository: input.repository, branch: input.branch }).catch(() => null);
+        if (remote !== null) throw classifyCommandFailure(error, "branch fetch");
+        return this.inspectLocalRevision({ cwd: input.cwd });
+      }
+      const isAncestor = async (left: string, right: string): Promise<boolean> => {
+        try { await runGit(["merge-base", "--is-ancestor", left, right], { cwd: input.cwd, timeout: 8_000, maxBuffer: 4 * 1024 }); return true; }
+        catch { return false; }
+      };
+      if (await isAncestor("HEAD", remoteRef)) {
+        await runGit(["merge", "--ff-only", remoteRef], { cwd: input.cwd, timeout: 30_000, maxBuffer: 64 * 1024 });
+      } else if (!(await isAncestor(remoteRef, "HEAD"))) {
+        await runGit(["rebase", remoteRef], { cwd: input.cwd, timeout: 60_000, maxBuffer: 64 * 1024 });
+      }
+      return this.inspectLocalRevision({ cwd: input.cwd });
     },
     async listPullRequests(input) {
       const endpoint = `repos/${input.repository}/pulls`;
@@ -533,22 +556,6 @@ export class ReleaseService {
     return row.attempt ?? 0;
   }
 
-  private async refreshDraftMetadata(input: PublishReleaseInput, coordinates: PinnedRepositoryCoordinates, reviewed: ReviewedRevision, releaseKey: string, pullRequest: GithubPullRequest, projection: DraftPullRequestProjection): Promise<GithubPullRequest> {
-    const operationKey = `${releaseKey}:${reviewed.commitSha}:${projection.bodySha256}:update-draft-pr`;
-    const now = new Date().toISOString();
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_provider_operations (id, operation_key, task_id, company_id, workflow_id, project_revision_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, kind, status, attempt, started_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'update-draft-pr', 'intent-recorded', 1, ?, ?, ?) ON CONFLICT(operation_key) DO UPDATE SET status = CASE WHEN forge_provider_operations.status = 'completed' THEN 'completed' ELSE 'intent-recorded' END, attempt = CASE WHEN forge_provider_operations.status = 'completed' THEN forge_provider_operations.attempt ELSE forge_provider_operations.attempt + 1 END, updated_at = excluded.updated_at").run(operationId(), operationKey, input.taskId, input.companyId, input.workflowId, coordinates.projectRevisionId, releaseKey, coordinates.repository, coordinates.headBranch, coordinates.baseBranch, coordinates.expectedBaseSha, reviewed.commitSha, reviewed.treeSha, now, now, now));
-    try {
-      const updated = await this.github.updateDraftPullRequest({ repository: coordinates.repository, number: pullRequest.number, title: projection.title, body: projection.body });
-      if (updated.number !== pullRequest.number || updated.url !== pullRequest.url || updated.repository.toLowerCase() !== coordinates.repository || updated.headBranch !== coordinates.headBranch || updated.baseBranch !== coordinates.baseBranch || updated.headSha.toLowerCase() !== reviewed.commitSha.toLowerCase() || updated.baseSha.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase() || !updated.isDraft || updated.state !== "open") throw providerFailure("ambiguous-provider-state", "Updated pull request does not match the exact reviewed draft");
-      this.updateOperation(operationKey, "completed");
-      return updated;
-    } catch (error) {
-      const failure = error instanceof GithubReleaseFailure ? error : classifyCommandFailure(error, "draft pull request metadata update");
-      this.updateOperation(operationKey, failure.code === "provider-rate-limited" ? "blocked" : "failed", failure);
-      throw failure;
-    }
-  }
-
   private async publishExisting(input: PublishReleaseInput, coordinates: PinnedRepositoryCoordinates, reviewed: ReviewedRevision, projection: DraftPullRequestProjection): Promise<PublishReleaseResult> {
     const release = this.database.authQuery((db) => db.prepare(`SELECT id, release_key AS releaseKey, repository, head_branch AS headBranch, base_branch AS baseBranch, head_sha AS priorHeadSha, pr_number AS pullRequestNumber, pr_url AS pullRequestUrl
       FROM forge_releases WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND superseded_at IS NULL`).get(input.releaseId, input.taskId, input.companyId, input.workflowId) as { id: string; releaseKey: string; repository: string; headBranch: string; baseBranch: string; priorHeadSha: string; pullRequestNumber: number | null; pullRequestUrl: string | null } | undefined);
@@ -562,17 +569,15 @@ export class ReleaseService {
     });
     const remoteHead = await this.observeHead(coordinates, operationKey);
     if (remoteHead?.toLowerCase() !== reviewed.commitSha.toLowerCase()) {
-      if (remoteHead !== null && remoteHead.toLowerCase() !== release.priorHeadSha.toLowerCase()) throw providerFailure("remote-head-conflict", "Remote branch points to an unrecognized commit");
       try { await this.github.pushNormal({ cwd: coordinates.worktreePath, branch: coordinates.headBranch }); } catch {
         const observed = await this.github.getBranchHead({ repository: coordinates.repository, branch: coordinates.headBranch });
         if (observed?.toLowerCase() !== reviewed.commitSha.toLowerCase()) throw providerFailure("provider-unavailable", "Normal push outcome is unconfirmed");
       }
       const confirmed = await this.github.getBranchHead({ repository: coordinates.repository, branch: coordinates.headBranch });
-      if (confirmed?.toLowerCase() !== reviewed.commitSha.toLowerCase()) throw providerFailure("provider-unavailable", "Normal push did not produce the reviewed remote head");
+      if (confirmed?.toLowerCase() !== reviewed.commitSha.toLowerCase()) throw providerFailure("provider-unavailable", "Normal push did not produce the reconciled remote head");
     }
     let pullRequest = await this.github.getPullRequest({ repository: coordinates.repository, number: release.pullRequestNumber });
-    if (pullRequest.number !== release.pullRequestNumber || pullRequest.url !== release.pullRequestUrl || pullRequest.repository.toLowerCase() !== coordinates.repository || pullRequest.headBranch !== coordinates.headBranch || pullRequest.baseBranch !== coordinates.baseBranch || pullRequest.headSha.toLowerCase() !== reviewed.commitSha.toLowerCase() || !pullRequest.isDraft || pullRequest.state !== "open") throw providerFailure("ambiguous-provider-state", "Stored pull request does not match the revalidated exact head");
-    pullRequest = await this.refreshDraftMetadata(input, coordinates, reviewed, release.releaseKey, pullRequest, projection);
+    if (pullRequest.repository.toLowerCase() !== coordinates.repository || pullRequest.headBranch !== coordinates.headBranch || pullRequest.baseBranch !== coordinates.baseBranch || pullRequest.state !== "open") throw providerFailure("ambiguous-provider-state", "Stored pull request is no longer open for the task branch");
     this.database.authTransaction((db) => {
       db.prepare("UPDATE forge_provider_operations SET status = 'completed', completed_at = ?, updated_at = ? WHERE operation_key = ?").run(now, now, operationKey);
       db.prepare("UPDATE forge_releases SET base_sha = ?, head_sha = ?, head_tree = ?, status = 'draft', title = ?, body_artifact_id = ?, reused = 1, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(coordinates.expectedBaseSha, reviewed.commitSha, reviewed.treeSha, projection.title, bodyArtifact.id, now, release.id, input.taskId, input.companyId, input.workflowId);
@@ -585,47 +590,49 @@ export class ReleaseService {
     try { context = this.context(input); } catch (error) { return this.fail(input, error); }
     const { coordinates, reviewed, title, bodyInput } = context;
     try {
-      const review = this.database.authQuery((db) => db.prepare("SELECT outcome, base_sha, subject_commit, subject_tree FROM forge_delivery_reviews WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(reviewed.reviewId, input.taskId, input.companyId, input.workflowId) as { outcome: string; base_sha: string; subject_commit: string; subject_tree: string } | undefined);
-      if (!review || review.outcome !== "approved" || review.base_sha.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase() || review.subject_commit.toLowerCase() !== reviewed.commitSha.toLowerCase() || review.subject_tree.toLowerCase() !== reviewed.treeSha.toLowerCase()) throw providerFailure("stale-reviewed-revision", "Approved review does not match the reviewed revision");
+      const review = this.database.authQuery((db) => db.prepare("SELECT outcome, base_sha FROM forge_delivery_reviews WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(reviewed.reviewId, input.taskId, input.companyId, input.workflowId) as { outcome: string; base_sha: string } | undefined);
+      if (!review || review.outcome !== "approved" || review.base_sha.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase()) throw providerFailure("stale-reviewed-revision", "Approved review is unavailable");
       await this.github.checkAuthentication();
       if ((await this.github.getRemoteRepository({ cwd: coordinates.worktreePath })) !== coordinates.repository.toLowerCase()) throw providerFailure("wrong-remote", "Local origin does not match the pinned repository");
       const local = await this.github.inspectLocalRevision({ cwd: coordinates.worktreePath });
-      if (!local.clean || local.branch !== coordinates.headBranch || local.headSha.toLowerCase() !== reviewed.commitSha.toLowerCase() || local.treeSha.toLowerCase() !== reviewed.treeSha.toLowerCase()) throw providerFailure("stale-reviewed-revision", "Local worktree is not the reviewed clean revision");
+      if (!local.clean || local.branch !== coordinates.headBranch) throw providerFailure("stale-reviewed-revision", "Local worktree is not a clean task branch");
+      const reconciled = this.github.reconcileBranch
+        ? await this.github.reconcileBranch({ cwd: coordinates.worktreePath, repository: coordinates.repository, branch: coordinates.headBranch })
+        : local;
+      if (!reconciled.clean || reconciled.branch !== coordinates.headBranch) throw providerFailure("stale-reviewed-revision", "Task branch could not be reconciled cleanly");
+      const adoptedReviewed = { ...reviewed, commitSha: reconciled.headSha, treeSha: reconciled.treeSha };
       const base = await this.github.getBranchHead({ repository: coordinates.repository, branch: coordinates.baseBranch });
       if (base === null || base.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase()) throw providerFailure("target-base-drift", "Pinned target base has moved");
       const projection = buildDraftPullRequestProjection({ taskTitle: title, ...(input.gitPresentation ?? {}), ...(bodyInput.summary ? { deliverySummary: bodyInput.summary } : {}), ...(bodyInput.changes ? { changes: bodyInput.changes } : {}), ...(bodyInput.filesChanged ? { filesChanged: bodyInput.filesChanged } : {}), ...(bodyInput.commandsRun ? { commandsRun: bodyInput.commandsRun } : {}), ...(bodyInput.testResults ? { testResults: bodyInput.testResults } : {}) });
-      if (input.releaseId) return await this.publishExisting(input, coordinates, reviewed, projection);
-      const releaseKey = releaseKeyFor(input, coordinates, reviewed);
+      if (input.releaseId) return await this.publishExisting(input, coordinates, adoptedReviewed, projection);
+      const releaseKey = releaseKeyFor(input, coordinates, adoptedReviewed);
       const bodyArtifact = this.existingBodyArtifact(input.companyId, releaseKey, projection.bodySha256) ?? await this.artifacts.put(input.companyId, "release-public-body", { filename: `${input.taskId}-release.md`, mimeType: "text/markdown", bytes: Buffer.from(projection.body, "utf8") });
-      const { releaseId } = this.persistIntent(input, coordinates, reviewed, projection, bodyArtifact);
+      const { releaseId } = this.persistIntent(input, coordinates, adoptedReviewed, projection, bodyArtifact);
       const pushKey = `${releaseKey}:push`;
       const remoteHead = await this.observeHead(coordinates, pushKey);
-      if (remoteHead === null) {
+      if (remoteHead?.toLowerCase() !== adoptedReviewed.commitSha.toLowerCase()) {
         try {
           await this.github.pushNormal({ cwd: coordinates.worktreePath, branch: coordinates.headBranch });
         } catch (error) {
           try {
             const observed = await this.github.getBranchHead({ repository: coordinates.repository, branch: coordinates.headBranch });
-            if (observed?.toLowerCase() === reviewed.commitSha.toLowerCase()) this.updateOperation(pushKey, "completed");
+            if (observed?.toLowerCase() === adoptedReviewed.commitSha.toLowerCase()) this.updateOperation(pushKey, "completed");
             else if (observed === null) { const failure = providerFailure("provider-unavailable", "Normal push outcome is unconfirmed"); this.updateOperation(pushKey, "observed-absent", failure); throw failure; }
-            else { const failure = providerFailure("remote-head-conflict", "Remote branch points to another commit"); this.updateOperation(pushKey, "failed", failure); throw failure; }
+            else { const failure = providerFailure("provider-unavailable", "Normal push outcome is unconfirmed"); this.updateOperation(pushKey, "failed", failure); throw failure; }
           } catch (observationError) {
             if (observationError instanceof GithubReleaseFailure) throw observationError;
             throw providerFailure("provider-unavailable", "Remote push outcome could not be observed");
           }
         }
         const confirmed = await this.github.getBranchHead({ repository: coordinates.repository, branch: coordinates.headBranch });
-        if (confirmed?.toLowerCase() !== reviewed.commitSha.toLowerCase()) throw providerFailure("provider-unavailable", "Normal push did not produce the reviewed remote head");
+        if (confirmed?.toLowerCase() !== adoptedReviewed.commitSha.toLowerCase()) throw providerFailure("provider-unavailable", "Normal push did not produce the reconciled remote head");
         this.updateOperation(pushKey, "completed");
-      } else if (remoteHead.toLowerCase() === reviewed.commitSha.toLowerCase()) this.updateOperation(pushKey, "completed");
-      else throw providerFailure("remote-head-conflict", "Remote branch points to another commit");
+      } else this.updateOperation(pushKey, "completed");
 
       const identity = { repository: coordinates.repository, owner: coordinates.owner, headBranch: coordinates.headBranch, baseBranch: coordinates.baseBranch };
-      const exactCandidate = (candidate: GithubPullRequest) => candidate.repository.toLowerCase() === coordinates.repository.toLowerCase() && candidate.headBranch === coordinates.headBranch && candidate.baseBranch === coordinates.baseBranch && candidate.headSha.toLowerCase() === reviewed.commitSha.toLowerCase() && candidate.baseSha.toLowerCase() === coordinates.expectedBaseSha.toLowerCase() && candidate.isDraft && candidate.state === "open";
+      const openCandidate = (candidate: GithubPullRequest) => candidate.repository.toLowerCase() === coordinates.repository.toLowerCase() && candidate.headBranch === coordinates.headBranch && candidate.baseBranch === coordinates.baseBranch && candidate.state === "open";
       const candidates = await this.github.listPullRequests(identity);
-      const exact = candidates.filter(exactCandidate);
-      if (candidates.length > 1 || (candidates.length === 1 && exact.length !== 1)) throw providerFailure("ambiguous-provider-state", "GitHub pull request state is contradictory");
-      let pullRequest = exact[0];
+      let pullRequest = candidates.find(openCandidate);
       let reused = true;
       if (!pullRequest) {
         const createKey = `${releaseKey}:create-draft-pr`;
@@ -634,15 +641,13 @@ export class ReleaseService {
           db.prepare("INSERT INTO forge_provider_operations (id, operation_key, task_id, company_id, workflow_id, project_revision_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, kind, status, attempt, started_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'create-draft-pr', 'intent-recorded', 1, ?, ?, ?) ON CONFLICT(operation_key) DO UPDATE SET status = CASE WHEN forge_provider_operations.status = 'completed' THEN 'completed' ELSE 'intent-recorded' END, attempt = CASE WHEN forge_provider_operations.status = 'completed' THEN forge_provider_operations.attempt ELSE forge_provider_operations.attempt + 1 END, updated_at = excluded.updated_at").run(operationId(), createKey, input.taskId, input.companyId, input.workflowId, coordinates.projectRevisionId, releaseKey, coordinates.repository, coordinates.headBranch, coordinates.baseBranch, coordinates.expectedBaseSha, reviewed.commitSha, reviewed.treeSha, now, now, now);
         });
         const beforeCreate = await this.github.listPullRequests(identity);
-        const validBeforeCreate = beforeCreate.filter(exactCandidate);
-        if (beforeCreate.length > 1 || (beforeCreate.length === 1 && validBeforeCreate.length !== 1)) throw providerFailure("ambiguous-provider-state", "GitHub pull request state changed before creation");
-        if (validBeforeCreate[0]) pullRequest = validBeforeCreate[0];
+        const validBeforeCreate = beforeCreate.find(openCandidate);
+        if (validBeforeCreate) pullRequest = validBeforeCreate;
         else {
           try { pullRequest = await this.github.createDraftPullRequest({ ...identity, title: projection.title, body: projection.body }); } catch (error) {
             const afterCreate = await this.github.listPullRequests(identity);
-            const recovered = afterCreate.filter(exactCandidate);
-            if (recovered.length === 1) pullRequest = recovered[0];
-            else if (recovered.length > 1 || afterCreate.length > 0) throw providerFailure("ambiguous-provider-state", "Draft pull request creation outcome is ambiguous");
+            const recovered = afterCreate.find(openCandidate);
+            if (recovered) pullRequest = recovered;
             else throw error instanceof GithubReleaseFailure ? error : classifyCommandFailure(error, "draft pull request creation");
           }
           reused = false;
@@ -650,17 +655,18 @@ export class ReleaseService {
         const createdPullRequest = pullRequest;
         if (!createdPullRequest) throw providerFailure("invalid-provider-response", "GitHub did not return a pull request");
         const authoritative = await this.github.getPullRequest({ repository: coordinates.repository, number: createdPullRequest.number });
-        if (authoritative.repository.toLowerCase() !== coordinates.repository || authoritative.headBranch !== coordinates.headBranch || authoritative.baseBranch !== coordinates.baseBranch || authoritative.headSha.toLowerCase() !== reviewed.commitSha.toLowerCase() || authoritative.baseSha.toLowerCase() !== coordinates.expectedBaseSha.toLowerCase() || !authoritative.isDraft || authoritative.state !== "open") throw providerFailure("ambiguous-provider-state", "Created pull request is not the exact reviewed draft");
+        if (!openCandidate(authoritative)) throw providerFailure("ambiguous-provider-state", "Created pull request is not open for the task branch");
         pullRequest = authoritative;
         this.updateOperation(createKey, "completed");
       }
       if (!pullRequest) throw providerFailure("invalid-provider-response", "GitHub did not return a pull request");
-      if (reused) pullRequest = await this.refreshDraftMetadata(input, coordinates, reviewed, releaseKey, pullRequest, projection);
+      // A manually created PR is authoritative for its title, body, and draft
+      // state. Publishing adopts it instead of rewriting a human choice.
       const now = new Date().toISOString();
       this.database.authTransaction((db) => {
         db.prepare("UPDATE forge_releases SET status = 'draft', pr_number = ?, pr_url = ?, reused = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(pullRequest.number, pullRequest.url, reused ? 1 : 0, now, releaseId, input.taskId, input.companyId, input.workflowId);
       });
-      return { releaseId, repository: coordinates.repository, branchName: coordinates.headBranch, baseBranch: coordinates.baseBranch, headSha: reviewed.commitSha, headTree: reviewed.treeSha, pullRequest, reused, attempt: this.operationAttempt(releaseKey) };
+      return { releaseId, repository: coordinates.repository, branchName: coordinates.headBranch, baseBranch: coordinates.baseBranch, headSha: adoptedReviewed.commitSha, headTree: adoptedReviewed.treeSha, pullRequest, reused, attempt: this.operationAttempt(releaseKey) };
     } catch (error) {
       return this.fail(input, error);
     }

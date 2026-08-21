@@ -373,6 +373,8 @@ interface DeliveryReviewContext {
   evidenceSha256: string;
   developerSessionRef: string;
   developerEvidenceArtifactId: string;
+  forwardMergePriorHead: string | null;
+  forwardMergeTargetBaseSha: string | null;
 }
 
 export interface AgentServiceOptions {
@@ -996,7 +998,9 @@ export class AgentService {
       da.storage_path AS deliveryStoragePath, da.sha256 AS deliverySha256,
       ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256,
       de.session_ref AS developerSessionRef,
-      de.evidence_artifact_id AS developerEvidenceArtifactId
+      de.evidence_artifact_id AS developerEvidenceArtifactId,
+      fm.prior_head AS forwardMergePriorHead,
+      fm.current_base_sha AS forwardMergeTargetBaseSha
       FROM forge_tasks t
       JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id
@@ -1005,6 +1009,7 @@ export class AgentService {
       JOIN forge_developer_executions de ON de.id = ? AND de.task_id = t.id AND de.company_id = t.company_id AND de.workflow_id = t.workflow_id AND de.delivery_artifact_id = ? AND lower(de.result_commit) = lower(?) AND lower(de.result_tree) = lower(?) AND lower(de.target_base_sha) = lower(?)
       JOIN forge_artifacts da ON da.id = de.delivery_artifact_id
       JOIN forge_artifacts ea ON ea.id = de.evidence_artifact_id
+      LEFT JOIN forge_forward_merges fm ON fm.developer_execution_id = de.id AND fm.task_id = de.task_id AND fm.company_id = de.company_id AND fm.workflow_id = de.workflow_id AND fm.status = 'merged' AND fm.conflict_file_count IS NULL AND lower(fm.result_head) = lower(de.result_commit) AND lower(fm.result_tree) = lower(de.result_tree)
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(
       input.leadOutputArtifactId,
       input.planRevision,
@@ -1110,7 +1115,7 @@ export class AgentService {
     const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
     const stopCancellationTracking = this.trackCancellation(executionId, runtime.signal);
     try {
-      const initialPrompt = this.deliveryReviewPrompt(context.title, brief, plan, delivery, developerEvidence, gitEvidence, delivery.includes('"priorHead"'), Boolean(context.developerSessionRef)) + (isFinalReview ? `\n\nYou are Forge's Integrator for this final review: your job is to get the Builder's branch merged - publish the pull request, watch CI, fix CI failures, and resolve merge conflicts against the current base.\n\nExact required CI context: ${JSON.stringify({ releaseId: input.releaseId, ciRunId: input.ciRunId, status: finalContext?.status, headSha: finalContext?.headSha, headTree: finalContext?.headTree })}` : "");
+      const initialPrompt = this.deliveryReviewPrompt(context.title, brief, plan, delivery, developerEvidence, gitEvidence, context.forwardMergePriorHead && context.forwardMergeTargetBaseSha ? { priorHead: context.forwardMergePriorHead, targetBaseSha: context.forwardMergeTargetBaseSha } : null, Boolean(context.developerSessionRef)) + (isFinalReview ? `\n\nYou are Forge's Integrator for this final review: your job is to get the Builder's branch merged - publish the pull request, watch CI, fix CI failures, and resolve merge conflicts against the current base.\n\nExact required CI context: ${JSON.stringify({ releaseId: input.releaseId, ciRunId: input.ciRunId, status: finalContext?.status, headSha: finalContext?.headSha, headTree: finalContext?.headTree })}` : "");
       const runTurn = async (turn: number, prompt: string): Promise<void> => {
         evidenceLines.push(JSON.stringify({ type: "forge.review-turn-start", turn }));
         const wrapper = await this.prepareTurnWrapper(executionId, leadProfile, worktreePath, schemaPath, prompt, { resumeSessionRef: leadSessionRef, sessionRef: leadSessionRef });
@@ -1400,7 +1405,7 @@ export class AgentService {
     return `You are Forge's Integrator: your job is to get the Builder's branch merged, which means watching CI and fixing what it reports. Diagnose one exact failed CI observation. Resume the same Lead session. Use only the bounded check names, summaries, and failing job logs below; do not request a new session, branch, worktree, pull request, merge, rebase, amend, force push, or history rewrite. Return exactly one JSON object with no markdown fences or commentary matching: {"kind":"ci-repair-plan","ciRunId":"...","ciAttemptId":"...","failedHeadSha":"...","rootCause":"...","disposition":"repair"|"rerun","failedChecks":[{"name":"exact failed check name","evidenceArtifactId":"...","diagnosis":"..."}],"steps":[{"number":1,"instruction":"...","verification":"..."}],"localVerification":["exact pinned command"],"unresolvedQuestions":[]}. Set disposition to "rerun" — and only then — when the evidence shows the failure is not caused by this delivery (a flake, infrastructure or runner outage, a rate limit, or a pre-existing failure on the base): Forge will re-run the failed provider jobs for you, at most twice per CI cycle, and then wait on CI again. Otherwise use "repair" and author the code fix. Either way, use the exact identity values supplied below, one failedChecks entry per failed exact-head check, contiguous step numbers starting at 1, the complete pinned local verification, and no unresolved questions; for a "rerun" the steps describe what to do if the re-run fails again. Use no other keys.\n\nTask: ${title}\nExact identity: ${JSON.stringify({ ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, failedHeadSha: input.failedHeadSha })}\nFailed exact-head checks: ${JSON.stringify(failedChecks)}\nRequired checks: ${JSON.stringify(input.requiredChecks)}\nPinned local verification: ${JSON.stringify(input.localVerification)}\nThe evidenceArtifactId for every failed check is exactly: ${input.evidenceArtifactId}${failedLogs.length ? `\nFailing job logs (tail):\n${failedLogs.map((entry) => `--- ${entry.name} (run ${entry.runId}) ---\n${entry.log}`).join("\n\n")}` : ""}`;
   }
 
-  private deliveryReviewPrompt(title: string, brief: string, plan: string, delivery: string, developerEvidence: string, gitEvidence: { targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }, isForwardMergeDelivery: boolean, hasDeveloperSession: boolean): string {
+  private deliveryReviewPrompt(title: string, brief: string, plan: string, delivery: string, developerEvidence: string, gitEvidence: { targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }, forwardMerge: { priorHead: string; targetBaseSha: string } | null, hasDeveloperSession: boolean): string {
     return [
       'You are Forge\'s Lead reviewer continuing the existing Lead session. Review the exact local Developer delivery; do not redesign or expand the approved plan. Do not modify files, commit, run CI, use GitHub/provider commands, or treat CI as available.',
       'Return exactly one JSON object with no markdown fences or commentary matching: {"kind":"delivery_review","summary":"...","outcome":"approved|blocking","findings":[{"findingId":"finding_...","severity":"blocking|advisory","rationale":"...","evidenceRef":"diff hunk, file, test, or report reference","disposition":"open|accepted|repaired","repairInstruction":null}],"repairPlan":null}. Blocking findings are limited to correctness, acceptance, security/privacy/data loss, compatibility, operational safety, unintended scope, or missing mandatory proof. Advisory findings never block. Treat \`not_applicable_locally\` steps as acceptable when their note is reasonable. An approved result cannot contain an open blocking finding. A blocking result must identify each open blocking finding and provide a bounded repairPlan when repair is possible; use null only when a member decision is required. Ground every finding in the supplied exact revision and evidence.',
@@ -1409,7 +1414,7 @@ export class AgentService {
       `Developer delivery report:\n${promptExcerpt(delivery, 32_000)}`,
       `Developer verification evidence:\n${promptExcerpt(developerEvidence, 16_000)}`,
       ...(hasDeveloperSession ? [] : ["There is no Developer session for this head; review the current diff against the base and treat the available delivery evidence as supplemental context."]),
-      ...(isForwardMergeDelivery ? ["This is a clean forward-merge delivery. Its pinned post-merge verification and the prior delivery proof remain authoritative for unchanged behavior. Do not block solely because broader checks or manual smoke steps were not repeated after the merge; report those as advisory unless the exact merge diff shows a concrete regression or new risk."] : []),
+      ...(forwardMerge ? [`This head is a clean forward merge of an already-reviewed delivery. Review the merge diff against the new base; its lineage is ${JSON.stringify(forwardMerge)}. Its pinned post-merge verification and prior delivery proof remain authoritative for unchanged behavior. Do not block solely because broader checks or manual smoke steps were not repeated after the merge; report those as advisory unless the exact merge diff shows a concrete regression or new risk.`] : []),
       `Exact Git subject (base, branch, commit, tree, clean state):\n${JSON.stringify({ targetBaseSha: gitEvidence.targetBaseSha, branch: gitEvidence.branch, subjectCommit: gitEvidence.subjectCommit, subjectTree: gitEvidence.subjectTree, observedHead: gitEvidence.head, observedTree: gitEvidence.tree, dirtyState: gitEvidence.status ? "dirty" : "clean" })}`,
       `Repository instructions:\n${promptExcerpt(gitEvidence.instructions || "(none found)", 12_000)}`,
       `Exact diff from target base to subject commit:\n${promptExcerpt(gitEvidence.diff, 72_000)}`,

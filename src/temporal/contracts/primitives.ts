@@ -61,7 +61,7 @@ export const TargetBaseBlockerCodeSchema = z.enum([
 ]);
 export type TargetBaseBlockerCode = z.infer<typeof TargetBaseBlockerCodeSchema>;
 
-export const TargetBaseArtifactKindSchema = z.enum(["forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery"]);
+export const TargetBaseArtifactKindSchema = z.enum(["developer-delivery", "forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery"]);
 export const ArtifactReferenceSchema = z.object({ id: durableId, sha256: z.string().regex(/^[a-f0-9]{64}$/), kind: TargetBaseArtifactKindSchema }).strict();
 export type ArtifactReference = z.infer<typeof ArtifactReferenceSchema>;
 

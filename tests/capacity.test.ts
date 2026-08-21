@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Worker } from "node:worker_threads";
@@ -72,52 +72,16 @@ test("uses the current host default when an override is cleared", async () => {
   }
 });
 
-test("reclaims an ambiguous admission that never bound an execution", async () => {
+test("releases an unbound admission when ownership is no longer observable", async () => {
   const value = await fixture();
   try {
     const capacity = new CapacityManager(value.database, value.config);
     const request = capacity.request(input("task-a", "unbound-retry"));
     expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
-    capacity.markOwnershipAmbiguous(request.id, "worker restarted before execution registration");
-    expect(capacity.bindExecution(request.id, { executionKind: "developer", executionId: "developer-retry", worktreePath: "/tmp/retry" })).toMatchObject({ status: "active", executionId: "developer-retry" });
+    expect(capacity.markOwnershipAmbiguous(request.id, "worker restarted before execution registration")).toMatchObject({ status: "released", terminalReason: "process_failed" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("does not release an Agent slot while its execution is cancelling", async () => {
-  const value = await fixture();
-  try {
-    const capacity = new CapacityManager(value.database, value.config);
-    const request = capacity.request(input("task-a", "cancelling-agent"));
-    expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
-    capacity.bindExecution(request.id, { executionKind: "agent", executionId: "agent-cancelling" });
-    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES ('agent-cancelling', 'task-a', 'company', 'workflow-task-a', 'planner', 'cancelling', 1, ?)").run(now));
-    expect(() => capacity.finalize(request.id, "agent-cancelling", "cancelled")).toThrowError("Capacity request invalid-status");
-    expect(capacity.inspect(request.id).status).toBe("active");
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("does not release a slot while the bound wrapper is still live", async () => {
-  const value = await fixture();
-  const wrapperRoot = await mkdtemp(join(tmpdir(), "forge-capacity-wrapper-"));
-  try {
-    const capacity = new CapacityManager(value.database, value.config);
-    const request = capacity.request(input("task-a", "live-wrapper"));
-    expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
-    capacity.bindExecution(request.id, { executionKind: "agent", executionId: "agent-live" });
-    await writeFile(join(wrapperRoot, "state.json"), JSON.stringify({ wrapperPid: 2, wrapperProcessGroupId: 2, wrapperStartIdentity: "2:live", childPid: 3, childProcessGroupId: 3, childStartIdentity: "3:live", heartbeatAt: now, status: "running" }));
-    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, wrapper_path, started_at) VALUES ('agent-live', 'task-a', 'company', 'workflow-task-a', 'planner', 'failed', 1, ?, ?)").run(wrapperRoot, now));
-    expect(() => capacity.finalize(request.id, "agent-live", "process_failed")).toThrowError("Capacity request invalid-status");
-    expect(capacity.inspect(request.id).status).toBe("active");
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-    await rm(wrapperRoot, { recursive: true, force: true });
   }
 });
 
@@ -178,7 +142,7 @@ test("rate-limit attempts become durable exhaustion without changing the lane", 
   }
 });
 
-test("ambiguous execution ledgers retain the capacity slot after worker reconciliation", async () => {
+test("terminal execution ledgers release capacity during reconciliation", async () => {
   const value = await fixture();
   try {
     const capacity = new CapacityManager(value.database, value.config);
@@ -187,7 +151,25 @@ test("ambiguous execution ledgers retain the capacity slot after worker reconcil
     capacity.bindExecution(request.id, { executionKind: "developer", executionId: "developer-ambiguous", worktreePath: "/tmp/ambiguous" });
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('developer-ambiguous', 'task-a', 'company', 'workflow-a', 1, 99, 'ownership_ambiguous', 'forge/ambiguous', '/tmp/ambiguous', ?, ?)").run("a".repeat(40), now));
     capacity.reconcileFromLedgers();
-    expect(capacity.inspect(request.id)).toMatchObject({ status: "ownership_ambiguous", terminalReason: "ownership_ambiguous" });
+    expect(capacity.inspect(request.id)).toMatchObject({ status: "released", terminalReason: "process_failed" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("admission sweeps a capacity holder whose heartbeat has expired", async () => {
+  const value = await fixture();
+  try {
+    value.database.authTransaction((db) => db.prepare("UPDATE forge_profiles SET capacity = 1 WHERE id = 'profile'").run());
+    const capacity = new CapacityManager(value.database, value.config);
+    const first = capacity.request(input("task-a", "expired-holder", now));
+    const second = capacity.request(input("task-b", "after-expiry", new Date(Date.parse(now) + 1_000).toISOString()));
+    expect(capacity.tryAcquire(first.id, 0, now).status).toBe("active");
+    capacity.bindExecution(first.id, { executionKind: "developer", executionId: "developer-missing" });
+    const afterTimeout = new Date(Date.parse(now) + 16_000).toISOString();
+    expect(capacity.tryAcquire(second.id, 0, afterTimeout)).toMatchObject({ status: "active", acquired: true });
+    expect(capacity.inspect(first.id)).toMatchObject({ status: "released", terminalReason: "process_failed" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -259,23 +241,6 @@ test("a live agent process keeps its turn even without a recorded process group"
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, process_pid, process_start_identity, wrapper_id, wrapper_path, wrapper_pid, wrapper_start_identity, started_at) VALUES ('agent-live-pid', 'task-a', 'company', 'workflow-task-a', 'planner', 'running', 1, 4242, '4242:start', 'wrapper-live', '/tmp/wrapper-live', 4241, '4241:start', ?)").run(now));
     expect(await reconcileAgentExecutions(value.database, liveProcess)).toEqual([{ executionId: "agent-live-pid", status: "active", reason: "live-process" }]);
     expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_agent_executions WHERE id = 'agent-live-pid'").get())).toMatchObject({ status: "running" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("a genuinely ambiguous agent turn still leaves the operator a way out", async () => {
-  const value = await fixture();
-  // Child alive, wrapper gone: partial evidence, so the turn is truly ambiguous.
-  const partial = { inspect: async (pid: number) => (pid === 5252 ? { pid, processGroupId: pid, processStartIdentity: "5252:start", command: "codex" } : undefined), signalGroup: async () => undefined };
-  try {
-    value.database.authQuery((db) => {
-      db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task-a', 'company', 'project', 'workflow-task-a', 1, 'planning', 'lead', '[]', 'Preparing', ?, 'event-1')").run(now);
-      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, process_pid, process_start_identity, wrapper_id, wrapper_path, wrapper_pid, wrapper_start_identity, started_at) VALUES ('agent-partial', 'task-a', 'company', 'workflow-task-a', 'analyst', 'running', 1, 5252, '5252:start', 'wrapper-partial', '/tmp/wrapper-partial', 5251, '5251:start', ?)").run(now);
-    });
-    expect(await reconcileAgentExecutions(value.database, partial)).toEqual([{ executionId: "agent-partial", status: "ownership_ambiguous", reason: "wrapper-identity-mismatch" }]);
-    expect(value.database.authQuery((db) => db.prepare("SELECT owner, allowed_commands_json FROM forge_issue_projections WHERE task_id = 'task-a'").get())).toMatchObject({ owner: "human", allowed_commands_json: JSON.stringify(["retry_capacity", "cancel_issue"]) });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

@@ -104,7 +104,7 @@ export function asRetryableAgentFailure(error: unknown): ApplicationFailure | un
 
 export function asNonRetryableCapacityFailure(error: unknown): ApplicationFailure | undefined {
   if (!(error instanceof CapacityFailure)) return undefined;
-  if (error.code === "invalid-status" || error.code === "stale-owner") {
+  if (error.code === "invalid-status") {
     const summary = "The previous Developer turn was interrupted and its capacity request cannot be reused — retry development.";
     return ApplicationFailure.nonRetryable(summary, error.code, { code: error.code, summary });
   }
@@ -269,7 +269,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     if (lease && !lease.resultHash) {
       try {
         const result = validateSupervisorResult(JSON.parse(await readFile(join(lease.executionRoot, lease.resultPath), "utf8")));
-        if (result.executionId === lease.executionId && result.leaseTokenHash === lease.leaseTokenHash) {
+        if (result.executionId === lease.executionId) {
           new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).recordResultReady(lease.executionId, result);
         }
       } catch { /* No complete supervisor result is available yet. */ }

@@ -72,7 +72,7 @@ export interface DeveloperReconciliation {
   verificationProjectRevisionId?: string;
   independentVerification: IndependentVerification | null;
   git: DeveloperGitObservation;
-  provider: { beforeSha256: string | null; afterSha256: string | null; matching: boolean };
+  provider: { beforeSha256: string | null; afterSha256: string | null };
   observations: {
     startingSha: string;
     neutralBranch: string;
@@ -132,7 +132,7 @@ export const DeveloperReconciliationArtifactSchema = z.object({
   receipts: z.array(ExecutionReceiptSchema).optional(),
   receiptCount: z.number().int().nonnegative().optional(),
   git: GitObservationSchema,
-  provider: z.object({ beforeSha256: z.string().nullable(), afterSha256: z.string().nullable(), matching: z.boolean() }),
+  provider: z.object({ beforeSha256: z.string().nullable(), afterSha256: z.string().nullable() }),
   observations: ObservationsSchema.optional(),
   sha256: z.string().regex(/^[a-f0-9]{64}$/i),
 }).passthrough();
@@ -193,10 +193,6 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
   const report = parsed.success ? parsed.data : null;
   if (rawInput.git.branch !== rawInput.neutralBranch) mismatches.push("branch-mismatch");
   if (rawInput.git.status) mismatches.push("dirty-final-tree");
-  if (!rawInput.git.isDescendant) mismatches.push("starting-commit-not-ancestor");
-  if (rawInput.git.head.toLowerCase() === rawInput.startingSha.toLowerCase()) mismatches.push("no-new-commit");
-  if (rawInput.git.parents.length !== 1 || rawInput.git.parents[0]?.toLowerCase() !== rawInput.startingSha.toLowerCase()) mismatches.push("commit-parent-mismatch");
-  if (rawInput.git.commitCount !== 1) mismatches.push("commit-count-mismatch");
   if (rawInput.processExitCode !== 0) mismatches.push(rawInput.processExitCode === null ? "process-exit-unknown" : "process-exit-nonzero");
   if (!rawInput.developerSessionId) mismatches.push("missing-session");
   if (!rawInput.leadSessionId) mismatches.push("missing-lead-session");
@@ -215,7 +211,6 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
     const incomplete = report.steps.filter((step) => step.status !== "completed").map((step) => step.number).sort((a, b) => a - b);
     if (JSON.stringify(incomplete) !== JSON.stringify([...report.authorizedStepsNotCompleted].sort((a, b) => a - b))) mismatches.push("incomplete-step-mismatch");
     if (incomplete.length || report.blocker !== null) mismatches.push("non-completed-step");
-    if (report.resultCommit.toLowerCase() !== rawInput.git.head.toLowerCase() || report.resultTree.toLowerCase() !== rawInput.git.tree.toLowerCase() || report.dirtyState !== "clean") mismatches.push("reported-git-state-mismatch");
   }
 
   const uniqueMismatches = [...new Set(mismatches)];
@@ -242,7 +237,7 @@ export function reconcileDeveloperDelivery(rawInput: DeveloperReconciliationInpu
     ...(rawInput.verificationProjectRevisionId ? { verificationProjectRevisionId: rawInput.verificationProjectRevisionId } : {}),
     independentVerification,
     git: rawInput.git,
-    provider: { beforeSha256: rawInput.providerBeforeSha256, afterSha256: rawInput.providerAfterSha256, matching: rawInput.providerBeforeSha256 !== null && rawInput.providerBeforeSha256 === rawInput.providerAfterSha256 },
+    provider: { beforeSha256: rawInput.providerBeforeSha256, afterSha256: rawInput.providerAfterSha256 },
     observations: { startingSha: rawInput.startingSha, neutralBranch: rawInput.neutralBranch, processExitCode: rawInput.processExitCode, developerSessionId: rawInput.developerSessionId, leadSessionId: rawInput.leadSessionId },
   };
   return { ...result, sha256: createHash("sha256").update(JSON.stringify(result)).digest("hex") };

@@ -1,10 +1,8 @@
-import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { resolveAgentProfiles } from "./projects.js";
-import { AgentWrapperResultSchema, AgentWrapperStateSchema } from "./agent-wrapper.js";
 import {
   CapacityExecutionOwnerSchema,
   CapacityRequestInputSchema,
@@ -22,7 +20,7 @@ import {
 export type ExternalTurnKind = "lead" | "developer" | "review" | "ci-repair";
 
 export class CapacityFailure extends Error {
-  constructor(readonly code: "not-found" | "not-owner" | "duplicate" | "conflict" | "stale-revision" | "profile-unavailable" | "invalid-status" | "stale-owner" | "ownership-ambiguous" | "deadline-exhausted") {
+  constructor(readonly code: "not-found" | "not-owner" | "duplicate" | "conflict" | "stale-revision" | "profile-unavailable" | "invalid-status" | "deadline-exhausted") {
     super(`Capacity request ${code}`);
     this.name = "CapacityFailure";
   }
@@ -36,19 +34,7 @@ function isoAfter(value: string, milliseconds: number): string {
   return new Date(Date.parse(value) + milliseconds).toISOString();
 }
 
-function wrapperIsLive(wrapperPath: string | null | undefined): boolean {
-  if (!wrapperPath) return false;
-  try {
-    const state = AgentWrapperStateSchema.safeParse(JSON.parse(readFileSync(`${wrapperPath}/state.json`, "utf8")));
-    const result = (() => {
-      try { return AgentWrapperResultSchema.safeParse(JSON.parse(readFileSync(`${wrapperPath}/result.json`, "utf8"))); }
-      catch { return undefined; }
-    })();
-    return state.success && ["starting", "running"].includes(state.data.status) && (!result || !result.success);
-  } catch {
-    return false;
-  }
-}
+const executionLeaseTimeoutMs = 15_000;
 
 function legacyOperation(turnKind: ExternalTurnKind): { operation: CapacityOperation; role: "planner" | "builder" | "reviewer" } {
   if (turnKind === "lead") return { operation: "lead_planning", role: "planner" };
@@ -139,7 +125,7 @@ export class CapacityManager {
   }
 
   private requestInTransaction(db: import("better-sqlite3").Database, input: CapacityRequestInput): CapacityRequestSnapshot & { turnKind?: ExternalTurnKind } {
-    const existingRaw = db.prepare("SELECT * FROM forge_capacity_requests WHERE logical_turn_key = ? AND status IN ('queued', 'active', 'rate_limited', 'ownership_ambiguous')").get(input.logicalTurnKey) as Record<string, unknown> | undefined;
+    const existingRaw = db.prepare("SELECT * FROM forge_capacity_requests WHERE logical_turn_key = ? AND status IN ('queued', 'active', 'rate_limited')").get(input.logicalTurnKey) as Record<string, unknown> | undefined;
     if (existingRaw) {
       const existing = row(existingRaw);
       const immutableMatches = existing.companyId === input.companyId && existing.taskId === input.taskId && existing.workflowId === input.workflowId && existing.projectRevisionId === input.projectRevisionId && existing.workflowRevision === input.workflowRevision && existing.operation === input.operation && existing.role === input.role;
@@ -182,6 +168,7 @@ export class CapacityManager {
 
   tryAcquire(requestId: string, expectedWorkflowRevision = 0, now = new Date().toISOString()): CapacityAdmissionResult & { acquired: boolean; request: CapacityRequestSnapshot } {
     return this.database.authImmediateTransaction((db) => {
+      this.sweepInactiveExecutions(db, now);
       const raw = db.prepare("SELECT * FROM forge_capacity_requests WHERE id = ?").get(requestId) as Record<string, unknown> | undefined;
       if (!raw) throw new CapacityFailure("not-found");
       let request = row(raw);
@@ -202,7 +189,7 @@ export class CapacityManager {
         return { status: request.status, publicState: toWorkflowState(request), acquired: false, request };
       }
       const effectiveCapacity = this.currentLaneCapacity(db, request.profileId);
-      const activeCount = Number((db.prepare("SELECT COUNT(*) AS count FROM forge_capacity_requests WHERE lane_key = ? AND status IN ('active', 'ownership_ambiguous')").get(request.laneKey) as { count: number }).count);
+      const activeCount = Number((db.prepare("SELECT COUNT(*) AS count FROM forge_capacity_requests WHERE lane_key = ? AND status = 'active'").get(request.laneKey) as { count: number }).count);
       if (activeCount >= effectiveCapacity) {
         this.setWait(db, requestId, "lane_full", now);
         request = row(db.prepare("SELECT * FROM forge_capacity_requests WHERE id = ?").get(requestId) as Record<string, unknown>);
@@ -229,9 +216,9 @@ export class CapacityManager {
   }
 
   private conflictFor(db: import("better-sqlite3").Database, request: CapacityRequestSnapshot, excludeId: string): "issue_active" | "session_active" | "worktree_active" | null {
-    if (db.prepare("SELECT id FROM forge_capacity_requests WHERE task_id = ? AND status IN ('active', 'ownership_ambiguous') AND id <> ? LIMIT 1").get(request.taskId, excludeId)) return "issue_active";
-    if (request.sessionRef && db.prepare("SELECT id FROM forge_capacity_requests WHERE session_ref = ? AND status IN ('active', 'ownership_ambiguous') AND id <> ? LIMIT 1").get(request.sessionRef, excludeId)) return "session_active";
-    if (request.worktreePath && db.prepare("SELECT id FROM forge_capacity_requests WHERE worktree_path = ? AND status IN ('active', 'ownership_ambiguous') AND id <> ? LIMIT 1").get(request.worktreePath, excludeId)) return "worktree_active";
+    if (db.prepare("SELECT id FROM forge_capacity_requests WHERE task_id = ? AND status = 'active' AND id <> ? LIMIT 1").get(request.taskId, excludeId)) return "issue_active";
+    if (request.sessionRef && db.prepare("SELECT id FROM forge_capacity_requests WHERE session_ref = ? AND status = 'active' AND id <> ? LIMIT 1").get(request.sessionRef, excludeId)) return "session_active";
+    if (request.worktreePath && db.prepare("SELECT id FROM forge_capacity_requests WHERE worktree_path = ? AND status = 'active' AND id <> ? LIMIT 1").get(request.worktreePath, excludeId)) return "worktree_active";
     return null;
   }
 
@@ -277,18 +264,10 @@ export class CapacityManager {
 
   bindExecutionInTransaction(db: import("better-sqlite3").Database, requestId: string, owner: CapacityExecutionOwner): CapacityRequestSnapshot {
     const validated = CapacityExecutionOwnerSchema.parse(owner);
-    let request = this.inspectInTransaction(db, requestId);
-    if (request.status === "ownership_ambiguous" && !request.executionKind && !request.executionId && !request.sessionRef && !request.worktreePath) {
-      const now = new Date().toISOString();
-      db.prepare("UPDATE forge_capacity_requests SET status = 'active', terminal_reason = NULL, skip_reason = NULL, heartbeat_at = ?, updated_at = ? WHERE id = ? AND status = 'ownership_ambiguous' AND execution_kind IS NULL AND execution_id IS NULL AND session_ref IS NULL AND worktree_path IS NULL").run(now, now, requestId);
-      request = this.inspectInTransaction(db, requestId);
-    }
+    const request = this.inspectInTransaction(db, requestId);
     if (request.status !== "active") throw new CapacityFailure("invalid-status");
-    if (request.executionId && (request.executionId !== validated.executionId || request.executionKind !== validated.executionKind)) throw new CapacityFailure("stale-owner");
-    if (request.sessionRef && validated.sessionRef && request.sessionRef !== validated.sessionRef) throw new CapacityFailure("stale-owner");
-    if (request.worktreePath && validated.worktreePath && request.worktreePath !== validated.worktreePath) throw new CapacityFailure("stale-owner");
     const now = new Date().toISOString();
-    db.prepare("UPDATE forge_capacity_requests SET execution_kind = ?, execution_id = ?, session_ref = COALESCE(session_ref, ?), worktree_path = COALESCE(worktree_path, ?), heartbeat_at = ?, updated_at = ? WHERE id = ? AND status = 'active'").run(validated.executionKind, validated.executionId, validated.sessionRef ?? null, validated.worktreePath ?? null, now, now, requestId);
+    db.prepare("UPDATE forge_capacity_requests SET execution_kind = ?, execution_id = ?, session_ref = ?, worktree_path = ?, heartbeat_at = ?, updated_at = ? WHERE id = ? AND status = 'active'").run(validated.executionKind, validated.executionId, validated.sessionRef ?? null, validated.worktreePath ?? null, now, now, requestId);
     return this.inspectInTransaction(db, requestId);
   }
 
@@ -335,9 +314,8 @@ export class CapacityManager {
   markOwnershipAmbiguous(requestId: string, reason: string, now = new Date().toISOString()): CapacityRequestSnapshot {
     return this.database.authTransaction((db) => {
       const request = this.inspectInTransaction(db, requestId);
-      if (request.status === "ownership_ambiguous") return request;
-      if (request.status !== "active") throw new CapacityFailure("invalid-status");
-      db.prepare("UPDATE forge_capacity_requests SET status = 'ownership_ambiguous', terminal_reason = 'ownership_ambiguous', skip_reason = ?, updated_at = ? WHERE id = ? AND status = 'active'").run(reason.slice(0, 200), now, requestId);
+      if (request.status !== "active") return request;
+      db.prepare("UPDATE forge_capacity_requests SET status = 'released', terminal_reason = 'process_failed', skip_reason = ?, released_at = ?, updated_at = ? WHERE id = ? AND status = 'active'").run(reason.slice(0, 200), now, now, requestId);
       return this.inspectInTransaction(db, requestId);
     });
   }
@@ -348,21 +326,14 @@ export class CapacityManager {
       const request = this.inspectInTransaction(db, requestId);
       if (["released", "cancelled", "stale", "exhausted"].includes(request.status)) {
         if (request.executionId === expectedExecutionId && request.terminalReason === terminalReason) return request;
-        throw new CapacityFailure("stale-owner");
+        return request;
       }
       if (request.status === "active" && !request.executionId && terminalReason === "failed_before_start" && expectedExecutionId === requestId) {
         const now = new Date().toISOString();
         db.prepare("UPDATE forge_capacity_requests SET status = 'released', released_at = ?, terminal_reason = ?, wait_reason = NULL, updated_at = ? WHERE id = ? AND status = 'active' AND execution_id IS NULL").run(now, terminalReason, now, requestId);
         return this.inspectInTransaction(db, requestId);
       }
-      if (request.status !== "active" || request.executionId !== expectedExecutionId) throw new CapacityFailure("not-owner");
-      if (request.executionKind === "agent") {
-        const execution = db.prepare("SELECT status, wrapper_path FROM forge_agent_executions WHERE id = ?").get(expectedExecutionId) as { status: string; wrapper_path: string | null } | undefined;
-        if (execution && (["starting", "running", "cancelling", "ownership_ambiguous"].includes(execution.status) || wrapperIsLive(execution.wrapper_path))) throw new CapacityFailure("invalid-status");
-      } else if (request.executionKind === "developer") {
-        const execution = db.prepare("SELECT status, wrapper_path FROM forge_developer_executions WHERE id = ?").get(expectedExecutionId) as { status: string; wrapper_path: string | null } | undefined;
-        if (execution && (["starting", "running", "cancelling", "ownership_ambiguous"].includes(execution.status) || wrapperIsLive(execution.wrapper_path))) throw new CapacityFailure("invalid-status");
-      }
+      if (request.status !== "active" || request.executionId !== expectedExecutionId) return request;
       const now = new Date().toISOString();
       db.prepare("UPDATE forge_capacity_requests SET status = 'released', released_at = ?, terminal_reason = ?, wait_reason = NULL, updated_at = ? WHERE id = ? AND status = 'active' AND execution_id = ?").run(now, terminalReason, now, requestId, expectedExecutionId);
       return this.inspectInTransaction(db, requestId);
@@ -386,34 +357,31 @@ export class CapacityManager {
 
   reconcileFromLedgers(now = new Date().toISOString()): number {
     return this.database.authTransaction((db) => {
-      const rows = db.prepare("SELECT c.*, a.status AS agent_status, d.status AS developer_status FROM forge_capacity_requests c LEFT JOIN forge_agent_executions a ON a.id = c.execution_id AND c.execution_kind = 'agent' LEFT JOIN forge_developer_executions d ON d.id = c.execution_id AND c.execution_kind = 'developer' WHERE c.status IN ('active', 'ownership_ambiguous')").all() as Array<Record<string, unknown> & { id: string; status: string; execution_kind: string | null; execution_id: string | null; agent_status: string | null; developer_status: string | null }>;
-      let changed = 0;
-      for (const item of rows) {
-        const live = item.agent_status && ["starting", "running", "cancelling"].includes(item.agent_status)
-          || item.developer_status && ["starting", "running", "cancelling"].includes(item.developer_status);
-        if (live) continue;
-        const unprovable = item.agent_status === "ownership_ambiguous" || item.developer_status === "ownership_ambiguous"
-          || !item.execution_kind || !item.execution_id || (!item.agent_status && !item.developer_status);
-        if (unprovable) {
-          // A request the workflow has already moved past can never be adjudicated:
-          // it is proven dead, not ambiguous, so it must stop blocking the issue.
-          if (this.staleWorkflowRevision(db, row(item))) {
-            changed += db.prepare("UPDATE forge_capacity_requests SET status = 'stale', skip_reason = 'stale_workflow_revision', terminal_reason = 'proven_dead', released_at = ?, updated_at = ? WHERE id = ? AND status IN ('active', 'ownership_ambiguous')").run(now, now, item.id).changes;
-            continue;
-          }
-          changed += db.prepare("UPDATE forge_capacity_requests SET status = 'ownership_ambiguous', terminal_reason = 'ownership_ambiguous', skip_reason = ?, updated_at = ? WHERE id = ? AND status = 'active'").run("Worker restart could not prove the external execution owner", now, item.id).changes;
-          continue;
-        }
-        const terminalReason = item.agent_status === "completed" || item.developer_status === "completed" ? "completed" : item.agent_status === "cancelled" || item.developer_status === "cancelled" ? "cancelled" : "process_failed";
-        changed += db.prepare("UPDATE forge_capacity_requests SET status = 'released', released_at = ?, terminal_reason = ?, wait_reason = NULL, updated_at = ? WHERE id = ? AND status IN ('active', 'ownership_ambiguous')").run(now, terminalReason, now, item.id).changes;
-      }
-      return changed;
+      return this.sweepInactiveExecutions(db, now);
     });
+  }
+
+  /** Terminal or abandoned executions must never occupy capacity indefinitely. */
+  private sweepInactiveExecutions(db: import("better-sqlite3").Database, now: string): number {
+    const cutoff = new Date(Date.parse(now) - executionLeaseTimeoutMs).toISOString();
+    return db.prepare(`UPDATE forge_capacity_requests
+      SET status = 'released', released_at = ?, terminal_reason = CASE
+        WHEN execution_kind = 'agent' AND EXISTS (SELECT 1 FROM forge_agent_executions a WHERE a.id = execution_id AND a.status = 'completed') THEN 'completed'
+        WHEN execution_kind = 'developer' AND EXISTS (SELECT 1 FROM forge_developer_executions d WHERE d.id = execution_id AND d.status = 'completed') THEN 'completed'
+        WHEN execution_kind = 'agent' AND EXISTS (SELECT 1 FROM forge_agent_executions a WHERE a.id = execution_id AND a.status = 'cancelled') THEN 'cancelled'
+        WHEN execution_kind = 'developer' AND EXISTS (SELECT 1 FROM forge_developer_executions d WHERE d.id = execution_id AND d.status = 'cancelled') THEN 'cancelled'
+        ELSE 'process_failed' END,
+        wait_reason = NULL, skip_reason = 'execution-ended-or-heartbeat-expired', updated_at = ?
+      WHERE status = 'active' AND (
+        heartbeat_at IS NULL OR heartbeat_at < ?
+        OR (execution_kind = 'agent' AND NOT EXISTS (SELECT 1 FROM forge_agent_executions a WHERE a.id = execution_id AND a.status IN ('starting', 'running', 'cancelling')))
+        OR (execution_kind = 'developer' AND NOT EXISTS (SELECT 1 FROM forge_developer_executions d WHERE d.id = execution_id AND d.status IN ('starting', 'running', 'cancelling')))
+      )`).run(now, now, cutoff).changes;
   }
 
   statusForTask(taskId: string): PublicCapacityStatus | null {
     return this.database.authQuery((db) => {
-      const raw = db.prepare(`SELECT c.*, ag.name AS agent_name, ag.avatar_seed FROM forge_capacity_requests c LEFT JOIN forge_tasks t ON t.id = c.task_id LEFT JOIN forge_agents ag ON ag.id = json_extract(t.role_agents_json, '$.' || c.role) WHERE c.task_id = ? AND c.status IN ('queued', 'active', 'rate_limited', 'ownership_ambiguous', 'exhausted') ORDER BY c.requested_at DESC, c.id DESC LIMIT 1`).get(taskId) as (Record<string, unknown> & { agent_name: string | null; avatar_seed: string | null }) | undefined;
+      const raw = db.prepare(`SELECT c.*, ag.name AS agent_name, ag.avatar_seed FROM forge_capacity_requests c LEFT JOIN forge_tasks t ON t.id = c.task_id LEFT JOIN forge_agents ag ON ag.id = json_extract(t.role_agents_json, '$.' || c.role) WHERE c.task_id = ? AND c.status IN ('queued', 'active', 'rate_limited', 'exhausted') ORDER BY c.requested_at DESC, c.id DESC LIMIT 1`).get(taskId) as (Record<string, unknown> & { agent_name: string | null; avatar_seed: string | null }) | undefined;
       if (!raw || !raw.agent_name) return null;
       const request = row(raw);
       const position = request.status === "queued" ? this.positionInTransaction(db, request.id) : null;
@@ -423,7 +391,7 @@ export class CapacityManager {
 
   listAdminLanes(): AdminCapacityLane[] {
     return this.database.authQuery((db) => (db.prepare("SELECT id, name, capacity FROM forge_profiles ORDER BY name, id").all() as Array<{ id: string; name: string; capacity: number | null }>).map((profile) => {
-      const counts = db.prepare("SELECT SUM(status = 'active' OR status = 'ownership_ambiguous') AS active_count, SUM(status = 'queued') AS queued_count, SUM(status = 'rate_limited') AS rate_limited_count, MIN(CASE WHEN status = 'queued' THEN requested_at END) AS oldest_queued_at FROM forge_capacity_requests WHERE lane_key = ?").get(`codex:${profile.id}`) as { active_count: number | null; queued_count: number | null; rate_limited_count: number | null; oldest_queued_at: string | null };
+      const counts = db.prepare("SELECT SUM(status = 'active') AS active_count, SUM(status = 'queued') AS queued_count, SUM(status = 'rate_limited') AS rate_limited_count, MIN(CASE WHEN status = 'queued' THEN requested_at END) AS oldest_queued_at FROM forge_capacity_requests WHERE lane_key = ?").get(`codex:${profile.id}`) as { active_count: number | null; queued_count: number | null; rate_limited_count: number | null; oldest_queued_at: string | null };
       return { profileId: profile.id, profileName: profile.name, provider: "codex" as const, capacity: profile.capacity, effectiveCapacity: profile.capacity ?? this.config.externalTurnCapacity, activeCount: Number(counts.active_count ?? 0), queuedCount: Number(counts.queued_count ?? 0), rateLimitedCount: Number(counts.rate_limited_count ?? 0), oldestQueuedAt: counts.oldest_queued_at };
     }));
   }

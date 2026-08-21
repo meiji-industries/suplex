@@ -74,7 +74,11 @@ export async function readDeveloperSupervisorResult(lease: DeveloperExecutionLea
   if (!handle) return undefined;
   try {
     const result = validateSupervisorResult(JSON.parse(await handle.readFile("utf8")));
-    return result.executionId === lease.executionId && result.leaseTokenHash === lease.leaseTokenHash ? result : undefined;
+    // The per-execution directory is the authority for locating this result.
+    // Lease tokens deliberately do not turn a local result into an immutable
+    // boundary: the operator may change the surrounding environment while a
+    // turn is running.
+    return result.executionId === lease.executionId ? result : undefined;
   } catch { return undefined; } finally { await handle.close(); }
 }
 

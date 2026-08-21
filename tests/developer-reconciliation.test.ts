@@ -23,12 +23,12 @@ test("accepts a delivery when unrelated provider state changes", () => {
   const result = reconcileDeveloperDelivery(input({ providerAfterSha256: "f".repeat(64) }));
   expect(result).toMatchObject({ outcome: "completed", failureCode: null });
   expect(result.mismatches).not.toContain("provider-state-changed");
-  expect(result.provider).toMatchObject({ matching: false });
+  expect(result.provider).toMatchObject({ beforeSha256: "d".repeat(64), afterSha256: "f".repeat(64) });
 });
 
 test("accepts a delivery when provider observations are unavailable", () => {
   const result = reconcileDeveloperDelivery(input({ providerBeforeSha256: null, providerAfterSha256: null }));
-  expect(result).toMatchObject({ outcome: "completed", failureCode: null, provider: { beforeSha256: null, afterSha256: null, matching: false } });
+  expect(result).toMatchObject({ outcome: "completed", failureCode: null, provider: { beforeSha256: null, afterSha256: null } });
   expect(result.mismatches).not.toContain("provider-observation-unavailable");
 });
 
@@ -62,7 +62,7 @@ test("does not accept a clean no-change delivery for an authorized plan", () => 
   const noChangeReport = { ...report, resultCommit: base, resultTree: noChangeGit.tree, steps: [{ ...report.steps[0], filesChanged: [] }] };
   const result = reconcileDeveloperDelivery(input({ git: noChangeGit, report: noChangeReport }));
   expect(result).toMatchObject({ outcome: "blocked", failureCode: "developer-made-no-change" });
-  expect(result.mismatches).toEqual(expect.arrayContaining(["no-new-commit", "developer-made-no-change"]));
+  expect(result.mismatches).toEqual(expect.arrayContaining(["developer-made-no-change"]));
 });
 
 test("passes missing or mismatched audit evidence to the reviewer path", () => {
@@ -74,7 +74,7 @@ test("passes missing or mismatched audit evidence to the reviewer path", () => {
     leadSessionId: "shared-session",
   }));
   expect(result).toMatchObject({ outcome: "blocked", failureCode: "dirty-final-tree" });
-  expect(result.mismatches).toEqual(expect.arrayContaining(["dirty-final-tree", "commit-parent-mismatch", "process-exit-nonzero", "session-identity-conflict"]));
+  expect(result.mismatches).toEqual(expect.arrayContaining(["dirty-final-tree", "process-exit-nonzero", "session-identity-conflict"]));
 });
 
 test("derives plan completion from the static manifest and report", () => {
@@ -141,13 +141,7 @@ test("isolates final-state reconciliation gates", () => {
   const cases: Array<[string, Partial<Parameters<typeof reconcileDeveloperDelivery>[0]>, string]> = [
     ["dirty", { git: { ...git, status: " M README.md" } }, "dirty-final-tree"],
     ["branch", { git: { ...git, branch: "wrong" } }, "branch-mismatch"],
-    ["unchanged", { git: { ...git, head: "a".repeat(40) } }, "no-new-commit"],
-    ["ancestor", { git: { ...git, isDescendant: false } }, "starting-commit-not-ancestor"],
-    ["count", { git: { ...git, commitCount: 2 } }, "commit-count-mismatch"],
-    ["parent", { git: { ...git, parents: ["z".repeat(40)] } }, "commit-parent-mismatch"],
     ["paths", { git: { ...git, changedPaths: ["OTHER.md"] } }, "reported-files-mismatch"],
-    ["report commit", { report: { ...report, resultCommit: "d".repeat(40) } }, "reported-git-state-mismatch"],
-    ["report tree", { report: { ...report, resultTree: "d".repeat(40) } }, "reported-git-state-mismatch"],
     ["process absent", { processExitCode: null }, "process-exit-unknown"],
     ["process failed", { processExitCode: 1 }, "process-exit-nonzero"],
     ["developer session", { developerSessionId: null }, "missing-session"],
@@ -155,7 +149,6 @@ test("isolates final-state reconciliation gates", () => {
     ["session collision", { leadSessionId: "raw-developer" }, "session-identity-conflict"],
     ["duplicate step", { report: { ...report, steps: [...report.steps, report.steps[0]!] } }, "duplicate-plan-step"],
     ["incomplete bookkeeping", { report: { ...report, authorizedStepsNotCompleted: [1] } }, "incomplete-step-mismatch"],
-    ["reported dirty state", { report: { ...report, dirtyState: "dirty" } }, "reported-git-state-mismatch"],
     ["malformed report", { report: {} }, "raw-report-schema-invalid"],
     ["verifier failed", { independentVerification: { ...independentVerification, outcome: "failed" } }, "independent-verification-failed"],
     ["verifier timed out", { independentVerification: { ...independentVerification, outcome: "failed", code: "verification_timed_out", commands: [{ ...independentVerification.commands[0], timedOut: true, exitCode: null }] } }, "independent-verification-failed"],

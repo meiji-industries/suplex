@@ -3,8 +3,8 @@ import { expect, test } from "vitest";
 import { CapacityFailure } from "../src/capacity.js";
 import { asNonRetryableCapacityFailure } from "../src/temporal/activities/context.js";
 
-test("maps unwinnable capacity binds to explicit non-retryable retry failures", () => {
-  for (const code of ["invalid-status", "stale-owner"] as const) {
+test("maps an invalid capacity bind to an explicit non-retryable retry failure", () => {
+  for (const code of ["invalid-status"] as const) {
     expect(asNonRetryableCapacityFailure(new CapacityFailure(code))).toMatchObject({
       type: code,
       nonRetryable: true,

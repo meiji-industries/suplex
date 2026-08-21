@@ -161,12 +161,12 @@ async function repairFixture() {
   const now = new Date().toISOString();
   value.database.authTransaction((db) => {
     for (const artifact of [delivery, developerEvidence, opinion, reviewEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_repair_fixture', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, reviewEvidence.id);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_repair_fixture', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, reviewEvidence.id);
     db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, current_step, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_repair_fixture', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'completed', 'forge/issue/task_1', ?, ?, 'session_developer', 1, ?, ?, ?, ?, 'clean', ?, ?)").run(worktreePath, targetBaseSha, now, now, subjectCommit, subjectTree, delivery.id, developerEvidence.id);
     db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, supersedes_review_id, created_at) VALUES ('delivery_review_fixture', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, ?, ?, ?, 'agent_repair_fixture', 'session_lead', 'blocking', 'Repair fixture needs correction.', ?, ?, 0, NULL, ?)").run(targetBaseSha, subjectCommit, subjectTree, opinion.id, reviewEvidence.id, now);
   });
   const sessionStore: SessionStore = { async create() { return "session_developer"; }, async read(ref) { return ref === "session_developer" ? "raw-developer" : ""; } };
-  const repairInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadSessionRef: "session_lead", developerSessionRef: "session_developer", developerExecutionId: "developer_repair_fixture", reviewId: "delivery_review_fixture", repairCycleLimit: 5, worktreePath, branchName: "forge/issue/task_1", targetBaseSha, subjectCommit, subjectTree, blockingFindings: [{ findingId: "finding_blocking", severity: "blocking" as const, rationale: "The marker is incomplete.", evidenceRef: "DELIVERED.md", disposition: "open" as const, repairInstruction: "Complete the marker." }], repairPlan: "Complete the marker." };
+  const repairInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", developerSessionRef: "session_developer", developerExecutionId: "developer_repair_fixture", reviewId: "delivery_review_fixture", repairCycleLimit: 5, worktreePath, branchName: "forge/issue/task_1", targetBaseSha, subjectCommit, subjectTree, blockingFindings: [{ findingId: "finding_blocking", severity: "blocking" as const, rationale: "The marker is incomplete.", evidenceRef: "DELIVERED.md", disposition: "open" as const, repairInstruction: "Complete the marker." }], repairPlan: "Complete the marker." };
   return { ...value, worktreePath, subjectCommit, subjectTree, sessionStore, repairInput };
 }
 
@@ -195,14 +195,14 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
   };
   try {
     const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore });
-    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 });
+    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
     expect(result.leadSessionRef).toBe("session_opaque");
     expect(calls).toHaveLength(2);
     expect(resumedSessionRef).toBe("session_opaque");
     expect(sessions.get("session_opaque")).toBe("raw-session-1");
     const briefSha = value.database.authQuery((db) => (db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ?").get(value.briefId) as { sha256: string }).sha256);
     value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET model = 'changed-after-task-creation' WHERE id = 'profile_1'").run());
-    const resumed = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 2, resume: { leadSessionRef: result.leadSessionRef, reason: "member_revision", instructionArtifactId: value.briefId, instructionSha256: briefSha } });
+    const resumed = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 2, resume: { leadSessionRef: result.leadSessionRef, reason: "member_revision", instructionArtifactId: value.briefId, instructionSha256: briefSha } });
     expect(resumed.leadSessionRef).toBe(result.leadSessionRef);
     expect(resumedModel).toBe("gpt-5-codex");
     expect(value.database.authQuery((db) => db.prepare("SELECT status, session_ref, process_start_identity FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ status: "completed", session_ref: "session_opaque", process_start_identity: "4321:2026-08-11T00:00:00.000Z" });
@@ -211,7 +211,7 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
     expect(evidenceText.toString("utf8")).not.toContain("gho_secret");
     expect(evidenceText.toString("utf8")).not.toContain("raw-session-1");
     expect(value.database.authQuery((db) => db.prepare("SELECT kind, revision, session_ref FROM forge_issue_outputs WHERE task_id = 'task_1'").get())).toEqual({ kind: "plan", revision: 1, session_ref: "session_opaque" });
-    const replayed = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 });
+    const replayed = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
     expect(replayed.leadExecutionId).toBe(result.leadExecutionId);
     expect(calls).toHaveLength(3);
   } finally {
@@ -229,7 +229,7 @@ test("Lead planning fails promptly when the provider stops emitting output", asy
   };
   try {
     const service = new AgentService(value.database, value.config, { processRunner: runner, leadOutputIdleTimeoutMs: 10, sessionStore: { async create() { return "session_silent"; }, async read() { return "raw-silent-session"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "provider-silent" });
+    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "provider-silent" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -246,7 +246,7 @@ test("Lead planning reuses a failed execution on activity retry", async () => {
     await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: calls < 3 ? "{}" : JSON.stringify({ kind: "plan", gitPresentation, summary: "A retried fixture plan", reproduction: null, rootCauseAnalysis: "The prior output was invalid.", steps: [{ number: 1, instruction: "Inspect the fixture", entryPoint: null, completionCriterion: "The fixture is understood", verification: "The fixture test passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change is required.", operationalAnalysis: "The change is local.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] }) } }));
     return { exitCode: 0, stderr: "" };
   };
-  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 };
+  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 };
   try {
     const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_retry"; }, async read() { return "raw-retry-session"; } } });
     await expect(service.runLeadPlanning(input)).rejects.toMatchObject({ code: "invalid-output-schema" });
@@ -276,12 +276,12 @@ test("a capacity request pins model, reasoning, and service priority through lat
   try {
     value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET reasoning_level = 'high', service_priority = 'priority' WHERE id = 'profile_1'").run());
     const capacity = new CapacityManager(value.database, value.config);
-    const request = capacity.request({ logicalTurnKey: "workflow-test-issue-task_1:1:lead_planning", companyId: "company_1", taskId: "task_1", workflowId: "workflow-test-issue-task_1", projectRevisionId: "revision_1", workflowRevision: 1, operation: "lead_planning", role: "analyst", profileId: "profile_1" });
+    const request = capacity.request({ logicalTurnKey: "workflow-test-issue-task_1:1:lead_planning", companyId: "company_1", taskId: "task_1", workflowId: "workflow-test-issue-task_1", projectRevisionId: "revision_1", workflowRevision: 1, operation: "lead_planning", role: "planner", profileId: "profile_1" });
     expect(capacity.tryAcquire(request.id, 1).status).toBe("active");
     value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET model = 'later-model', reasoning_level = 'low', service_priority = 'standard' WHERE id = 'profile_1'").run());
 
     const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_pinned"; }, async read() { return "raw-pinned-session"; } } });
-    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1, capacityRequestId: request.id });
+    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1, capacityRequestId: request.id });
 
     expect(wrapperRequests[0]).toMatchObject({ model: "pinned-model", reasoningLevel: "high", servicePriority: "priority" });
     expect(wrapperRequests[0]?.model).not.toBe("later-model");
@@ -338,7 +338,7 @@ test.each(["live", "exited"] as const)("Lead planning finalizes stored completio
   const now = new Date().toISOString();
   value.database.authTransaction((db) => {
     db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(manifest.id, manifest.companyId, manifest.kind, manifest.filename, manifest.mimeType, manifest.byteSize, manifest.sha256, manifest.storagePath, manifest.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES (?, 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:started', ?, ?, ?, 0)").run(executionId, `agent-turns/${executionId}/spool.ndjson`, `agent-turns/${executionId}/status.json`, now);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES (?, 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:started', ?, ?, ?, 0)").run(executionId, `agent-turns/${executionId}/spool.ndjson`, `agent-turns/${executionId}/status.json`, now);
   });
   let calls = 0;
   const controller = {
@@ -352,7 +352,7 @@ test.each(["live", "exited"] as const)("Lead planning finalizes stored completio
       processController: controller,
       sessionStore: { async create() { return "session_opaque"; }, async read() { return "raw-session"; } },
     });
-    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 });
+    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
     expect(result.leadExecutionId).toBe(executionId);
     expect(calls).toBe(0);
     expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_agent_executions WHERE id = ?").get(executionId))).toEqual({ status: "completed" });
@@ -365,7 +365,7 @@ test.each(["live", "exited"] as const)("Lead planning finalizes stored completio
 test("Lead stale-child reconciliation signals through the injected process controller", async () => {
   const value = await fixture();
   const now = new Date().toISOString();
-  value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, process_pid, process_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES ('agent_stale', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:wrapper-start', 4201, '4201:child-start', 'agent-turns/agent_stale/spool.ndjson', 'agent-turns/agent_stale/status.json', ?, 0)").run(now));
+  value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, process_pid, process_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES ('agent_stale', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:wrapper-start', 4201, '4201:child-start', 'agent-turns/agent_stale/spool.ndjson', 'agent-turns/agent_stale/status.json', ?, 0)").run(now));
   let groupAlive = true;
   const signals: string[] = [];
   const child = { pid: 4201, command: "codex", executable: "codex", argv: ["codex", "exec"], processGroup: 5101, startTime: "child-start" };
@@ -386,7 +386,7 @@ test("Lead stale-child reconciliation signals through the injected process contr
         return { exitCode: 0, stderr: "" };
       },
     });
-    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 });
+    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
     expect(result.leadExecutionId).toBe("agent_stale");
     expect(signals).toEqual(["SIGTERM"]);
     expect(value.database.authQuery((db) => db.prepare("SELECT attempt, status FROM forge_agent_executions WHERE id = 'agent_stale'").get())).toEqual({ attempt: 2, status: "completed" });
@@ -399,7 +399,7 @@ test("Lead stale-child reconciliation signals through the injected process contr
 test("Lead retry reports ownership ambiguity when restart reconciliation wins the lease race", async () => {
   const value = await fixture();
   const now = new Date().toISOString();
-  value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES ('agent_reconciled', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:wrapper-start', 'agent-turns/agent_reconciled/spool.ndjson', 'agent-turns/agent_reconciled/status.json', ?, 0)").run(now));
+  value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES ('agent_reconciled', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:wrapper-start', 'agent-turns/agent_reconciled/spool.ndjson', 'agent-turns/agent_reconciled/status.json', ?, 0)").run(now));
   const controller = {
     async inspect() {
       value.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'ownership_ambiguous' WHERE id = 'agent_reconciled'").run());
@@ -410,7 +410,7 @@ test("Lead retry reports ownership ambiguity when restart reconciliation wins th
   };
   try {
     const service = new AgentService(value.database, value.config, { processController: controller, processRunner: async () => { throw new Error("reconciled turns must not spawn"); }, sessionStore: { async create() { return "session_opaque"; }, async read() { return "raw-session"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "ownership_ambiguous" });
+    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "ownership_ambiguous" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -425,7 +425,7 @@ test("Lead live-wrapper attachment honors Activity cancellation", async () => {
   await writeFile(join(runtimeDir, "spool.ndjson"), "");
   await writeFile(join(runtimeDir, "status.json"), JSON.stringify({ state: "running", eventOffset: 0 }));
   const now = new Date().toISOString();
-  value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, heartbeat_at, event_offset) VALUES (?, 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:started', ?, ?, ?, ?, 0)").run(executionId, `agent-turns/${executionId}/spool.ndjson`, `agent-turns/${executionId}/status.json`, now, now));
+  value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, heartbeat_at, event_offset) VALUES (?, 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:started', ?, ?, ?, ?, 0)").run(executionId, `agent-turns/${executionId}/spool.ndjson`, `agent-turns/${executionId}/status.json`, now, now));
   let groupAlive = true;
   const wrapper = { pid: 4101, command: "wrapper", executable: "node", argv: ["node", "wrapper"], processGroup: 5101, startTime: "started" };
   const controller = {
@@ -438,7 +438,7 @@ test("Lead live-wrapper attachment honors Activity cancellation", async () => {
   abort.abort();
   try {
     const service = new AgentService(value.database, value.config, { processController: controller, processRunner: async () => { throw new Error("cancelled attachment must not spawn"); }, sessionStore: { async create() { return "session_opaque"; }, async read() { return "raw-session"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 }, { signal: abort.signal })).rejects.toMatchObject({ code: "cancelled" });
+    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 }, { signal: abort.signal })).rejects.toMatchObject({ code: "cancelled" });
     expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_agent_executions WHERE id = ?").get(executionId))).toEqual({ status: "cancelled", failure_code: "cancelled" });
   } finally {
     value.database.close();
@@ -486,7 +486,7 @@ test("delivery review preflight failures finalize a typed attempt without launch
       projectRevisionId: "revision_1",
       briefArtifactId: value.briefId,
       planRevision: 1,
-      roleProfiles: { analyst: "profile_1", implementer: "profile_1" },
+      roleProfiles: { planner: "profile_1", builder: "profile_1" },
       leadOutputArtifactId: "lead_output_missing",
       subject: {
         planRevision: 1,
@@ -537,7 +537,7 @@ test("Lead authors a complete conflict-resolution plan from both merge sides", a
   value.database.authTransaction((db) => {
     for (const artifact of [plan, leadEvidence, conflictArtifact]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
     db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, conflict_artifact_id, conflict_artifact_sha256, conflict_file_count, updated_at) VALUES ('merge-lead-1', 'task_1', 'company_1', ?, ?, ?, NULL, NULL, 'conflict', '[\"shared.txt\"]', ?, 'workflow-test-issue-task_1', 'revision_1', 'pre_release', ?, ?, ?, 1, ?)").run("b".repeat(40), "b".repeat(40), "a".repeat(40), now, "a".repeat(40), conflictArtifact.id, conflictArtifact.sha256, now);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_conflict_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_conflict_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_conflict_plan', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_conflict_lead', 1, 'plan', ?, ?, 'session_lead', 'Approved plan', ?)").run(plan.id, leadEvidence.id, now);
   });
   const runner: LeadProcessRunner = async (invocation) => {
@@ -569,7 +569,7 @@ test("Lead planning classifies a successful process without schema output", asyn
   };
   try {
     const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_missing"; }, async read() { return "raw-missing-session"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "missing-output" });
+    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "missing-output" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -589,7 +589,7 @@ test.each([
   };
   try {
     const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_failure"; }, async read() { return "raw-failure-session"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code });
+    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code });
     const failure = value.database.authQuery((db) => db.prepare("SELECT failure_code, failure_summary FROM forge_agent_executions WHERE task_id = 'task_1'").get() as { failure_code: string; failure_summary: string });
     expect(failure).toEqual({ failure_code: code, failure_summary: summary });
     expect(failure.failure_summary).not.toContain(stderr);
@@ -609,7 +609,7 @@ test("Lead planning treats a structured unsupported-model response as a permanen
   };
   try {
     const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_model_failure"; }, async read() { return "raw-model-failure"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 })).rejects.toMatchObject({
+    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 })).rejects.toMatchObject({
       code: "model-unavailable",
       nonRetryable: true,
       message: "The configured model “gpt-5-codex” is unavailable for the active provider account. Select a supported model, then retry.",
@@ -643,7 +643,7 @@ test("Developer activities preserve the configured service receiver", async () =
   };
   try {
     const activities = createActivities(value.database, value.config, { developer });
-    await activities.runDeveloperExecution({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { implementer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: "artifact_plan" });
+    await activities.runDeveloperExecution({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: "artifact_plan" });
     expect(developer.calls).toBe(1);
   } finally {
     value.database.close();
@@ -662,7 +662,7 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
     const now = new Date().toISOString();
     db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES ('profile_2', 'Reviewer', 'codex', 'gpt-5.6-luna', 'medium', 'standard', 1, ?, ?)").run(now, now);
     for (const artifact of [draft, priorEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_primary', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'completed', 1, 'session_primary', ?, ?, ?)").run(now, now, priorEvidence.id);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_primary', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_primary', ?, ?, ?)").run(now, now, priorEvidence.id);
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_primary', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_primary', 1, 'plan', ?, ?, 'session_primary', 'Draft plan', ?)").run(draft.id, priorEvidence.id, now);
   });
   let calls = 0;
@@ -680,9 +680,9 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
   };
   try {
     const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore });
-    const review = await service.runSupplementalReview({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1", reviewer: "profile_2" }, revision: 1, leadOutputArtifactId: draft.id, leadEvidenceArtifactId: priorEvidence.id });
+    const review = await service.runSupplementalReview({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1", reviewer: "profile_2" }, revision: 1, leadOutputArtifactId: draft.id, leadEvidenceArtifactId: priorEvidence.id });
     reviewArtifactId = review.reviewArtifactId;
-    const consolidated = await service.consolidateLeadPlan({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1", reviewer: "profile_2" }, revision: 2, leadSessionRef: "session_primary", leadOutputArtifactId: draft.id, supplementalReviewArtifactId: review.reviewArtifactId });
+    const consolidated = await service.consolidateLeadPlan({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1", reviewer: "profile_2" }, revision: 2, leadSessionRef: "session_primary", leadOutputArtifactId: draft.id, supplementalReviewArtifactId: review.reviewArtifactId });
     expect(review.sessionRef).toBe("session_review");
     expect(consolidated.leadSessionRef).toBe("session_primary");
     expect(calls).toBe(2);
@@ -703,7 +703,7 @@ test("Developer execution creates an isolated delivery commit and stores an exac
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();
     for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_lead_for_developer', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_lead_for_developer', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_lead_for_developer', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_lead_for_developer', 1, 'plan', ?, ?, 'session_lead', 'A bounded developer fixture', ?)").run(plan.id, leadEvidence.id, now);
   });
   const runner: LeadProcessRunner = async (invocation) => {
@@ -722,7 +722,7 @@ test("Developer execution creates an isolated delivery commit and stores an exac
   };
   try {
     const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore });
-    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id })).rejects.toMatchObject({ code: "plan-authority-missing" });
+    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id })).rejects.toMatchObject({ code: "plan-authority-missing" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -737,7 +737,7 @@ test("Developer execution safely resumes an owned worktree after its result was 
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();
     for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_lead_for_retry', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_lead_for_retry', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_lead_for_retry', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_lead_for_retry', 1, 'plan', ?, ?, 'session_lead', 'Retry the bounded developer fixture', ?)").run(plan.id, leadEvidence.id, now);
   });
   const finalPlanSubject = verifyRoutinePlanOutput(value.database, { outputId: "output_lead_for_retry", plan, evidence: leadEvidence, leadExecutionId: "agent_lead_for_retry" });
@@ -756,7 +756,7 @@ test("Developer execution safely resumes an owned worktree after its result was 
     return { exitCode: 0, stderr: "" };
   };
   const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_retry"; }, async read() { return "raw-retry-session"; } } });
-  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, finalPlanSubject };
+  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, finalPlanSubject };
   try {
     await expect(service.run(input)).rejects.toMatchObject({ code: "process-exited" });
     const failed = value.database.authQuery((db) => db.prepare("SELECT id, evidence_artifact_id FROM forge_developer_executions WHERE task_id = 'task_1' AND attempt = 1").get() as { id: string; evidence_artifact_id: string });
@@ -803,11 +803,11 @@ test("Developer report claims cannot override a failed pinned verifier", async (
     sessionStore: { async create() { return "session_verifier_fail"; }, async read(ref) { return ref === "session_lead" ? "raw-lead" : "raw-verifier-fail"; } },
   });
   try {
-    const result = await service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { implementer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, authorization, developerTurnExecutionId: "developer_verifier_fail" });
-    expect(result).toMatchObject({ outcome: "blocked", failureCode: "independent-verification-failed" });
+    const result = await service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, authorization, developerTurnExecutionId: "developer_verifier_fail" });
+    expect(result).toMatchObject({ outcome: "blocked", failureCode: "required-local-tests-failed" });
     const reconciliationRow = value.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(result.reconciliationArtifactId) as { storagePath: string; sha256: string });
     const reconciliation = DeveloperReconciliationArtifactSchema.parse(JSON.parse((await artifactStore.read({ companyId: "company_1", ...reconciliationRow })).toString("utf8")));
-    expect(reconciliation).toMatchObject({ outcome: "blocked", failureCode: "independent-verification-failed", independentVerification: { outcome: "failed" } });
+    expect(reconciliation).toMatchObject({ outcome: "blocked", failureCode: "required-local-tests-failed", independentVerification: { outcome: "failed" } });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -865,7 +865,7 @@ test("authorized Developer retry resumes a dirty preserved worktree", async () =
     },
     sessionStore: { async create() { return "session_authorized_retry"; }, async read(ref) { return ref === "session_lead" ? "raw-lead" : "raw-authorized-retry"; } },
   });
-  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { implementer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, authorization };
+  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, authorization };
   try {
     const blocked = await service.run({ ...input, developerTurnExecutionId: "developer_retry_1", developerAttempt: 1 });
     expect(blocked).toMatchObject({ outcome: "blocked", dirtyState: "dirty" });
@@ -896,7 +896,7 @@ test("a late Developer failure cannot overwrite a cancellation", async () => {
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();
     for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_cancel_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_cancel_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_cancel_plan', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_cancel_lead', 1, 'plan', ?, ?, 'session_lead', 'Cancellation plan', ?)").run(plan.id, leadEvidence.id, now);
   });
   const finalPlanSubject = verifyRoutinePlanOutput(value.database, { outputId: "output_cancel_plan", plan, evidence: leadEvidence, leadExecutionId: "agent_cancel_lead" });
@@ -908,7 +908,7 @@ test("a late Developer failure cannot overwrite a cancellation", async () => {
   };
   try {
     const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_developer"; }, async read() { return "raw-developer"; } } });
-    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, finalPlanSubject })).rejects.toBeInstanceOf(AgentFailure);
+    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, finalPlanSubject })).rejects.toBeInstanceOf(AgentFailure);
     expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, evidence_artifact_id FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get())).toMatchObject({ status: "cancelled", failure_code: null, evidence_artifact_id: expect.any(String) });
   } finally {
     value.database.close();
@@ -924,7 +924,7 @@ test("a late Developer success cannot overwrite a cancellation", async () => {
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();
     for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_cancel_success_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_cancel_success_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_cancel_success_plan', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_cancel_success_lead', 1, 'plan', ?, ?, 'session_lead', 'Cancellation success race', ?)").run(plan.id, leadEvidence.id, now);
   });
   const finalPlanSubject = verifyRoutinePlanOutput(value.database, { outputId: "output_cancel_success_plan", plan, evidence: leadEvidence, leadExecutionId: "agent_cancel_success_lead" });
@@ -943,7 +943,7 @@ test("a late Developer success cannot overwrite a cancellation", async () => {
   };
   try {
     const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_developer"; }, async read() { return "raw-developer"; } } });
-    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, finalPlanSubject })).rejects.toMatchObject({ code: "developer-cancelled" });
+    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, finalPlanSubject })).rejects.toMatchObject({ code: "developer-cancelled" });
     expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get())).toEqual({ status: "cancelled" });
   } finally {
     value.database.close();
@@ -969,7 +969,7 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
   const now = new Date().toISOString();
   value.database.authTransaction((db) => {
     for (const artifact of [plan, leadEvidence, delivery, developerEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_lead_review', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_lead_review', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_review_plan', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_lead_review', 1, 'plan', ?, ?, 'session_lead', 'Exact fixture plan', ?)").run(plan.id, leadEvidence.id, now);
     db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, current_step, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_review_subject', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'completed', 'forge/issue/task_1', ?, ?, 'session_developer', 1, ?, ?, ?, ?, 'clean', ?, ?)").run(worktreePath, targetBaseSha, now, now, subjectCommit, subjectTree, delivery.id, developerEvidence.id);
   });
@@ -999,7 +999,7 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
   };
   try {
     const lead = new AgentService(value.database, value.config, { processRunner: reviewRunner, sessionStore });
-    const reviewInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadOutputArtifactId: plan.id, subject: { planRevision: 1, targetBaseSha, subjectCommit, subjectTree, developerExecutionId: "developer_review_subject", deliveryArtifactId: delivery.id, developerEvidenceArtifactId: "stale_verification_artifact", leadSessionRef: "session_lead", developerSessionRef: "session_developer" }, worktreePath, branchName: "forge/issue/task_1", supersedesReviewId: null };
+    const reviewInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadOutputArtifactId: plan.id, subject: { planRevision: 1, targetBaseSha, subjectCommit, subjectTree, developerExecutionId: "developer_review_subject", deliveryArtifactId: delivery.id, developerEvidenceArtifactId: "stale_verification_artifact", leadSessionRef: "session_lead", developerSessionRef: "session_developer" }, worktreePath, branchName: "forge/issue/task_1", supersedesReviewId: null };
     const review = await lead.reviewDelivery(reviewInput);
     expect(review).toMatchObject({ outcome: "completed", subject: { subjectCommit, subjectTree, developerEvidenceArtifactId: developerEvidence.id }, review: { opinion: "blocking", leadSessionRef: "session_lead" } });
     if (review.outcome !== "completed") throw new Error("Fixture review did not complete");
@@ -1060,7 +1060,7 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
       return { exitCode: 0, stderr: "" };
     };
     const oversizedDeveloper = new DeveloperService(value.database, value.config, { processRunner: oversizedRepairRunner, sessionStore });
-    const repairInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadSessionRef: "session_lead", developerSessionRef: "session_developer", developerExecutionId: "developer_review_subject", reviewId: completedReview.review.reviewId, repairCycleLimit: 5, worktreePath, branchName: "forge/issue/task_1", targetBaseSha, subjectCommit, subjectTree, blockingFindings: completedReview.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open"), repairPlan: completedReview.review.repairPlan! };
+    const repairInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", developerSessionRef: "session_developer", developerExecutionId: "developer_review_subject", reviewId: completedReview.review.reviewId, repairCycleLimit: 5, worktreePath, branchName: "forge/issue/task_1", targetBaseSha, subjectCommit, subjectTree, blockingFindings: completedReview.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open"), repairPlan: completedReview.review.repairPlan! };
     const oversized = await oversizedDeveloper.runRepair({ ...repairInput, cycle: 1 });
     expect(oversized).toMatchObject({ outcome: "blocked", code: "evidence-too-large", cycle: 1, subject: { developerExecutionId: "developer_review_subject", subjectCommit, subjectTree } });
     expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, evidence_artifact_id, finished_at FROM forge_delivery_repairs WHERE id = ?").get(oversized.repairAttemptId))).toMatchObject({ status: "blocked", failure_code: "evidence-too-large", evidence_artifact_id: oversized.evidenceArtifactId, finished_at: expect.any(String) });
@@ -1089,7 +1089,7 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
     const filenameOnlyPlan = await artifactStore.put("company_1", "delivery-repair-plan", { filename: "final_review_blocking-1.md", mimeType: "text/markdown", bytes: Buffer.from("This filename is not durable repair authority.") });
     value.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(filenameOnlyPlan.id, filenameOnlyPlan.companyId, filenameOnlyPlan.kind, filenameOnlyPlan.filename, filenameOnlyPlan.mimeType, filenameOnlyPlan.byteSize, filenameOnlyPlan.sha256, filenameOnlyPlan.storagePath, filenameOnlyPlan.createdAt));
     const guardedDeveloper = new DeveloperService(value.database, value.config, { processRunner: async () => { throw new Error("A filename-only repair plan reached execution"); }, sessionStore });
-    await expect(guardedDeveloper.runRepair({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadSessionRef: "session_lead", developerSessionRef: "session_developer", developerExecutionId: "developer_review_subject", reviewId: completedReview.review.reviewId, repairAuthority: "final_review", cycle: 1, repairCycleLimit: 2, worktreePath, branchName: "forge/issue/task_1", targetBaseSha, subjectCommit, subjectTree, blockingFindings: completedReview.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open"), repairPlanArtifactId: filenameOnlyPlan.id, repairPlanSha256: filenameOnlyPlan.sha256 })).rejects.toMatchObject({ code: "repair-authority-mismatch" });
+    await expect(guardedDeveloper.runRepair({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", developerSessionRef: "session_developer", developerExecutionId: "developer_review_subject", reviewId: completedReview.review.reviewId, repairAuthority: "final_review", cycle: 1, repairCycleLimit: 2, worktreePath, branchName: "forge/issue/task_1", targetBaseSha, subjectCommit, subjectTree, blockingFindings: completedReview.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open"), repairPlanArtifactId: filenameOnlyPlan.id, repairPlanSha256: filenameOnlyPlan.sha256 })).rejects.toMatchObject({ code: "repair-authority-mismatch" });
     const developer = new DeveloperService(value.database, value.config, { processRunner: repairRunner, sessionStore });
     const repaired = await developer.runRepair({ ...repairInput, cycle: 5 });
     expect(repaired).toMatchObject({ outcome: "completed", developerSessionRef: "session_developer", repairAttemptId: expect.any(String), reviewId: completedReview.review.reviewId, cycle: 5, subject: { subjectCommit, subjectTree } });
@@ -1242,10 +1242,10 @@ test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Lead r
   const value = await fixture(process.env.FORGE_CODEX_REAL_MODEL ?? "gpt-5.6-luna", "Create CONTROLLED_PROOF.md with the exact text `forge developer proof`. The file content is mandatory and must remain exact.");
   try {
     const lead = new AgentService(value.database, value.config);
-    const plan = await lead.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, revision: 1 });
+    const plan = await lead.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1", builder: "profile_1" }, revision: 1 });
     expect(plan.leadOutputKind).toBe("plan");
     const developer = new DeveloperService(value.database, value.config);
-    const delivery = await developer.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadSessionRef: plan.leadSessionRef, leadOutputArtifactId: plan.leadOutputArtifactId });
+    const delivery = await developer.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: plan.leadSessionRef, leadOutputArtifactId: plan.leadOutputArtifactId });
     expect(delivery.outcome).toBe("completed");
     const defectPath = join(delivery.worktreePath, "CONTROLLED_PROOF.md");
     await writeFile(defectPath, "wrong proof\n");
@@ -1260,7 +1260,7 @@ test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Lead r
       for (const artifact of [controlledDelivery, controlledEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
       db.prepare("UPDATE forge_developer_executions SET result_commit = ?, result_tree = ?, dirty_state = 'clean', delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(subjectCommit, subjectTree, controlledDelivery.id, controlledEvidence.id, delivery.developerExecutionId);
     });
-    const review = await lead.reviewDelivery({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadOutputArtifactId: plan.leadOutputArtifactId, subject: { planRevision: 1, targetBaseSha: delivery.targetBaseSha, subjectCommit, subjectTree, developerExecutionId: delivery.developerExecutionId, deliveryArtifactId: controlledDelivery.id, developerEvidenceArtifactId: controlledEvidence.id, leadSessionRef: plan.leadSessionRef, developerSessionRef: delivery.developerSessionRef }, worktreePath: delivery.worktreePath, branchName: delivery.branchName, supersedesReviewId: null });
+    const review = await lead.reviewDelivery({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadOutputArtifactId: plan.leadOutputArtifactId, subject: { planRevision: 1, targetBaseSha: delivery.targetBaseSha, subjectCommit, subjectTree, developerExecutionId: delivery.developerExecutionId, deliveryArtifactId: controlledDelivery.id, developerEvidenceArtifactId: controlledEvidence.id, leadSessionRef: plan.leadSessionRef, developerSessionRef: delivery.developerSessionRef }, worktreePath: delivery.worktreePath, branchName: delivery.branchName, supersedesReviewId: null });
     if (review.outcome !== "completed") throw new Error("Real review did not return a completed result");
     expect(review.review.leadSessionRef).toBe(plan.leadSessionRef);
     expect(review.review.leadSessionRef).not.toBe(delivery.developerSessionRef);
@@ -1274,13 +1274,13 @@ test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Lead r
     };
     const originalOpinionBytes = await readArtifact(review.review.opinionArtifactId);
     const originalEvidenceBytes = await readArtifact(review.review.evidenceArtifactId);
-    const repaired = await developer.runRepair({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadSessionRef: plan.leadSessionRef, developerSessionRef: delivery.developerSessionRef, developerExecutionId: delivery.developerExecutionId, reviewId: review.review.reviewId, cycle: 1, repairCycleLimit: 2, worktreePath: delivery.worktreePath, branchName: delivery.branchName, targetBaseSha: delivery.targetBaseSha, subjectCommit, subjectTree, blockingFindings: review.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open"), repairPlan: review.review.repairPlan! });
+    const repaired = await developer.runRepair({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: plan.leadSessionRef, developerSessionRef: delivery.developerSessionRef, developerExecutionId: delivery.developerExecutionId, reviewId: review.review.reviewId, cycle: 1, repairCycleLimit: 2, worktreePath: delivery.worktreePath, branchName: delivery.branchName, targetBaseSha: delivery.targetBaseSha, subjectCommit, subjectTree, blockingFindings: review.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open"), repairPlan: review.review.repairPlan! });
     expect(repaired.outcome).toBe("completed");
     expect(repaired.developerSessionRef).toBe(delivery.developerSessionRef);
     expect(repaired.resultCommit).not.toBe(subjectCommit);
     expect((await execFileAsync("git", ["show", `HEAD:CONTROLLED_PROOF.md`], { cwd: delivery.worktreePath })).stdout.trim()).toBe("forge developer proof");
     if (repaired.outcome !== "completed") throw new Error("Real repair did not complete");
-    const fresh = await lead.reviewDelivery({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadOutputArtifactId: plan.leadOutputArtifactId, supersedesReviewId: review.review.reviewId, subject: { planRevision: 1, targetBaseSha: delivery.targetBaseSha, subjectCommit: repaired.resultCommit!, subjectTree: repaired.resultTree!, developerExecutionId: repaired.developerExecutionId, deliveryArtifactId: repaired.deliveryArtifactId, developerEvidenceArtifactId: repaired.evidenceArtifactId, leadSessionRef: plan.leadSessionRef, developerSessionRef: repaired.developerSessionRef }, worktreePath: delivery.worktreePath, branchName: delivery.branchName });
+    const fresh = await lead.reviewDelivery({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadOutputArtifactId: plan.leadOutputArtifactId, supersedesReviewId: review.review.reviewId, subject: { planRevision: 1, targetBaseSha: delivery.targetBaseSha, subjectCommit: repaired.resultCommit!, subjectTree: repaired.resultTree!, developerExecutionId: repaired.developerExecutionId, deliveryArtifactId: repaired.deliveryArtifactId, developerEvidenceArtifactId: repaired.evidenceArtifactId, leadSessionRef: plan.leadSessionRef, developerSessionRef: repaired.developerSessionRef }, worktreePath: delivery.worktreePath, branchName: delivery.branchName });
     if (fresh.outcome !== "completed") throw new Error("Fresh real review did not return a completed result");
     expect(fresh.review.opinion).toBe("approved");
     expect(fresh.review.supersedesReviewId).toBe(review.review.reviewId);
@@ -1308,12 +1308,12 @@ test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Develo
   value.database.authTransaction((db) => {
     const now = new Date().toISOString();
     for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_real_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'analyst', 'completed', 1, 'session_real_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_real_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_real_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
     db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_real_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_real_lead', 1, 'plan', ?, ?, 'session_real_lead', 'Create one owner-controlled proof marker', ?)").run(plan.id, leadEvidence.id, now);
   });
   try {
     const service = new DeveloperService(value.database, value.config);
-    const result = await service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { analyst: "profile_1", implementer: "profile_1" }, leadSessionRef: "session_real_lead", leadOutputArtifactId: plan.id });
+    const result = await service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_real_lead", leadOutputArtifactId: plan.id });
     expect(result.outcome).toBe("completed");
     expect(result.developerSessionRef).toMatch(/^session_[a-f0-9]{24}$/);
     expect(result.developerSessionRef).not.toBe("session_real_lead");
@@ -1356,11 +1356,11 @@ test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Codex 
   };
   try {
     const service = new AgentService(value.database, value.config, { processRunner: runner });
-    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1" }, revision: 1 });
+    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
     expect(result.leadSessionRef).toMatch(/^session_[a-f0-9]{24}$/);
     expect(result.leadOutputKind).toBe("plan");
-    const review = await service.runSupplementalReview({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1", reviewer: "profile_2" }, revision: 1, leadOutputArtifactId: result.leadOutputArtifactId, leadEvidenceArtifactId: result.leadEvidenceArtifactId });
-    const consolidated = await service.consolidateLeadPlan({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { analyst: "profile_1", reviewer: "profile_2" }, revision: 2, leadSessionRef: result.leadSessionRef, leadOutputArtifactId: result.leadOutputArtifactId, supplementalReviewArtifactId: review.reviewArtifactId });
+    const review = await service.runSupplementalReview({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1", reviewer: "profile_2" }, revision: 1, leadOutputArtifactId: result.leadOutputArtifactId, leadEvidenceArtifactId: result.leadEvidenceArtifactId });
+    const consolidated = await service.consolidateLeadPlan({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1", reviewer: "profile_2" }, revision: 2, leadSessionRef: result.leadSessionRef, leadOutputArtifactId: result.leadOutputArtifactId, supplementalReviewArtifactId: review.reviewArtifactId });
     expect(review.sessionRef).toMatch(/^session_[a-f0-9]{24}$/);
     expect(review.sessionRef).not.toBe(result.leadSessionRef);
     expect(consolidated.leadSessionRef).toBe(result.leadSessionRef);

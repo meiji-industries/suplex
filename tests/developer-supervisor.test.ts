@@ -49,7 +49,14 @@ test("INV-06 real supervisor writes one bounded, hashed result envelope", async 
     expect(events.map((event) => event.sequence)).toEqual([...events].sort((left, right) => left.sequence - right.sequence).map((event) => event.sequence));
     expect(events.map((event) => event.line)).toContain("out-0");
     expect(events.map((event) => event.line)).toContain("err-19");
-    expect(await readFile(join(executionRoot, "heartbeat.json"), "utf8")).toContain("result_ready");
+    // finalize() renames result.json into place, then updates state.status and writes heartbeat.json, so
+    // heartbeat.json can still say "running" for a moment after result.json is observable; poll it too.
+    let heartbeat = "";
+    for (let attempt = 0; attempt < 100 && !heartbeat.includes("result_ready"); attempt += 1) {
+      try { heartbeat = await readFile(join(executionRoot, "heartbeat.json"), "utf8"); } catch { /* not yet written */ }
+      if (!heartbeat.includes("result_ready")) await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(heartbeat).toContain("result_ready");
     for (let attempt = 0; attempt < 100 && exitCode === null; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 10));
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 3 }); }
 });

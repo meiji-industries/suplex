@@ -352,7 +352,7 @@ export class DeveloperService {
     ]);
     const plan = JSON.parse(planText) as { kind?: unknown; steps?: Array<{ number: number; instruction: string; verification: string }> };
     if (plan.kind !== "plan" || !Array.isArray(plan.steps) || !plan.steps.length) throw new AgentFailure("plan-unavailable", "A final Lead plan is required before development");
-    const profile = this.executionProfile(input, input.roleProfiles.implementer);
+    const profile = this.executionProfile(input, input.roleProfiles.builder);
     if (!profile || profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
     const prior = input.supersedesExecutionId
       ? this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.supersedesExecutionId, input.taskId, input.companyId, input.workflowId) as PriorDeveloperExecution | undefined)
@@ -612,7 +612,7 @@ export class DeveloperService {
   private async runAuthorized(input: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity> & { authorization: NonNullable<DeveloperExecutionActivityInput["authorization"]> }): Promise<DeveloperExecutionResult> {
     const authorization = AuthorizedPlanSubjectSchema.parse(input.authorization);
     if (authorization.taskId !== input.taskId || authorization.companyId !== input.companyId || authorization.projectId !== input.projectId || authorization.workflowId !== input.workflowId || authorization.planRevision !== input.planRevision || authorization.planArtifactId !== input.leadOutputArtifactId) throw new AgentFailure("plan-authorization-mismatch", "Developer authorization coordinates do not match the requested issue plan");
-    const profile = this.executionProfile(input, input.roleProfiles.implementer);
+    const profile = this.executionProfile(input, input.roleProfiles.builder);
     if (!profile || profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
     const executionId = input.developerTurnExecutionId ?? input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
@@ -689,7 +689,7 @@ export class DeveloperService {
       const reconciliation = reconcileDeveloperDelivery({ executionId, companyId: input.companyId, report: parsed.finalReport, independentVerification, git, startingSha: activeWorktree.startingSha, neutralBranch: activeWorktree.branchName, providerBeforeSha256: beforeObservation.sha256, providerAfterSha256: after.observation?.sha256 ?? null, processExitCode: result.exitCode, malformedLines: parsed.malformedLines, developerSessionId: rawSessionId ?? null, leadSessionId: leadSessionId ?? null, authorization, manifest: evidence.manifest });
       const deliverySummary = reconciliation.outcome === "completed"
         ? reconciliation.report?.summary ?? "Developer delivery reconciled"
-        : `Required local tests failed: ${independentVerification.summary}`;
+        : `Developer delivery could not be accepted: ${reconciliation.mismatches.join(", ") || "reconciliation failed"}.${independentVerification.outcome === "failed" ? ` Independent verification: ${independentVerification.summary}` : ""}`;
       const reconciliationArtifact = await this.artifacts.putIdempotent(input.companyId, "developer-reconciliation", `${executionId}:reconciliation:v3`, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(reconciliation), "utf8") });
       this.database.authTransaction((db) => {
         for (const artifact of [after.artifact, rawReportArtifact, gitArtifact, reconciliationArtifact]) registerArtifact(db, artifact);

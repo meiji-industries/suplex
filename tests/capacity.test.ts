@@ -231,6 +231,23 @@ test("a live agent process keeps its turn even without a recorded process group"
   }
 });
 
+test("a genuinely ambiguous agent turn still leaves the operator a way out", async () => {
+  const value = await fixture();
+  // Child alive, wrapper gone: partial evidence, so the turn is truly ambiguous.
+  const partial = { inspect: async (pid: number) => (pid === 5252 ? { pid, processGroupId: pid, processStartIdentity: "5252:start", command: "codex" } : undefined), signalGroup: async () => undefined };
+  try {
+    value.database.authQuery((db) => {
+      db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task-a', 'company', 'project', 'workflow-task-a', 1, 'planning', 'lead', '[]', 'Preparing', ?, 'event-1')").run(now);
+      db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, process_pid, process_start_identity, wrapper_id, wrapper_path, wrapper_pid, wrapper_start_identity, started_at) VALUES ('agent-partial', 'task-a', 'company', 'workflow-task-a', 'analyst', 'running', 1, 5252, '5252:start', 'wrapper-partial', '/tmp/wrapper-partial', 5251, '5251:start', ?)").run(now);
+    });
+    expect(await reconcileAgentExecutions(value.database, partial)).toEqual([{ executionId: "agent-partial", status: "ownership_ambiguous", reason: "wrapper-identity-mismatch" }]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT owner, allowed_commands_json FROM forge_issue_projections WHERE task_id = 'task-a'").get())).toMatchObject({ owner: "human", allowed_commands_json: JSON.stringify(["retry_capacity", "cancel_issue"]) });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("separate SQLite workers race admission without exceeding the lane", async () => {
   const value = await fixture();
   try {

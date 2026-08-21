@@ -26,6 +26,7 @@ export interface AttentionPolicyInput {
   owner: "human" | "lead";
   allowedCommands: IssueCommand[];
   blocker: IssueBlocker | null | undefined;
+  pendingAction?: string | null;
   stateChangedAt?: string;
   projectedAt: string;
 }
@@ -41,7 +42,7 @@ export type AttentionPolicyResult =
         category: AttentionCategory;
         summary: string;
         actions: IssueBlockerAction[];
-        evidence: IssueBlocker["evidence"];
+        evidence: IssueBlocker["evidence"] | null;
         sourceRevision: number;
         activatedAt: string;
       };
@@ -55,6 +56,24 @@ export function attentionPolicy(input: AttentionPolicyInput): AttentionPolicyRes
   if (input.blocker === undefined) return { kind: "quiet", projectionStatus: "unknown", reason: "legacy-state-missing-blocker" };
   if (!input.stateChangedAt) return { kind: "quiet", projectionStatus: "unknown", reason: "legacy-state-missing-time" };
   const blocker = input.blocker;
+  // A phase the operator has to act on always shows up, even when the failing activity never wrote evidence.
+  const strandedHuman = input.phase === "failed" || (input.phase === "delivery_blocked" && input.owner === "human");
+  if (strandedHuman && (!blocker || !ArtifactPointerSchema.safeParse(blocker.evidence).success)) {
+    const category = AttentionCategorySchema.safeParse(blocker?.category).data ?? "agent_exhausted";
+    return {
+      kind: "attention",
+      projectionStatus: "current",
+      item: {
+        id: attentionId(input.companyId, input.taskId, input.revision, category),
+        category,
+        summary: blocker?.summary ?? input.pendingAction ?? (input.phase === "failed" ? "The task failed and needs an operator" : "Delivery is blocked and needs an operator"),
+        actions: blocker?.actions ?? input.allowedCommands.map((command) => ({ command, label: command.replaceAll("_", " "), requiresNote: false, destructive: command === "cancel_issue" })),
+        evidence: null,
+        sourceRevision: input.revision,
+        activatedAt: input.stateChangedAt,
+      },
+    };
+  }
   if (!blocker || blocker.unblockOwner !== "human") return { kind: "quiet", projectionStatus: "current" };
   if (blocker.retry && !blocker.retry.exhausted) return { kind: "quiet", projectionStatus: "current" };
   if (blocker.actions.some((action) => !input.allowedCommands.includes(action.command))) return { kind: "quiet", projectionStatus: "unknown", reason: "legacy-state-missing-blocker" };
@@ -74,5 +93,3 @@ export function attentionPolicy(input: AttentionPolicyInput): AttentionPolicyRes
     },
   };
 }
-
-export const evaluateAttentionPolicy = attentionPolicy;

@@ -419,6 +419,7 @@ export class DeveloperService {
         const result = await this.processRunner({
           command: this.command,
           args: this.provider.buildTurnArgs({ prompt, profile }),
+          stdin: prompt,
           cwd: worktree.worktreePath,
           env: withWorktreeMiseTrust(guard.env, worktree.worktreePath),
           detached: true,
@@ -670,6 +671,7 @@ export class DeveloperService {
       const result = await this.processRunner({
         command: this.command,
         args: this.provider.buildTurnArgs({ prompt, profile, imagePaths: staged.imagePaths }),
+        stdin: prompt,
         cwd: activeWorktree.worktreePath,
         env: withWorktreeMiseTrust(guard.env, activeWorktree.worktreePath),
         detached: true,
@@ -762,12 +764,14 @@ export class DeveloperService {
     });
     const evidenceLines: string[] = [];
     const expectedRawSessionId = rawSessionId;
+    const mergePrompt = this.mergeConflictResolutionPrompt(plan, input, conflict);
     let verificationArtifact: StoredArtifact | undefined;
     let completedMerge: { headSha: string; treeSha: string } | undefined;
     try {
       const result = await this.processRunner({
         command: this.command,
-        args: this.provider.buildTurnArgs({ prompt: this.mergeConflictResolutionPrompt(plan, input, conflict), resumeSessionId: rawSessionId, profile }),
+        args: this.provider.buildTurnArgs({ prompt: mergePrompt, resumeSessionId: rawSessionId, profile }),
+        stdin: mergePrompt,
         cwd: input.worktreePath,
         env: withWorktreeMiseTrust(guard.env, input.worktreePath),
         detached: true,
@@ -909,6 +913,7 @@ export class DeveloperService {
         const result = await this.processRunner({
           command: this.command,
           args: this.provider.buildTurnArgs({ prompt: repairPrompt, resumeSessionId: rawSessionId, profile }),
+          stdin: repairPrompt,
           cwd: worktreePath,
           env: withWorktreeMiseTrust(guard.env, worktreePath),
           detached: true,
@@ -1060,8 +1065,9 @@ export class DeveloperService {
     });
     const evidenceLines = [JSON.stringify({ type: "forge.ci-repair-context", ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, failedHeadSha: input.failedHeadSha, plan: redact(planText), evidence: redact(evidenceText) })];
     const outputLines: string[] = [];
+    const ciRepairPrompt = this.ciRepairPrompt(planText, { branchName: input.branchName, worktreePath, priorCommit: input.priorCommit, priorTree: input.priorTree });
     try {
-      const result = await this.processRunner({ command: this.command, args: this.provider.buildTurnArgs({ prompt: this.ciRepairPrompt(planText, { branchName: input.branchName, worktreePath, priorCommit: input.priorCommit, priorTree: input.priorTree }), resumeSessionId: rawSessionId }), cwd: worktreePath, env: withWorktreeMiseTrust(guard.env, worktreePath), detached: true, onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); }, onLine: async (line) => { const event = this.provider.parseEvent(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair returned a different Developer session identity"); evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.heartbeat(executionId); } });
+      const result = await this.processRunner({ command: this.command, args: this.provider.buildTurnArgs({ prompt: ciRepairPrompt, resumeSessionId: rawSessionId }), stdin: ciRepairPrompt, cwd: worktreePath, env: withWorktreeMiseTrust(guard.env, worktreePath), detached: true, onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); }, onLine: async (line) => { const event = this.provider.parseEvent(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair returned a different Developer session identity"); evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.heartbeat(executionId); } });
       if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, outputLines);
       const report = parseRepairReport(outputLines, this.provider);
       const gitState = await this.worktrees.inspectDelivery(worktreePath);

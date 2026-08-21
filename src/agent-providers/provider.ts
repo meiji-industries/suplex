@@ -10,6 +10,8 @@ export type { SessionStore } from "../session-store.js";
 export interface LeadInvocation {
   command: string;
   args: string[];
+  /** Prompt supplied on the child process's standard input when required. */
+  stdin?: string;
   cwd: string;
   env?: NodeJS.ProcessEnv;
   detached?: boolean;

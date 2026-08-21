@@ -25,6 +25,7 @@ export interface DeveloperTurnRunInput {
   worktreeIdentityHash: string;
   command: string;
   args: string[];
+  stdin?: string;
   cwd: string;
   env: Record<string, string>;
   controller?: ProcessController;
@@ -69,6 +70,14 @@ async function writeExclusiveOrVerify(path: string, content: string): Promise<vo
     const existing = DeveloperSupervisorInvocationSchema.parse(JSON.parse(await readFile(path, "utf8")));
     const current = DeveloperSupervisorInvocationSchema.parse(JSON.parse(content));
     if (JSON.stringify(stableInvocation(existing)) !== JSON.stringify(stableInvocation(current))) throw new Error("Developer execution input conflicts with the durable start record");
+  }
+}
+
+async function writePromptExclusiveOrVerify(path: string, prompt: string): Promise<void> {
+  try { await writeExclusive(path, prompt); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    if (await readFile(path, "utf8") !== prompt) throw new Error("Developer execution prompt conflicts with the durable start record");
   }
 }
 
@@ -129,6 +138,9 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
   const lease = leaseResult.lease;
   const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId: lease.executionId, command: input.command, args: input.args, cwd: input.cwd, env: Object.fromEntries(Object.entries(input.env).filter(([key]) => key === "PATH" || key === "FORGE_GIT_REAL_BIN" || key === "FORGE_GIT_GUARD_DIR" || key === "MISE_TRUSTED_CONFIG_PATHS")) });
   await writeExclusiveOrVerify(join(root, "invocation.json"), `${JSON.stringify(invocation)}\n`);
+  const prompt = input.stdin ?? input.args.at(-1);
+  if (!prompt || prompt === "-") throw new Error("Developer supervisor prompt is missing; refusing to launch Codex with empty stdin");
+  await writePromptExclusiveOrVerify(join(root, "prompt.txt"), prompt);
   try { await writeFile(join(root, "events.jsonl"), "", { flag: "wx", mode: 0o600 }); }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error; }
 

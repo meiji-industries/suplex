@@ -1,5 +1,5 @@
-import { readFileSync } from "node:fs";
-import { mkdir, open, readFile, rename, rm, unlink, lstat } from "node:fs/promises";
+import { constants, readFileSync } from "node:fs";
+import { mkdir, open, readFile, rename, rm, lstat } from "node:fs/promises";
 import { createServer, createConnection, type Socket } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, timingSafeEqual } from "node:crypto";
@@ -333,7 +333,19 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
     throw error;
   }
   if (invocation.executionId !== executionId) throw new Error("Developer supervisor invocation identity mismatch");
-  const childProcess = spawn(invocation.command, invocation.args, { cwd: invocation.cwd, detached: true, stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...invocation.env } });
+  const promptPath = join(root, "prompt.txt");
+  let promptHandle;
+  try {
+    promptHandle = await open(promptPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    if ((await promptHandle.stat()).size === 0) throw new Error("Developer supervisor prompt is empty; refusing to launch Codex with empty stdin");
+  } catch (error) {
+    const failedAt = new Date().toISOString();
+    await atomicWriteJson(join(root, "supervisor.json"), DeveloperSupervisorSnapshotSchema.parse({ version: 1, executionId, status: "failed", supervisor, child: null, heartbeatAt: failedAt }));
+    await atomicWriteJson(join(root, "heartbeat.json"), DeveloperSupervisorHeartbeatSchema.parse({ version: 1, executionId, status: "failed", heartbeatAt: failedAt }));
+    throw new Error(`Developer supervisor prompt file is missing or unreadable: ${promptPath}`, { cause: error });
+  }
+  const childProcess = spawn(invocation.command, invocation.args, { cwd: invocation.cwd, detached: true, stdio: [promptHandle.fd, "pipe", "pipe"], env: { ...process.env, ...invocation.env } });
+  await promptHandle.close();
   const childExitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolvePromise, reject) => {
     childProcess.once("error", reject);
     childProcess.once("exit", (code, signal) => resolvePromise({ code, signal }));
@@ -347,7 +359,6 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
     const finished = new Promise<DeveloperSupervisorResult | undefined>((resolvePromise) => { resolveFinished = resolvePromise; });
     const gitGuardDirectory = invocation.env.FORGE_GIT_GUARD_DIR && resolve(invocation.env.FORGE_GIT_GUARD_DIR).startsWith(`${root}${sep}`) ? resolve(invocation.env.FORGE_GIT_GUARD_DIR) : null;
     const state: SupervisorState = { executionRoot: root, executionId, token, tokenHash, controller, supervisor, child, childProcess, gitGuardDirectory, status: "starting", heartbeatAt, startedAt: heartbeatAt, sequence: 0, outputTruncated: false, eventsBytes: 0, termSentAt: null, killSentAt: null, confirmedExitAt: null, pendingControlRequests: new Set(), cancellationTask: null, finished, resolveFinished };
-    await unlink(invocationPath).catch(() => undefined);
     state.status = "running";
     await writeSnapshot(state);
     await writeHeartbeat(state);

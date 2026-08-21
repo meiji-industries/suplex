@@ -325,6 +325,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
         worktreeIdentityHash: createHash("sha256").update(`${input.companyId}\0${input.workflowId}\0${invocation.cwd}`).digest("hex"),
         command: invocation.command,
         args: invocation.args,
+        ...(invocation.stdin !== undefined ? { stdin: invocation.stdin } : {}),
         cwd: invocation.cwd,
         env,
         onStart: invocation.onStart,

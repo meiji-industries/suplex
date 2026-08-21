@@ -19,6 +19,31 @@ test("uses a short deterministic socket for long runtime paths", () => {
   expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(100);
 });
 
+test("supervisor feeds the durable prompt file to the child stdin", async () => {
+  const root = await mkdtemp(join("/tmp", "fg-sup-prompt-"));
+  const executionId = `developer_${"d".repeat(24)}`;
+  const executionRoot = join(root, "developer-executions", executionId);
+  try {
+    const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId, command: process.execPath, args: ["-e", "process.stdin.on('data', (chunk) => process.stdout.write(chunk))"], cwd: root, env: {} });
+    await mkdir(executionRoot, { recursive: true, mode: 0o700 });
+    await writeFile(join(executionRoot, "invocation.json"), `${JSON.stringify(invocation)}\n`);
+    await writeFile(join(executionRoot, "prompt.txt"), "durable retry prompt\n", { mode: 0o600 });
+    await writeFile(join(executionRoot, "lease-token"), "supervisor-test-token", { mode: 0o600 });
+    const source = fileURLToPath(new URL("../src/developer-supervisor.ts", import.meta.url));
+    const child = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "pipe", "pipe"] });
+    child.unref();
+    const resultPath = join(executionRoot, "result.json");
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        DeveloperSupervisorResultSchema.parse(JSON.parse(await readFile(resultPath, "utf8")));
+        break;
+      } catch { await new Promise((resolve) => setTimeout(resolve, 25)); }
+    }
+    const events = await readFile(join(executionRoot, "events.jsonl"), "utf8");
+    expect(events).toContain("durable retry prompt");
+  } finally { await rm(root, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
 test("INV-06 real supervisor writes one bounded, hashed result envelope", async () => {
   const root = await mkdtemp(join("/tmp", "fg-sup-"));
   const executionRoot = join(root, "runtime".repeat(9), "developer-executions", `developer_${"a".repeat(24)}`);
@@ -28,6 +53,7 @@ test("INV-06 real supervisor writes one bounded, hashed result envelope", async 
     const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId: `developer_${"a".repeat(24)}`, command: process.execPath, args: ["--input-type=module", "-e", "for (let i = 0; i < 20; i += 1) { process.stdout.write('out-' + i + '\\n'); process.stderr.write('err-' + i + '\\n'); } setTimeout(() => undefined, 1_000);", longPrompt], cwd: process.cwd(), env: {} });
     await mkdir(executionRoot, { recursive: true, mode: 0o700 });
     await writeFile(join(executionRoot, "invocation.json"), JSON.stringify(invocation));
+    await writeFile(join(executionRoot, "prompt.txt"), longPrompt, { mode: 0o600 });
     await writeFile(join(executionRoot, "lease-token"), token, { mode: 0o600 });
     const source = fileURLToPath(new URL("../src/developer-supervisor.ts", import.meta.url));
     const child = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "pipe", "pipe"] });
@@ -63,7 +89,7 @@ test("INV-06 real supervisor writes one bounded, hashed result envelope", async 
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 3 }); }
 });
 
-test("supervisor failure after spawn writes a failed snapshot instead of dying silently", async () => {
+test("supervisor failure before child spawn writes a failed snapshot instead of dying silently", async () => {
   const root = await mkdtemp(join("/tmp", "fg-sup-fail-"));
   const executionRoot = join(root, "developer-executions", `developer_${"b".repeat(24)}`);
   try {
@@ -103,6 +129,7 @@ test("a failing heartbeat write does not kill the supervisor or orphan the child
     const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId, command: process.execPath, args: ["-e", "setTimeout(() => process.stdout.write('done\\n'), 5_000);"], cwd: root, env: {} });
     await mkdir(executionRoot, { recursive: true, mode: 0o700 });
     await writeFile(join(executionRoot, "invocation.json"), JSON.stringify(invocation));
+    await writeFile(join(executionRoot, "prompt.txt"), "heartbeat prompt", { mode: 0o600 });
     await writeFile(join(executionRoot, "lease-token"), "supervisor-test-token", { mode: 0o600 });
     const source = fileURLToPath(new URL("../src/developer-supervisor.ts", import.meta.url));
     const child = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "pipe", "pipe"] });

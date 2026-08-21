@@ -34,19 +34,15 @@ test("INV-02/INV-03/INV-05/INV-06 competing supervisors preserve one child, grow
     const fixture = fileURLToPath(new URL("./fixtures/developer-turn-child.mjs", import.meta.url));
     const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId, command: process.execPath, args: [fixture, "--duration", "400", "--output", outputPath, "--launch-count", launchCountPath], cwd: process.cwd(), env: {} });
     await writeFile(join(executionRoot, "invocation.json"), `${JSON.stringify(invocation)}\n`);
+    await writeFile(join(executionRoot, "prompt.txt"), "competing supervisor prompt", { mode: 0o600 });
+    await writeFile(join(executionRoot, "lease-token"), "integration-token", { mode: 0o600 });
     const source = fileURLToPath(new URL("../src/developer-supervisor.ts", import.meta.url));
-    const supervisor = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "ignore", "pipe", "pipe"] });
-    const competingSupervisor = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "ignore", "pipe", "pipe"] });
+    const supervisor = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "ignore", "pipe"] });
+    const competingSupervisor = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "ignore", "pipe"] });
     competingSupervisor.unref();
     let stderr = "";
     supervisor.stderr?.on("data", (chunk) => { stderr += String(chunk); });
     supervisor.unref();
-    const tokenPipe = supervisor.stdio[3];
-    if (!tokenPipe || typeof tokenPipe === "string" || !("end" in tokenPipe)) throw new Error("supervisor token pipe unavailable");
-    tokenPipe.end("integration-token");
-    const competingTokenPipe = competingSupervisor.stdio[3];
-    if (!competingTokenPipe || typeof competingTokenPipe === "string" || !("end" in competingTokenPipe)) throw new Error("competing supervisor token pipe unavailable");
-    competingTokenPipe.end("integration-token");
     let result;
     try {
       result = await waitFor(async () => {
@@ -82,8 +78,11 @@ test("INV-01/INV-02 retry starts the same turn after worker loss before supervis
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, 'task_pre_spawn', 'company_pre_spawn', ?, 1, 1, 'starting', 'forge/issue/task_pre_spawn', ?, ?, ?, ?)").run(executionId, workflowId, worktreePath, "a".repeat(40), now, now);
     });
     const fixture = fileURLToPath(new URL("./fixtures/developer-turn-child.mjs", import.meta.url));
-    const input = { database, config, executionId, developerAttempt: 1, planRevision: 1, turnKind: "implementation" as const, companyId: "company_pre_spawn", taskId: "task_pre_spawn", workflowId, canonicalWorktreePath: worktreePath, worktreeIdentityHash: "w".repeat(64), command: process.execPath, args: [fixture, "--duration", "700", "--output", outputPath, "--launch-count", launchCountPath, "--stderr-noise", "true"], cwd: root, env: { PATH: "/tmp/guard-before:/usr/bin", FORGE_GIT_REAL_BIN: "/usr/bin/git", FORGE_GIT_GUARD_DIR: "/tmp/guard-before" } };
+    const input = { database, config, executionId, developerAttempt: 1, planRevision: 1, turnKind: "implementation" as const, companyId: "company_pre_spawn", taskId: "task_pre_spawn", workflowId, canonicalWorktreePath: worktreePath, worktreeIdentityHash: "w".repeat(64), command: process.execPath, args: [fixture, "--duration", "700", "--output", outputPath, "--launch-count", launchCountPath, "--stderr-noise", "true"], stdin: "retry reuseWorktree prompt", cwd: root, env: { PATH: "/tmp/guard-before:/usr/bin", FORGE_GIT_REAL_BIN: "/usr/bin/git", FORGE_GIT_GUARD_DIR: "/tmp/guard-before" } };
     await expect(runDeveloperTurn({ ...input, spawnSupervisor: () => { throw new Error("simulated worker loss before supervisor spawn"); } })).rejects.toThrow("simulated worker loss");
+    const executionDirectory = join(config.runtimeRoot, "developer-executions", executionId);
+    expect(DeveloperSupervisorInvocationSchema.parse(JSON.parse(await readFile(join(executionDirectory, "invocation.json"), "utf8")))).toMatchObject({ command: process.execPath, args: input.args });
+    expect(await readFile(join(executionDirectory, "prompt.txt"), "utf8")).toBe("retry reuseWorktree prompt");
     const streamed: string[] = [];
     let sawLiveLine!: () => void;
     const liveLine = new Promise<void>((resolve) => { sawLiveLine = resolve; });

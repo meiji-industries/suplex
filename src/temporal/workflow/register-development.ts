@@ -92,7 +92,10 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
       await ctx.recordHandlerNoop("retry_development", "This retry command was already processed.");
       return ctx.state;
     }
-    if (command.reconcileOnly && ctx.state.phase === "delivery_blocked" && ctx.state.developerExecutionId && ctx.patched(ctx.developerReconciliationRecoveryPatch)) {
+    // Retain this marker for retries recorded before retry_development always started
+    // a fresh turn. Those histories invoked the patch regardless of reconcileOnly.
+    const reconciliationRecoveryEnabled = ctx.patched(ctx.developerReconciliationRecoveryPatch);
+    if (command.reconcileOnly && ctx.state.phase === "delivery_blocked" && ctx.state.developerExecutionId && reconciliationRecoveryEnabled) {
       const priorExecutionId = ctx.state.developerExecutionId;
       const reconciled = await activityProxies.reconcileDeveloperDeliveryEvidence({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, developerExecutionId: priorExecutionId });
       if (reconciled?.outcome === "completed") {

@@ -390,51 +390,65 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   // previous run already projected that revision, so emitting it again with a
   // different continuationCount would correctly look like conflicting
   // authoritative history to the projection boundary.
-  if (workflowContext.exactPlanAuthorityEnabled) await workflowContext.initialProjection;
-  else {
-    if (!continuation) await workflowContext.projectState(workflowContext.captureInitialProjectionState ? workflowContext.initialProjectionState : workflowContext.state);
-    workflowContext.initialProjectionComplete = true;
-  }
-  while (true) {
-    if (workflowContext.state.phase === "cancelled" || workflowContext.state.phase === "done") return workflowContext.state;
-    if (workflowContext.state.phase === "releasing" && workflowContext.state.releaseRetryAt) {
-      const delay = Math.max(0, Date.parse(workflowContext.state.releaseRetryAt) - Date.now());
-      if (delay > 0) await sleep(delay);
-      if (workflowContext.state.phase === "releasing") await workflowContext.runPublishTurn();
-      continue;
+  try {
+    if (workflowContext.exactPlanAuthorityEnabled) await workflowContext.initialProjection;
+    else {
+      if (!continuation) await workflowContext.projectState(workflowContext.captureInitialProjectionState ? workflowContext.initialProjectionState : workflowContext.state);
+      workflowContext.initialProjectionComplete = true;
     }
-    if (workflowContext.state.phase === "ci_waiting") {
-      const sleepingRevision = workflowContext.state.revision;
-      const sleepingReleaseId = workflowContext.state.releaseId;
-      const sleepingHeadSha = workflowContext.state.expectedHeadSha;
-      const pollAt = workflowContext.state.ciNextPollAt ? isoEpochMillis(workflowContext.state.ciNextPollAt) : Date.now();
-      const delay = Math.max(0, pollAt - Date.now());
-      if (delay > 0) await sleep(delay);
-      if (workflowContext.state.phase !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
-      await workflowContext.reconcileCiTurn();
-      continue;
+    while (true) {
+      if (workflowContext.state.phase === "cancelled" || workflowContext.state.phase === "done") return workflowContext.state;
+      if (workflowContext.state.phase === "releasing" && workflowContext.state.releaseRetryAt) {
+        const delay = Math.max(0, Date.parse(workflowContext.state.releaseRetryAt) - Date.now());
+        if (delay > 0) await sleep(delay);
+        if (workflowContext.state.phase === "releasing") await workflowContext.runPublishTurn();
+        continue;
+      }
+      if (workflowContext.state.phase === "ci_waiting") {
+        const sleepingRevision = workflowContext.state.revision;
+        const sleepingReleaseId = workflowContext.state.releaseId;
+        const sleepingHeadSha = workflowContext.state.expectedHeadSha;
+        const pollAt = workflowContext.state.ciNextPollAt ? isoEpochMillis(workflowContext.state.ciNextPollAt) : Date.now();
+        const delay = Math.max(0, pollAt - Date.now());
+        if (delay > 0) await sleep(delay);
+        if (workflowContext.state.phase !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
+        await workflowContext.reconcileCiTurn();
+        continue;
+      }
+      if (workflowContext.state.phase === "ready_reconciliation") {
+        await sleepUntil(workflowContext.state.acceptanceRetryAt);
+        if (workflowContext.state.phase === "ready_reconciliation") await workflowContext.reconcileAcceptanceTurn();
+        continue;
+      }
+      if (workflowContext.state.phase === "manual_merge") {
+        await sleepUntil(workflowContext.state.mergeRetryAt);
+        if (workflowContext.state.phase === "manual_merge") await workflowContext.reconcileMergeTurn();
+        continue;
+      }
+      const chained = allHandlersFinished() ? autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) : null;
+      if (chained) {
+        await runAutoChainedCommand(workflowContext, chained);
+        continue;
+      }
+      await condition(() => (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge" || (allHandlersFinished() && autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) !== null));
+      if (workflowContext.continuationRequested && allHandlersFinished()) {
+        if (workflowContext.stateMutationLocked || workflowContext.state.activeOperation !== null) continue;
+        const compact = compactStateForContinuation(workflowContext.state);
+        assertContinuationStateWithinLimit(compact);
+        await continueAsNew<typeof issueWorkflow>({ ...validatedInput, continuationState: compact, continueAsNewAfter: continueAfter });
+      }
     }
-    if (workflowContext.state.phase === "ready_reconciliation") {
-      await sleepUntil(workflowContext.state.acceptanceRetryAt);
-      if (workflowContext.state.phase === "ready_reconciliation") await workflowContext.reconcileAcceptanceTurn();
-      continue;
-    }
-    if (workflowContext.state.phase === "manual_merge") {
-      await sleepUntil(workflowContext.state.mergeRetryAt);
-      if (workflowContext.state.phase === "manual_merge") await workflowContext.reconcileMergeTurn();
-      continue;
-    }
-    const chained = allHandlersFinished() ? autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) : null;
-    if (chained) {
-      await runAutoChainedCommand(workflowContext, chained);
-      continue;
-    }
-    await condition(() => (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge" || (allHandlersFinished() && autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) !== null));
-    if (workflowContext.continuationRequested && allHandlersFinished()) {
-      if (workflowContext.stateMutationLocked || workflowContext.state.activeOperation !== null) continue;
-      const compact = compactStateForContinuation(workflowContext.state);
-      assertContinuationStateWithinLimit(compact);
-      await continueAsNew<typeof issueWorkflow>({ ...validatedInput, continuationState: compact, continueAsNewAfter: continueAfter });
-    }
+  } catch (error) {
+    if (!isCancellation(error)) throw error;
+    // An external `temporal workflow cancel` lands here as a CancelledFailure from
+    // whatever the loop was awaiting. Project the same cancelled phase the
+    // cancel_issue update produces, in a non-cancellable scope since the ambient
+    // cancellation would otherwise abort the projection activity itself.
+    await CancellationScope.nonCancellable(async () => {
+      if (state.phase === "cancelled" || state.phase === "done") return;
+      state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Issue cancelled externally", blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
+      await projectIssueState(state);
+    });
+    throw error;
   }
 }

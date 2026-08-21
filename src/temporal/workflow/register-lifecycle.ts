@@ -1,5 +1,6 @@
 import { condition, setHandler } from "@temporalio/workflow";
 
+import { TERMINAL_PHASES } from "../../issue-phases.js";
 import { assertPayloadWithinLimit } from "../policy.js";
 import { ContinueWorkCommandSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, StartPlanningInputSchema } from "../issue-contracts.js";
 import { issueUpdates } from "../issue-updates.js";
@@ -54,7 +55,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     if (!ctx.exactPlanAuthorityEnabled && ctx.captureInitialProjectionState) await condition(() => ctx.initialProjectionComplete);
     if (ctx.initialProjectionBarrierEnabled) await ctx.initialProjection;
     const command = PlanCommandInputSchema.parse(rawInput);
-    if (command.expectedRevision !== ctx.state.revision || ["done", "cancelled"].includes(ctx.state.phase)) throw new Error("Issue cancellation is not available in the current phase");
+    if (command.expectedRevision !== ctx.state.revision || TERMINAL_PHASES.has(ctx.state.phase)) throw new Error("Issue cancellation is not available in the current phase");
     if (ctx.state.phase === "planning" && ctx.planningScope) {
       ctx.planningScope.cancel();
       await ctx.planningPromise?.catch(() => undefined);

@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { TERMINAL_PHASES } from "../../../issue-phases.js";
 import { acceptanceStateFields } from "./acceptance.js";
 import { capacityStateFields } from "./capacity.js";
 import { ciStateFields } from "./ci.js";
@@ -50,6 +51,11 @@ export const IssueWorkflowStateSchema = z.object(orderedStateFields).superRefine
     if (action.destructive !== (action.command === "cancel_issue")) context.addIssue({ code: "custom", path: ["blocker", "actions"], message: "Only issue cancellation is destructive" });
     if (["reject_plan", "record_delivery_decision", "request_delivery_changes"].includes(action.command) && !action.requiresNote) context.addIssue({ code: "custom", path: ["blocker", "actions"], message: "This action requires a note" });
   }
+}).transform((state) => {
+  // Single-operator tool: cancel_issue must always be offered while the issue is
+  // still active, even mid agent-turn phases that otherwise clear allowedCommands.
+  if (TERMINAL_PHASES.has(state.phase) || state.allowedCommands.includes("cancel_issue")) return state;
+  return { ...state, allowedCommands: [...state.allowedCommands, "cancel_issue" as const] };
 });
 
 export const IssueContinuationStateSchema = z.object({

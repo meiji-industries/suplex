@@ -32,3 +32,6 @@ export function phaseLabel(phase: IssuePhase): string {
 export const ACTIVE_PHASES: ReadonlySet<IssuePhase> = new Set(["planning", "approval", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "repair_required", "delivery_reviewed", "releasing", "merge_conflict_reviewing", "merge_conflict_required", "merge_conflict_resolving", "ci_waiting", "ci_repair_required", "final_review", "accepted", "ready_reconciliation", "manual_merge"]);
 export const BLOCKED_PHASES: ReadonlySet<IssuePhase> = new Set(["delivery_blocked", "blocked", "failed"]);
 export const ATTENTION_ACTIVE_PHASES: ReadonlySet<string> = new Set([...ACTIVE_PHASES, "delivery_blocked"]);
+
+// Phases where the workflow has already finished and there is nothing left to cancel.
+export const TERMINAL_PHASES: ReadonlySet<IssuePhase> = new Set(["done", "cancelled"]);

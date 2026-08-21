@@ -12,7 +12,8 @@ exports[`initial state serialized field order is frozen 1`] = `
   "revision": 0,
   "owner": "human",
   "allowedCommands": [
-    "start_planning"
+    "start_planning",
+    "cancel_issue"
   ],
   "pendingAction": "Start planning",
   "lastEventId": "workflow-installation-issue-task-recovery:0",

@@ -35,7 +35,7 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
       await new Promise((resolve) => setTimeout(resolve, 100));
       issueState = await queryIssueWorkflow(config, startedIssue.workflowId);
     }
-    expect(issueState).toMatchObject({ issueId: "issue-restart", phase: "backlog", revision: 0, allowedCommands: ["start_planning"] });
+    expect(issueState).toMatchObject({ issueId: "issue-restart", phase: "backlog", revision: 0, allowedCommands: ["start_planning", "cancel_issue"] });
     state.holdPlanning = true;
     state.planningGate = new Promise<void>((resolve) => { state.releasePlanning = resolve; });
     const plannedIssuePromise = executeIssueCommand(config, startedIssue.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "issue-admin" });
@@ -52,7 +52,7 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     expect(plannedIssue).toMatchObject({ phase: "approval", revision: 4, owner: "human", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], blocker: { category: "member_authorization", evidence: { artifactId: artifacts.integrationLeadOutputArtifactId, sha256: expect.any(String), kind: "lead-plan" }, actions: expect.arrayContaining([expect.objectContaining({ command: "approve_plan" }), expect.objectContaining({ command: "reject_plan" })]) } });
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-restart'").get())).toEqual({ revision: 4, phase: "approval" });
     const revisionRequested = await rejectIssuePlan(config, startedIssue.workflowId, { expectedRevision: 4, actorUserId: "issue-admin", note: "Please address the security boundary" });
-    expect(revisionRequested).toMatchObject({ phase: "planning", revision: 5, allowedCommands: ["start_planning"], planRevision: null, planMaterial: null });
+    expect(revisionRequested).toMatchObject({ phase: "planning", revision: 5, allowedCommands: ["start_planning", "cancel_issue"], planRevision: null, planMaterial: null });
     const replannedIssue = await executeIssueCommand(config, startedIssue.workflowId, "start_planning", { expectedRevision: 5, actorUserId: "issue-admin" });
     expect(replannedIssue).toMatchObject({ phase: "approval", revision: 9, planRevision: 6, planMaterial: true });
     const approvedIssue = await executeIssueCommand(config, startedIssue.workflowId, "approve_plan", { expectedRevision: 9, actorUserId: "issue-admin", note: "Approve revised plan" });
@@ -209,3 +209,49 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     await harness.stop();
   }
 }, 120_000);
+
+test("cancel_issue is available while planning is in flight and wins over a late Lead result", async () => {
+  const harness = createTemporalHarness();
+  await harness.start();
+  const { config, database, state } = harness;
+  try {
+    const started = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-restart", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false });
+    let issueState = await queryIssueWorkflow(config, started.workflowId);
+    for (let attempt = 0; attempt < 20 && issueState.phase !== "backlog"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      issueState = await queryIssueWorkflow(config, started.workflowId);
+    }
+    expect(issueState.allowedCommands).toContain("cancel_issue");
+
+    state.holdPlanning = true;
+    state.planningGate = new Promise<void>((resolve) => { state.releasePlanning = resolve; });
+    const plannedIssuePromise = executeIssueCommand(config, started.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "issue-admin" });
+    let planning = await queryIssueWorkflow(config, started.workflowId);
+    for (let attempt = 0; attempt < 20 && planning.phase !== "planning"; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      planning = await queryIssueWorkflow(config, started.workflowId);
+    }
+    // The bug under test: a lead-owned phase mid-turn (allowedCommands used to be []) must
+    // still offer cancel_issue to a single operator.
+    expect(planning).toMatchObject({ phase: "planning", owner: "lead" });
+    expect(planning.allowedCommands).toContain("cancel_issue");
+
+    const cancelled = await executeIssueCommand(config, started.workflowId, "cancel_issue", { expectedRevision: planning.revision, actorUserId: "issue-admin" });
+    expect(cancelled).toMatchObject({ phase: "cancelled", owner: "human" });
+
+    // Release the held Lead turn now that cancellation was requested: its stale result must
+    // not resurrect a cancelled issue (the capacity turn is rejected as stale and discarded).
+    state.releasePlanning();
+    state.holdPlanning = false;
+    await plannedIssuePromise.catch(() => undefined);
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      issueState = await queryIssueWorkflow(config, started.workflowId);
+      if (issueState.phase === "cancelled") break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    expect(issueState).toMatchObject({ phase: "cancelled", owner: "human" });
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-restart'").get())).toEqual({ revision: issueState.revision, phase: "cancelled" });
+  } finally {
+    await harness.stop();
+  }
+}, 60_000);

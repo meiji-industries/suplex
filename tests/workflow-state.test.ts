@@ -29,7 +29,7 @@ test("safe summaries are normalized before entering workflow state", () => {
 test("delivery workflow constructors keep blockers retryable and approvals exact", () => {
   const initial = state();
   const reviewing = reviewingDeliveryState(initial);
-  expect(reviewing).toMatchObject({ phase: "reviewing_delivery", owner: "lead", allowedCommands: [] });
+  expect(reviewing).toMatchObject({ phase: "reviewing_delivery", owner: "lead", allowedCommands: ["cancel_issue"] });
 
   const blocked = reviewBlockedState(reviewing, { attemptId: "review_attempt_1", code: "process-failed", summary: "The review process did not complete.", evidenceArtifactId: "artifact_review_evidence" });
   expect(blocked).toMatchObject({ phase: "delivery_blocked", owner: "human", allowedCommands: ["review_delivery", "cancel_issue"], deliveryReviewBlockerCode: "process-failed", deliveryReviewAttemptId: "review_attempt_1" });

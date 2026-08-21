@@ -265,10 +265,11 @@ function deliveryBlockCode(failure: AgentFailure): import("./temporal/issue-cont
   if (failure.code === "session-identity-conflict" || failure.code === "session-conflict") return "session-conflict";
   if (failure.code === "delivery-revision-changed" || failure.code === "unsafe-working-directory") return "subject-changed";
   if (failure.code === "malformed-review-output" || failure.code === "missing-review-output" || failure.code === "invalid-review-output") return "invalid-output";
-  return "process-failed";
+  if (["process-failed", "process-exited", "process-crashed"].includes(failure.code)) return "process-failed";
+  return "preflight-failed";
 }
 
-function safeBlockSummary(code: import("./temporal/issue-contracts.js").DeliveryOperationBlockCode, correctionExhausted = false): string {
+function safeBlockSummary(code: import("./temporal/issue-contracts.js").DeliveryOperationBlockCode, correctionExhausted = false, reason?: string): string {
   if (correctionExhausted) return "The Lead returned invalid review output after one format correction; retry the review.";
   const summaries: Record<import("./temporal/issue-contracts.js").DeliveryOperationBlockCode, string> = {
     "invalid-output": "The Lead review was not machine-readable; retry the review.",
@@ -277,6 +278,7 @@ function safeBlockSummary(code: import("./temporal/issue-contracts.js").Delivery
     "authentication-required": "Agent provider authentication is unavailable; sign in again, then retry.",
     "rate-limited": "Agent provider rate limiting prevented the review from completing; retry later.",
     "process-failed": "The Lead review process did not complete; inspect the evidence and retry.",
+    "preflight-failed": reason ?? "The Lead review preflight failed; inspect the evidence and retry.",
     "evidence-too-large": "Lead review evidence exceeded the local artifact limit; retry with bounded output.",
     "subject-changed": "The exact delivery subject changed before review; produce a fresh delivery.",
     "repair-incomplete": "The repair did not address every open blocking finding.",
@@ -874,7 +876,7 @@ export class AgentService {
     const attemptId = `review_attempt_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
     const code = deliveryBlockCode(failure);
-    const summary = safeBlockSummary(code);
+    const summary = safeBlockSummary(code, false, failure.message);
     const references = this.database.authQuery((db) => ({
       task: db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(input.taskId, input.companyId, input.workflowId) as { id: string } | undefined,
       developerExecution: db.prepare("SELECT id FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.subject.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string } | undefined,
@@ -1021,18 +1023,8 @@ export class AgentService {
       subject = { ...subject, developerEvidenceArtifactId: context.developerEvidenceArtifactId };
       input.subject = subject;
     }
-    if (!context || !context.developerSessionRef) {
-      const failure = new AgentFailure("scoped-input-missing", "Exact Developer delivery evidence is unavailable");
-      if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
-      throw failure;
-    }
-    if (context.developerSessionRef !== subject.developerSessionRef) {
-      const failure = new AgentFailure("delivery-revision-changed", "The Developer session no longer matches the immutable review subject");
-      if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
-      throw failure;
-    }
-    if (context.developerSessionRef === leadSessionRef) {
-      const failure = new AgentFailure("session-identity-conflict", "Lead review must reuse the Lead session and remain distinct from Developer");
+    if (!context) {
+      const failure = new AgentFailure("scoped-input-missing", "The current delivery artifact is unavailable");
       if (!isFinalReview) return this.blockedDeliveryReviewPreflight(input, failure);
       throw failure;
     }
@@ -1108,7 +1100,7 @@ export class AgentService {
     const attemptId = activeAttempt?.id ?? `review_attempt_${randomBytes(12).toString("hex")}`;
     if (!active) this.database.authTransaction((db) => {
       db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, started_at, event_offset) VALUES (?, ?, ?, ?, 'planner', 'starting', 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)").run(executionId, input.taskId, input.companyId, input.workflowId, `${input.workflowId}:delivery-review:${subjectCommit}:${attemptId}`, input.planRevision, isFinalReview ? "final-delivery-review" : "delivery-review", leadProfile.id, leadProfile.model, leadProfile.reasoningLevel, leadProfile.servicePriority, leadSessionRef, startedAt);
-      if (!isFinalReview) db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id, lead_execution_id, lead_session_ref, developer_session_ref, status, correction_attempts, supersedes_review_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 0, ?, ?)").run(attemptId, input.taskId, input.companyId, input.workflowId, subject.planRevision, targetBaseSha, subjectCommit, subjectTree, subject.developerExecutionId, subject.deliveryArtifactId, subject.developerEvidenceArtifactId, executionId, leadSessionRef, context.developerSessionRef, input.supersedesReviewId, startedAt);
+      if (!isFinalReview) db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id, lead_execution_id, lead_session_ref, developer_session_ref, status, correction_attempts, supersedes_review_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'running', 0, ?, ?)").run(attemptId, input.taskId, input.companyId, input.workflowId, subject.planRevision, targetBaseSha, subjectCommit, subjectTree, subject.developerExecutionId, subject.deliveryArtifactId, subject.developerEvidenceArtifactId, executionId, leadSessionRef, context.developerSessionRef ?? subject.developerSessionRef, input.supersedesReviewId, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, leadSessionRef, input.worktreePath);
     });
     const evidenceLines: string[] = [];
@@ -1118,7 +1110,7 @@ export class AgentService {
     const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
     const stopCancellationTracking = this.trackCancellation(executionId, runtime.signal);
     try {
-      const initialPrompt = this.deliveryReviewPrompt(context.title, brief, plan, delivery, developerEvidence, gitEvidence, delivery.includes('"priorHead"')) + (isFinalReview ? `\n\nYou are Forge's Integrator for this final review: your job is to get the Builder's branch merged - publish the pull request, watch CI, fix CI failures, and resolve merge conflicts against the current base.\n\nExact required CI context: ${JSON.stringify({ releaseId: input.releaseId, ciRunId: input.ciRunId, status: finalContext?.status, headSha: finalContext?.headSha, headTree: finalContext?.headTree })}` : "");
+      const initialPrompt = this.deliveryReviewPrompt(context.title, brief, plan, delivery, developerEvidence, gitEvidence, delivery.includes('"priorHead"'), Boolean(context.developerSessionRef)) + (isFinalReview ? `\n\nYou are Forge's Integrator for this final review: your job is to get the Builder's branch merged - publish the pull request, watch CI, fix CI failures, and resolve merge conflicts against the current base.\n\nExact required CI context: ${JSON.stringify({ releaseId: input.releaseId, ciRunId: input.ciRunId, status: finalContext?.status, headSha: finalContext?.headSha, headTree: finalContext?.headTree })}` : "");
       const runTurn = async (turn: number, prompt: string): Promise<void> => {
         evidenceLines.push(JSON.stringify({ type: "forge.review-turn-start", turn }));
         const wrapper = await this.prepareTurnWrapper(executionId, leadProfile, worktreePath, schemaPath, prompt, { resumeSessionRef: leadSessionRef, sessionRef: leadSessionRef });
@@ -1186,7 +1178,7 @@ export class AgentService {
         db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidence.id, executionId);
         if (!isFinalReview) db.prepare("UPDATE forge_delivery_review_attempts SET status = 'completed', correction_attempts = ?, evidence_artifact_id = ?, completed_review_id = ?, finished_at = ? WHERE id = ?").run(correctionAttempts, evidence.id, reviewId, this.now().toISOString(), attemptId);
       });
-      const completed = DeliveryReviewActivityResultSchema.parse({ outcome: "completed", attemptId, correctionAttempts, subject: { ...subject, developerSessionRef: context.developerSessionRef }, review: { reviewId, leadExecutionId: executionId, leadSessionRef, opinionArtifactId: opinion.id, evidenceArtifactId: evidence.id, opinion: review.outcome, summary: review.summary, repairPlan: review.repairPlan, repairPlanArtifactId: repairPlanArtifact?.id ?? null, repairPlanSha256: repairPlanArtifact?.sha256 ?? null, findings: review.findings, supersedesReviewId: input.supersedesReviewId } });
+      const completed = DeliveryReviewActivityResultSchema.parse({ outcome: "completed", attemptId, correctionAttempts, subject: { ...subject, developerSessionRef: context.developerSessionRef ?? subject.developerSessionRef }, review: { reviewId, leadExecutionId: executionId, leadSessionRef, opinionArtifactId: opinion.id, evidenceArtifactId: evidence.id, opinion: review.outcome, summary: review.summary, repairPlan: review.repairPlan, repairPlanArtifactId: repairPlanArtifact?.id ?? null, repairPlanSha256: repairPlanArtifact?.sha256 ?? null, findings: review.findings, supersedesReviewId: input.supersedesReviewId } });
       return completed;
     } catch (error) {
       const cancelled = runtime.signal?.aborted && !(error instanceof AgentFailure && error.code === "ownership_ambiguous");
@@ -1195,7 +1187,7 @@ export class AgentService {
       evidenceLines.push(JSON.stringify({ type: "forge.review-turn-failed", code: failure.code }));
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const code = failure.code === "cancelled" ? "cancelled" : failure.code === "correction-exhausted" ? "correction-exhausted" : deliveryBlockCode(failure);
-      const summary = code === "cancelled" ? failure.message : safeBlockSummary(code, code === "correction-exhausted");
+      const summary = code === "cancelled" ? failure.message : safeBlockSummary(code, code === "correction-exhausted", failure.message);
       const finalStatus = failure.code === "cancelled" ? "cancelled" : isFinalReview || !expectedFailure ? "failed" : "blocked";
       this.database.authTransaction((db) => {
         db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
@@ -1204,7 +1196,7 @@ export class AgentService {
       });
       if (!expectedFailure || isFinalReview) throw failure;
       if (code === "cancelled") throw failure;
-      return DeliveryReviewActivityResultSchema.parse({ outcome: "blocked", attemptId, code, summary, evidenceArtifactId: evidence.id, executionId, sessionRef: leadSessionRef, correctionAttempts, subject: { ...subject, developerSessionRef: context.developerSessionRef } });
+      return DeliveryReviewActivityResultSchema.parse({ outcome: "blocked", attemptId, code, summary, evidenceArtifactId: evidence.id, executionId, sessionRef: leadSessionRef, correctionAttempts, subject: { ...subject, developerSessionRef: context.developerSessionRef ?? subject.developerSessionRef } });
     } finally { clearInterval(heartbeat); stopCancellationTracking(); await this.cleanupTerminalWrapper(executionId); }
   }
 
@@ -1408,7 +1400,7 @@ export class AgentService {
     return `You are Forge's Integrator: your job is to get the Builder's branch merged, which means watching CI and fixing what it reports. Diagnose one exact failed CI observation. Resume the same Lead session. Use only the bounded check names, summaries, and failing job logs below; do not request a new session, branch, worktree, pull request, merge, rebase, amend, force push, or history rewrite. Return exactly one JSON object with no markdown fences or commentary matching: {"kind":"ci-repair-plan","ciRunId":"...","ciAttemptId":"...","failedHeadSha":"...","rootCause":"...","disposition":"repair"|"rerun","failedChecks":[{"name":"exact failed check name","evidenceArtifactId":"...","diagnosis":"..."}],"steps":[{"number":1,"instruction":"...","verification":"..."}],"localVerification":["exact pinned command"],"unresolvedQuestions":[]}. Set disposition to "rerun" — and only then — when the evidence shows the failure is not caused by this delivery (a flake, infrastructure or runner outage, a rate limit, or a pre-existing failure on the base): Forge will re-run the failed provider jobs for you, at most twice per CI cycle, and then wait on CI again. Otherwise use "repair" and author the code fix. Either way, use the exact identity values supplied below, one failedChecks entry per failed exact-head check, contiguous step numbers starting at 1, the complete pinned local verification, and no unresolved questions; for a "rerun" the steps describe what to do if the re-run fails again. Use no other keys.\n\nTask: ${title}\nExact identity: ${JSON.stringify({ ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, failedHeadSha: input.failedHeadSha })}\nFailed exact-head checks: ${JSON.stringify(failedChecks)}\nRequired checks: ${JSON.stringify(input.requiredChecks)}\nPinned local verification: ${JSON.stringify(input.localVerification)}\nThe evidenceArtifactId for every failed check is exactly: ${input.evidenceArtifactId}${failedLogs.length ? `\nFailing job logs (tail):\n${failedLogs.map((entry) => `--- ${entry.name} (run ${entry.runId}) ---\n${entry.log}`).join("\n\n")}` : ""}`;
   }
 
-  private deliveryReviewPrompt(title: string, brief: string, plan: string, delivery: string, developerEvidence: string, gitEvidence: { targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }, isForwardMergeDelivery: boolean): string {
+  private deliveryReviewPrompt(title: string, brief: string, plan: string, delivery: string, developerEvidence: string, gitEvidence: { targetBaseSha: string; subjectCommit: string; subjectTree: string; status: string; branch: string; head: string; tree: string; diff: string; commit: string; instructions: string }, isForwardMergeDelivery: boolean, hasDeveloperSession: boolean): string {
     return [
       'You are Forge\'s Lead reviewer continuing the existing Lead session. Review the exact local Developer delivery; do not redesign or expand the approved plan. Do not modify files, commit, run CI, use GitHub/provider commands, or treat CI as available.',
       'Return exactly one JSON object with no markdown fences or commentary matching: {"kind":"delivery_review","summary":"...","outcome":"approved|blocking","findings":[{"findingId":"finding_...","severity":"blocking|advisory","rationale":"...","evidenceRef":"diff hunk, file, test, or report reference","disposition":"open|accepted|repaired","repairInstruction":null}],"repairPlan":null}. Blocking findings are limited to correctness, acceptance, security/privacy/data loss, compatibility, operational safety, unintended scope, or missing mandatory proof. Advisory findings never block. Treat \`not_applicable_locally\` steps as acceptable when their note is reasonable. An approved result cannot contain an open blocking finding. A blocking result must identify each open blocking finding and provide a bounded repairPlan when repair is possible; use null only when a member decision is required. Ground every finding in the supplied exact revision and evidence.',
@@ -1416,6 +1408,7 @@ export class AgentService {
       `Authorized approved plan:\n${promptExcerpt(plan, 24_000)}`,
       `Developer delivery report:\n${promptExcerpt(delivery, 32_000)}`,
       `Developer verification evidence:\n${promptExcerpt(developerEvidence, 16_000)}`,
+      ...(hasDeveloperSession ? [] : ["There is no Developer session for this head; review the current diff against the base and treat the available delivery evidence as supplemental context."]),
       ...(isForwardMergeDelivery ? ["This is a clean forward-merge delivery. Its pinned post-merge verification and the prior delivery proof remain authoritative for unchanged behavior. Do not block solely because broader checks or manual smoke steps were not repeated after the merge; report those as advisory unless the exact merge diff shows a concrete regression or new risk."] : []),
       `Exact Git subject (base, branch, commit, tree, clean state):\n${JSON.stringify({ targetBaseSha: gitEvidence.targetBaseSha, branch: gitEvidence.branch, subjectCommit: gitEvidence.subjectCommit, subjectTree: gitEvidence.subjectTree, observedHead: gitEvidence.head, observedTree: gitEvidence.tree, dirtyState: gitEvidence.status ? "dirty" : "clean" })}`,
       `Repository instructions:\n${promptExcerpt(gitEvidence.instructions || "(none found)", 12_000)}`,

@@ -36,7 +36,7 @@ import { registerDevelopmentHandlers } from "./workflow/register-development.js"
 import { registerMergeHandlers, registerMergeReconciliationHandler } from "./workflow/register-merge.js";
 import { registerReleaseHandlers } from "./workflow/register-release.js";
 import { registerTargetBaseHandlers } from "./workflow/register-target-base.js";
-import { applyLeadResult, applyLegacyLeadResult, autoChainedCommand, compactStateForContinuation, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
+import { applyLeadResult, applyLegacyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, compactStateForContinuation, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
 
 export * from "./issue-updates.js";
 export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
@@ -344,6 +344,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     reconcileCiTurn: async () => { throw new Error("CI runtime is not initialized"); },
     reconcileMergeTurn: async () => { throw new Error("Merge runtime is not initialized"); },
     reconcileAcceptanceTurn: async () => { throw new Error("Acceptance runtime is not initialized"); },
+    retryAcceptDelivery: async () => { throw new Error("Acceptance runtime is not initialized"); },
     resumeCapacityOperation: async () => { throw new Error("Capacity runtime is not initialized"); },
     runFinalReviewTurn: async () => { throw new Error("Final-review runtime is not initialized"); },
   }, { get: () => state, set: (next) => { state = next; } });
@@ -403,12 +404,13 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         if (workflowContext.state.phase === "manual_merge") await workflowContext.reconcileMergeTurn();
         continue;
       }
+      if (await autoRetryDeliveryBlocker(workflowContext)) continue;
       const chained = allHandlersFinished() ? autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) : null;
       if (chained) {
         await runAutoChainedCommand(workflowContext, chained);
         continue;
       }
-      await condition(() => (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge" || (allHandlersFinished() && autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) !== null));
+      await condition(() => (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge" || (allHandlersFinished() && (autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) !== null || canAutoRetryDeliveryBlocker(workflowContext))));
       if (workflowContext.continuationRequested && allHandlersFinished()) {
         if (workflowContext.stateMutationLocked || workflowContext.state.activeOperation !== null) continue;
         const compact = compactStateForContinuation(workflowContext.state);

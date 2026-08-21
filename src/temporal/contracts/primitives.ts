@@ -30,7 +30,7 @@ export type DeliveryReviewSubject = z.infer<typeof DeliveryReviewSubjectSchema>;
 export const DeliveryOperationBlockCodeSchema = z.enum([
   "invalid-output", "correction-exhausted", "session-conflict", "authentication-required",
   "rate-limited", "process-failed", "evidence-too-large", "subject-changed",
-  "repair-incomplete", "repair-scope", "worktree-unsafe", "repair-cap-exhausted",
+  "repair-incomplete", "repair-scope", "worktree-unsafe", "repair-cap-exhausted", "preflight-failed",
 ]);
 export type DeliveryOperationBlockCode = z.infer<typeof DeliveryOperationBlockCodeSchema>;
 export const DeliveryWorkflowBlockCodeSchema = z.union([

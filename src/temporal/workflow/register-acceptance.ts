@@ -162,4 +162,5 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
   }, "reconcile_acceptance"));
   ctx.runFinalReviewTurn = runFinalReviewTurn;
   ctx.reconcileAcceptanceTurn = reconcileAcceptanceTurn;
+  ctx.retryAcceptDelivery = (command) => accept(command, "accept");
 }

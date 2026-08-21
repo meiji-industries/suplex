@@ -261,6 +261,8 @@ const AUTO_CHAINED_COMMANDS = { delivery_ready: "review_delivery", delivery_revi
 // A chained step that threw is never chained again in this run: the phase may re-enter itself
 // (plan conflict -> required -> resolve throws -> plan conflict ...) and each pass has a new revision.
 const haltedChains = new Set<string>();
+const AUTO_RETRY_BLOCKER_DELAYS = [30_000, 120_000, 300_000] as const;
+const AUTO_RETRY_BLOCKER_COMMANDS = new Set(["review_delivery", "final_review", "accept_delivery", "reconcile_acceptance", "reconcile_merge"]);
 
 // Human decision gates: the member is choosing, not handing work to an agent, so a failure inside one of
 // these is retried in place by the guarded fallback below.
@@ -294,6 +296,49 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   } catch {
     haltedChains.add(chained.command); // the manual button stays in allowedCommands for a retry
   }
+}
+
+function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | null {
+  if (ctx.state.phase !== "delivery_blocked") return null;
+  const nonDestructive = ctx.state.allowedCommands.filter((command) => command !== "cancel_issue");
+  const command = nonDestructive[0];
+  if (nonDestructive.length !== 1 || !command || !AUTO_RETRY_BLOCKER_COMMANDS.has(command)) return null;
+  return command as "review_delivery" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge";
+}
+
+function retryScope(ctx: IssueWorkflowContext, command: string): string | null {
+  if (command === "review_delivery") return ctx.state.resultCommit ?? null;
+  return ctx.state.acceptanceId ?? ctx.state.releaseId ?? null;
+}
+
+export function canAutoRetryDeliveryBlocker(ctx: IssueWorkflowContext): boolean {
+  if (!ctx.patched("forge-auto-retry-blockers-v1")) return false;
+  const command = retryOnlyBlockerCommand(ctx);
+  const scope = command ? retryScope(ctx, command) : null;
+  if (!command || !scope) return false;
+  const prefix = `${ctx.state.workflowId}:auto-retry:${command}:${scope}:`;
+  const attempt = (ctx.state.processedCommandIds ?? []).filter((id) => id.startsWith(prefix)).length;
+  return attempt < AUTO_RETRY_BLOCKER_DELAYS.length;
+}
+
+export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promise<boolean> {
+  if (!canAutoRetryDeliveryBlocker(ctx)) return false;
+  const command = retryOnlyBlockerCommand(ctx)!;
+  const scope = retryScope(ctx, command)!;
+  const prefix = `${ctx.state.workflowId}:auto-retry:${command}:${scope}:`;
+  const attempt = (ctx.state.processedCommandIds ?? []).filter((id) => id.startsWith(prefix)).length;
+  const commandId = `${prefix}${attempt + 1}`;
+  if (ctx.commandAlreadyProcessed(commandId)) return false;
+  ctx.markCommandProcessed(commandId);
+  await sleep(AUTO_RETRY_BLOCKER_DELAYS[attempt]);
+  if (ctx.state.phase !== "delivery_blocked" || retryOnlyBlockerCommand(ctx) !== command || retryScope(ctx, command) !== scope) return true;
+  const input = { expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId ?? ctx.input.autoApprovePlanActorUserId ?? "forge-auto-retry", commandId };
+  if (command === "review_delivery") await reviewDelivery(ctx, input);
+  else if (command === "final_review") await ctx.runFinalReviewTurn();
+  else if (command === "accept_delivery") await ctx.retryAcceptDelivery(input);
+  else if (command === "reconcile_acceptance") await ctx.reconcileAcceptanceTurn();
+  else await ctx.reconcileMergeTurn();
+  return true;
 }
 
 // A rejected update handler must never leave the Workflow holding mutated state

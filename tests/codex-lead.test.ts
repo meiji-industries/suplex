@@ -521,10 +521,10 @@ test("delivery review preflight failures finalize a typed attempt without launch
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_preflight', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'completed', 'forge/issue/task_1', ?, ?, 'session_developer', ?, ?, ?, ?, 'clean', ?, ?)").run(invalidInput.worktreePath, "a".repeat(40), now, now, "b".repeat(40), "c".repeat(40), delivery.id, evidence.id);
     });
     const result = await service.reviewDelivery({ ...invalidInput, subject: { ...invalidInput.subject, developerExecutionId: "developer_preflight", deliveryArtifactId: delivery.id, developerEvidenceArtifactId: evidence.id } });
-    expect(result).toMatchObject({ outcome: "blocked", code: "process-failed", correctionAttempts: 0 });
+    expect(result).toMatchObject({ outcome: "blocked", code: "preflight-failed", summary: "The current delivery artifact is unavailable", correctionAttempts: 0 });
     if (result.outcome !== "blocked") throw new Error("Expected a typed blocked review result");
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, completed_review_id, evidence_artifact_id, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id FROM forge_delivery_review_attempts WHERE id = ?").get(result.attemptId))).toMatchObject({ status: "blocked", failure_code: "process-failed", completed_review_id: null, evidence_artifact_id: result.evidenceArtifactId, developer_execution_id: "developer_preflight", delivery_artifact_id: delivery.id, developer_evidence_artifact_id: evidence.id });
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, evidence_artifact_id FROM forge_agent_executions WHERE id = ?").get(result.executionId))).toEqual({ status: "blocked", failure_code: "process-failed", evidence_artifact_id: result.evidenceArtifactId });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, failure_summary, completed_review_id, evidence_artifact_id, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id FROM forge_delivery_review_attempts WHERE id = ?").get(result.attemptId))).toMatchObject({ status: "blocked", failure_code: "preflight-failed", failure_summary: "The current delivery artifact is unavailable", completed_review_id: null, evidence_artifact_id: result.evidenceArtifactId, developer_execution_id: "developer_preflight", delivery_artifact_id: delivery.id, developer_evidence_artifact_id: evidence.id });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, failure_summary, evidence_artifact_id FROM forge_agent_executions WHERE id = ?").get(result.executionId))).toEqual({ status: "blocked", failure_code: "preflight-failed", failure_summary: "The current delivery artifact is unavailable", evidence_artifact_id: result.evidenceArtifactId });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -1018,6 +1018,7 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
   };
   try {
     const lead = new AgentService(value.database, value.config, { processRunner: reviewRunner, sessionStore });
+    value.database.authTransaction((db) => db.prepare("UPDATE forge_developer_executions SET session_ref = NULL WHERE id = 'developer_review_subject'").run());
     const reviewInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadOutputArtifactId: plan.id, subject: { planRevision: 1, targetBaseSha, subjectCommit, subjectTree, developerExecutionId: "developer_review_subject", deliveryArtifactId: delivery.id, developerEvidenceArtifactId: "stale_verification_artifact", leadSessionRef: "session_lead", developerSessionRef: "session_developer" }, worktreePath, branchName: "forge/issue/task_1", supersedesReviewId: null };
     const review = await lead.reviewDelivery(reviewInput);
     expect(review).toMatchObject({ outcome: "completed", subject: { subjectCommit, subjectTree, developerEvidenceArtifactId: developerEvidence.id }, review: { opinion: "blocking", leadSessionRef: "session_lead" } });
@@ -1029,11 +1030,13 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
     expect(reviewRequestPrompt).toContain(subjectCommit);
     expect(reviewRequestPrompt).toContain(subjectTree);
     expect(reviewRequestPrompt).toContain("Treat `not_applicable_locally` steps as acceptable when their note is reasonable.");
+    expect(reviewRequestPrompt).toContain("There is no Developer session for this head; review the current diff against the base");
     expect(reviewRequestPrompt.length).toBeLessThan(200_000);
     expect(reviewRequestPrompt).toContain("[truncated ");
     expect(reviewRequestPrompt).toContain("preserved-tail");
     expect(reviewOutputSchema).toMatchObject({ properties: { kind: { const: "delivery_review" } } });
     expect(value.database.authQuery((db) => db.prepare("SELECT outcome, session_ref, subject_commit FROM forge_delivery_reviews WHERE id = ?").get(completedReview.review.reviewId))).toEqual({ outcome: "blocking", session_ref: "session_lead", subject_commit: subjectCommit });
+    value.database.authTransaction((db) => db.prepare("UPDATE forge_developer_executions SET session_ref = 'session_developer' WHERE id = 'developer_review_subject'").run());
     const reviewEvidenceRow = value.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_delivery_review_attempts attempt ON attempt.evidence_artifact_id = a.id WHERE attempt.completed_review_id = ?").get(completedReview.review.reviewId) as { storagePath: string; sha256: string });
     const reviewEvidenceText = (await new ArtifactStore(value.config.artifactRoot).read({ companyId: "company_1", storagePath: reviewEvidenceRow.storagePath, sha256: reviewEvidenceRow.sha256 })).toString("utf8");
     expect(reviewEvidenceText).toContain("forge.review-turn-start");

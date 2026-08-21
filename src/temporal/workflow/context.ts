@@ -95,6 +95,7 @@ export interface IssueWorkflowContext {
   reconcileCiTurn: () => Promise<IssueWorkflowState>;
   reconcileMergeTurn: () => Promise<IssueWorkflowState>;
   reconcileAcceptanceTurn: () => Promise<IssueWorkflowState>;
+  retryAcceptDelivery: (command: { expectedRevision: number; actorUserId: string; commandId: string }) => Promise<IssueWorkflowState>;
   resumeCapacityOperation: (operation: CapacityOperation) => Promise<IssueWorkflowState>;
   runFinalReviewTurn: () => Promise<IssueWorkflowState>;
 }

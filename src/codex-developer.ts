@@ -94,6 +94,7 @@ const repairSummary: Record<RepairBlockCode, string> = {
   "authentication-required": "Agent provider authentication is unavailable; sign in again, then retry.",
   "rate-limited": "Agent provider rate limiting prevented the repair from completing; retry later.",
   "process-failed": "The Developer repair process did not complete; inspect the evidence and retry.",
+  "preflight-failed": "The Developer repair preflight failed; inspect the evidence and retry.",
   "evidence-too-large": "Developer repair evidence exceeded the local artifact limit; retry with bounded output.",
   "subject-changed": "The reviewed delivery subject changed; produce a fresh exact delivery.",
   "repair-incomplete": "The repair did not address every open blocking finding.",

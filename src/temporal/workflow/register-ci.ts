@@ -68,7 +68,8 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       return ctx.state;
     }
     if (ctx.state.phase !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId || ctx.state.expectedHeadSha !== expectedHeadSha) return ctx.state;
-    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, expectedHeadSha: result.expectedHeadSha, ciAttempt: result.attemptNumber, ciAttemptId: result.attemptId, ciRunId: result.runId, ciOutcome: result.outcome, ciReason: result.reason, ciOwner: result.owner, ciRepairable: result.repairable, ciEvidenceArtifactId: result.evidenceArtifactId, ciPolicyHash: result.policyHash, ciPropagationDeadline: result.propagationDeadline, ciOverallDeadline: result.overallDeadline, ciNextPollAt: result.nextPollAt, pendingAction: result.outcome === "waiting" || result.outcome === "rate_limited" ? "Waiting for required CI" : result.summary, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    const ciOwner = (result.owner as "system" | "integrator" | "human" | "lead" | null) === "lead" ? "integrator" : result.owner;
+    ctx.assignState(() => contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, expectedHeadSha: result.expectedHeadSha, ciAttempt: result.attemptNumber, ciAttemptId: result.attemptId, ciRunId: result.runId, ciOutcome: result.outcome, ciReason: result.reason, ciOwner, ciRepairable: result.repairable, ciEvidenceArtifactId: result.evidenceArtifactId, ciPolicyHash: result.policyHash, ciPropagationDeadline: result.propagationDeadline, ciOverallDeadline: result.overallDeadline, ciNextPollAt: result.nextPollAt, pendingAction: result.outcome === "waiting" || result.outcome === "rate_limited" ? "Waiting for required CI" : result.summary, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` }));
     await ctx.project();
     if (result.outcome === "passed") {
       if (result.reason === "checks_passed_merged") {
@@ -103,7 +104,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
         return ctx.state;
       }
     }
-    if (result.outcome === "failed" && result.repairable && result.owner === "integrator" && result.evidenceArtifactId && ctx.state.leadSessionRef && ctx.state.ciAttemptId) {
+    if (result.outcome === "failed" && result.repairable && ciOwner === "integrator" && result.evidenceArtifactId && ctx.state.leadSessionRef && ctx.state.ciAttemptId) {
       const leadSessionRef = ctx.state.leadSessionRef;
       const ciAttemptId = ctx.state.ciAttemptId;
       const evidenceArtifactId = result.evidenceArtifactId;

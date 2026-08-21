@@ -1,6 +1,7 @@
-import type { CancellationScope } from "@temporalio/workflow";
+import { log, type CancellationScope } from "@temporalio/workflow";
 
 import type { CapacityOperation, CapacityRole } from "../../capacity-contracts.js";
+import { IssueWorkflowStateSchema } from "../issue-contracts.js";
 import type {
   IssueBlocker,
   IssueCommand,
@@ -50,6 +51,7 @@ export interface IssueWorkflowContext {
   readonly supervisedDeveloperTurns: boolean;
   readonly shouldContinueAsNew: (revision: number) => boolean;
   readonly currentState: () => IssueWorkflowState;
+  readonly assignState: (next: () => unknown) => IssueWorkflowState;
   readonly addRevisionCommand: (commands: IssueCommand[]) => IssueCommand[];
   readonly approvalCommands: (exactSubject: boolean, supplementalReview: boolean) => IssueCommand[];
   readonly approvalBlocker: (result: LeadPlanningResult, exactSubject: boolean, supplementalReview: boolean) => IssueBlocker | null;
@@ -100,7 +102,45 @@ export interface IssueWorkflowContext {
   runFinalReviewTurn: () => Promise<IssueWorkflowState>;
 }
 
-type ContextOptions = Omit<IssueWorkflowContext, "input" | "state" | "repairCycleLimit">;
+type ContextOptions = Omit<IssueWorkflowContext, "input" | "state" | "repairCycleLimit" | "assignState">;
+
+// Workflow state is a durable compatibility boundary. A newly introduced
+// writer must not be able to turn a validation mismatch into a permanently
+// failing Workflow Task while old history is replayed.
+export function assignWorkflowState(previous: IssueWorkflowState, next: () => unknown): IssueWorkflowState {
+  try {
+    const parsed = IssueWorkflowStateSchema.safeParse(next());
+    if (parsed.success) return parsed.data;
+    warnStateAssignment("Ignoring invalid workflow state assignment", {
+      issues: parsed.error.issues.map((issue) => ({ path: issue.path.join("."), code: issue.code })),
+    });
+  } catch (error) {
+    warnStateAssignment("Ignoring workflow state assignment error", {
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  const revision = previous.revision + 1;
+  const fallback = IssueWorkflowStateSchema.safeParse({
+    ...previous,
+    revision,
+    lastEventId: `${previous.workflowId}:${revision}`,
+  });
+  if (fallback.success) return fallback.data;
+
+  // `previous` was validated before it entered the workflow. This guard keeps
+  // a future schema regression from escaping a state assignment as well.
+  warnStateAssignment("Keeping prior workflow state after fallback validation failed", {
+    issues: fallback.error.issues.map((issue) => ({ path: issue.path.join("."), code: issue.code })),
+  });
+  return previous;
+}
+
+function warnStateAssignment(message: string, attributes: Record<string, unknown>): void {
+  // The pure helper is also unit-tested outside a Workflow isolate, where the
+  // Temporal logger deliberately throws. Real workflow assignments are logged.
+  try { log.warn(message, attributes); } catch { /* not in a Workflow context */ }
+}
 
 export function createIssueWorkflowContext(input: IssueWorkflowInput, initial: IssueWorkflowState, options: ContextOptions, stateRef?: StateRef): IssueWorkflowContext {
   let localState = initial;
@@ -110,6 +150,11 @@ export function createIssueWorkflowContext(input: IssueWorkflowInput, initial: I
     input: { value: input, enumerable: true },
     repairCycleLimit: { value: input.repairCycleLimit ?? 2, enumerable: true },
     state: { enumerable: true, get: () => ref.get(), set: (next: IssueWorkflowState) => ref.set(next) },
+    assignState: { value: (next: () => unknown) => {
+      const assigned = assignWorkflowState(ref.get(), next);
+      ref.set(assigned);
+      return assigned;
+    }, enumerable: true },
   });
   return context;
 }

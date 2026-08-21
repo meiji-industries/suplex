@@ -4,7 +4,7 @@ import { DeliveryReviewActivityResultSchema, DeveloperRepairActivityResultSchema
 import { ISSUE_PHASES, TERMINAL_PHASES } from "../src/issue-phases.js";
 import { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "../src/temporal/workflows.js";
 import { finalReviewerTurn } from "../src/temporal/workflow/state-transitions.js";
-import type { IssueWorkflowContext } from "../src/temporal/workflow/context.js";
+import { assignWorkflowState, type IssueWorkflowContext } from "../src/temporal/workflow/context.js";
 
 const subject = { planRevision: 1, targetBaseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40), developerExecutionId: "developer_1", deliveryArtifactId: "artifact_delivery", developerEvidenceArtifactId: "artifact_evidence", leadSessionRef: "session_lead", developerSessionRef: "session_developer" };
 const blockingFinding = { findingId: "finding_blocking", severity: "blocking" as const, rationale: "The controlled defect remains.", evidenceRef: "fixture", disposition: "open" as const, repairInstruction: "Fix the controlled defect." };
@@ -51,6 +51,14 @@ test("workflow summaries are truncated before state validation", () => {
   expect(parsed.pendingAction!.length).toBeLessThanOrEqual(200);
   expect(parsed.targetBaseBlockerSummary!.length).toBeLessThanOrEqual(200);
   expect(parsed.blocker?.summary.length).toBeLessThanOrEqual(200);
+});
+
+test("invalid workflow state assignments keep a revision-bumped valid state", () => {
+  const previous = state();
+  const assigned = assignWorkflowState(previous, () => IssueWorkflowStateSchema.parse({ ...previous, ciOwner: "not-an-owner" }));
+
+  expect(assigned).toMatchObject({ revision: previous.revision + 1, lastEventId: `${previous.workflowId}:${previous.revision + 1}` });
+  expect(assigned.ciOwner).toBe(previous.ciOwner);
 });
 
 test("delivery workflow constructors keep blockers retryable and approvals exact", () => {

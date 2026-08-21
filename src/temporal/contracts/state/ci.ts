@@ -6,7 +6,9 @@ export const ciStateFields = {
   ciAttempt: z.number().int().nonnegative().optional(),
   ciOutcome: z.enum(["waiting", "passed", "failed", "missing_required", "cancelled", "timed_out", "non_success", "stale_head", "rate_limited", "provider_unavailable", "invalid_provider_response"]).nullable().optional(),
   ciReason: z.string().max(128).nullable().optional(),
-  ciOwner: z.enum(["system", "integrator", "human"]).nullable().optional(),
+  // "lead" was written by workflows before the Integrator role owned CI
+  // follow-up. Keep it readable so existing workflow histories can replay.
+  ciOwner: z.enum(["system", "integrator", "human", "lead"]).nullable().optional(),
   ciRepairable: z.boolean().optional(),
   ciAttemptId: durableId.nullable().optional(),
   ciEvidenceArtifactId: durableId.nullable().optional(),

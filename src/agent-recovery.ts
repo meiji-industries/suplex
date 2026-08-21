@@ -11,16 +11,45 @@ interface AgentExecutionRow {
   process_start_identity: string | null;
   wrapper_id: string | null;
   wrapper_path: string | null;
+  wrapper_pid: number | null;
+  wrapper_start_identity: string | null;
 }
 
 export interface AgentRecoveryOutcome {
   executionId: string;
-  status: "active" | "terminal_result" | "ownership_ambiguous";
-  reason: "live-wrapper" | "stored-wrapper-result" | "wrapper-missing" | "wrapper-identity-mismatch";
+  status: "active" | "terminal_result" | "ownership_ambiguous" | "failed";
+  reason: "live-wrapper" | "live-process" | "stored-wrapper-result" | "wrapper-missing" | "wrapper-identity-mismatch" | "process-gone";
 }
 
+const EXECUTION_COLUMNS = "id, task_id, status, process_pid, process_group_id, process_start_identity, wrapper_id, wrapper_path, wrapper_pid, wrapper_start_identity";
+
 function rows(database: ForgeDatabase): AgentExecutionRow[] {
-  return database.authQuery((db) => db.prepare("SELECT id, task_id, status, process_pid, process_group_id, process_start_identity, wrapper_id, wrapper_path FROM forge_agent_executions WHERE status IN ('starting', 'running', 'cancelling') AND (wrapper_id IS NOT NULL OR wrapper_path IS NOT NULL) ORDER BY started_at, id").all() as AgentExecutionRow[]);
+  return database.authQuery((db) => db.prepare(`SELECT ${EXECUTION_COLUMNS} FROM forge_agent_executions WHERE status IN ('starting', 'running', 'cancelling') ORDER BY started_at, id`).all() as AgentExecutionRow[]);
+}
+
+function markFailed(database: ForgeDatabase, row: AgentExecutionRow, summary: string): void {
+  const now = new Date().toISOString();
+  database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = 'worker-restart', failure_summary = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(now, now, summary, row.id));
+}
+
+function heartbeat(database: ForgeDatabase, row: AgentExecutionRow): void {
+  database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(new Date().toISOString(), row.id));
+}
+
+/**
+ * The recorded process identities decide the turn: every one still running is
+ * proof of life, every one gone is proof of death. Only a partial match, or no
+ * recorded identity at all, is genuinely ambiguous.
+ */
+async function recordedProcessLiveness(controller: ProcessController, row: AgentExecutionRow): Promise<"live" | "gone" | "unknown"> {
+  const recorded = [
+    row.process_pid && row.process_start_identity ? { pid: row.process_pid, identity: row.process_start_identity } : undefined,
+    row.wrapper_pid && row.wrapper_start_identity ? { pid: row.wrapper_pid, identity: row.wrapper_start_identity } : undefined,
+  ].filter((entry): entry is { pid: number; identity: string } => Boolean(entry));
+  if (recorded.length === 0) return "unknown";
+  const alive = await Promise.all(recorded.map(async (entry) => (await controller.inspect(entry.pid))?.processStartIdentity === entry.identity));
+  if (alive.every(Boolean)) return "live";
+  return alive.some(Boolean) ? "unknown" : "gone";
 }
 
 function markAmbiguous(database: ForgeDatabase, row: AgentExecutionRow, reason: string): void {
@@ -34,19 +63,27 @@ function markAmbiguous(database: ForgeDatabase, row: AgentExecutionRow, reason: 
 export async function reconcileAgentExecutions(database: ForgeDatabase, controller: ProcessController = defaultProcessController): Promise<AgentRecoveryOutcome[]> {
   const outcomes: AgentRecoveryOutcome[] = [];
   for (const row of rows(database)) {
-    if (!row.wrapper_id || !row.wrapper_path) {
-      markAmbiguous(database, row, "Agent wrapper identity is missing");
-      outcomes.push({ executionId: row.id, status: "ownership_ambiguous", reason: "wrapper-missing" });
+    const liveness = await recordedProcessLiveness(controller, row);
+    if (liveness === "gone") {
+      markFailed(database, row, "The recorded Agent process is gone; Forge failed the turn so the workflow can retry.");
+      outcomes.push({ executionId: row.id, status: "failed", reason: "process-gone" });
       continue;
     }
-    if (!row.process_pid || !row.process_group_id || !row.process_start_identity) {
+    if (!row.wrapper_id || !row.wrapper_path || !row.process_pid || !row.process_group_id || !row.process_start_identity) {
+      // Too little evidence for a wrapper inspection: the process identity decides.
+      if (liveness === "live") {
+        heartbeat(database, row);
+        outcomes.push({ executionId: row.id, status: "active", reason: "live-process" });
+        continue;
+      }
+      if (!row.wrapper_id && !row.wrapper_path) continue;
       markAmbiguous(database, row, "Agent process ownership evidence is incomplete");
-      outcomes.push({ executionId: row.id, status: "ownership_ambiguous", reason: "wrapper-identity-mismatch" });
+      outcomes.push({ executionId: row.id, status: "ownership_ambiguous", reason: row.wrapper_path ? "wrapper-identity-mismatch" : "wrapper-missing" });
       continue;
     }
     const inspection = await inspectDurableExecution({ controller, executionId: row.id, wrapperPath: row.wrapper_path, processPid: row.process_pid, processGroupId: row.process_group_id, processStartIdentity: row.process_start_identity });
     if (inspection.status === "terminal_result") {
-      database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running')").run(new Date().toISOString(), row.id));
+      heartbeat(database, row);
       outcomes.push({ executionId: row.id, status: "terminal_result", reason: "stored-wrapper-result" });
       continue;
     }
@@ -55,14 +92,14 @@ export async function reconcileAgentExecutions(database: ForgeDatabase, controll
       outcomes.push({ executionId: row.id, status: "ownership_ambiguous", reason: inspection.status === "missing" ? "wrapper-missing" : "wrapper-identity-mismatch" });
       continue;
     }
-    database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(new Date().toISOString(), row.id));
+    heartbeat(database, row);
     outcomes.push({ executionId: row.id, status: "active", reason: "live-wrapper" });
   }
   return outcomes;
 }
 
 async function agentRow(database: ForgeDatabase, executionId: string): Promise<AgentExecutionRow | undefined> {
-  return database.authQuery((db) => db.prepare("SELECT id, task_id, status, process_pid, process_group_id, process_start_identity, wrapper_id, wrapper_path FROM forge_agent_executions WHERE id = ?").get(executionId) as AgentExecutionRow | undefined);
+  return database.authQuery((db) => db.prepare(`SELECT ${EXECUTION_COLUMNS} FROM forge_agent_executions WHERE id = ?`).get(executionId) as AgentExecutionRow | undefined);
 }
 
 export async function cancelAgentExecution(database: ForgeDatabase, executionId: string, controller: ProcessController = defaultProcessController): Promise<{ status: "cancelled" | "ownership_ambiguous"; reason?: string }> {

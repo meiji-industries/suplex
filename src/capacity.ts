@@ -50,11 +50,11 @@ function wrapperIsLive(wrapperPath: string | null | undefined): boolean {
   }
 }
 
-function legacyOperation(turnKind: ExternalTurnKind): { operation: CapacityOperation; role: "analyst" | "implementer" | "reviewer" } {
-  if (turnKind === "lead") return { operation: "lead_planning", role: "analyst" };
+function legacyOperation(turnKind: ExternalTurnKind): { operation: CapacityOperation; role: "planner" | "builder" | "reviewer" } {
+  if (turnKind === "lead") return { operation: "lead_planning", role: "planner" };
   if (turnKind === "review") return { operation: "supplemental_review", role: "reviewer" };
-  if (turnKind === "ci-repair") return { operation: "developer_repair", role: "implementer" };
-  return { operation: "developer_execution", role: "implementer" };
+  if (turnKind === "ci-repair") return { operation: "developer_repair", role: "builder" };
+  return { operation: "developer_execution", role: "builder" };
 }
 
 function row(raw: Record<string, unknown>): CapacityRequestSnapshot {
@@ -386,22 +386,26 @@ export class CapacityManager {
 
   reconcileFromLedgers(now = new Date().toISOString()): number {
     return this.database.authTransaction((db) => {
-      const rows = db.prepare("SELECT c.id, c.execution_kind, c.execution_id, a.status AS agent_status, d.status AS developer_status FROM forge_capacity_requests c LEFT JOIN forge_agent_executions a ON a.id = c.execution_id AND c.execution_kind = 'agent' LEFT JOIN forge_developer_executions d ON d.id = c.execution_id AND c.execution_kind = 'developer' WHERE c.status = 'active'").all() as Array<{ id: string; execution_kind: string | null; execution_id: string | null; agent_status: string | null; developer_status: string | null }>;
+      const rows = db.prepare("SELECT c.*, a.status AS agent_status, d.status AS developer_status FROM forge_capacity_requests c LEFT JOIN forge_agent_executions a ON a.id = c.execution_id AND c.execution_kind = 'agent' LEFT JOIN forge_developer_executions d ON d.id = c.execution_id AND c.execution_kind = 'developer' WHERE c.status IN ('active', 'ownership_ambiguous')").all() as Array<Record<string, unknown> & { id: string; status: string; execution_kind: string | null; execution_id: string | null; agent_status: string | null; developer_status: string | null }>;
       let changed = 0;
       for (const item of rows) {
         const live = item.agent_status && ["starting", "running", "cancelling"].includes(item.agent_status)
           || item.developer_status && ["starting", "running", "cancelling"].includes(item.developer_status);
         if (live) continue;
-        if (item.agent_status === "ownership_ambiguous" || item.developer_status === "ownership_ambiguous") {
-          changed += db.prepare("UPDATE forge_capacity_requests SET status = 'ownership_ambiguous', terminal_reason = 'ownership_ambiguous', skip_reason = ?, updated_at = ? WHERE id = ? AND status = 'active'").run("Worker restart could not prove the external execution owner", now, item.id).changes;
-          continue;
-        }
-        if (!item.execution_kind || !item.execution_id || (!item.agent_status && !item.developer_status)) {
+        const unprovable = item.agent_status === "ownership_ambiguous" || item.developer_status === "ownership_ambiguous"
+          || !item.execution_kind || !item.execution_id || (!item.agent_status && !item.developer_status);
+        if (unprovable) {
+          // A request the workflow has already moved past can never be adjudicated:
+          // it is proven dead, not ambiguous, so it must stop blocking the issue.
+          if (this.staleWorkflowRevision(db, row(item))) {
+            changed += db.prepare("UPDATE forge_capacity_requests SET status = 'stale', skip_reason = 'stale_workflow_revision', terminal_reason = 'proven_dead', released_at = ?, updated_at = ? WHERE id = ? AND status IN ('active', 'ownership_ambiguous')").run(now, now, item.id).changes;
+            continue;
+          }
           changed += db.prepare("UPDATE forge_capacity_requests SET status = 'ownership_ambiguous', terminal_reason = 'ownership_ambiguous', skip_reason = ?, updated_at = ? WHERE id = ? AND status = 'active'").run("Worker restart could not prove the external execution owner", now, item.id).changes;
           continue;
         }
         const terminalReason = item.agent_status === "completed" || item.developer_status === "completed" ? "completed" : item.agent_status === "cancelled" || item.developer_status === "cancelled" ? "cancelled" : "process_failed";
-        changed += db.prepare("UPDATE forge_capacity_requests SET status = 'released', released_at = ?, terminal_reason = ?, wait_reason = NULL, updated_at = ? WHERE id = ? AND status = 'active'").run(now, terminalReason, now, item.id).changes;
+        changed += db.prepare("UPDATE forge_capacity_requests SET status = 'released', released_at = ?, terminal_reason = ?, wait_reason = NULL, updated_at = ? WHERE id = ? AND status IN ('active', 'ownership_ambiguous')").run(now, terminalReason, now, item.id).changes;
       }
       return changed;
     });

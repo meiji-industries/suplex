@@ -51,7 +51,7 @@ test("passes missing or mismatched audit evidence to the reviewer path", () => {
     developerSessionId: "shared-session",
     leadSessionId: "shared-session",
   }));
-  expect(result).toMatchObject({ outcome: "completed", failureCode: null });
+  expect(result).toMatchObject({ outcome: "blocked", failureCode: "dirty-final-tree" });
   expect(result.mismatches).toEqual(expect.arrayContaining(["dirty-final-tree", "commit-parent-mismatch", "provider-observation-unavailable", "process-exit-nonzero", "session-identity-conflict"]));
 });
 

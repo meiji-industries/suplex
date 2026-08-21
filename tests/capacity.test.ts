@@ -5,6 +5,7 @@ import { Worker } from "node:worker_threads";
 
 import { expect, test } from "vitest";
 
+import { reconcileAgentExecutions } from "../src/agent-recovery.js";
 import { CapacityManager } from "../src/capacity.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
@@ -23,14 +24,14 @@ async function fixture() {
     db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES ('profile', 'Profile', 'codex', 'gpt-5.6-sol', 'medium', 'standard', 2, ?, ?)").run(now, now);
     for (const taskId of ["task-a", "task-b", "task-c", "task-d"]) {
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company', 'task-brief', ?, 'text/plain', 1, ?, ?, ?)").run(`brief-${taskId}`, `${taskId}.txt`, "a".repeat(64), `company/${taskId}`, now);
-      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES (?, 'company', 'project', ?, ?, '[]', ?, 0, ?, 'revision', ?, ?, ?)").run(taskId, taskId, `brief-${taskId}`, JSON.stringify({ implementer: "profile", analyst: "profile", reviewer: "profile" }), `workflow-${taskId}`, `key-${taskId}`, now, now);
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES (?, 'company', 'project', ?, ?, '[]', ?, 0, ?, 'revision', ?, ?, ?)").run(taskId, taskId, `brief-${taskId}`, JSON.stringify({ builder: "profile", planner: "profile", reviewer: "profile" }), `workflow-${taskId}`, `key-${taskId}`, now, now);
     }
   });
   return { root, config, database };
 }
 
 function input(taskId: string, logicalTurnKey: string, requestedAt?: string, workflowRevision = 0) {
-  return { logicalTurnKey, companyId: "company", taskId, workflowId: `workflow-${taskId}`, projectRevisionId: "revision", workflowRevision, operation: "developer_execution" as const, role: "implementer" as const, profileId: "profile", ...(requestedAt ? { requestedAt } : {}) };
+  return { logicalTurnKey, companyId: "company", taskId, workflowId: `workflow-${taskId}`, projectRevisionId: "revision", workflowRevision, operation: "developer_execution" as const, role: "builder" as const, profileId: "profile", ...(requestedAt ? { requestedAt } : {}) };
 }
 
 test("admits FIFO requests per profile lane and releases exactly one slot", async () => {
@@ -90,7 +91,7 @@ test("does not release an Agent slot while its execution is cancelling", async (
     const request = capacity.request(input("task-a", "cancelling-agent"));
     expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
     capacity.bindExecution(request.id, { executionKind: "agent", executionId: "agent-cancelling" });
-    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES ('agent-cancelling', 'task-a', 'company', 'workflow-task-a', 'analyst', 'cancelling', 1, ?)").run(now));
+    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES ('agent-cancelling', 'task-a', 'company', 'workflow-task-a', 'planner', 'cancelling', 1, ?)").run(now));
     expect(() => capacity.finalize(request.id, "agent-cancelling", "cancelled")).toThrowError("Capacity request invalid-status");
     expect(capacity.inspect(request.id).status).toBe("active");
   } finally {
@@ -108,7 +109,7 @@ test("does not release a slot while the bound wrapper is still live", async () =
     expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
     capacity.bindExecution(request.id, { executionKind: "agent", executionId: "agent-live" });
     await writeFile(join(wrapperRoot, "state.json"), JSON.stringify({ wrapperPid: 2, wrapperProcessGroupId: 2, wrapperStartIdentity: "2:live", childPid: 3, childProcessGroupId: 3, childStartIdentity: "3:live", heartbeatAt: now, status: "running" }));
-    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, wrapper_path, started_at) VALUES ('agent-live', 'task-a', 'company', 'workflow-task-a', 'analyst', 'failed', 1, ?, ?)").run(wrapperRoot, now));
+    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, wrapper_path, started_at) VALUES ('agent-live', 'task-a', 'company', 'workflow-task-a', 'planner', 'failed', 1, ?, ?)").run(wrapperRoot, now));
     expect(() => capacity.finalize(request.id, "agent-live", "process_failed")).toThrowError("Capacity request invalid-status");
     expect(capacity.inspect(request.id).status).toBe("active");
   } finally {
@@ -185,6 +186,43 @@ test("ambiguous execution ledgers retain the capacity slot after worker reconcil
     value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('developer-ambiguous', 'task-a', 'company', 'workflow-a', 1, 99, 'ownership_ambiguous', 'forge/ambiguous', '/tmp/ambiguous', ?, ?)").run("a".repeat(40), now));
     capacity.reconcileFromLedgers();
     expect(capacity.inspect(request.id)).toMatchObject({ status: "ownership_ambiguous", terminalReason: "ownership_ambiguous" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("a dead agent process fails its execution and frees the ambiguous capacity slot", async () => {
+  const value = await fixture();
+  const deadProcess = { inspect: async () => undefined, signalGroup: async () => undefined };
+  try {
+    const capacity = new CapacityManager(value.database, value.config);
+    const request = capacity.request(input("task-a", "workflow-task-a:1:developer_execution"));
+    expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, process_pid, process_start_identity, started_at) VALUES ('agent-dead', 'task-a', 'company', 'workflow-task-a', 'analyst', 'running', 1, 424242, '424242:Fri 21 Aug 00:47:24 2026', ?)").run(now));
+    capacity.bindExecution(request.id, { executionKind: "agent", executionId: "agent-dead", sessionRef: "session-dead" });
+    capacity.markOwnershipAmbiguous(request.id, "operator killed the stack mid-turn");
+
+    expect(await reconcileAgentExecutions(value.database, deadProcess)).toEqual([{ executionId: "agent-dead", status: "failed", reason: "process-gone" }]);
+    capacity.reconcileFromLedgers();
+
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_agent_executions WHERE id = 'agent-dead'").get())).toMatchObject({ status: "failed", failure_code: "worker-restart" });
+    expect(capacity.inspect(request.id)).toMatchObject({ status: "released", terminalReason: "process_failed" });
+    const retry = capacity.request(input("task-a", "workflow-task-a:2:developer_execution", new Date(Date.parse(now) + 1_000).toISOString()));
+    expect(capacity.tryAcquire(retry.id, 0).status).toBe("active");
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("a live agent process keeps its turn even without a recorded process group", async () => {
+  const value = await fixture();
+  const liveProcess = { inspect: async (pid: number) => ({ pid, processGroupId: pid, processStartIdentity: `${pid}:start`, command: "codex" }), signalGroup: async () => undefined };
+  try {
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, process_pid, process_start_identity, wrapper_id, wrapper_path, wrapper_pid, wrapper_start_identity, started_at) VALUES ('agent-live-pid', 'task-a', 'company', 'workflow-task-a', 'analyst', 'running', 1, 4242, '4242:start', 'wrapper-live', '/tmp/wrapper-live', 4241, '4241:start', ?)").run(now));
+    expect(await reconcileAgentExecutions(value.database, liveProcess)).toEqual([{ executionId: "agent-live-pid", status: "active", reason: "live-process" }]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_agent_executions WHERE id = 'agent-live-pid'").get())).toMatchObject({ status: "running" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

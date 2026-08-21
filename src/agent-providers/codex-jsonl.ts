@@ -1,21 +1,10 @@
 import { createHash } from "node:crypto";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
-import { redact } from "../logging.js";
+import { redact, StructuredLogger } from "../logging.js";
 import { ExecutionReceiptSchema, type ExecutionReceipt } from "../developer-contracts.js";
 
-const MAX_LINE_BYTES = 512 * 1024;
 const MAX_SUMMARY = 4_000;
-
-export class CodexJsonlParseError extends Error {
-  readonly code: "oversized-output" | "malformed-line";
-
-  constructor(code: CodexJsonlParseError["code"], message: string) {
-    super(message);
-    this.name = "CodexJsonlParseError";
-    this.code = code;
-  }
-}
 
 export interface CodexJsonlParseOptions {
   executionId: string;
@@ -108,6 +97,7 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
   let finalReport: unknown;
   let malformedLines = 0;
   let observedAt: string | undefined;
+  const logger = new StructuredLogger();
   const push = (input: Parameters<typeof createReceipt>[2]) => {
     sequence += 1;
     const receipt = createReceipt(options, sequence, input);
@@ -116,7 +106,6 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
   };
 
   for (const line of lines) {
-    if (Buffer.byteLength(line, "utf8") > MAX_LINE_BYTES) throw new CodexJsonlParseError("oversized-output", "Codex JSONL output exceeded the bounded line limit");
     let event: Record<string, unknown>;
     try {
       const parsed = JSON.parse(line) as unknown;
@@ -124,7 +113,7 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
       event = parsed as Record<string, unknown>;
     } catch {
       malformedLines += 1;
-      push({ kind: "reconciliation", stepNumber: null, sourceItemId: null, summary: "Malformed Codex JSONL line preserved as evidence", exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `malformed:${createHash("sha256").update(line).digest("hex")}` });
+      logger.warn("Skipping malformed Codex JSONL line", {}, { byteLength: Buffer.byteLength(line, "utf8") });
       continue;
     }
     if (typeof event.thread_id === "string") threadId = event.thread_id;

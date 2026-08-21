@@ -13,16 +13,18 @@ test("disables the inner sandbox for new and resumed Codex turns", () => {
   expect(resumed).toEqual(expect.arrayContaining(["exec", "resume", "--dangerously-bypass-approvals-and-sandbox", "thread_opaque"]));
 });
 
-test("parses Codex file changes and preserves malformed output as diagnostic evidence", () => {
+test("parses oversized valid output and skips malformed lines without losing following events", () => {
+  const oversizedOutput = "x".repeat(2 * 1024 * 1024);
   const parsed = parseCodexJsonl([
     JSON.stringify({ type: "item.started", item: { id: "cmd_1", type: "command_execution", command: "git status --short" } }),
-    JSON.stringify({ type: "item.completed", item: { id: "cmd_1", type: "command_execution", command: "git status --short", exit_code: 0 } }),
-    JSON.stringify({ type: "item.completed", item: { id: "change_1", type: "file_change", changes: [{ path: "README.md", kind: "update" }] } }),
+    JSON.stringify({ type: "item.completed", item: { id: "cmd_1", type: "command_execution", command: "git status --short", exit_code: 0, aggregated_output: oversizedOutput } }),
     "not-json",
+    JSON.stringify({ type: "item.completed", item: { id: "message_1", type: "agent_message", text: "Completed after malformed output." } }),
   ], options);
-  expect(parsed.receipts.some((receipt) => receipt.kind === "file_change" && receipt.summary === "README.md")).toBe(true);
+  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "command_finished", sourceItemId: "cmd_1" }));
   expect(parsed.malformedLines).toBe(1);
-  expect(parsed.receipts.some((receipt) => receipt.kind === "reconciliation")).toBe(true);
+  expect(parsed.receipts).toContainEqual(expect.objectContaining({ kind: "agent_update", summary: "Completed after malformed output." }));
+  expect(parsed.receipts.some((receipt) => receipt.summary === "Malformed Codex JSONL line preserved as evidence")).toBe(false);
   expect(parsed.receipts.every((receipt) => receipt.stepNumber === null)).toBe(true);
 });
 

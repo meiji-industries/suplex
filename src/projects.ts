@@ -60,6 +60,7 @@ export interface Agent {
   role: ProjectRole;
   avatarSeed: string;
   profileId: string;
+  archivedAt: string | null;
   activeCount: number;
   lastSeenAt: string;
   createdAt: string;
@@ -67,6 +68,7 @@ export interface Agent {
 }
 
 export type AgentInput = { name: string; role: ProjectRole; avatarSeed?: string | undefined; profileId: string };
+export type AgentUpdate = { name?: string | undefined; role?: ProjectRole | undefined; avatarSeed?: string | undefined; profileId?: string | undefined; archived?: boolean | undefined };
 
 export type ModelStatus = "active" | "retired";
 
@@ -195,6 +197,7 @@ export interface AgentRow {
   role: ProjectRole;
   avatar_seed: string;
   profile_id: string;
+  archived_at: string | null;
   active_count?: number;
   last_seen_at?: string;
   created_at: string;
@@ -218,6 +221,8 @@ const checkPattern = /^[\p{L}\p{N}][\p{L}\p{N} ._:/()\[\]-]{0,119}$/u;
 const secretPattern = /(?:gh[pousr]_|github_pat_|token\s*=|password\s*=|secret\s*=|BEGIN [A-Z ]+ PRIVATE KEY|sk-[A-Za-z0-9])/i;
 const modelIdPattern = /^[a-z0-9][a-z0-9._-]{1,119}$/;
 const avatarSeedPattern = /^[a-f0-9]{32}$/;
+// Agent names also carry duplication suffixes such as "Planner (copy 2)".
+const agentNamePattern = /^[\p{L}\p{N}](?:[\p{L}\p{N} ._'()-]{0,78}[\p{L}\p{N})])?$/u;
 const approvedSetupCommands = new Set(["pnpm install", "pnpm install --frozen-lockfile", "npm install", "npm ci", "yarn install", "yarn install --immutable", "bun install", "mise run setup", "cargo fetch --locked"]);
 const approvedVerificationCommands = new Set(["pnpm test", "pnpm typecheck", "pnpm lint", "npm test", "npm run typecheck", "npm run lint", "yarn test", "yarn typecheck", "yarn lint", "bun test", "mise run test", "mise run typecheck", "mise run lint", "cargo test", "make test", "make check"]);
 
@@ -313,7 +318,7 @@ function publicProfile(row: ProfileRow, config: Pick<ForgeConfig, "externalTurnC
 }
 
 export function publicAgent(row: AgentRow): Agent {
-  return { id: row.id, name: row.name, role: row.role, avatarSeed: row.avatar_seed, profileId: row.profile_id, activeCount: row.active_count ?? 0, lastSeenAt: row.last_seen_at ?? row.created_at, createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: row.id, name: row.name, role: row.role, avatarSeed: row.avatar_seed, profileId: row.profile_id, archivedAt: row.archived_at ?? null, activeCount: row.active_count ?? 0, lastSeenAt: row.last_seen_at ?? row.created_at, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 export function resolveAgentProfiles(db: import("better-sqlite3").Database, roleAgents: RoleAssignments): RoleAssignments {
@@ -645,10 +650,10 @@ export class ProjectService {
     return this.database.authQuery((db) => (db.prepare("SELECT * FROM forge_profiles ORDER BY name").all() as ProfileRow[]).map((row) => publicProfile(row, this.config)));
   }
 
-  private validateAgentInput(input: AgentInput): Required<AgentInput> {
+  private validateAgentInput(input: AgentInput, skipName = false): Required<AgentInput> {
     const name = input.name.trim();
     const profileId = input.profileId.trim();
-    if (!namePattern.test(name)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-name", "name", "Agent name is invalid")]);
+    if (!skipName && !agentNamePattern.test(name)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-name", "name", "Agent name is invalid")]);
     if (!(["planner", "builder", "reviewer", "integrator"] as ProjectRole[]).includes(input.role)) throw new ProjectFailure("Agent configuration is invalid", [finding("invalid-role", "role", "Agent role is invalid")]);
     const profile = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_profiles WHERE id = ?").get(profileId) as { id: string } | undefined);
     if (!profile) throw new ProjectFailure("Agent configuration is invalid", [finding("profile-unavailable", "profileId", "Agent profile is unavailable")]);
@@ -672,15 +677,35 @@ export class ProjectService {
     return this.database.authQuery((db) => publicAgent(db.prepare("SELECT * FROM forge_agents WHERE id = ?").get(id) as AgentRow));
   }
 
-  updateAgent(actorUserId: string, agentId: string, input: AgentInput): Agent {
+  private internalAgentRow(agentId: string): AgentRow {
+    const row = this.database.authQuery((db) => db.prepare("SELECT * FROM forge_agents WHERE id = ? AND kind = 'internal'").get(agentId) as AgentRow | undefined);
+    if (!row) throw new ProjectFailure("Agent not found", [], 404);
+    return row;
+  }
+
+  /** Archiving must not strand a project on a default it can no longer replace. */
+  private assertArchivable(agent: AgentRow): void {
+    const { projects: dependents, replacement } = this.database.authQuery((db) => ({
+      projects: (db.prepare("SELECT name FROM forge_projects WHERE json_extract(role_defaults_json, '$.' || ?) = ? ORDER BY name").all(agent.role, agent.id) as Array<{ name: string }>).map((row) => row.name),
+      replacement: db.prepare("SELECT id FROM forge_agents WHERE kind = 'internal' AND role = ? AND id != ? AND archived_at IS NULL").get(agent.role, agent.id) as { id: string } | undefined,
+    }));
+    if (dependents.length === 0) return;
+    const where = dependents.join(", ");
+    if (agent.role === "builder") throw new ProjectFailure(`${agent.name} is the builder default for ${where}. Every project needs a builder, so assign a different builder default first.`, [finding("builder-default", "archived", "Reassign the project builder default before archiving")], 409);
+    if (!replacement) throw new ProjectFailure(`${agent.name} is the ${agent.role} default for ${where} and is the only ${agent.role} agent left. Create another ${agent.role} agent first.`, [finding("last-of-role", "archived", `Another ${agent.role} agent is required before archiving`)], 409);
+  }
+
+  updateAgent(actorUserId: string, agentId: string, input: AgentUpdate): Agent {
     this.requireAdmin(actorUserId);
-    const agentInput = this.validateAgentInput(input);
+    const existing = this.internalAgentRow(agentId);
+    const agentInput = this.validateAgentInput({ name: input.name ?? existing.name, role: input.role ?? existing.role, avatarSeed: input.avatarSeed ?? existing.avatar_seed, profileId: input.profileId ?? existing.profile_id }, input.name === undefined);
+    if (input.archived === true && !existing.archived_at) this.assertArchivable(existing);
     const now = this.now().toISOString();
+    const archivedAt = input.archived === undefined ? existing.archived_at : input.archived ? existing.archived_at ?? now : null;
     try {
       return this.database.authTransaction((db) => {
-        const result = db.prepare("UPDATE forge_agents SET name = ?, role = ?, avatar_seed = ?, profile_id = ?, updated_at = ? WHERE id = ? AND kind = 'internal'").run(agentInput.name, agentInput.role, agentInput.avatarSeed, agentInput.profileId, now, agentId);
-        if (result.changes !== 1) throw new ProjectFailure("Agent not found", [], 404);
-        this.auth.recordAuditEventInTransaction(db, actorUserId, "agent_updated", undefined, undefined, { agentId });
+        db.prepare("UPDATE forge_agents SET name = ?, role = ?, avatar_seed = ?, profile_id = ?, archived_at = ?, updated_at = ? WHERE id = ? AND kind = 'internal'").run(agentInput.name, agentInput.role, agentInput.avatarSeed, agentInput.profileId, archivedAt, now, agentId);
+        this.auth.recordAuditEventInTransaction(db, actorUserId, input.archived === undefined ? "agent_updated" : input.archived ? "agent_archived" : "agent_unarchived", undefined, undefined, { agentId });
         return publicAgent(db.prepare("SELECT * FROM forge_agents WHERE id = ?").get(agentId) as AgentRow);
       });
     } catch (error) {
@@ -689,7 +714,23 @@ export class ProjectService {
     }
   }
 
-  listAgents(actorUserId: string, companyId?: string): Agent[] {
+  duplicateAgent(actorUserId: string, agentId: string): Agent {
+    this.requireAdmin(actorUserId);
+    const existing = this.internalAgentRow(agentId);
+    const now = this.now().toISOString();
+    const id = identifier("agent");
+    this.database.authTransaction((db) => {
+      const taken = new Set((db.prepare("SELECT name FROM forge_agents WHERE kind = 'internal'").all() as Array<{ name: string }>).map((row) => row.name));
+      const base = existing.name.slice(0, 60);
+      let name = `${base} (copy)`;
+      for (let copy = 2; taken.has(name); copy += 1) name = `${base} (copy ${copy})`;
+      db.prepare("INSERT INTO forge_agents (id, kind, name, role, avatar_seed, profile_id, created_at, updated_at) VALUES (?, 'internal', ?, ?, ?, ?, ?, ?)").run(id, name, existing.role, randomBytes(16).toString("hex"), existing.profile_id, now, now);
+      this.auth.recordAuditEventInTransaction(db, actorUserId, "agent_duplicated", undefined, undefined, { agentId: id, sourceAgentId: agentId });
+    });
+    return publicAgent(this.database.authQuery((db) => db.prepare("SELECT * FROM forge_agents WHERE id = ?").get(id) as AgentRow));
+  }
+
+  listAgents(actorUserId: string, companyId?: string, includeArchived = false): Agent[] {
     const user = this.user(actorUserId);
     if (companyId) this.auth.requireCompanyAccess(actorUserId, companyId);
     const scope = companyId ? " AND t.company_id = ?" : user.role === "admin" ? "" : " AND EXISTS (SELECT 1 FROM forge_memberships m WHERE m.user_id = ? AND m.company_id = t.company_id)";
@@ -701,7 +742,7 @@ export class ProjectService {
         COALESCE((SELECT MAX(COALESCE(e.heartbeat_at, e.finished_at, e.started_at)) FROM forge_agent_executions e JOIN forge_tasks t ON t.id = e.task_id WHERE json_extract(t.role_agents_json, '$.' || e.role) = a.id${scope}), ''),
         COALESCE((SELECT MAX(COALESCE(d.heartbeat_at, d.finished_at, d.started_at)) FROM forge_developer_executions d JOIN forge_tasks t ON t.id = d.task_id WHERE json_extract(t.role_agents_json, '$.builder') = a.id${scope}), '')
       ), ''), a.created_at) AS last_seen_at
-      FROM forge_agents a WHERE a.kind = 'internal' ORDER BY active_count DESC, a.name COLLATE NOCASE, a.id`).all(...params) as AgentRow[]).map(publicAgent));
+      FROM forge_agents a WHERE a.kind = 'internal'${includeArchived ? "" : " AND a.archived_at IS NULL"} ORDER BY (a.archived_at IS NOT NULL), active_count DESC, a.name COLLATE NOCASE, a.id`).all(...params) as AgentRow[]).map(publicAgent));
   }
 
   updateProfileCapacity(actorUserId: string, profileId: string, capacity: number | null): CodexProfile {

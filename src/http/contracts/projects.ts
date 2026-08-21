@@ -29,9 +29,10 @@ export const ProjectBodySchema = z.object({
 }).strict();
 
 export const AgentBodySchema = z.object({ name: z.string().min(1), role: z.enum(["planner", "builder", "reviewer", "integrator"]), avatarSeed: z.string().regex(/^[a-f0-9]{32}$/).optional(), profileId: z.string().min(1) }).strict();
-export const AgentResponseSchema = z.object({ id: z.string(), name: z.string(), role: z.enum(["planner", "builder", "reviewer", "integrator"]), avatarSeed: z.string(), profileId: z.string(), activeCount: z.number().int().nonnegative(), lastSeenAt: z.string(), createdAt: z.string(), updatedAt: z.string() });
+export const AgentPatchBodySchema = z.object({ name: z.string().min(1).optional(), role: z.enum(["planner", "builder", "reviewer", "integrator"]).optional(), avatarSeed: z.string().regex(/^[a-f0-9]{32}$/).optional(), profileId: z.string().min(1).optional(), archived: z.boolean().optional() }).strict();
+export const AgentResponseSchema = z.object({ id: z.string(), name: z.string(), role: z.enum(["planner", "builder", "reviewer", "integrator"]), avatarSeed: z.string(), profileId: z.string(), archivedAt: z.string().nullable(), activeCount: z.number().int().nonnegative(), lastSeenAt: z.string(), createdAt: z.string(), updatedAt: z.string() });
 export const AgentListResponseSchema = z.object({ agents: z.array(AgentResponseSchema) });
-export const AgentListQuerySchema = z.object({ companyId: z.string().min(1).optional() });
+export const AgentListQuerySchema = z.object({ companyId: z.string().min(1).optional(), includeArchived: z.literal("true").optional() });
 export type AgentResponse = z.infer<typeof AgentResponseSchema>;
 
 export const ProjectRepositoryBodySchema = z.object({

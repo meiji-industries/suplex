@@ -23,7 +23,7 @@ const projects: FastifyPluginAsync<ProjectRoutesOptions> = async (app, options) 
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const { projects } = options;
   typed.get("/api/profiles", { schema: { response: { 200: ProfileListResponseSchema } } }, async (request, reply) => reply.send({ profiles: projects.listProfiles(request.forgeUser.id) }));
-  typed.get("/api/agents", { schema: { querystring: AgentListQuerySchema, response: { 200: AgentListResponseSchema } } }, async (request, reply) => reply.send({ agents: projects.listAgents(request.forgeUser.id, request.query.companyId) }));
+  typed.get("/api/agents", { schema: { querystring: AgentListQuerySchema, response: { 200: AgentListResponseSchema } } }, async (request, reply) => reply.send({ agents: projects.listAgents(request.forgeUser.id, request.query.companyId, request.query.includeArchived === "true") }));
   typed.get("/api/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: projects.listModels(request.forgeUser.id) }));
   typed.get("/api/projects", { schema: { response: { 200: ProjectListResponseSchema } } }, async (request, reply) => reply.send({ projects: projects.listProjects(request.forgeUser.id) }));
   typed.get("/api/companies/:companyId/projects", { schema: { params: CompanyIdParamsSchema, response: { 200: ProjectListResponseSchema } } }, async (request, reply) => reply.send({ projects: projects.listProjects(request.forgeUser.id, request.params.companyId) }));

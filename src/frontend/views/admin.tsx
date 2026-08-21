@@ -1,4 +1,5 @@
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from ".././components/ui/alert-dialog.js";
 import { Badge } from ".././components/ui/badge.js";
 import { Button } from ".././components/ui/button.js";
 import { Checkbox } from ".././components/ui/checkbox.js";
@@ -13,9 +14,9 @@ import { SettingsLayout } from ".././components/app/settings-layout.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, SettingsToolbarAction, type SettingsTableColumn } from ".././components/app/settings-table.js";
 import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { readJson, withCompany, type ApiUser } from ".././lib/api.js";
-import { useCallback, useEffect, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { adminDate, type ApiAgent, type ApiCredential, type ApiHermesAgent, type ApiInvitation, type ApiModel, type ApiProfile, type ApiProject } from "../lib/view-shared.js";
-import { Check, Copy, Ellipsis, Key, Pencil, RotateCw, Save, ShieldAlert } from "lucide-react";
+import { Archive, ArchiveRestore, Check, Copy, Ellipsis, Key, Pencil, RotateCw, Save, ShieldAlert } from "lucide-react";
 
 const USER_COLUMNS: SettingsTableColumn[] = [
   { key: "indent", width: 60 },
@@ -45,6 +46,7 @@ const AGENT_COLUMNS: SettingsTableColumn[] = [
   { key: "name", label: "Name ↓", width: 240 },
   { key: "role", label: "Role", width: 140 },
   { key: "profile", label: "Profile", width: 220 },
+  { key: "menu", width: 28 },
   { key: "end", width: 32 },
 ];
 
@@ -64,6 +66,26 @@ const USER_GROUPS: Array<{ label: string; status: ApiUser["status"] }> = [
   { label: "Pending", status: "pending" },
   { label: "Revoked", status: "revoked" },
 ];
+
+function AgentNameEditor({ agent, onSave }: { agent: ApiAgent; onSave: (name: string) => Promise<void> }): ReactElement {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(agent.name);
+  const [saving, setSaving] = useState(false);
+  const skipBlur = useRef(false);
+  useEffect(() => { if (!editing) setDraft(agent.name); }, [editing, agent.name]);
+  const save = async (): Promise<void> => {
+    if (skipBlur.current) { skipBlur.current = false; return; }
+    const next = draft.trim();
+    if (next === agent.name) { setEditing(false); return; }
+    if (!next || saving) return;
+    setSaving(true);
+    try { await onSave(next); setEditing(false); } finally { setSaving(false); }
+  };
+  if (editing) {
+    return <Input aria-label={`Agent name`} autoFocus className="h-7" disabled={saving} value={draft} onChange={(event) => setDraft(event.target.value)} onBlur={() => void save()} onKeyDown={(event) => { if (event.key === "Escape") { event.preventDefault(); skipBlur.current = true; setDraft(agent.name); setEditing(false); } else if (event.key === "Enter") event.currentTarget.blur(); }} />;
+  }
+  return <button type="button" data-agent-name-editor aria-label={`Rename ${agent.name}`} className="min-w-0 truncate text-left" onClick={() => { skipBlur.current = false; setDraft(agent.name); setEditing(true); }}>{agent.name}</button>;
+}
 
 export function AdminView(): ReactElement {
   const { user, companies, currentCompany, loading } = useCompanyContext();
@@ -90,6 +112,8 @@ export function AdminView(): ReactElement {
   const [agentProfileId, setAgentProfileId] = useState("");
   const [agentOpen, setAgentOpen] = useState(false);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+  const [showArchivedAgents, setShowArchivedAgents] = useState(false);
+  const [archiveTarget, setArchiveTarget] = useState<ApiAgent | null>(null);
   const [capacityLanes, setCapacityLanes] = useState<Array<{ profileId: string; activeCount: number; queuedCount: number }>>([]);
   const [capacityEdits, setCapacityEdits] = useState<Record<string, string>>({});
   const [modelId, setModelId] = useState("");
@@ -123,7 +147,7 @@ export function AdminView(): ReactElement {
         readJson<{ invitations: ApiInvitation[] }>("/api/admin/invitations"),
         readJson<{ credentials: ApiCredential[] }>("/api/admin/credentials"),
         readJson<{ profiles: ApiProfile[] }>("/api/profiles").catch(() => ({ profiles: [] })),
-        readJson<{ agents: ApiAgent[] }>("/api/agents").catch(() => ({ agents: [] })),
+        readJson<{ agents: ApiAgent[] }>("/api/agents?includeArchived=true").catch(() => ({ agents: [] })),
         readJson<{ agents: ApiHermesAgent[] }>(`/api/admin/hermes-agents${currentCompany ? `?companyId=${encodeURIComponent(currentCompany.id)}` : ""}`).catch(() => ({ agents: [] })),
         currentCompany ? readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(currentCompany.id)}/projects`).catch(() => ({ projects: [] })) : Promise.resolve({ projects: [] }),
         readJson<{ models: ApiModel[] }>("/api/admin/models").catch(() => ({ models: [] })),
@@ -189,6 +213,20 @@ export function AdminView(): ReactElement {
       await readJson(editing ? `/api/admin/agents/${encodeURIComponent(editingAgentId)}` : "/api/admin/agents", { method: editing ? "PATCH" : "POST", body: JSON.stringify({ name: agentName, role: agentRole, avatarSeed: agentAvatarSeed, profileId: agentProfileId }) });
       setAgentOpen(false); setEditingAgentId(null); await reload();
     } catch { setError(editing ? "Unable to update agent" : "Unable to create agent"); }
+  };
+  const patchAgent = async (agent: ApiAgent, body: Record<string, unknown>, fallback: string): Promise<void> => {
+    try {
+      await readJson(`/api/admin/agents/${encodeURIComponent(agent.id)}`, { method: "PATCH", body: JSON.stringify(body) });
+      setError("");
+      await reload();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : fallback); }
+  };
+  const duplicateAgent = async (agent: ApiAgent): Promise<void> => {
+    try {
+      await readJson(`/api/admin/agents/${encodeURIComponent(agent.id)}/duplicate`, { method: "POST", body: "{}" });
+      setError("");
+      await reload();
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to duplicate agent"); }
   };
 
   // Hermes handlers
@@ -429,6 +467,7 @@ export function AdminView(): ReactElement {
 
   const isProfiles = window.location.pathname.endsWith("/profiles");
   const isAgents = window.location.pathname.endsWith("/agents");
+  const visibleAgents = showArchivedAgents ? agents : agents.filter((agent) => !agent.archivedAt);
   const isModels = window.location.pathname.endsWith("/models");
   const isCompanies = window.location.pathname.endsWith("/companies");
   const isInvitations = window.location.pathname.endsWith("/invitations");
@@ -542,23 +581,50 @@ export function AdminView(): ReactElement {
               <div className="mt-4 flex h-8 items-center justify-between">
                 <div className="flex items-baseline gap-2">
                   <h2 className="text-base font-medium">Internal agents</h2>
-                  <span className="text-[11px] text-muted-foreground">{agents.length}</span>
+                  <span className="text-[11px] text-muted-foreground">{visibleAgents.length}</span>
                 </div>
+                <label className="flex items-center gap-2 text-[11px] text-muted-foreground" htmlFor="show-archived-agents">
+                  <Checkbox id="show-archived-agents" checked={showArchivedAgents} onCheckedChange={(checked) => setShowArchivedAgents(checked === true)} />
+                  Show archived
+                </label>
               </div>
               <SettingsDataTable label="Internal Agents" columns={AGENT_COLUMNS} className="mt-3">
                 <tbody>
-                  {agents.map((agent) => (
-                    <SettingsTableRow aria-label={`Edit ${agent.name}`} key={agent.id} onClick={() => openEditAgent(agent)} tabIndex={0}>
+                  {visibleAgents.map((agent) => (
+                    <SettingsTableRow aria-label={`Edit ${agent.name}`} key={agent.id} onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input, label, [data-base-ui-portal]")) openEditAgent(agent); }} tabIndex={0}>
                       <SettingsTableCell className="p-0" />
-                      <SettingsTableCell><span className="flex items-center gap-3"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><span>{agent.name}</span></span></SettingsTableCell>
+                      <SettingsTableCell><span className="flex min-w-0 items-center gap-3"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><AgentNameEditor agent={agent} onSave={(name) => patchAgent(agent, { name }, "Unable to rename agent")} />{agent.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}</span></SettingsTableCell>
                       <SettingsTableCell className="capitalize">{agent.role}</SettingsTableCell>
                       <SettingsTableCell className="truncate">{profiles.find((profile) => profile.id === agent.profileId)?.name ?? agent.profileId}</SettingsTableCell>
+                      <SettingsTableCell className="p-0">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${agent.name} actions`} title={`${agent.name} actions`} />}><Ellipsis /></DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => void duplicateAgent(agent)}><Copy />Duplicate</DropdownMenuItem>
+                            {agent.archivedAt
+                              ? <DropdownMenuItem onClick={() => void patchAgent(agent, { archived: false }, "Unable to unarchive agent")}><ArchiveRestore />Unarchive</DropdownMenuItem>
+                              : <DropdownMenuItem onClick={() => setArchiveTarget(agent)}><Archive />Archive</DropdownMenuItem>}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </SettingsTableCell>
                       <SettingsTableCell className="p-0"><Button variant="ghost" size="icon-xs" aria-label={`Edit ${agent.name}`} title={`Edit ${agent.name}`} onClick={() => openEditAgent(agent)}><Pencil /></Button></SettingsTableCell>
                     </SettingsTableRow>
                   ))}
                 </tbody>
-                {agents.length === 0 ? <SettingsTableEmpty columnCount={AGENT_COLUMNS.length}>No internal agents configured.</SettingsTableEmpty> : null}
+                {visibleAgents.length === 0 ? <SettingsTableEmpty columnCount={AGENT_COLUMNS.length}>No internal agents configured.</SettingsTableEmpty> : null}
               </SettingsDataTable>
+              <AlertDialog open={archiveTarget !== null} onOpenChange={(open) => { if (!open) setArchiveTarget(null); }}>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Archive {archiveTarget?.name}?</AlertDialogTitle>
+                    <AlertDialogDescription>Archived agents disappear from task and project pickers. Tasks already assigned to this agent keep running, and you can unarchive it later.</AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction variant="destructive" onClick={() => { const target = archiveTarget; setArchiveTarget(null); if (target) void patchAgent(target, { archived: true }, "Unable to archive agent"); }}>Archive</AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </section>
 
             <section>

@@ -17,7 +17,10 @@ test("state parsing always offers cancellation outside terminal phases", () => {
   for (const phase of ISSUE_PHASES) {
     const parsed = IssueWorkflowStateSchema.parse({ ...state(), phase, allowedCommands: [] });
     if (TERMINAL_PHASES.has(phase)) expect(parsed.allowedCommands).not.toContain("cancel_issue");
-    else expect(parsed.allowedCommands).toContain("cancel_issue");
+    else {
+      expect(parsed.allowedCommands).toContain("cancel_issue");
+      expect(parsed.allowedCommands).not.toEqual([]);
+    }
   }
 });
 

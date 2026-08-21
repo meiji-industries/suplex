@@ -74,10 +74,12 @@ export const IssueWorkflowStateSchema = z.preprocess((raw) => {
     if (["reject_plan", "record_delivery_decision", "request_delivery_changes"].includes(action.command) && !action.requiresNote) context.addIssue({ code: "custom", path: ["blocker", "actions"], message: "This action requires a note" });
   }
 }).transform((state) => {
-  // Single-operator tool: cancel_issue must always be offered while the issue is
-  // still active, even mid agent-turn phases that otherwise clear allowedCommands.
+  // Single-operator tool: a nonterminal state must always be actionable. The
+  // delivery-blocked retry is the natural recovery action; other in-flight
+  // phases retain their universally safe cancellation action.
   if (TERMINAL_PHASES.has(state.phase) || state.allowedCommands.includes("cancel_issue")) return state;
-  return { ...state, allowedCommands: [...state.allowedCommands, "cancel_issue" as const] };
+  const naturalRetry = state.phase === "delivery_blocked" ? ["retry_development" as const] : [];
+  return { ...state, allowedCommands: [...naturalRetry, ...state.allowedCommands, "cancel_issue" as const] };
 });
 
 export const IssueContinuationStateSchema = z.object({

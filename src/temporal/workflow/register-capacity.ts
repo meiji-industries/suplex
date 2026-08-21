@@ -126,10 +126,9 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
   setHandler(issueUpdates.retry_capacity, ctx.guarded(async (rawInput) => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision || !ctx.state.capacityBlocker || !ctx.state.allowedCommands.includes("retry_capacity")) throw new Error("Capacity retry is not available in the current state");
-    if (ctx.state.capacityBlocker.category === "ownership_ambiguous") await activityProxies.reconcileCapacityOwnership({});
     if (ctx.state.capacity) {
       const request = await activityProxies.inspectCapacity({ requestId: ctx.state.capacity.requestId });
-      if (["active", "ownership_ambiguous"].includes(request.status)) throw new Error("Capacity ownership must be reconciled before retry");
+      if (request.status === "active") throw new Error("Capacity cancellation must settle before retry");
     }
     const operation = ctx.state.capacityBlocker.resumeOperation;
     const nextPhase = operation === "lead_planning" ? "planning" : operation === "developer_execution" ? "development" : operation === "delivery_review" ? "reviewing_delivery" : operation === "developer_repair" ? "repair_required" : operation === "final_review" ? "final_review" : operation === "merge_conflict_resolution" ? "merge_conflict_required" : operation === "merge_conflict_plan" ? "merge_conflict_reviewing" : "approval";

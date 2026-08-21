@@ -23,6 +23,7 @@ import {
   projectIssueStateActivity,
   reconcileTargetBase,
   recordProbeStarted,
+  inspectCapacity,
 } from "./workflow/activity-proxies.js";
 import { evidencePointer, humanBlocker } from "./workflow/state-transitions.js";
 import { createIssueWorkflowContext } from "./workflow/context.js";
@@ -321,7 +322,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     projectCapacityState,
     acquireExternalTurn,
     cancelCurrentCapacity: async () => { throw new Error("Capacity cancellation is not initialized"); },
-    preserveAmbiguousCapacity: async () => { throw new Error("Capacity cancellation is not initialized"); },
     settleCancelledCapacity: async () => { throw new Error("Capacity cancellation is not initialized"); },
     permanentActivityFailure,
     failureBlockCategory,
@@ -373,6 +373,15 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   registerLifecycleHandlersContinuation(workflowContext);
   registerPlanningHandlersReject(workflowContext);
   registerCapacityHandlers(workflowContext);
+  // Old histories can contain the former ownership blocker even though its
+  // capacity request has already been released.  Clear that ceremonial gate
+  // once this patch is active, without changing replay of histories before it.
+  if (patched("forge-capacity-ownership-clear-v1") && state.capacityBlocker?.category === "ownership_ambiguous" && state.capacity) {
+    const request = await inspectCapacity({ requestId: state.capacity.requestId });
+    if (["released", "cancelled", "stale", "exhausted"].includes(request.status)) {
+      state = IssueWorkflowStateSchema.parse({ ...state, capacity: null, capacityBlocker: null, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer retry is available", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+    }
+  }
   assertPayloadWithinLimit("Issue Workflow result", state);
   // Continue-As-New carries the last business revision into a fresh run. The
   // previous run already projected that revision, so emitting it again with a

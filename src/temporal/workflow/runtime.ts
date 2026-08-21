@@ -199,7 +199,7 @@ export function createAcquireExternalTurn(
           assertCurrent();
           const resultExecutionId = executionId(result);
           if (current.executionId && resultExecutionId && current.executionId !== resultExecutionId) throw ApplicationFailure.nonRetryable("capacity_owner_mismatch", "capacity_owner_mismatch", { requestId: request.id });
-          if (current.status === "ownership_ambiguous") {
+          if (current.status === "ownership_ambiguous" && !options.patched("forge-capacity-ownership-clear-v1")) {
             observedRevision = await options.projectCapacityState({ ...admission.publicState, status: "ownership_ambiguous", position: null, reason: null, retryAt: null }, "Ownership verification required");
             return result;
           }
@@ -235,12 +235,19 @@ export function createAcquireExternalTurn(
           throw error;
         }
       }
-      if (admission.status === "exhausted" || admission.status === "ownership_ambiguous") {
-        const category = admission.status === "exhausted" ? "capacity_exhausted" : "ownership_ambiguous";
+      if (admission.status === "exhausted") {
+        const category = "capacity_exhausted" as const;
         const state = stateRef.get();
-        stateRef.set(IssueWorkflowStateSchema.parse({ ...state, capacity: admission.publicState, capacityBlocker: { category, summary: category === "capacity_exhausted" ? "External turn capacity was exhausted." : "Forge cannot prove external process ownership.", nextAction: category === "capacity_exhausted" ? "Retry capacity or cancel the issue." : "Verify ownership before retrying or cancelling.", resumeOperation: spec.operation }, allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: category === "capacity_exhausted" ? "Capacity retry required" : "Ownership verification required", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
+        stateRef.set(IssueWorkflowStateSchema.parse({ ...state, capacity: admission.publicState, capacityBlocker: { category, summary: "External turn capacity was exhausted.", nextAction: "Retry capacity or cancel the issue.", resumeOperation: spec.operation }, allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: "Capacity retry required", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
         await options.projectState(stateRef.get());
         throw ApplicationFailure.nonRetryable(category, category, stateRef.get().capacityBlocker);
+      }
+      if ((admission as { status: string }).status === "ownership_ambiguous" && !options.patched("forge-capacity-ownership-clear-v1")) {
+        const state = stateRef.get();
+        const legacyAdmission = admission as unknown as { status: "ownership_ambiguous"; publicState: IssueWorkflowState["capacity"] & {} };
+        stateRef.set(IssueWorkflowStateSchema.parse({ ...state, capacity: legacyAdmission.publicState, capacityBlocker: { category: "ownership_ambiguous", summary: "Forge cannot prove external process ownership.", nextAction: "Verify ownership before retrying or cancelling.", resumeOperation: spec.operation }, allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: "Ownership verification required", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
+        await options.projectState(stateRef.get());
+        throw ApplicationFailure.nonRetryable("ownership_ambiguous", "ownership_ambiguous", stateRef.get().capacityBlocker);
       }
       const retryAt = admission.publicState.retryAt;
       const retryDelay = admission.status === "rate_limited" && retryAt ? Math.max(1_000, isoEpochMillis(retryAt) - Date.now()) : 5_000;

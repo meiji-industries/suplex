@@ -121,7 +121,10 @@ export const CapacityRequestInputSchema = z.object({
 export type CapacityRequestInput = z.infer<typeof CapacityRequestInputSchema>;
 
 export const CapacityAdmissionResultSchema = z.object({
-  status: CapacityRequestStatusSchema,
+  // `ownership_ambiguous` remains readable in persisted request history, but
+  // admission never produces it. Cancellation is resolved by the recorded
+  // process' liveness and the request is released.
+  status: z.enum(["queued", "active", "rate_limited", "released", "cancelled", "stale", "exhausted"]),
   publicState: WorkflowCapacityStateSchema,
 });
 export type CapacityAdmissionResult = z.infer<typeof CapacityAdmissionResultSchema>;

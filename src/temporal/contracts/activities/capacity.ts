@@ -4,7 +4,7 @@ import type {
 } from "../../../capacity-contracts.js";
 
 export interface CapacityActivities {
-  cancelCapacityExecution(input: { requestId: string }): Promise<{ status: "cancelled" | "ownership_ambiguous"; executionId?: string | undefined; reason?: string | undefined }>;
+  cancelCapacityExecution(input: { requestId: string }): Promise<{ status: "cancelled"; executionId?: string | undefined; reason?: string | undefined }>;
   requestCapacity(input: CapacityRequestInput): Promise<CapacityRequestSnapshot>;
   tryAcquireCapacity(input: { requestId: string; expectedWorkflowRevision: number }): Promise<CapacityAdmissionResult>;
   inspectCapacity(input: { requestId: string }): Promise<CapacityRequestSnapshot>;

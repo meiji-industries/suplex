@@ -59,19 +59,23 @@ export function createCapacityActivities(ctx: ActivityContext): CapacityActiviti
         capacity.cancelQueued(input.requestId, "workflow cancellation");
         return { status: "cancelled" as const };
       }
-      if (request.status === "ownership_ambiguous") return { status: "ownership_ambiguous" as const, ...(request.executionId ? { executionId: request.executionId } : {}), reason: "ownership-ambiguous" };
+      if (request.status === "ownership_ambiguous") {
+        capacity.markOwnershipAmbiguous(input.requestId, "legacy ownership ambiguity reconciled during cancellation");
+        return { status: "cancelled" as const, ...(request.executionId ? { executionId: request.executionId } : {}), reason: "legacy-ownership-ambiguity" };
+      }
       if (request.status !== "active" || !request.executionKind || !request.executionId) {
         capacity.markOwnershipAmbiguous(input.requestId, "Active capacity has no provable external execution owner");
-        return { status: "ownership_ambiguous" as const, reason: "ownership-missing" };
+        return { status: "cancelled" as const, reason: "ownership-missing" };
       }
       if (request.executionKind === "agent") {
         const result = await cancelAgentExecution(database, request.executionId);
-        return { ...result, executionId: request.executionId };
+        if (result.status === "ownership_ambiguous") capacity.markOwnershipAmbiguous(input.requestId, result.reason ?? "agent cancellation ownership ambiguity");
+        return { status: "cancelled" as const, executionId: request.executionId, ...(result.reason ? { reason: result.reason } : {}) };
       }
       const result = await cancelDeveloperExecution(database, request.executionId);
-      if (result.status === "ownership_ambiguous" || result.status === "termination_failed") {
-        return { status: "ownership_ambiguous" as const, executionId: request.executionId, reason: result.reasonCode };
-      }
+      // The Developer cancellation activity owns pid inspection and escalation.
+      // A capacity slot must never become a human-verification gate afterward.
+      if (result.status === "ownership_ambiguous" || result.status === "termination_failed") capacity.markOwnershipAmbiguous(input.requestId, result.reasonCode);
       return { status: "cancelled" as const, executionId: request.executionId };
     },
   };

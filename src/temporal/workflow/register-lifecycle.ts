@@ -14,7 +14,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, capacity: null, revision: ctx.state.revision + 1, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
   };
-  const cancelCurrentCapacity = async (): Promise<{ status: "cancelled" | "ownership_ambiguous"; executionId?: string | undefined }> => {
+  const cancelCurrentCapacity = async (): Promise<{ status: "cancelled"; executionId?: string | undefined }> => {
     if (!ctx.state.capacity) return { status: "cancelled" };
     if (["queued", "rate_limited"].includes(ctx.state.capacity.status)) {
       await cancelQueuedCapacity();
@@ -23,16 +23,9 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     if (ctx.state.capacity.status === "active" || ctx.state.capacity.status === "ownership_ambiguous") {
       return cancelCapacityExecution({ requestId: ctx.state.capacity.requestId });
     }
-    return { status: "ownership_ambiguous" };
+    return { status: "cancelled" };
   };
-  const preserveAmbiguousCapacity = async (): Promise<void> => {
-    if (!ctx.state.capacity) return;
-    const capacity = { ...ctx.state.capacity, status: "ownership_ambiguous" as const, position: null, reason: null, retryAt: null };
-    const blocker = { category: "ownership_ambiguous" as const, summary: "Forge cannot prove the cancelled external process is terminal.", nextAction: "Verify ownership before releasing capacity.", resumeOperation: ctx.state.capacity.operation };
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, capacity, capacityBlocker: blocker, owner: "human", allowedCommands: [], pendingAction: "External ownership verification required", revision: ctx.state.revision + 1, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
-    await ctx.project();
-  };
-  const settleCancelledCapacity = async (executionId: string): Promise<"settled" | "ambiguous" | "none"> => {
+  const settleCancelledCapacity = async (executionId: string): Promise<"settled" | "none"> => {
     if (!ctx.state.capacity) return "none";
     const request = await inspectCapacity({ requestId: ctx.state.capacity.requestId });
     if (request.status === "active" && request.executionId === executionId) {
@@ -40,13 +33,6 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, capacity: null, capacityBlocker: null, revision: ctx.state.revision + 1, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return "settled";
-    }
-    if (request.status === "ownership_ambiguous" || request.status === "active") {
-      const capacity = { ...ctx.state.capacity, status: "ownership_ambiguous" as const, position: null, reason: null, retryAt: null };
-      const blocker = { category: "ownership_ambiguous" as const, summary: "Forge cannot prove the cancelled external process is terminal.", nextAction: "Verify ownership before releasing capacity.", resumeOperation: ctx.state.capacity.operation };
-      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, capacity, capacityBlocker: blocker, owner: "human", allowedCommands: [], pendingAction: "External ownership verification required", revision: ctx.state.revision + 1, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
-      await ctx.project();
-      return "ambiguous";
     }
     return "none";
   };
@@ -87,8 +73,6 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     } else {
       const cancellation = await cancelCurrentCapacity();
       if (cancellation.executionId) await settleCancelledCapacity(cancellation.executionId);
-      ownershipAmbiguous = cancellation.status === "ownership_ambiguous";
-      if (ownershipAmbiguous && !unconditionalCancellation) await preserveAmbiguousCapacity();
     }
     let acceptanceStatus = ctx.state.acceptanceStatus;
     let acceptanceReasonArtifactId = ctx.state.acceptanceReasonArtifactId;
@@ -122,7 +106,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
       const executionId = ctx.state.developerExecutionId;
       await ctx.withStateMutation(() => {
         if (ctx.state.revision !== command.expectedRevision || !developerCancellationAvailable()) throw new Error("Developer cancellation was superseded by another command");
-        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: [], pendingAction: "Cancelling Developer turn", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("cancellation_requested", null, "Cancellation was sent to the recorded Developer supervisor.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
+        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_blocked", owner: "human", allowedCommands: ctx.addRevisionCommand(["retry_development", "cancel_issue"]), pendingAction: "Cancelling Developer turn", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, ...ctx.recoveryFields("cancellation_requested", null, "Cancellation was sent to the recorded Developer supervisor.", ctx.state.developerLastHeartbeatAt ?? null), activeOperation: null });
         ctx.markCommandProcessed(command.commandId);
       });
       await ctx.project();
@@ -152,7 +136,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
         revision: ctx.state.revision + 1,
         phase: executionId || hasCapacityOwnership ? "delivery_blocked" : "ready_for_development",
         owner: executionId || hasCapacityOwnership ? "human" : "lead",
-        allowedCommands: executionId || hasCapacityOwnership ? [] : ["start_development", "cancel_issue"],
+        allowedCommands: executionId || hasCapacityOwnership ? ctx.addRevisionCommand(["retry_development", "cancel_issue"]) : ["start_development", "cancel_issue"],
         pendingAction: executionId || hasCapacityOwnership ? "Cancelling Developer turn" : "Start development",
         lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`,
         ...(executionId || hasCapacityOwnership ? ctx.recoveryFields("cancellation_requested", null, "Cancellation was sent to the recorded Developer supervisor.", ctx.state.developerLastHeartbeatAt ?? null) : {}),
@@ -164,14 +148,10 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     await ctx.project();
     if (!executionId && !hasCapacityOwnership) return ctx.state;
     if (!executionId) {
-      const cancellation = await ctx.cancelCurrentCapacity();
-      if (cancellation.status === "ownership_ambiguous") {
-        await ctx.preserveAmbiguousCapacity();
-      } else {
-        await ctx.withStateMutation(() => {
-          ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ctx.addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, activeOperation: null });
-        });
-      }
+      await ctx.cancelCurrentCapacity();
+      await ctx.withStateMutation(() => {
+        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "ready_for_development", owner: "lead", allowedCommands: ctx.addRevisionCommand(["start_development", "cancel_issue"]), pendingAction: "Start development", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, activeOperation: null });
+      });
       await ctx.project();
       return ctx.state;
     }
@@ -191,10 +171,6 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     if (["cancelled", "cancelled_confirmed", "interrupted"].includes(result.status) && ctx.state.capacity) {
       capacityStateProjected = (await ctx.settleCancelledCapacity(executionId)) !== "none";
     }
-    if ((result.status === "ownership_ambiguous" || result.status === "termination_failed") && ctx.state.capacity) {
-      await ctx.preserveAmbiguousCapacity();
-      capacityStateProjected = true;
-    }
     if (!capacityStateProjected) await ctx.project();
     void command;
     return ctx.state;
@@ -205,7 +181,6 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     if (!developerCancellationAvailable()) throw new Error("Developer cancellation is not available in the current phase");
   } });
   ctx.cancelCurrentCapacity = cancelCurrentCapacity;
-  ctx.preserveAmbiguousCapacity = preserveAmbiguousCapacity;
   ctx.settleCancelledCapacity = settleCancelledCapacity;
 }
 

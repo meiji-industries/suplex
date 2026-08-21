@@ -330,7 +330,7 @@ export function registerPlanningHandlersReject(ctx: IssueWorkflowContext): void 
   setHandler(issueUpdates.reject_plan, ctx.guarded(async (rawInput) => {
     assertPayloadWithinLimit("plan revision command", rawInput);
     const command = PlanCommandInputSchema.parse(rawInput);
-    const capacityCancellation = ctx.state.phase === "development" && ctx.state.developerExecutionId ? { status: "cancelled" as const } : await ctx.cancelCurrentCapacity();
+    if (!(ctx.state.phase === "development" && ctx.state.developerExecutionId)) await ctx.cancelCurrentCapacity();
     if (ctx.state.phase === "development") {
       const cancellation = await cancelDeveloperExecution({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, executionId: ctx.state.developerExecutionId! });
       if (cancellation.status === "completed_before_cancellation") {
@@ -345,9 +345,6 @@ export function registerPlanningHandlersReject(ctx: IssueWorkflowContext): void 
         return ctx.state;
       }
       if (ctx.state.capacity) await ctx.settleCancelledCapacity(ctx.state.developerExecutionId!);
-    } else if (capacityCancellation.status === "ownership_ambiguous") {
-      await ctx.preserveAmbiguousCapacity();
-      return ctx.state;
     }
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "planning", owner: "lead", allowedCommands: ["start_planning"], pendingAction: "Lead plan revision", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, planRevision: null, planMaterial: null, materialCategories: [], supplementalReviewUsed: false, supplementalReviewArtifactId: null, decisionId: null, blocker: null, stateChangedAt: new Date().toISOString() });

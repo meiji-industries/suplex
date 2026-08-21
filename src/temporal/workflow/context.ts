@@ -15,7 +15,7 @@ import type {
 export type Failure = { code: string; summary: string; category?: IssueBlocker["category"]; evidenceArtifactId?: string; evidenceSha256?: string };
 export type StateRef = { get(): IssueWorkflowState; set(next: IssueWorkflowState): void };
 export type ExternalTurnSpec = { operation: CapacityOperation; role: CapacityRole; profileId?: string | undefined; sessionRef?: string | null | undefined; worktreePath?: string | null | undefined };
-export type CapacityCancellation = { status: "cancelled" | "ownership_ambiguous"; executionId?: string | undefined };
+export type CapacityCancellation = { status: "cancelled"; executionId?: string | undefined };
 export type RecoveryStatus = "starting" | "active" | "reconnecting" | "result_pending_claim" | "cancellation_requested" | "cancelling" | "interrupted" | "cancelled" | "ownership_ambiguous" | "failed";
 
 export interface IssueWorkflowContext {
@@ -66,8 +66,7 @@ export interface IssueWorkflowContext {
   readonly projectCapacityState: (capacity: IssueWorkflowState["capacity"], pendingAction?: string) => Promise<number>;
   readonly acquireExternalTurn: <T>(spec: ExternalTurnSpec, run: (capacityRequestId?: string) => Promise<T>, executionId: (result: T) => string | undefined, durableCapacityEnabled?: boolean) => Promise<T>;
   cancelCurrentCapacity: () => Promise<CapacityCancellation>;
-  preserveAmbiguousCapacity: () => Promise<void>;
-  settleCancelledCapacity: (executionId: string) => Promise<"settled" | "ambiguous" | "none">;
+  settleCancelledCapacity: (executionId: string) => Promise<"settled" | "none">;
   readonly permanentActivityFailure: (error: unknown, recoverExhausted?: boolean) => Failure | undefined;
   readonly failureBlockCategory: (code: string) => "authentication" | "configuration" | "capacity" | "execution_ownership" | undefined;
   readonly leadResultKind: (result: LeadPlanningResult) => "plan" | "decision_blocker";

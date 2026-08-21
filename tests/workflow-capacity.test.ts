@@ -92,7 +92,7 @@ test("time-skipping Workflow wait is durable and quiet before admission", async 
     async tryAcquireCapacity() {
       acquireCalls += 1;
       const result = capacity(acquireCalls === 1 ? "queued" : "active", acquireCalls === 1 ? null : "agent-test");
-      return { status: result.status, publicState: publicState(result) };
+      return { status: acquireCalls === 1 ? "queued" as const : "active" as const, publicState: publicState(result) };
     },
     async runLeadPlanning() { return { leadSessionRef: "session-test", leadExecutionId: "agent-test", leadEvidenceArtifactId: "evidence-test", leadOutputArtifactId: "output-test", leadOutputKind: "plan", leadSummary: "Plan", materialCategories: [], material: false }; },
     async inspectCapacity() { return capacity("active", "agent-test"); },
@@ -237,7 +237,7 @@ test("Activity retry preserves the capacity request for wrapper reattachment", a
   }
 }, 30_000);
 
-test.each(["ownership_ambiguous", "released"] as const)("a failed turn does not finalize a %s slot it no longer owns", async (capacityStatus) => {
+test.each(["released"] as const)("a failed turn does not finalize a %s slot it no longer owns", async (capacityStatus) => {
   const environment = await TestWorkflowEnvironment.createTimeSkipping();
   const taskQueue = `capacity-ownership-race-${randomUUID()}`;
   let finalizeCalls = 0;
@@ -246,7 +246,7 @@ test.each(["ownership_ambiguous", "released"] as const)("a failed turn does not 
     async requestCapacity() { return capacity("queued"); },
     async tryAcquireCapacity() { const result = capacity("active", "agent-lost"); return { status: "active", publicState: publicState(result) }; },
     async runLeadPlanning() { throw ApplicationFailure.nonRetryable("Lead ownership is ambiguous", "ownership_ambiguous"); },
-    async inspectCapacity() { return capacity(capacityStatus, "agent-lost", capacityStatus === "ownership_ambiguous" ? { terminalReason: "ownership_ambiguous", skipReason: "Worker restart could not prove ownership" } : {}); },
+    async inspectCapacity() { return capacity(capacityStatus, "agent-lost"); },
     async finalizeCapacity() {
       finalizeCalls += 1;
       throw ApplicationFailure.nonRetryable("Capacity request not-owner", "not-owner");
@@ -267,7 +267,6 @@ test.each(["ownership_ambiguous", "released"] as const)("a failed turn does not 
 }, 30_000);
 
 test.each([
-  ["ownership_ambiguous", "ownership-ambiguity-blocker.json"],
   ["exhausted", "bounded-capacity-exhaustion.json"],
 ] as const)("%s admission becomes one typed Workflow blocker", async (status, fixtureName) => {
   const environment = await TestWorkflowEnvironment.createTimeSkipping();
@@ -285,7 +284,7 @@ test.each([
       const state = await handle.executeUpdate(startPlanningUpdate, { args: [{ expectedRevision: 0, actorUserId: "user-test" }] });
       return { state, history: await handle.fetchHistory() };
     });
-    expect(completed.state).toMatchObject({ phase: "planning", owner: "human", allowedCommands: ["retry_capacity", "cancel_issue"], capacity: { status }, capacityBlocker: { category: status === "exhausted" ? "capacity_exhausted" : "ownership_ambiguous" } });
+    expect(completed.state).toMatchObject({ phase: "planning", owner: "human", allowedCommands: ["retry_capacity", "cancel_issue"], capacity: { status }, capacityBlocker: { category: "capacity_exhausted" } });
     if (process.env.FORGE_CAPACITY_REPLAY_CAPTURE_DIR) {
       const history = proto.temporal.api.history.v1.History.create(completed.history);
       const json = proto.temporal.api.history.v1.History.toObject(history, { longs: String, enums: String, bytes: String, defaults: false, arrays: true, objects: true });

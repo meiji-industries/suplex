@@ -174,7 +174,13 @@ export class CapacityManager {
       let request = row(raw);
       if (request.workflowRevision !== expectedWorkflowRevision) throw new CapacityFailure("stale-revision");
       if (request.status === "active") return { status: "active", publicState: toWorkflowState(request), acquired: true, request };
-      if (!(["queued", "rate_limited"] as string[]).includes(request.status)) return { status: request.status, publicState: toWorkflowState(request), acquired: false, request };
+      if (!(["queued", "rate_limited"] as string[]).includes(request.status)) {
+        if (request.status === "ownership_ambiguous") {
+          db.prepare("UPDATE forge_capacity_requests SET status = 'released', terminal_reason = 'process_failed', released_at = ?, updated_at = ? WHERE id = ? AND status = 'ownership_ambiguous'").run(now, now, requestId);
+          request = row(db.prepare("SELECT * FROM forge_capacity_requests WHERE id = ?").get(requestId) as Record<string, unknown>);
+        }
+        return { status: request.status as Exclude<CapacityRequestSnapshot["status"], "ownership_ambiguous">, publicState: toWorkflowState(request), acquired: false, request };
+      }
       if (request.status === "rate_limited") return { status: request.status, publicState: toWorkflowState(request), acquired: false, request };
       if (this.enforceDeadline && Date.parse(request.deadlineAt) <= Date.parse(now)) {
         db.prepare("UPDATE forge_capacity_requests SET status = 'exhausted', terminal_reason = 'wait_exhausted', updated_at = ?, released_at = ? WHERE id = ? AND status = 'queued'").run(now, now, requestId);
@@ -186,14 +192,14 @@ export class CapacityManager {
       if (ownerConflict) {
         this.setWait(db, requestId, ownerConflict, now);
         request = row(db.prepare("SELECT * FROM forge_capacity_requests WHERE id = ?").get(requestId) as Record<string, unknown>);
-        return { status: request.status, publicState: toWorkflowState(request), acquired: false, request };
+        return { status: request.status as Exclude<CapacityRequestSnapshot["status"], "ownership_ambiguous">, publicState: toWorkflowState(request), acquired: false, request };
       }
       const effectiveCapacity = this.currentLaneCapacity(db, request.profileId);
       const activeCount = Number((db.prepare("SELECT COUNT(*) AS count FROM forge_capacity_requests WHERE lane_key = ? AND status = 'active'").get(request.laneKey) as { count: number }).count);
       if (activeCount >= effectiveCapacity) {
         this.setWait(db, requestId, "lane_full", now);
         request = row(db.prepare("SELECT * FROM forge_capacity_requests WHERE id = ?").get(requestId) as Record<string, unknown>);
-        return { status: request.status, publicState: toWorkflowState(request, this.positionInTransaction(db, requestId)), acquired: false, request };
+        return { status: request.status as Exclude<CapacityRequestSnapshot["status"], "ownership_ambiguous">, publicState: toWorkflowState(request, this.positionInTransaction(db, requestId)), acquired: false, request };
       }
 
       const eligible = this.eligibleInTransaction(db, request.laneKey, now);
@@ -201,7 +207,7 @@ export class CapacityManager {
       if (!first || first.id !== requestId) {
         this.setWait(db, requestId, "lane_full", now);
         request = row(db.prepare("SELECT * FROM forge_capacity_requests WHERE id = ?").get(requestId) as Record<string, unknown>);
-        return { status: request.status, publicState: toWorkflowState(request, this.positionInTransaction(db, requestId)), acquired: false, request };
+        return { status: request.status as Exclude<CapacityRequestSnapshot["status"], "ownership_ambiguous">, publicState: toWorkflowState(request, this.positionInTransaction(db, requestId)), acquired: false, request };
       }
       const changed = db.prepare("UPDATE forge_capacity_requests SET status = 'active', wait_reason = NULL, skip_reason = NULL, acquired_at = ?, heartbeat_at = ?, updated_at = ? WHERE id = ? AND status = 'queued'").run(now, now, now, requestId).changes;
       if (changed !== 1) throw new CapacityFailure("duplicate");

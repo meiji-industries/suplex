@@ -139,7 +139,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       ? [{ command: "approve_plan", label: "Approve plan", requiresNote: true, destructive: false }, { command: "request_plan_revision", label: "Request plan revision", requiresNote: true, destructive: false }]
       : [{ command: "approve_plan", label: "Approve plan", requiresNote: false, destructive: false }, { command: "reject_plan", label: "Request plan revision", requiresNote: true, destructive: false }];
     if (supplementalReview) actions.push({ command: "request_supplemental_review", label: "Request supplemental review", requiresNote: false, destructive: false });
-    return humanBlocker("member_authorization", "Member approval is required for this material plan.", actions, evidencePointer(result.leadOutputArtifactId, result.leadOutputSha256 ?? result.leadOutputArtifactSha256, "lead-plan"));
+    return humanBlocker("member_authorization", "Member approval is required for this material plan.", actions, evidencePointer(result.leadOutputArtifactId, "lead-plan"));
   };
   const initialProjection = continuation || !exactPlanAuthorityEnabled ? Promise.resolve(state) : projectIssueState(state);
   let continuationRequested = false;

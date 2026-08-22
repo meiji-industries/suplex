@@ -396,7 +396,7 @@ export function createGuarded(
           ...before,
           revision,
           pendingAction: summary,
-          blocker: failure?.category ? humanBlocker(failure.category, summary, [...retry, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : before.blocker,
+          blocker: failure?.category ? humanBlocker(failure.category, summary, [...retry, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : before.blocker,
           stateChangedAt: new Date().toISOString(),
           lastEventId: `${state.workflowId}:${revision}`,
         });
@@ -449,7 +449,7 @@ export function createGuarded(
         owner: "human",
         allowedCommands,
         pendingAction: summary,
-        blocker: failure?.category ? humanBlocker(failure.category, summary, [...retryActions, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : null,
+        blocker: failure?.category ? humanBlocker(failure.category, summary, [...retryActions, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : null,
         stateChangedAt: new Date().toISOString(),
         lastEventId: `${state.workflowId}:${revision}`,
       });

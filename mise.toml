@@ -18,11 +18,12 @@ _.path = "./node_modules/.bin"
 
 [tasks.dev]
 description = "Run Temporal, the Forge API, and the worker without hot reload (restart manually; live Developer turns survive src edits)"
+env = { FORGE_PRETTY_LOGS = "1" }
 run = [{ tasks = ["temporal", "server", "worker"] }]
 
 [tasks."dev:watch"]
 description = "Same as dev, but tsx watch restarts the API and worker on every src save"
-env = { FORGE_WATCH = "1" }
+env = { FORGE_WATCH = "1", FORGE_PRETTY_LOGS = "1" }
 run = [{ tasks = ["temporal", "server", "worker"] }]
 
 [tasks.down]

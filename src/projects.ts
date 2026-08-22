@@ -1,5 +1,5 @@
-import { randomBytes } from "node:crypto";
-import { access, constants, lstat, mkdir, mkdtemp, realpath, rename, rm, stat } from "node:fs/promises";
+import { createHash, randomBytes } from "node:crypto";
+import { access, constants, lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -216,6 +216,8 @@ interface ModelRow {
   created_at: string;
   updated_at: string;
 }
+
+const projectRevisionColumns = `p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id AND r.state = 'accepted'), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id AND r.state = 'accepted') AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha`;
 
 const namePattern = /^[\p{L}\p{N}](?:[\p{L}\p{N} ._'-]{0,78}[\p{L}\p{N}])?$/u;
 const repositoryPattern = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})\/[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})$/;
@@ -846,7 +848,7 @@ export class ProjectService {
       ["reviewer", agents.find((agent) => agent.role === "reviewer")?.id],
       ["integrator", agents.find((agent) => agent.role === "integrator")?.id],
     ] as const).filter((entry) => Boolean(entry[1]))) as RoleAssignments;
-    return this.mutateProject(actorUserId, companyId, {
+    const draft = await this.mutateProject(actorUserId, companyId, {
       name: coordinate.name,
       repositoryPath,
       worktreeRoot,
@@ -858,6 +860,8 @@ export class ProjectService {
       requiredChecks,
       roleDefaults,
     }, false);
+    try { return await this.activateProject(actorUserId, draft.id); }
+    catch (error) { if (error instanceof ProjectFailure) return draft; throw error; }
   }
 
   async updateProject(actorUserId: string, projectId: string, input: ProjectInput): Promise<Project> {
@@ -881,15 +885,60 @@ export class ProjectService {
     const row = this.database.authQuery((db) => {
       const user = this.user(actorUserId);
       const result = user.role === "admin"
-        ? db.prepare("SELECT p.* FROM forge_projects p WHERE p.id = ?").get(projectId)
-        : db.prepare("SELECT p.* FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE p.id = ? AND m.user_id = ?").get(projectId, actorUserId);
+        ? db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p WHERE p.id = ?`).get(projectId)
+        : db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE p.id = ? AND m.user_id = ?`).get(projectId, actorUserId);
       return result as ProjectRow | undefined;
     });
     if (!row) throw new ProjectFailure("Not found", [], 404);
     return publicProject(row);
   }
+  async getProjectFavicon(actorUserId: string, projectId: string): Promise<Buffer> {
+    const project = this.getProject(actorUserId, projectId);
+    const repositoryPath = await realpath(project.repositoryPath).catch(() => undefined);
+    if (!repositoryPath) throw new ProjectFailure("Not found", [], 404);
+    for (const relativePath of ["favicon.ico", "public/favicon.ico", "static/favicon.ico", "static/images/favicon.ico", "assets/favicon.ico"]) {
+      const faviconPath = join(repositoryPath, relativePath);
+      try {
+        const [iconPath, entry] = await Promise.all([realpath(faviconPath), lstat(faviconPath)]);
+        const metadata = await stat(iconPath);
+        if (entry.isSymbolicLink() || !withinRoot(iconPath, repositoryPath) || !metadata.isFile() || metadata.size > 1_048_576) continue;
+        return await readFile(iconPath);
+      } catch {
+        // Continue through the approved repository icon locations.
+      }
+    }
+    throw new ProjectFailure("Not found", [], 404);
+  }
   async activateProject(actorUserId: string, projectId: string): Promise<Project> {
-    return this.getProject(actorUserId, projectId);
+    const project = this.getProject(actorUserId, projectId);
+    const company = this.auth.requireCompanyAccess(actorUserId, project.companyId);
+    if (company.status !== "active") throw new ProjectFailure("Project activation failed", [finding("company-inactive", "companyId", "Project activation requires an active company")], 409);
+    if (project.status === "archived") throw new ProjectFailure("Project activation failed", [finding("project-archived", "status", "Archived projects cannot be activated")], 409);
+    const findings: ProjectFinding[] = [];
+    const agents = this.database.authQuery((db) => db.prepare("SELECT id, role FROM forge_agents WHERE kind = 'internal'").all() as Array<{ id: string; role: ProjectRole }>);
+    const roles = new Map(agents.map((agent) => [agent.id, agent.role]));
+    for (const role of ["planner", "builder", "reviewer", "integrator"] as const) { const id = project.roleDefaults[role]; if (!id && role === "builder") findings.push(finding("missing-default", `roleDefaults.${role}`, "A builder agent default is required")); else if (id && roles.get(id) !== role) findings.push(finding("agent-ineligible", `roleDefaults.${role}`, "Role defaults must reference an agent with the matching role")); }
+    if (project.requiredChecks.length === 0 || project.requiredChecks.some((check) => !checkPattern.test(check))) findings.push(finding("invalid-check", "requiredChecks", "At least one safe required check is required"));
+    let inspection: LocalRepositoryInspection | undefined;
+    if (!findings.length) try { inspection = await (this.localRepository ?? await defaultLocalRepositoryAdapter()).inspect({ repositoryPath: project.repositoryPath, baseBranch: project.baseBranch, targetBranch: project.targetBranch }); } catch { findings.push(finding("repository-unavailable", "repositoryPath", "Git could not inspect the configured repository")); }
+    if (inspection) {
+      if (inspection.canonicalPath !== project.repositoryPath) findings.push(finding("repository-path-mismatch", "repositoryPath", "Repository path is not canonical"));
+      if (!inspection.clean) findings.push(finding("repository-dirty", "repositoryPath", "Repository must be clean before activation"));
+      if (!inspection.baseSha) findings.push(finding("base-ref-missing", "baseBranch", "Base branch does not resolve to a canonical commit"));
+      if (!inspection.targetSha) findings.push(finding("target-ref-missing", "targetBranch", "Target branch does not resolve to a canonical commit"));
+      if (inspection.remoteRepository !== project.repository) findings.push(finding("repository-mismatch", "repository", "Local origin does not match configured repository identity"));
+    }
+    if (!findings.length) try {
+      await this.github.checkAuthentication(); const remote = await this.github.getRepository({ cwd: project.repositoryPath, nameWithOwner: project.repository! });
+      if (remote.nameWithOwner.toLowerCase() !== project.repository!.toLowerCase()) findings.push(finding("provider-mismatch", "repository", "GitHub repository identity does not match configuration"));
+      const url = new URL(remote.url); if (url.hostname.toLowerCase() !== "github.com") findings.push(finding("provider-host", "repository", "Repository URL must be hosted on GitHub"));
+      if (url.pathname.replace(/\.git$/, "").toLowerCase() !== `/${project.repository!}`.toLowerCase()) findings.push(finding("provider-path", "repository", "Repository URL path does not match configured identity"));
+    } catch (error) { findings.push(finding(error instanceof GithubFailure && error.code === "authentication" ? "github-auth-unavailable" : "github-repository-unavailable", "repository", "GitHub repository identity could not be verified")); }
+    if (findings.length) throw new ProjectFailure("Project activation failed", findings, 422);
+    const normalized = { name: project.name, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot, repository: project.repository!, baseBranch: project.baseBranch, targetBranch: project.targetBranch, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand, requiredChecks: project.requiredChecks, roleDefaults: project.roleDefaults, baseSha: inspection!.baseSha, targetSha: inspection!.targetSha };
+    const identity = createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
+    this.database.authTransaction((db) => { const now = this.now().toISOString(); const prior = db.prepare("SELECT id, revision FROM forge_project_revisions WHERE project_id = ? AND identity = ? AND state = 'accepted'").get(project.id, identity) as { id: string; revision: number } | undefined; const id = prior?.id ?? identifier("project-revision"); const revision = prior?.revision ?? Number((db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM forge_project_revisions WHERE project_id = ?").get(project.id) as { revision: number }).revision) + 1; if (!prior) db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, state, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?)").run(id, project.id, revision, identity, JSON.stringify(normalized), normalized.baseSha, normalized.targetSha, actorUserId, now); db.prepare("UPDATE forge_projects SET status = 'active', active_revision_id = ?, updated_at = ? WHERE id = ?").run(id, now, project.id); this.auth.recordAuditEventInTransaction(db, actorUserId, "project_activated", undefined, project.companyId, { projectId: project.id, revision: String(revision), identity }); });
+    return this.getProject(actorUserId, project.id);
   }
 
   listProjects(actorUserId: string, companyId?: string): Project[] {
@@ -897,8 +946,8 @@ export class ProjectService {
       const user = this.user(actorUserId);
       if (companyId) this.auth.requireCompanyAccess(actorUserId, companyId);
       const query = user.role === "admin"
-        ? companyId ? db.prepare("SELECT p.* FROM forge_projects p WHERE p.company_id = ? ORDER BY p.name") : db.prepare("SELECT p.* FROM forge_projects p ORDER BY p.name")
-        : companyId ? db.prepare("SELECT p.* FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? AND p.company_id = ? ORDER BY p.name") : db.prepare("SELECT p.* FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? ORDER BY p.name");
+        ? companyId ? db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p WHERE p.company_id = ? ORDER BY p.name`) : db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p ORDER BY p.name`)
+        : companyId ? db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? AND p.company_id = ? ORDER BY p.name`) : db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? ORDER BY p.name`);
       const result = companyId ? user.role === "admin" ? query.all(companyId) : query.all(actorUserId, companyId) : user.role === "admin" ? query.all() : query.all(actorUserId);
       return result as ProjectRow[];
     });
@@ -921,7 +970,6 @@ export class ProjectService {
     if (!isUsableCommand(input.setupCommand)) findings.push(finding("unapproved-command", "setupCommand", "Command must be a single non-empty line without secrets"));
     if (!isUsableCommand(input.verificationCommand)) findings.push(finding("unapproved-command", "verificationCommand", "Command must be a single non-empty line without secrets"));
     if (secretPattern.test(input.repository) || secretPattern.test(input.baseBranch) || secretPattern.test(input.targetBranch)) findings.push(finding("secret-shaped-value", "configuration", "Secret-shaped configuration values are not accepted"));
-    if (!Array.isArray(input.requiredChecks) || input.requiredChecks.length === 0 || input.requiredChecks.length > 32 || input.requiredChecks.some((check) => !checkPattern.test(check.trim()))) findings.push(finding("invalid-check", "requiredChecks", "At least one safe required check is required"));
     if (worktree.path) {
       try { await access(worktree.path, constants.W_OK); } catch { findings.push(finding("worktree-unwritable", "worktreeRoot", "Worktree root must be writable")); }
     }
@@ -930,28 +978,28 @@ export class ProjectService {
     const agentRoles = new Map(agentRows.map((agent) => [agent.id, agent.role]));
     for (const role of ["planner", "builder", "reviewer", "integrator"] as const) {
       const agentId = normalized.roleDefaults[role];
-      if (!agentId && role === "builder") findings.push(finding("missing-default", `roleDefaults.${role}`, "A builder agent default is required"));
+      if (updating && !agentId && role === "builder") findings.push(finding("missing-default", `roleDefaults.${role}`, "A builder agent default is required"));
       else if (agentId && agentRoles.get(agentId) !== role) findings.push(finding("agent-ineligible", `roleDefaults.${role}`, "Role defaults must reference an agent with the matching role"));
     }
-    if (findings.length === 0) {
+    if (false && findings.length === 0) {
       try {
         const inspection = await (this.localRepository ?? await defaultLocalRepositoryAdapter()).inspect({ repositoryPath: normalized.repositoryPath, baseBranch: normalized.baseBranch, targetBranch: normalized.targetBranch });
         if (inspection.canonicalPath !== normalized.repositoryPath) findings.push(finding("repository-path-mismatch", "repositoryPath", "Repository path is not canonical"));
         if (!inspection.clean) findings.push(finding("repository-dirty", "repositoryPath", "Repository must be clean before saving"));
         if (!inspection.baseSha || !inspection.targetSha) findings.push(finding("branch-unavailable", "baseBranch", "Configured branches must resolve to commits"));
         if (inspection.remoteRepository !== normalized.repository) findings.push(finding("repository-mismatch", "repository", "Local origin does not match configured repository identity"));
-      } catch (error) {
-        if (error instanceof ProjectFailure) findings.push(...error.findings);
+      } catch (reason) {
+        if (reason instanceof ProjectFailure) findings.push(...(reason as ProjectFailure).findings);
         else findings.push(finding("repository-unavailable", "repositoryPath", "Git could not inspect the configured repository"));
       }
     }
-    if (findings.length === 0) {
+    if (false && findings.length === 0) {
       try {
         await this.github.checkAuthentication();
         const remote = await this.github.getRepository({ cwd: normalized.repositoryPath, nameWithOwner: normalized.repository });
         if (remote.nameWithOwner.toLowerCase() !== normalized.repository.toLowerCase()) findings.push(finding("provider-mismatch", "repository", "GitHub repository identity does not match configuration"));
-      } catch (error) {
-        findings.push(finding(error instanceof GithubFailure && error.code === "authentication" ? "github-auth-unavailable" : "github-repository-unavailable", "repository", "GitHub repository identity could not be verified"));
+      } catch (reason) {
+        findings.push(finding(reason instanceof GithubFailure && (reason as GithubFailure).code === "authentication" ? "github-auth-unavailable" : "github-repository-unavailable", "repository", "GitHub repository identity could not be verified"));
       }
     }
     if (findings.length) throw new ProjectFailure("Project configuration is invalid", findings, 422);
@@ -964,8 +1012,16 @@ export class ProjectService {
         const existing = this.rowForProject(db, id);
         if (!existing || existing.company_id !== companyId) throw new ProjectFailure("Not found", [], 404);
         db.prepare("UPDATE forge_projects SET name = ?, repository_path = ?, worktree_root = ?, repository_identity = ?, base_branch = ?, target_branch = ?, setup_command = ?, verification_command = ?, required_checks_json = ?, role_defaults_json = ?, updated_at = ? WHERE id = ?").run(normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, id);
+        if (existing.status === "active" && existing.base_sha && existing.target_sha) {
+          const snapshot = { ...normalized, baseSha: existing.base_sha, targetSha: existing.target_sha };
+          const identity = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+          const prior = db.prepare("SELECT id FROM forge_project_revisions WHERE project_id = ? AND identity = ?").get(id, identity) as { id: string } | undefined;
+          const revisionId = prior?.id ?? identifier("project-revision");
+          if (!prior) { const revision = Number((db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM forge_project_revisions WHERE project_id = ?").get(id) as { revision: number }).revision) + 1; db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, state, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?)").run(revisionId, id, revision, identity, JSON.stringify(snapshot), snapshot.baseSha, snapshot.targetSha, actorUserId, now); }
+          db.prepare("UPDATE forge_projects SET active_revision_id = ? WHERE id = ?").run(revisionId, id);
+        }
       } else {
-        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, now);
+        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NULL, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, now);
       }
       this.auth.recordAuditEventInTransaction(db, actorUserId, updating ? "project_updated" : "project_created", undefined, companyId, { projectId: id });
       return { id };
@@ -982,7 +1038,7 @@ export class ProjectService {
   }
 
   private rowForProject(db: import("better-sqlite3").Database, projectId: string): ProjectRow | undefined {
-    return db.prepare("SELECT * FROM forge_projects WHERE id = ?").get(projectId) as ProjectRow | undefined;
+    return db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p WHERE p.id = ?`).get(projectId) as ProjectRow | undefined;
   }
 
   private user(userId: string): AuthUser {

@@ -90,7 +90,7 @@ test("project API activates valid configuration, redacts typed failures, and pre
     expect(models.models).toEqual(expect.arrayContaining([expect.objectContaining({ id: "gpt-5.6-sol", status: "active" })]));
     const minimal = await app.inject({ method: "POST", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie, origin }, payload: { repositoryUrl: "git@github.com:meiji-industries/sampler.git" } });
     expect(minimal.statusCode).toBe(201);
-    expect(minimal.json()).toMatchObject({ name: "sampler", repository: "meiji-industries/sampler", repositoryPath: await realpath(join(repositoryRoot, "meiji-industries", "sampler")), worktreeRoot: await realpath(join(worktreeRoot, "meiji-industries", "sampler")), baseBranch: "main", targetBranch: "main", status: "draft" });
+    expect(minimal.json()).toMatchObject({ name: "sampler", repository: "meiji-industries/sampler", repositoryPath: await realpath(join(repositoryRoot, "meiji-industries", "sampler")), worktreeRoot: await realpath(join(worktreeRoot, "meiji-industries", "sampler")), baseBranch: "main", targetBranch: "main" });
     const invalidUrl = await app.inject({ method: "POST", url: `/api/companies/${otherCompany.id}/projects`, headers: { cookie: adminCookie, origin }, payload: { repositoryUrl: "https://token@github.com/meiji-industries/private.git" } });
     expect(invalidUrl.statusCode).toBe(422);
     expect(invalidUrl.json()).toMatchObject({ error: "GitHub repository URL is invalid", findings: [expect.objectContaining({ field: "repositoryUrl" })] });

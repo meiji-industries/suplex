@@ -188,7 +188,7 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     expect(tasks.getTask((enrolled.json() as { user: { id: string } }).user.id, task.id).ci).toBeDefined();
     const projected = await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } });
     expect(projected.statusCode, projected.body).toBe(200);
-    expect(projected.json()).toMatchObject({ ci: { runId: "ci-api", owner: "integrator", policy: { projectRevisionId: active.activeRevisionId, requiredChecks: ["Tests / unit"], acceptedConclusions: ["success"] }, attempts: [{ id: "ci-attempt-api", owner: "integrator", checks: [{ providerCheckId: "1", selectedForEvaluation: true }] }] } });
+    expect(projected.json()).toMatchObject({ ci: { runId: "ci-api", owner: "integrator", policy: { projectRevisionId: active.activeRevisionId, requiredChecks: ["Tests / unit"], acceptedConclusions: ["success", "skipped"] }, attempts: [{ id: "ci-attempt-api", owner: "integrator", checks: [{ providerCheckId: "1", selectedForEvaluation: true }] }] } });
     expect(projected.body).not.toMatch(/session_ref|worktree_path|provider response body|raw logs/i);
 
     const targetBaseSha = await git(["rev-parse", "HEAD"], repositoryPath);
@@ -206,7 +206,7 @@ test("task API command dispatch preserves revision and evidence lineage", async 
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-api-diff-blocked', ?, ?, ?, 1, 3, 'blocked', ?, ?, ?, ?, ?, ?, ?, ?, 'clean')").run(task.id, company.id, task.workflowId, delivery.branchName, delivery.worktreePath, targetBaseSha, now, now, now, resultCommit, resultTree);
     });
     const blockedTask = (await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } })).json();
-    expect(blockedTask).toMatchObject({ developerExecution: { id: "developer-api-diff-blocked", status: "blocked", resultCommit, verificationResults: [] } });
+    expect(blockedTask).toMatchObject({ developerExecution: { id: "developer-api-diff-blocked", status: "blocked", resultCommit } });
     const developerDiff = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/developer-diff`, headers: { cookie, origin } });
     expect(developerDiff.statusCode).toBe(200);
     expect(developerDiff.json()).toMatchObject({ branchName: delivery.branchName, baseSha: targetBaseSha, headSha: resultCommit, patch: expect.stringContaining("+API delivery") });

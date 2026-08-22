@@ -34,6 +34,11 @@ const projects: FastifyPluginAsync<ProjectRoutesOptions> = async (app, options) 
     return reply.code(201).send(project);
   });
   typed.get("/api/projects/:projectId", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => reply.send(projects.getProject(request.forgeUser.id, request.params.projectId)));
+  typed.post("/api/projects/:projectId/activate", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => reply.send(await projects.activateProject(request.forgeUser.id, request.params.projectId)));
+  typed.get("/api/projects/:projectId/favicon", { schema: { params: ProjectIdParamsSchema } }, async (request, reply) => {
+    const favicon = await projects.getProjectFavicon(request.forgeUser.id, request.params.projectId);
+    return reply.header("Cache-Control", "private, max-age=300").header("X-Content-Type-Options", "nosniff").type("image/x-icon").send(favicon);
+  });
   typed.get("/api/projects/:projectId/checks", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectCheckListResponseSchema } } }, async (request, reply) => reply.send({ checks: await projects.listProjectChecks(request.forgeUser.id, request.params.projectId) }));
   typed.get("/api/projects/:projectId/repository-defaults", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectRepositoryDefaultsResponseSchema } } }, async (request, reply) => reply.send(await projects.getProjectRepositoryDefaults(request.forgeUser.id, request.params.projectId)));
   typed.patch("/api/projects/:projectId", { schema: { params: ProjectIdParamsSchema, body: ProjectBodySchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => reply.send(await projects.updateProject(request.forgeUser.id, request.params.projectId, { ...request.body, roleDefaults: roleDefaults(request.body.roleDefaults) })));

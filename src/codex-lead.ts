@@ -1071,6 +1071,12 @@ export class AgentService {
       }
     }
     const reviewRole: "planner" | "reviewer" = isFinalReview && input.roleProfiles.reviewer ? "reviewer" : "planner";
+    const visualEvidenceMissing = !isFinalReview && input.visualEvidence === "required" && (() => {
+      try {
+        const report = JSON.parse(delivery) as { visualEvidence?: { captured?: unknown; paths?: unknown } };
+        return report.visualEvidence?.captured !== true || !Array.isArray(report.visualEvidence.paths) || report.visualEvidence.paths.length === 0;
+      } catch { return true; }
+    })();
     let leadProfile: Awaited<ReturnType<AgentService["resolveTurnProfile"]>>;
     let rawSessionId: string;
     try {
@@ -1146,6 +1152,14 @@ export class AgentService {
         await runTurn(2, correctionPrompt);
         try { review = DeliveryReviewSchema.parse(parseDeliveryReview(outputLines, this.provider)); }
         catch { throw new AgentFailure("correction-exhausted", safeBlockSummary("correction-exhausted", true)); }
+      }
+      if (visualEvidenceMissing) {
+        review = DeliveryReviewSchema.parse({
+          ...review,
+          outcome: "blocking",
+          summary: `${review.summary} Visual evidence is required before delivery can continue.`,
+          findings: [...review.findings, { findingId: `visual_evidence_${randomBytes(12).toString("hex")}`, severity: "blocking", rationale: "The task requires visual evidence, but the Developer delivery did not provide captured evidence paths.", evidenceRef: "developer-delivery:visualEvidence", disposition: "open", repairInstruction: "Capture relevant visual evidence and include its paths in the Developer delivery report." }],
+        });
       }
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const opinion = await this.artifacts.putArtifact(input.companyId, "delivery-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });

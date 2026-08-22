@@ -1,4 +1,5 @@
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
+import { Avatar, AvatarFallback, AvatarImage } from ".././components/ui/avatar.js";
 import { Button } from ".././components/ui/button.js";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from ".././components/ui/card.js";
 import { Checkbox } from ".././components/ui/checkbox.js";
@@ -145,6 +146,15 @@ function ProjectDefaultAgents({ project, agents }: { project: ApiProject; agents
         );
       })}
     </div>
+  );
+}
+
+function ProjectIcon({ project }: { project: ApiProject }): ReactElement {
+  return (
+    <Avatar size="sm" shape="square">
+      <AvatarImage src={`/api/projects/${project.id}/favicon`} alt="" />
+      <AvatarFallback aria-label={`${project.name} icon`}>{project.name.slice(0, 1).toUpperCase()}</AvatarFallback>
+    </Avatar>
   );
 }
 
@@ -348,7 +358,7 @@ export function ProjectsView(): ReactElement {
                 <article key={project.id}>
                   <Card size="sm">
                     <CardHeader>
-                      <CardTitle><span className="text-[13px]">{project.name}</span></CardTitle>
+                      <CardTitle><span className="flex items-center gap-2"><ProjectIcon project={project} /><span className="text-[13px]">{project.name}</span></span></CardTitle>
                       <CardAction>
                         <div className="flex items-center gap-1">
                           <Button variant="ghost" size="sm" onClick={() => setSettingsProject(project)}>Configure</Button>

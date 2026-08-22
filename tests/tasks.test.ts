@@ -479,7 +479,7 @@ test("streams projection changes written by the Temporal worker process", async 
     const unsubscribeDenied = value.tasks.subscribe("sync-member", (event) => deniedEvents.push(event));
     const workerDatabase = new ForgeDatabase(join(value.root, "forge.sqlite"));
     try {
-      projectState(workerDatabase, IssueWorkflowStateSchema.parse({ ...created.task, issueId: created.task.id, projectRevisionId: created.task.projectRevisionId, revision: 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${created.task.workflowId}:1`, continuationCount: 0, lastSummaryHash: null, repairCycle: 0 }), "run-worker");
+      projectState(workerDatabase, IssueWorkflowStateSchema.parse(JSON.parse(JSON.stringify({ ...created.task, issueId: created.task.id, projectRevisionId: created.task.projectRevisionId, revision: 1, phase: "planning", owner: "lead", allowedCommands: [], pendingAction: "Lead planning", lastEventId: `${created.task.workflowId}:1`, continuationCount: 0, lastSummaryHash: null, repairCycle: 0 }))), "run-worker");
       await expect.poll(() => events).toEqual([{ type: "invalidate", taskId: created.task.id, companyId: created.task.companyId, revision: 1, attentionChanged: false }]);
       expect(deniedEvents).toEqual([]);
     } finally {

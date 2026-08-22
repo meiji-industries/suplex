@@ -23,6 +23,7 @@ const DeliveryReviewActivityInputCoreSchema = z.object({
   supersedesReviewId: durableId.nullable().default(null),
   deliveryReviewId: durableId.optional(),
   capacityRequestId: durableId.optional(),
+  visualEvidence: z.enum(["off", "capture", "required"]).optional(),
 }).strict().superRefine((value, context) => {
   if (value.reviewKind === "final" && !value.deliveryReviewId) context.addIssue({ code: "custom", path: ["deliveryReviewId"], message: "Final review requires the exact delivery review" });
 });

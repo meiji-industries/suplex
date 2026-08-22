@@ -12,6 +12,7 @@ export const PlanMaterialCategorySchema = z.enum([
 export type PlanMaterialCategory = z.infer<typeof PlanMaterialCategorySchema>;
 
 const GovernanceIdSchema = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
+/** Legacy workflow payload compatibility; new code identifies immutable artifacts by ID. */
 const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 
 export const PlanSubjectSchema = z.object({

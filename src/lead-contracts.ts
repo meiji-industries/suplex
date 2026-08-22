@@ -202,6 +202,7 @@ export const LeadResumeDescriptorSchema = z.object({
   leadSessionRef: durableId,
   reason: z.enum(["member_revision", "decision_resolution"]),
   instructionArtifactId: durableId,
+  /** Legacy workflow payload compatibility; ignored. */
   instructionSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
 
@@ -221,9 +222,7 @@ export const LeadPlanningActivityInputSchema = z.object({
   capacityRequestId: durableId.optional(),
   leadSessionRef: durableId.optional(),
   revisionNoteArtifactId: durableId.optional(),
-  revisionNoteSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   memberResponseArtifactId: durableId.optional(),
-  memberResponseSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
 
 export type LeadPlanningActivityInput = z.infer<typeof LeadPlanningActivityInputSchema>;
@@ -238,6 +237,7 @@ export interface LeadPlanningResult {
   leadSummary: string;
   materialCategories: PlanMaterialCategory[];
   material: boolean;
+  /** Historical activity-result compatibility; ignored by current workflows. */
   leadEvidenceArtifactSha256?: string;
   leadOutputArtifactSha256?: string;
   leadEvidenceSha256?: string;

@@ -16,6 +16,7 @@ export const ResolveDecisionBlockerInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   actorUserId: durableId,
   answerArtifactId: durableId,
+  /** Historical command payload compatibility; ignored. */
   answerSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 }).strict();
 
@@ -38,9 +39,11 @@ export const PlanCommandInputSchema = z.object({
   decision: z.enum(["accept", "request_changes", "cancel"]).optional(),
   idempotencyKey: DecisionIdempotencyKeySchema.optional(),
   noteStagingRef: durableId.optional(),
+  /** Historical command payload compatibility; ignored. */
   noteSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   expectedWorkflowRevision: z.number().int().nonnegative().optional(),
   answerStagingRef: durableId.optional(),
+  /** Historical command payload compatibility; ignored. */
   answerSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 

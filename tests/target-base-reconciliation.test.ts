@@ -15,7 +15,7 @@ import {
 import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "../src/temporal/target-base.js";
 
 const sha = (letter: string) => letter.repeat(40);
-const artifact = { id: "artifact_forward", sha256: "a".repeat(64), kind: "forward-merge-delivery" as const };
+const artifact = { id: "artifact_forward", kind: "forward-merge-delivery" as const };
 
 async function gitRepository(root: string): Promise<{ base: string; head: string }> {
   const { execFile } = await import("node:child_process");

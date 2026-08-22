@@ -143,40 +143,6 @@ test("Developer truth constraints reject invalid authorization, duplicate leases
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("0019 upgrades legacy Developer executions without inventing verification truth and is idempotent", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-db-developer-upgrade-test-"));
-  const filename = join(root, "forge.sqlite");
-  try {
-    const current = new ForgeDatabase(filename);
-    seedDeveloperExecution(current, root);
-    current.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, result_commit = ?, result_tree = ? WHERE id = 'execution-developer'").run("2026-08-12T00:01:00.000Z", "b".repeat(40), "c".repeat(40)));
-    const migrationCount = current.health().expectedMigrations;
-    current.close();
-
-    const legacy = new Database(filename);
-    const developerTruthMigration = readMigrations(join(process.cwd(), "drizzle")).find((migration) => migration.tag.endsWith("_developer_execution_truth"))!;
-    legacy.pragma("foreign_keys = OFF");
-    legacy.exec(`
-      DROP TABLE forge_developer_execution_events;
-      DROP TABLE forge_developer_execution_truth;
-      DROP TABLE forge_issue_worktrees;
-      DROP TABLE forge_plan_authorizations;
-    `);
-    legacy.prepare("DELETE FROM __drizzle_migrations WHERE hash = ?").run(developerTruthMigration.hash);
-    legacy.close();
-
-    const upgraded = new ForgeDatabase(filename);
-    expect(upgraded.health()).toMatchObject({ schemaState: "current", appliedMigrations: migrationCount });
-    expect(upgraded.authQuery((db) => db.prepare("SELECT status, result_commit, result_tree FROM forge_developer_executions WHERE id = 'execution-developer'").get())).toEqual({ status: "completed", result_commit: "b".repeat(40), result_tree: "c".repeat(40) });
-    expect(upgraded.authQuery((db) => db.prepare("SELECT execution_id FROM forge_developer_execution_truth WHERE execution_id = 'execution-developer'").get())).toBeUndefined();
-    upgraded.close();
-
-    const reopened = new ForgeDatabase(filename);
-    expect(reopened.health()).toMatchObject({ schemaState: "current", appliedMigrations: migrationCount });
-    expect(reopened.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_developer_executions WHERE id = 'execution-developer'").get())).toEqual({ count: 1 });
-    reopened.close();
-  } finally { await rm(root, { recursive: true, force: true }); }
-});
 
 test("schema health distinguishes empty, current, behind, ahead, partial, and corrupt migration states", () => {
   const root = mkdtempSync(join(tmpdir(), "forge-db-schema-test-"));

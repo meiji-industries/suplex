@@ -59,8 +59,7 @@ export function installHttpErrorHandlers(app: FastifyInstance): void {
       sendDomainFailure(reply, error);
       return;
     }
-    // err: pino serialises message, stack and cause; message is still redacted separately.
-    request.log.error({ requestId: request.id, method: request.method, url: request.url, error: redact(error instanceof Error ? error.message : String(error)), err: error instanceof Error ? error : new Error(String(error)) }, "Unhandled request error");
+    request.log.error({ requestId: request.id, method: request.method, url: request.url, error: redact(error instanceof Error ? error.message : String(error)) }, "Unhandled request error");
     reply.code(500).send({ error: "Internal server error" });
   });
 

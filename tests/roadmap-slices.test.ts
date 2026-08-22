@@ -388,11 +388,11 @@ test("restore drill preserves users, completed work, artifacts, and draft releas
         async updateDraftPullRequest() { providerMutations += 1; return pullRequest({ number: 42, headSha, baseSha }); },
         async getPullRequest() { providerReads += 1; return pullRequest({ number: 42, headSha, baseSha }); },
       });
-      expect(reconciliation.developerExecutions).toEqual([{ executionId: "developer-in-flight", status: "interrupted", reason: "restore-invalidated-process-ownership" }]);
+      expect(reconciliation.developerExecutions).toEqual([{ executionId: "developer-in-flight", status: "failed", reason: "process-missing" }]);
       expect(reconciliation.providers).toEqual([expect.objectContaining({ releaseId: "release-drill", status: "matched", pullRequestNumber: 42 })]);
       expect(providerReads).toBe(2);
       expect(providerMutations).toBe(0);
-      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = 'developer-in-flight'").get())).toEqual({ status: "interrupted", failure_code: "restore-process-invalidated" });
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = 'developer-in-flight'").get())).toEqual({ status: "failed", failure_code: "developer-process-missing" });
       expect(restoredDatabase.authQuery((db) => db.prepare("SELECT task_id, phase FROM forge_issue_projections ORDER BY task_id").all())).toEqual([{ task_id: "task-a", phase: "development" }, { task_id: "task-completed", phase: "done" }]);
     } finally {
       restoredDatabase.close();

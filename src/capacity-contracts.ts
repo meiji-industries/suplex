@@ -61,8 +61,8 @@ export type WorkflowCapacityState = z.infer<typeof WorkflowCapacityStateSchema>;
 
 export const CapacityBlockerSchema = z.object({
   category: z.enum(["capacity_exhausted", "ownership_ambiguous"]),
-  summary: z.string().max(200),
-  nextAction: z.string().max(200),
+  summary: z.string(),
+  nextAction: z.string(),
   resumeOperation: CapacityOperationSchema,
 });
 export type CapacityBlocker = z.infer<typeof CapacityBlockerSchema>;
@@ -164,6 +164,6 @@ export type AdminCapacityLane = z.infer<typeof AdminCapacityLaneSchema>;
 export const CapacityReconciliationResultSchema = z.object({
   requestId: durableId,
   status: CapacityRequestStatusSchema,
-  reason: z.string().max(200),
+  reason: z.string(),
 });
 export type CapacityReconciliationResult = z.infer<typeof CapacityReconciliationResultSchema>;

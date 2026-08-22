@@ -73,7 +73,7 @@ export type MergeReconciliationOutcome = z.infer<typeof MergeReconciliationOutco
 export const AcceptanceBlockerSchema = z.object({
   code: z.string().min(1).max(80).regex(/^[a-z0-9_:-]+$/),
   owner: z.enum(["human", "lead", "provider"]),
-  summary: z.string().min(1).max(500),
+  summary: z.string().min(1),
   retryAt: z.string().datetime().nullable(),
   evidenceArtifactId: durableId.nullable(),
 });
@@ -365,16 +365,15 @@ export class AcceptanceService {
       fr.id AS finalReviewId, fr.outcome AS finalReviewOutcome, fr.plan_revision AS finalPlanRevision, fr.base_sha AS finalBaseSha, fr.subject_commit AS finalHeadSha, fr.subject_tree AS finalHeadTree, fr.ci_run_id AS finalCiRunId, fr.delivery_review_id AS finalDeliveryReviewId, fr.session_ref AS finalReviewSessionRef, fr.opinion_artifact_id AS finalReviewOpinionArtifactId, fr.evidence_artifact_id AS finalReviewEvidenceArtifactId, fr.developer_execution_id AS developerExecutionId,
       de.session_ref AS developerSessionRef, de.target_base_sha AS developerTargetBaseSha, de.result_commit AS developerHeadSha, de.result_tree AS developerHeadTree, c.status AS ciStatus, c.expected_head_sha AS ciExpectedHeadSha, io.session_ref AS authoritativeLeadSessionRef
       FROM forge_tasks t
-      JOIN forge_project_revisions pr ON pr.id = t.project_revision_id
       JOIN forge_releases r ON r.id = ? AND r.task_id = t.id AND r.company_id = t.company_id AND r.workflow_id = ? AND r.superseded_at IS NULL AND r.status IN ('draft', 'ready')
       JOIN forge_delivery_reviews dr ON dr.id = ? AND dr.task_id = t.id AND dr.company_id = t.company_id AND dr.workflow_id = t.workflow_id
       JOIN forge_final_reviews fr ON fr.id = ? AND fr.task_id = t.id AND fr.company_id = t.company_id AND fr.workflow_id = t.workflow_id AND fr.release_id = r.id AND fr.delivery_review_id = dr.id
       JOIN forge_developer_executions de ON de.id = fr.developer_execution_id AND de.task_id = t.id AND de.company_id = t.company_id AND de.workflow_id = t.workflow_id
       JOIN forge_ci_runs c ON c.id = ? AND c.task_id = t.id AND c.company_id = t.company_id AND c.release_id = r.id
-      JOIN forge_issue_outputs io ON io.task_id = t.id AND io.company_id = t.company_id AND io.workflow_id = t.workflow_id AND io.revision = fr.plan_revision AND io.kind = 'plan' AND io.session_ref = fr.session_ref AND io.session_ref <> de.session_ref
+      JOIN forge_agent_executions io ON io.task_id = t.id AND io.company_id = t.company_id AND io.workflow_id = t.workflow_id AND io.output_revision = fr.plan_revision AND io.output_kind = 'plan' AND io.session_ref = fr.session_ref AND io.session_ref <> de.session_ref
       JOIN forge_users u ON u.id = ? AND u.status = 'active' AND (u.role = 'admin' OR EXISTS (SELECT 1 FROM forge_memberships m WHERE m.user_id = u.id AND m.company_id = t.company_id))
-      WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_revision_id = ? AND pr.id = ?`).get(
-      input.releaseId, input.workflowId, input.deliveryReviewId, input.finalReviewId, input.ciRunId, input.actorUserId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId, input.projectRevisionId,
+      WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_revision_id = ?`).get(
+      input.releaseId, input.workflowId, input.deliveryReviewId, input.finalReviewId, input.ciRunId, input.actorUserId, input.taskId, input.companyId, input.workflowId, input.projectRevisionId,
     ) as EvidenceRow | undefined);
     return evidence;
   }

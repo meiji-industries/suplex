@@ -118,7 +118,7 @@ export interface GithubReleasePortOptions {
 const BranchResponseSchema = z.object({ commit: z.object({ sha: z.string().regex(shaPattern) }) });
 const RepositorySchema = z.string().regex(repositoryPattern).transform((value) => value.toLowerCase());
 const RestErrorSchema = z.object({
-  message: z.string().min(1).max(500),
+  message: z.string().min(1),
   documentation_url: z.string().url().refine((value) => new URL(value).hostname === "docs.github.com", "unexpected documentation host"),
   status: z.union([z.number().int(), z.string().regex(/^\d{3}$/)]),
 });

@@ -7,7 +7,7 @@ export const lifecycleStateFields = {
   owner: z.enum(["human", "lead"]),
   allowedCommands: z.array(IssueCommandSchema),
   pendingAction: z.string().max(200).nullable(),
-  blockerCode: z.string().max(128).nullable().optional(),
+  blockerCode: z.string().nullable().optional(),
   lastEventId: durableId,
   continuationCount: z.number().int().nonnegative(),
   /** Historical compatibility only; ignored after deserialization. */
@@ -17,5 +17,5 @@ export const lifecycleStateFields = {
   activeOperation: ActiveOperationSchema.optional(),
   processedCommandIds: z.array(durableId).max(64).optional(),
   // Appended last: workflow-state field order is part of the persisted contract.
-  lastHandlerError: z.object({ command: z.string().max(128), reason: z.string().max(256), at: z.string().datetime() }).nullable().optional(),
+  lastHandlerError: z.object({ command: z.string(), reason: z.string(), at: z.string().datetime() }).nullable().optional(),
 };

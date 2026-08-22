@@ -16,47 +16,47 @@ export const HermesAdminAgentSchema = z.object({
   revokedAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
-}).strict();
+});
 
 export type HermesAdminAgent = z.infer<typeof HermesAdminAgentSchema>;
 
 export const HermesAgentListResponseSchema = z.object({
   agents: z.array(HermesAdminAgentSchema),
-}).strict();
+});
 
 export const HermesAdminListQuerySchema = z.object({
   companyId: z.string().optional(),
-}).strict();
+});
 
 export const HermesAdminCreateBodySchema = z.object({
-  name: z.string().trim().min(1).max(80),
+  name: z.string().trim().min(1),
   companyId: z.string().min(1).max(128),
   projectIds: z.array(z.string().min(1).max(128)).min(1),
   avatarSeed: z.string().max(128).optional(),
-}).strict();
+});
 
 export const HermesAdminCreateResponseSchema = z.object({
   agent: HermesAdminAgentSchema,
   pairingCode: z.string(),
   expiresAt: z.string(),
-}).strict();
+});
 
 export const HermesAdminAgentParamsSchema = z.object({
   agentId: z.string().min(1).max(128),
-}).strict();
+});
 
 export const HermesAdminProjectsBodySchema = z.object({
   projectIds: z.array(z.string().min(1).max(128)),
-}).strict();
+});
 
 export const HermesAdminProjectsResponseSchema = z.object({
   agent: HermesAdminAgentSchema,
-}).strict();
+});
 
 export const HermesAdminPairingCodeResponseSchema = z.object({
   pairingCode: z.string(),
   expiresAt: z.string(),
-}).strict();
+});
 
 export const HermesPublicAgentSchema = z.object({
   id: z.string(),
@@ -72,30 +72,30 @@ export const HermesPublicAgentSchema = z.object({
   revokedAt: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
-}).strict();
+});
 
 export type HermesPublicAgent = z.infer<typeof HermesPublicAgentSchema>;
 
 export const HermesPairingExchangeBodySchema = z.object({
   pairingCode: z.string(),
   profileId: z.string().trim().min(1).max(128),
-}).strict();
+});
 
 export const HermesPairingExchangeResponseSchema = z.object({
   agent: HermesPublicAgentSchema,
   credential: z.string(),
-}).strict();
+});
 
 export const HermesTaskCreateBodySchema = z.object({
   projectId: z.string().min(1).max(128),
-  title: z.string().trim().min(1).max(160),
-  description: z.string().trim().min(1).max(20_000),
+  title: z.string().trim().min(1),
+  description: z.string().trim().min(1),
   idempotencyKey: z.string().trim().min(1).max(128),
-}).strict();
+});
 
 export const HermesTaskIdParamsSchema = z.object({
   taskId: z.string().min(1).max(128),
-}).strict();
+});
 
 export const HermesSafeTaskProjectionSchema = z.object({
   id: z.string(),
@@ -107,6 +107,6 @@ export const HermesSafeTaskProjectionSchema = z.object({
   pendingAction: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
-}).strict();
+});
 
 export type HermesSafeTaskProjection = z.infer<typeof HermesSafeTaskProjectionSchema>;

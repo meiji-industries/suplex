@@ -47,7 +47,7 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
         );
         ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "lead", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution requires the Lead plan", mergeResolutionPlanId: plan.planId, mergeResolutionPlanArtifactId: plan.planArtifactId, mergeResolutionLeadExecutionId: plan.leadExecutionId, mergeResolutionLeadSessionRef: plan.leadSessionRef, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       } catch {
-        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["cancel_issue"], pendingAction: "Planner couldn't plan the fix — retry or take a look", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Planner couldn't plan the fix — retry or take a look", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       }
       if (legacyConflict) ctx.continuationRequested = true;
       await ctx.project();

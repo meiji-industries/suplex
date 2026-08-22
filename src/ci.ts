@@ -7,6 +7,7 @@ import { z } from "zod";
 import type { ForgeDatabase } from "./database.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { redact } from "./logging.js";
+import { loadTaskConfiguration } from "./task-project-configuration.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -62,14 +63,14 @@ export type PullRequestObservation = z.infer<typeof PullRequestObservationSchema
 
 export const CheckObservationSchema = z.object({
   providerCheckId: z.string().min(1).max(256),
-  name: z.string().min(1).max(200),
+  name: z.string().min(1),
   headSha: CommitShaSchema,
   status: z.enum(["queued", "in_progress", "completed"]),
   conclusion: z.enum(["success", "failure", "cancelled", "timed_out", "action_required", "neutral", "skipped", "stale"]).nullable(),
   detailsUrl: z.string().url().max(2_000).nullable(),
   startedAt: z.string().datetime().nullable(),
   completedAt: z.string().datetime().nullable(),
-  summary: z.string().max(CI_SUMMARY_MAX_LENGTH).nullable(),
+  summary: z.string().nullable(),
 }).strict();
 export type CheckObservation = z.infer<typeof CheckObservationSchema>;
 
@@ -388,26 +389,17 @@ export interface CiReconcileResult extends CiEvaluationResult {
   nextPollAt: string | null;
 }
 
-type RevisionConfig = { repository: string; baseBranch: string; targetBranch: string; baseSha: string; requiredChecks: string[] };
-
-function revisionConfig(raw: string): RevisionConfig {
-  try {
-    const value = JSON.parse(raw) as Record<string, unknown>;
-    return { repository: RepositorySchema.parse(value.repository), baseBranch: z.string().min(1).parse(value.baseBranch), targetBranch: z.string().min(1).parse(value.targetBranch), baseSha: CommitShaSchema.parse(value.baseSha), requiredChecks: z.array(z.string()).parse(value.requiredChecks) };
-  } catch { throw new CiFailure("invalid-policy"); }
-}
-
 export class CiService {
   constructor(private readonly database: ForgeDatabase, private readonly provider: CiProvider, private readonly artifacts?: ArtifactStore, private readonly now: () => Date = () => new Date()) {}
 
   async reconcile(input: CiReconcileInput): Promise<CiReconcileResult> {
     const now = this.now().toISOString();
     const requestedAttempt = input.attemptNumber;
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.project_id AS projectId, pr.id AS projectRevisionId, r.repository, r.head_sha AS expectedHeadSha, r.head_tree AS expectedHeadTree, r.base_branch AS baseBranch, r.head_branch AS headBranch, r.pr_number AS pullRequestNumber, r.status AS releaseStatus, r.superseded_at AS releaseSupersededAt, pr.normalized_json AS normalizedJson, pr.state AS revisionState
-      FROM forge_tasks t JOIN forge_releases r ON r.id = ? AND r.task_id = t.id AND r.company_id = ? JOIN forge_project_revisions pr ON pr.id = (SELECT current.id FROM forge_project_revisions current WHERE current.project_id = t.project_id AND current.state = 'accepted' ORDER BY current.revision DESC LIMIT 1)
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.project_id AS projectId, t.project_configuration_artifact_id AS projectRevisionId, r.repository, r.head_sha AS expectedHeadSha, r.head_tree AS expectedHeadTree, r.base_branch AS baseBranch, r.head_branch AS headBranch, r.pr_number AS pullRequestNumber, r.status AS releaseStatus, r.superseded_at AS releaseSupersededAt
+      FROM forge_tasks t JOIN forge_releases r ON r.id = ? AND r.task_id = t.id AND r.company_id = ?
       WHERE t.id = ? AND t.company_id = ?`).get(input.releaseId, input.companyId, input.taskId, input.companyId) as { projectId: string; projectRevisionId: string; repository: string; expectedHeadSha: string; expectedHeadTree: string; baseBranch: string; headBranch: string; pullRequestNumber: number | null; releaseStatus: string; releaseSupersededAt: string | null; normalizedJson: string; revisionState: string } | undefined);
-    if (!context || context.releaseSupersededAt || !["draft", "ready", "releasing", "ci_waiting"].includes(context.releaseStatus) || context.pullRequestNumber === null || context.revisionState !== "accepted") throw new CiFailure("stale-input");
-    const revision = revisionConfig(context.normalizedJson);
+    if (!context || context.releaseSupersededAt || !["draft", "ready", "releasing", "ci_waiting"].includes(context.releaseStatus) || context.pullRequestNumber === null || !this.artifacts) throw new CiFailure("stale-input");
+    const revision = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input);
     if (context.repository.toLowerCase() !== revision.repository.toLowerCase()) throw new CiFailure("stale-input");
     const { policy, policyJson, policyHash } = buildCiPolicy(context.projectRevisionId, revision.requiredChecks);
     let run = this.database.authQuery((db) => db.prepare("SELECT id, attempt, first_observed_at AS firstObservedAt, propagation_deadline AS propagationDeadline, overall_deadline AS overallDeadline, consecutive_provider_failures AS consecutiveProviderFailures FROM forge_ci_runs WHERE release_id = ? AND expected_head_sha = ? AND policy_hash = ? LIMIT 1").get(input.releaseId, input.expectedHeadSha, policyHash) as { id: string; attempt: number; firstObservedAt: string | null; propagationDeadline: string | null; overallDeadline: string | null; consecutiveProviderFailures: number } | undefined);

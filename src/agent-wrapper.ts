@@ -13,8 +13,8 @@ const DurableIdSchema = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9
 export const AgentWrapperManifestSchema = z.object({
   runtimeRoot: z.string().min(1),
   executionId: DurableIdSchema,
-  command: z.string().min(1).max(1_000),
-  args: z.array(z.string().max(100_000)).max(256),
+  command: z.string().min(1),
+  args: z.array(z.string()),
   cwd: z.string().min(1),
   pathOverride: z.string().optional(),
   createdAt: z.string().datetime(),

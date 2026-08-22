@@ -50,7 +50,7 @@ export const MaterialityEvidenceArtifactSchema = z.object({
   version: z.literal(1).default(1),
   categories: z.array(PlanMaterialCategorySchema).max(6),
   affectedPaths: z.array(z.string().min(1)).default([]),
-  evidence: z.array(z.object({ category: PlanMaterialCategorySchema, rationale: z.string(), evidenceRefs: z.array(z.string()) }).strict()).max(6).default([]),
+  evidence: z.array(z.object({ category: PlanMaterialCategorySchema, rationale: z.string(), evidenceRefs: z.array(z.string()) }).strict()).max(6).default([]), // bound: one evidence group per material category
 }).strict();
 
 export type MaterialityEvidenceArtifact = z.infer<typeof MaterialityEvidenceArtifactSchema>;

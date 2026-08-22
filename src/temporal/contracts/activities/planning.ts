@@ -64,7 +64,7 @@ export const PreparePlanRevisionActivityInputSchema = z.object({
 export type PreparePlanRevisionActivityInput = z.infer<typeof PreparePlanRevisionActivityInputSchema>;
 export const PreparePlanRevisionActivityResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("accepted"), revisionRequestId: durableId, coordinates: RevisedExecutionCoordinatesSchema }).strict(),
-  z.object({ status: z.literal("blocked"), revisionRequestId: durableId, blockerCode: z.string().min(1).max(128) }).strict(),
+  z.object({ status: z.literal("blocked"), revisionRequestId: durableId, blockerCode: z.string().min(1) }).strict(),
 ]);
 export type PreparePlanRevisionActivityResult = z.infer<typeof PreparePlanRevisionActivityResultSchema>;
 export const CreateSuccessorActivityInputSchema = z.object({

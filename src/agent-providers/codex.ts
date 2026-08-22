@@ -299,7 +299,7 @@ export const codexProvider: AgentProvider = {
       }
     } catch (error) {
       if (error instanceof AgentFailure) throw error;
-      throw new AgentFailure("version_incompatible", "The installed Codex CLI model catalog could not validate the pinned Lead settings", { nonRetryable: true });
+      throw new AgentFailure("version_incompatible", `The installed Codex CLI model catalog could not validate the pinned Lead settings: ${error instanceof Error ? error.message : String(error)}`, { nonRetryable: true });
     }
   },
   parseExecutionTranscript(lines: Iterable<string>, options: AgentTranscriptOptions): AgentTranscript {

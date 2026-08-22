@@ -127,7 +127,7 @@ const blockedResult = z.object({
   code: TargetBaseBlockerCodeSchema,
   owner: z.enum(["human", "provider", "lead"]),
   retryable: z.boolean(),
-  summary: z.string().min(1).max(500),
+  summary: z.string().min(1),
   evidenceArtifact: ArtifactReferenceSchema.optional(),
   observedBaseSha: sha.optional(),
   priorHead: sha.optional(),
@@ -296,7 +296,7 @@ export const IssueLeadOutputKindSchema = z.enum(["plan", "decision_blocker"]);
 export const IssuePlanDecisionSchema = z.enum(["approve", "request_revision", "reject"]);
 export const AttentionCategorySchema = z.enum(["member_authorization", "member_decision", "agent_contradiction", "agent_exhausted", "unsafe_recovery", "provider_ambiguity", "provider_authentication", "provider_connectivity_exhausted", "verification_unrecoverable", "target_drift", "capacity_exhausted"]);
 export type AttentionCategory = z.infer<typeof AttentionCategorySchema>;
-export const IssueBlockerActionSchema = z.object({ command: IssueCommandSchema, label: z.string().min(1).max(120), requiresNote: z.boolean(), destructive: z.boolean() });
+export const IssueBlockerActionSchema = z.object({ command: IssueCommandSchema, label: z.string().min(1), requiresNote: z.boolean(), destructive: z.boolean() });
 export type IssueBlockerAction = z.infer<typeof IssueBlockerActionSchema>;
 export const ArtifactPointerSchema = z.object({ artifactId: durableId, kind: z.enum(["attention-evidence", "lead-plan", "decision-blocker", "delivery-review", "developer-delivery", "developer-repair", "ci-evidence", "merge-conflict-plan", "merge-conflict-resolution"]) });
 export type ArtifactPointer = z.infer<typeof ArtifactPointerSchema>;

@@ -142,6 +142,7 @@ export interface DeveloperServiceOptions {
   worktrees?: WorktreeManager;
   now?: () => Date;
   github?: Pick<GithubReleasePort, "getPullRequest">;
+  githubObservation?: unknown;
 }
 
 function safeJsonLine(line: string): string {

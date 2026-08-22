@@ -96,6 +96,18 @@ export interface DatabaseHealth {
   writable: boolean;
 }
 
+/**
+ * Migration is opt-out for the server and worker, but diagnostics must choose
+ * a non-migrating mode explicitly so observing a live database cannot change
+ * it. A read-only connection also requires the database to already exist.
+ */
+export type ForgeDatabaseOpenOptions =
+  | { migrate?: true; readOnly?: false }
+  | { migrate: false; readOnly?: false }
+  | { migrate?: false; readOnly: true };
+
+export type ForgeDatabaseOpenMode = "migrate" | "read-write" | "read-only";
+
 export interface RepositoryIdentityCollision {
   projectId: string;
   companyId: string;
@@ -243,24 +255,37 @@ function determineSchemaState(expected: ExpectedMigration[], applied: AppliedMig
 export class ForgeDatabase {
   private readonly db: Database.Database;
   private readonly orm: BetterSQLite3Database<AuthSchema & { probeWorkflows: typeof probeWorkflows; workerRegistrations: typeof workerRegistrations }>;
+  private readonly mode: ForgeDatabaseOpenMode;
 
-  constructor(filename: string) {
-    mkdirSync(dirname(filename), { recursive: true });
-    this.db = new Database(filename);
+  constructor(filename: string, options: ForgeDatabaseOpenOptions = {}) {
+    const readOnly = options.readOnly === true;
+    const migrate = options.migrate ?? !readOnly;
+    if (readOnly && migrate) throw new Error("A read-only database connection cannot run migrations");
+    this.mode = readOnly ? "read-only" : migrate ? "migrate" : "read-write";
+    if (migrate) mkdirSync(dirname(filename), { recursive: true });
+    this.db = new Database(filename, readOnly ? { readonly: true } : migrate ? undefined : { fileMustExist: true });
     this.db.pragma("busy_timeout = 5000");
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("synchronous = FULL");
     this.db.pragma("foreign_keys = ON");
     this.db.pragma("recursive_triggers = ON");
+    if (!readOnly) {
+      this.db.pragma("journal_mode = WAL");
+      this.db.pragma("synchronous = FULL");
+    }
     this.orm = drizzle(this.db, { schema: { ...authSchema, probeWorkflows, workerRegistrations } });
     try {
-      this.preflightProjectRepositoryIdentities();
-      applyMigrations(this.db, migrationFolder());
-      this.ensureModelCatalog();
+      if (migrate) {
+        this.preflightProjectRepositoryIdentities();
+        applyMigrations(this.db, migrationFolder());
+        this.ensureModelCatalog();
+      }
     } catch (error) {
       this.db.close();
       throw error;
     }
+  }
+
+  openMode(): ForgeDatabaseOpenMode {
+    return this.mode;
   }
 
   private ensureModelCatalog(): void {
@@ -586,9 +611,10 @@ export class ForgeDatabase {
     const journalMode = String(this.db.pragma("journal_mode", { simple: true })).toLowerCase();
     const walMode = journalMode === "wal";
 
-    const appliedRows = this.db
-      .prepare("SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at ASC, hash ASC")
-      .all() as Array<{ hash: string; created_at: number }>;
+    const migrationsTable = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '__drizzle_migrations'").get();
+    const appliedRows = migrationsTable
+      ? this.db.prepare("SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at ASC, hash ASC").all() as Array<{ hash: string; created_at: number }>
+      : [];
     const applied = appliedRows.map((row) => ({ hash: row.hash, createdAt: row.created_at }));
 
     return {

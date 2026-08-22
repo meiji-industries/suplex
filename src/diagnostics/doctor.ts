@@ -13,7 +13,18 @@ export type DoctorCheck = { status: "PASS" | "WARN" | "FAIL"; name: string; deta
 export async function runDoctor(config: ForgeConfig, database: ForgeDatabase, options: { fix?: boolean } = {}): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = [];
   const schema = database.schemaStatus();
-  checks.push({ status: schema.state === "current" ? "PASS" : "FAIL", name: "database schema", detail: `${schema.state} (${schema.applied.length}/${schema.expected.length} migrations)` });
+  if (options.fix && schema.state === "behind") {
+    throw new Error("forge doctor --fix refused: database is behind this build — restart the stack to migrate");
+  }
+  const unknownApplied = schema.applied.filter((migration) => !schema.expected.some((expected) => expected.hash === migration.hash));
+  const unknownNames = unknownApplied.map((migration) => `migration-${migration.createdAt} (${migration.hash})`);
+  checks.push({
+    status: schema.state === "current" ? "PASS" : schema.state === "ahead" ? "WARN" : "FAIL",
+    name: "database schema",
+    detail: schema.state === "ahead"
+      ? `ahead (${schema.applied.length}/${schema.expected.length} migrations); build lacks ${unknownNames.join(", ") || "an applied migration"}`
+      : `${schema.state} (${schema.applied.length}/${schema.expected.length} migrations)`,
+  });
   const journal = database.authQuery((db) => String(db.pragma("journal_mode", { simple: true })));
   checks.push({ status: journal.toLowerCase() === "wal" ? "PASS" : "WARN", name: "sqlite WAL", detail: journal });
   const disk = await statfs(config.databasePath);

@@ -24,6 +24,17 @@ import { runLogViewer } from "./log-viewer.js";
 const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
 const commandArgs = process.argv.slice(process.argv[2] === "--" ? 4 : 3);
 const foreground = process.argv.includes("--foreground");
+const verbose = process.argv.includes("--verbose");
+
+function openDiagnosticDatabase(filename: string, options: { fix?: boolean } = {}): ForgeDatabase {
+  const database = new ForgeDatabase(filename, options.fix ? { migrate: false } : { readOnly: true });
+  const schema = database.schemaStatus();
+  if (database.openMode() === "read-only" && schema.state === "behind") {
+    process.stderr.write("database is behind this build — restart the stack to migrate\n");
+  }
+  if (verbose) process.stderr.write(`database open mode: ${database.openMode()}\n`);
+  return database;
+}
 
 async function stopForge(config: ReturnType<typeof loadConfig>): Promise<void> {
   const registryPath = `${config.runtimeRoot}/owned-processes.json`;
@@ -55,10 +66,14 @@ async function main(): Promise<void> {
       else if (arg === "--since") since = commandArgs[++index];
       else if (arg === "--errors") errors = true;
       else if (arg === "--follow") follow = true;
+      else if (arg === "--verbose") { /* handled globally */ }
       else throw new Error(`Unknown logs option: ${arg}`);
       if ((arg === "--task" && !taskId) || (arg === "--since" && !since)) throw new Error(`${arg} requires a value`);
     }
-    await runLogViewer({ errors, follow, ...(taskId ? { taskId } : {}), ...(since ? { since } : {}) });
+    const database = openDiagnosticDatabase(loadConfig().databasePath);
+    try {
+      await runLogViewer({ errors, follow, ...(taskId ? { taskId } : {}), ...(since ? { since } : {}) });
+    } finally { database.close(); }
     return;
   }
   if (command === "help") {
@@ -69,7 +84,7 @@ async function main(): Promise<void> {
   if (command === "task") {
     const taskId = commandArgs[0];
     if (!taskId || taskId.startsWith("--")) throw new Error("task requires a task ID");
-    const database = new ForgeDatabase(config.databasePath);
+    const database = openDiagnosticDatabase(config.databasePath);
     try {
       const diagnostic = await inspectTask(config, database, taskId, process.argv.includes("--history"));
       if (process.argv.includes("--bundle")) process.stdout.write(`bundle      ${await writeTaskBundle(config, database, taskId)}\n`);
@@ -78,9 +93,10 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "doctor") {
-    const database = new ForgeDatabase(config.databasePath);
+    const fix = process.argv.includes("--fix");
+    const database = openDiagnosticDatabase(config.databasePath, { fix });
     try {
-      const checks = await runDoctor(config, database, { fix: process.argv.includes("--fix") });
+      const checks = await runDoctor(config, database, { fix });
       process.stdout.write(formatDoctor(checks));
       if (checks.some((check) => check.status === "FAIL")) process.exitCode = 1;
     } finally { database.close(); }

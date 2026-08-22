@@ -1304,19 +1304,14 @@ export class AgentService {
       const evidence = await this.persistEvidence(input.companyId, executionId, lines);
       const reviewArtifact = await this.artifacts.put(input.companyId, "supplemental-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
       const reviewId = `review_${randomBytes(12).toString("hex")}`;
-      const reviewSubject = undefined;
       this.database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, reviewArtifact.id, reviewArtifact.companyId, reviewArtifact.kind, reviewArtifact.filename, reviewArtifact.mimeType, reviewArtifact.byteSize, reviewArtifact.sha256, reviewArtifact.storagePath, reviewArtifact.createdAt);
         db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidence.id, executionId);
       });
-      if (reviewSubject && sessionRef) {
-        new PlanGovernanceRepository(this.database).appendSupplementalReview({ subject: reviewSubject, reviewId, executionId, reviewerSessionRef: sessionRef, opinionArtifactId: reviewArtifact.id, opinionArtifactSha256: reviewArtifact.sha256, evidenceArtifactId: evidence.id, evidenceArtifactSha256: evidence.sha256, summary: review.summary });
-      } else {
-        this.database.authTransaction((db) => db.prepare("INSERT INTO forge_plan_reviews (id, task_id, company_id, workflow_id, plan_revision, profile_id, execution_id, session_ref, opinion_artifact_id, evidence_artifact_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.revision, profile.id, executionId, sessionRef, reviewArtifact.id, evidence.id, review.summary, this.now().toISOString()));
-      }
-      return { reviewId, reviewArtifactId: reviewArtifact.id, evidenceArtifactId: evidence.id, executionId, sessionRef, summary: review.summary, ...(reviewSubject ? { subject: reviewSubject, reviewArtifactSha256: reviewArtifact.sha256, evidenceManifestArtifactId: reviewSubject.evidenceManifestArtifactId, evidenceManifestSha256: reviewSubject.evidenceManifestSha256 } : {}) };
+      this.database.authTransaction((db) => db.prepare("INSERT INTO forge_plan_reviews (id, task_id, company_id, workflow_id, plan_revision, profile_id, execution_id, session_ref, opinion_artifact_id, evidence_artifact_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.revision, profile.id, executionId, sessionRef, reviewArtifact.id, evidence.id, review.summary, this.now().toISOString()));
+      return { reviewId, reviewArtifactId: reviewArtifact.id, evidenceArtifactId: evidence.id, executionId, sessionRef, summary: review.summary };
     } catch (error) {
-      const failure = runtime.signal?.aborted ? new AgentFailure("cancelled", "The Codex supplemental review was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("review-failed", "Supplemental review failed");
+      const failure = runtime.signal?.aborted ? new AgentFailure("cancelled", "The Codex supplemental review was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("review-failed", "The Codex supplemental review failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, lines);
       const finalStatus = failure.code === "cancelled" ? "cancelled" : "failed";
       this.database.authTransaction((db) => {

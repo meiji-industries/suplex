@@ -17,7 +17,6 @@ import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import type { GithubReleasePort } from "./github-release.js";
 import { createGitCommandGuard, withWorktreeMiseTrust, WorktreeFailure, WorktreeManager } from "./worktrees.js";
-import { createGithubAdapter, type GithubAdapter } from "./github.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { runPinnedVerification } from "./verification.js";
 import { parseAcceptedProjectRevision } from "./projects.js";
@@ -143,7 +142,6 @@ export interface DeveloperServiceOptions {
   worktrees?: WorktreeManager;
   now?: () => Date;
   github?: Pick<GithubReleasePort, "getPullRequest">;
-  githubObservation?: GithubAdapter;
 }
 
 function safeJsonLine(line: string): string {
@@ -224,7 +222,6 @@ export class DeveloperService {
   private readonly worktrees: WorktreeManager;
   private readonly now: () => Date;
   private readonly github: Pick<GithubReleasePort, "getPullRequest"> | undefined;
-  private readonly githubObservation: GithubAdapter;
 
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: DeveloperServiceOptions = {}) {
@@ -236,7 +233,6 @@ export class DeveloperService {
     this.worktrees = options.worktrees ?? new WorktreeManager();
     this.now = options.now ?? (() => new Date());
     this.github = options.github;
-    this.githubObservation = options.githubObservation ?? createGithubAdapter();
   }
 
   private bindCapacityInTransaction(db: Database.Database, input: { capacityRequestId?: string | undefined }, executionId: string, sessionRef?: string, worktreePath?: string): void {

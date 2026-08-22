@@ -12,6 +12,7 @@ export interface ArtifactInput {
   filename: string;
   mimeType: string;
   bytes: Buffer;
+  taskId?: string;
 }
 
 export const ArtifactKinds = ["task-brief", "task-image", "agent-evidence", "attention-evidence", "lead-plan", "decision-blocker", "lead-input-manifest", "decision-answer", "supplemental-review", "plan-decision", "plan-blocker-response", "plan-revision-reason", "continuation-reason", "developer-delivery", "delivery-review", "delivery-repair-plan", "developer-repair", "delivery-blocker", "delivery-decision", "ci-evidence", "ci-repair-plan", "ci-repair-evidence", "merge-conflict-evidence", "merge-conflict-plan", "merge-conflict-resolution", "planning-evidence-manifest", "repository-evidence", "materiality-evidence", "lead-review-response", "release-public-body", "forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery", "developer-evidence-manifest", "developer-command-output", "developer-git-snapshot", "developer-provider-observation", "developer-delivery-raw"] as const;
@@ -284,7 +285,7 @@ export class ArtifactStore {
   async put(companyId: string, kind: StoredArtifact["kind"], input: ArtifactInput): Promise<StoredArtifact> {
     const planned = this.plan(companyId, `put_${randomUUID().replaceAll("-", "")}`, kind, input);
     const artifact = await this.write(planned, input.bytes);
-    this.database?.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
+    this.database?.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, input.taskId ?? "", artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
     return artifact;
   }
   async putArtifact(companyId: string, taskId: string, kind: string, bytes: Buffer | object, filename?: string): Promise<string> {

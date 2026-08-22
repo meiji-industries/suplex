@@ -6,7 +6,7 @@ import type { AuthUser } from "./auth.js";
 import { AuthFailure, AuthService } from "./auth.js";
 import type { CheckConclusion, CheckStatus, CiOutcome, CiOwner } from "./ci.js";
 import type { ForgeConfig } from "./config.js";
-import { ArtifactFailure, ArtifactManifestEntrySchema, ArtifactStore, type ArtifactManifestEntry, type PlannedArtifact, type StoredArtifact } from "./artifacts.js";
+import { ArtifactFailure, ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { PersistedLeadOutputSchema, SupplementalReviewSchema, type PersistedLeadOutput, type SupplementalReview } from "./codex-lead.js";
 import { CapacityManager } from "./capacity.js";
 import type { PublicCapacityStatus } from "./capacity-contracts.js";
@@ -1128,23 +1128,19 @@ export class TaskService {
 
     const imageArtifacts: StoredArtifact[] = [];
     let briefArtifact: StoredArtifact | undefined;
-    const plannedArtifacts: PlannedArtifact[] = [];
     try {
       const taskId = reserved.intent.task_id;
       const workflowId = reserved.intent.workflow_id;
       this.updateCreationIntent(reserved.intent.id, { state: "staging", errorCode: null, attempt: reserved.intent.attempt + 1 }, reserved.intent.lease_token);
       const briefBytes = Buffer.from(normalizeText(input.description), "utf8");
-      plannedArtifacts.push(this.artifacts.plan(companyId, reserved.intent.id, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: briefBytes }));
-      for (const { image, bytes } of decodedImages) plannedArtifacts.push(this.artifacts.plan(companyId, reserved.intent.id, "task-image", { filename: image.filename, mimeType: image.mimeType, bytes }));
-      const manifest = plannedArtifacts.map(({ stagingPath: _stagingPath, ...entry }) => ArtifactManifestEntrySchema.parse(entry));
-      this.updateCreationIntent(reserved.intent.id, { artifactManifest: manifest }, reserved.intent.lease_token);
       await this.maybeFault("after_manifest_persisted", { intentId: reserved.intent.id, taskId });
-      for (const [artifactIndex, planned] of plannedArtifacts.entries()) {
-        const bytes = artifactIndex === 0 ? briefBytes : decodedImages[artifactIndex - 1]!.bytes;
-        const artifact = await this.artifacts.write(planned, bytes);
-        await this.maybeFault("after_artifact_finalized", { intentId: reserved.intent.id, taskId, artifactIndex });
-        if (artifactIndex === 0) briefArtifact = artifact;
-        else imageArtifacts.push(artifact);
+      briefArtifact = await this.artifacts.put(companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: briefBytes, taskId });
+      await this.maybeFault("after_artifact_finalized", { intentId: reserved.intent.id, taskId, artifactIndex: 0 });
+      this.updateCreationIntent(reserved.intent.id, { artifactIds: [briefArtifact.id] }, reserved.intent.lease_token);
+      for (const [imageIndex, { image, bytes }] of decodedImages.entries()) {
+        const artifact = await this.artifacts.put(companyId, "task-image", { filename: image.filename, mimeType: image.mimeType, bytes, taskId });
+        await this.maybeFault("after_artifact_finalized", { intentId: reserved.intent.id, taskId, artifactIndex: imageIndex + 1 });
+        imageArtifacts.push(artifact);
         this.updateCreationIntent(reserved.intent.id, { artifactIds: [briefArtifact, ...imageArtifacts].filter((entry): entry is StoredArtifact => Boolean(entry)).map((entry) => entry.id) }, reserved.intent.lease_token);
       }
       if (!briefArtifact) throw new ArtifactFailure("artifact-corrupt", "Task brief could not be stored");
@@ -1160,8 +1156,6 @@ export class TaskService {
       const initialState = createInitialIssueWorkflowState({ issueId: taskId, companyId, projectId: input.projectId, workflowId, projectRevisionId: project.activeRevisionId, requestHash, briefArtifactId: briefArtifact.id, briefSha256: briefArtifact.sha256, imageArtifactIds: imageArtifacts.map((artifact) => artifact.id), roleProfiles, supplementalReview: input.supplementalReview === true, autoApprovePlan, ...(autoApprovePlanActorUserId ? { autoApprovePlanActorUserId } : {}), pullRequestMode, ...(autoMergeActorUserId ? { autoMergeActorUserId } : {}), repairCycleLimit: 2 });
       const eventHash = projectionStateHash(initialState);
       this.database.authTransaction((db) => {
-        db.prepare(`INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(briefArtifact!.id, companyId, briefArtifact!.kind, briefArtifact!.filename, briefArtifact!.mimeType, briefArtifact!.byteSize, briefArtifact!.sha256, briefArtifact!.storagePath, briefArtifact!.createdAt);
-        for (const artifact of imageArtifacts) db.prepare(`INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(artifact.id, companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
         db.prepare(`INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, auto_approve_plan, pull_request_mode, delivery_target, run_project_tests, visual_evidence, workflow_id, project_revision_id, idempotency_key, request_hash, creator_agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(taskId, companyId, input.projectId, input.title.trim(), briefArtifact!.id, JSON.stringify(imageArtifacts.map((artifact) => artifact.id)), JSON.stringify(roleAgents), input.supplementalReview === true ? 1 : 0, autoApprovePlan ? 1 : 0, pullRequestMode, deliveryTarget, runProjectTests ? 1 : 0, visualEvidence, workflowId, project.activeRevisionId, idempotencyKey, requestHash, creatorAgentId, now, now);
         db.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, authoritative_event_hash, projected_at) VALUES (?, ?, ?, ?, 0, 'backlog', 'human', ?, ?, ?, ?, ?, 0, ?, ?)`).run(taskId, companyId, input.projectId, workflowId, JSON.stringify(["start_planning"]), "Start planning", now, `${workflowId}:0`, eventHash, eventHash, now);
         db.prepare(`INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, 0, 'task_created', ?, ?, ?)`).run(`${workflowId}:0`, taskId, companyId, workflowId, JSON.stringify({ revision: 0, stateHash: eventHash }), now, eventHash);
@@ -1189,7 +1183,7 @@ export class TaskService {
       }
       const ambiguousStart = error instanceof TaskFailure && error.findings.some((item) => item.code === "workflow-start-ambiguous");
       const durableCreationState = current.state === "workflow_starting" || current.state === "started";
-      if (!ambiguousStart && !durableCreationState && plannedArtifacts.length > 0) {
+      if (!ambiguousStart && !durableCreationState && (briefArtifact || imageArtifacts.length > 0)) {
         await this.cleanupCreationArtifacts(current, [briefArtifact, ...imageArtifacts]);
         try { this.updateCreationIntent(reserved.intent.id, { state: "failed_before_start", errorCode: error instanceof ArtifactFailure ? error.code : "creation-failed" }, reserved.intent.lease_token); } catch (leaseError) { if (!(leaseError instanceof CreationLeaseLost)) throw leaseError; }
       }
@@ -1242,12 +1236,11 @@ export class TaskService {
     });
   }
 
-  private updateCreationIntent(intentId: string, update: { state?: CreationIntentRow["state"]; artifactIds?: string[]; artifactManifest?: ArtifactManifestEntry[]; errorCode?: string | null; attempt?: number }, expectedLeaseToken?: string | null): void {
+  private updateCreationIntent(intentId: string, update: { state?: CreationIntentRow["state"]; artifactIds?: string[]; errorCode?: string | null; attempt?: number }, expectedLeaseToken?: string | null): void {
     this.database.authTransaction((db) => {
       const current = db.prepare("SELECT artifact_ids_json, artifact_manifest_json, lease_token, attempt, error_code FROM forge_task_creation_intents WHERE id = ?").get(intentId) as { artifact_ids_json: string; artifact_manifest_json: string; lease_token: string | null; attempt: number; error_code: string | null } | undefined;
       if (!current) return;
       const artifactIds = update.artifactIds ?? parseImageIds(current.artifact_ids_json);
-      const manifest = update.artifactManifest ?? json<ArtifactManifestEntry[]>(current.artifact_manifest_json, []);
       const now = this.now();
       const state = update.state;
       const clearLease = state === "started" || state === "failed_before_start";
@@ -1255,18 +1248,14 @@ export class TaskService {
       const leaseExpiresAt = clearLease || !leaseToken ? null : new Date(now.getTime() + 30_000).toISOString();
       const errorCode = update.errorCode === undefined ? current.error_code : update.errorCode;
       const result = expectedLeaseToken === undefined
-        ? db.prepare("UPDATE forge_task_creation_intents SET state = COALESCE(?, state), artifact_ids_json = ?, artifact_manifest_json = ?, lease_token = ?, lease_expires_at = ?, error_code = ?, attempt = COALESCE(?, attempt), updated_at = ? WHERE id = ?").run(state ?? null, JSON.stringify(artifactIds), JSON.stringify(manifest), leaseToken, leaseExpiresAt, errorCode, update.attempt ?? null, now.toISOString(), intentId)
-        : db.prepare("UPDATE forge_task_creation_intents SET state = COALESCE(?, state), artifact_ids_json = ?, artifact_manifest_json = ?, lease_token = ?, lease_expires_at = ?, error_code = ?, attempt = COALESCE(?, attempt), updated_at = ? WHERE id = ? AND lease_token = ?").run(state ?? null, JSON.stringify(artifactIds), JSON.stringify(manifest), leaseToken, leaseExpiresAt, errorCode, update.attempt ?? null, now.toISOString(), intentId, expectedLeaseToken);
+        ? db.prepare("UPDATE forge_task_creation_intents SET state = COALESCE(?, state), artifact_ids_json = ?, lease_token = ?, lease_expires_at = ?, error_code = ?, attempt = COALESCE(?, attempt), updated_at = ? WHERE id = ?").run(state ?? null, JSON.stringify(artifactIds), leaseToken, leaseExpiresAt, errorCode, update.attempt ?? null, now.toISOString(), intentId)
+        : db.prepare("UPDATE forge_task_creation_intents SET state = COALESCE(?, state), artifact_ids_json = ?, lease_token = ?, lease_expires_at = ?, error_code = ?, attempt = COALESCE(?, attempt), updated_at = ? WHERE id = ? AND lease_token = ?").run(state ?? null, JSON.stringify(artifactIds), leaseToken, leaseExpiresAt, errorCode, update.attempt ?? null, now.toISOString(), intentId, expectedLeaseToken);
       if (expectedLeaseToken !== undefined && result.changes !== 1) throw new CreationLeaseLost();
     });
   }
 
   private async cleanupCreationArtifacts(intent: CreationIntentRow, artifacts: Array<StoredArtifact | undefined> = []): Promise<void> {
     const ids = [...new Set([...parseImageIds(intent.artifact_ids_json), ...artifacts.flatMap((artifact) => artifact ? [artifact.id] : [])])];
-    const manifest = json<ArtifactManifestEntry[]>(intent.artifact_manifest_json, []).flatMap((entry) => {
-      const parsed = ArtifactManifestEntrySchema.safeParse(entry);
-      return parsed.success ? [parsed.data] : [];
-    });
     const rows = this.database.authQuery((db) => {
       if (!ids.length) return [] as Array<{ id: string; company_id: string; storage_path: string }>;
       const placeholders = ids.map(() => "?").join(",");
@@ -1275,8 +1264,7 @@ export class TaskService {
     this.database.authTransaction((db) => {
       for (const row of rows) db.prepare("DELETE FROM forge_artifacts WHERE id = ? AND company_id = ?").run(row.id, row.company_id);
     });
-    const exactPaths = [...manifest.map((entry) => ({ storagePath: entry.storagePath, stagingPath: `${intent.company_id}/.staging/${intent.id}/${entry.id}.tmp` })), ...rows.map((row) => ({ storagePath: row.storage_path, stagingPath: `${intent.company_id}/.staging/${intent.id}/${row.id}.tmp` })), ...artifacts.filter((artifact): artifact is StoredArtifact => Boolean(artifact)).map((artifact) => ({ storagePath: artifact.storagePath, stagingPath: `${intent.company_id}/.staging/${intent.id}/${artifact.id}.tmp` }))];
-    await Promise.all(exactPaths.map((path) => this.artifacts.removePlanned(path)));
+    await Promise.all(rows.map((row) => this.artifacts.remove({ companyId: row.company_id, storagePath: row.storage_path })));
   }
 
   private async resumeCreationIntent(authority: TaskCreationAuthority, intent: CreationIntentRow, input: TaskInput): Promise<{ task: ForgeTask; created: boolean }> {

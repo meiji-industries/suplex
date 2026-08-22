@@ -278,7 +278,7 @@ function ReleasePanel({ task }: { task: ApiTask }): ReactElement | null {
   </Card>;
 }
 
-function PullRequestCard({ task, busy, onMarkReady, onCheckCi, onCheckMerge }: { task: ApiTask; busy: boolean; onMarkReady: () => Promise<void>; onCheckCi?: () => Promise<void>; onCheckMerge?: () => Promise<void> }): ReactElement | null {
+function PullRequestCard({ task, busy, onMarkReady, onMerge, onCheckCi, onCheckMerge }: { task: ApiTask; busy: boolean; onMarkReady: () => Promise<void>; onMerge?: () => Promise<void>; onCheckCi?: () => Promise<void>; onCheckMerge?: () => Promise<void> }): ReactElement | null {
   const release = task.release;
   if (!release?.pullRequestUrl || release.pullRequestNumber === null) return null;
   const providerState = task.deliveryGate?.release.state;
@@ -308,6 +308,7 @@ function PullRequestCard({ task, busy, onMarkReady, onCheckCi, onCheckMerge }: {
         {onCheckCi ? <Button size="sm" variant="outline" onClick={() => void onCheckCi()} disabled={busy}>{busy ? "Checking…" : "Check CI"}</Button> : null}
         <a className={buttonVariants({ variant: "outline", size: "sm" })} href={release.pullRequestUrl} target="_blank" rel="noreferrer">Open PR<ExternalLink aria-hidden="true" /></a>
         {release.isDraft ? <Button size="sm" onClick={() => void onMarkReady()} disabled={busy}>{busy ? "Marking ready…" : "Mark As Ready"}</Button> : null}
+        {onMerge ? <Button size="sm" onClick={() => void onMerge()} disabled={busy}>{busy ? "Merging…" : "Merge"}</Button> : null}
         {onCheckMerge ? <Button size="sm" onClick={() => void onCheckMerge()} disabled={busy}>{busy ? "Checking…" : "Check merge"}</Button> : null}
       </div>
     </CardFooter>
@@ -540,7 +541,7 @@ function InlineTaskEditor({ field, value, onSave }: { field: "title" | "descript
     : <button type="button" data-task-description-editor aria-label="Edit task description" onClick={start} className="block w-full whitespace-pre-wrap text-left font-sans text-[13px] leading-5">{value || "No description."}</button>;
 }
 
-export function TaskDetailsPage({ task, project, companyId: _companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onDuplicate, onUpdateDetails, onRefresh, onRescue }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onDuplicate: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport> }): ReactElement {
+export function TaskDetailsPage({ task, project, companyId: _companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onMerge, onDuplicate, onUpdateDetails, onRefresh, onRescue }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onMerge: () => Promise<void>; onDuplicate: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport> }): ReactElement {
   const approveCommand = task.commands.find((command) => command.name === "approve_plan");
   const revisionCommand = task.commands.find((command) => command.name === "request_plan_revision");
   const blockerCommand = task.commands.find((command) => command.name === "respond_plan_blocker");
@@ -634,7 +635,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                   <div className="mx-auto max-w-4xl space-y-4">
                     <PlanningRunCard task={task} />
                     {task.phase === "planning" ? <LiveExecutionRun taskId={task.id} eventPath="planning-events" activityLabel="Planner" onRefresh={onRefresh} /> : null}
-                    {pullRequestInMain ? <div data-active-pull-request><PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} {...(task.allowedCommands.includes("reconcile_ci") ? { onCheckCi: () => onPlanAction("reconcile-ci") } : {})} {...(task.allowedCommands.includes("reconcile_merge") ? { onCheckMerge: () => onPlanAction("reconcile-merge") } : {})} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
+                    {pullRequestInMain ? <div data-active-pull-request><PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} {...(task.allowedCommands.includes("reconcile_ci") ? { onCheckCi: () => onPlanAction("reconcile-ci") } : {})} {...(task.allowedCommands.includes("reconcile_merge") ? { onMerge, onCheckMerge: () => onPlanAction("reconcile-merge") } : {})} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
                     <RescueControls task={task} busy={busy} onRescue={onRescue} />
                     {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} developmentStatus={developerLiveness ? <DevelopmentStatus state={developerLiveness} now={developmentNow} inline /> : undefined} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} compact /></DeveloperRecoveryStatus> : <LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
                     {task.developerExecution ? <DeveloperEvidence execution={task.developerExecution} onViewChanges={openDiff} /> : null}

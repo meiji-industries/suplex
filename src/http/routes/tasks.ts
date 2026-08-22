@@ -92,6 +92,20 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
     if (updated.allowedCommands.includes("reconcile_ci")) return reply.send(await tasks.executeCommand(request.forgeUser.id, task.id, "reconcile_ci", { expectedRevision: updated.revision }));
     return reply.send(updated);
   });
+  if (options.release) typed.post("/api/tasks/:taskId/merge-pull-request", { schema: { params: TaskIdParamsSchema, body: ExpectedRevisionBodySchema, response: { 200: TaskResponseSchema } } }, async (request, reply) => {
+    const task = tasks.getTask(request.forgeUser.id, request.params.taskId);
+    if (request.body.expectedRevision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [], 409, task);
+    const release = task.release;
+    if (!release?.pullRequestUrl || release.pullRequestNumber === null || !task.allowedCommands.includes("reconcile_merge")) return reply.send(task);
+    try {
+      await options.release!.mergePullRequest({ taskId: task.id, companyId: task.companyId, workflowId: task.workflowId, releaseId: release.id, repository: release.repository, pullRequestNumber: release.pullRequestNumber });
+      const updated = tasks.getTask(request.forgeUser.id, task.id);
+      return reply.send(await tasks.executeCommand(request.forgeUser.id, task.id, "reconcile_merge", { expectedRevision: updated.revision }));
+    } catch (error) {
+      if (error instanceof GithubReleaseFailure) throw new TaskFailure(error.summary, [], error.code === "provider-unavailable" || error.code === "provider-rate-limited" ? 503 : 409, task);
+      throw error;
+    }
+  });
   typed.get("/api/tasks/:taskId/developer-diff", { schema: { params: TaskIdParamsSchema, response: { 200: TaskDeveloperDiffResponseSchema, 304: z.null() } } }, async (request, reply) => {
     const result = await tasks.getDeveloperDiff(request.forgeUser.id, request.params.taskId);
     const etag = `\"${result.etag}\"`;

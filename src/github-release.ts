@@ -89,10 +89,12 @@ export interface GithubReleasePort {
   createDraftPullRequest(input: DraftPullRequestCreate): Promise<GithubPullRequest>;
   updateDraftPullRequest(input: DraftPullRequestUpdate): Promise<GithubPullRequest>;
   getPullRequest(input: { repository: string; number: number }): Promise<GithubPullRequest>;
+  mergePullRequest?(input: { repository: string; number: number; headSha: string }): Promise<void>;
 }
 
 export type GithubAcceptancePort = Pick<GithubReleasePort, "getBranchHead" | "getPullRequest"> & {
   markReadyForReview(input: { repository: string; number: number }): Promise<void>;
+  mergePullRequest?(input: { repository: string; number: number; headSha: string }): Promise<void>;
   enableAutoMerge?(input: { repository: string; number: number; headSha: string }): Promise<void>;
 };
 export type GithubReleaseAdapter = GithubReleasePort & GithubAcceptancePort;
@@ -352,6 +354,9 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
     async markReadyForReview(input) {
       try { await runGh(["pr", "ready", String(input.number), "--repo", input.repository]); } catch (error) { throw classifyCommandFailure(error, "mark ready for review"); }
     },
+    async mergePullRequest(input) {
+      try { await runGh(["pr", "merge", String(input.number), "--repo", input.repository, "--merge", "--match-head-commit", input.headSha]); } catch (error) { throw classifyCommandFailure(error, "merge pull request"); }
+    },
     async enableAutoMerge(input) {
       // Use a merge method the repository allows; GitHub rejects disallowed ones outright.
       const repo = await api(["api", `repos/${input.repository}`], "repository settings") as { allow_squash_merge?: boolean; allow_merge_commit?: boolean; allow_rebase_merge?: boolean };
@@ -491,6 +496,17 @@ export class ReleaseService {
     const confirmed = await this.github.getPullRequest({ repository: release.repository, number: release.pullRequestNumber });
     if (!matchesRelease(confirmed) || confirmed.isDraft) throw providerFailure("ambiguous-provider-state", "GitHub did not confirm the pull request is ready for review");
     this.database.authTransaction((db) => db.prepare("UPDATE forge_releases SET status = 'ready', updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND status = 'draft'").run(new Date().toISOString(), release.id, input.taskId, input.companyId, input.workflowId));
+  }
+
+  async mergePullRequest(input: { taskId: string; companyId: string; workflowId: string; releaseId: string; repository: string; pullRequestNumber: number }): Promise<void> {
+    const release = this.database.authQuery((db) => db.prepare(`SELECT repository, base_branch AS baseBranch, head_branch AS headBranch, head_sha AS headSha, pr_number AS pullRequestNumber, pr_url AS pullRequestUrl
+      FROM forge_releases WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND superseded_at IS NULL`).get(input.releaseId, input.taskId, input.companyId, input.workflowId) as { repository: string; baseBranch: string; headBranch: string; headSha: string; pullRequestNumber: number | null; pullRequestUrl: string | null } | undefined);
+    if (!release || release.repository.toLowerCase() !== input.repository.toLowerCase() || release.pullRequestNumber !== input.pullRequestNumber || !release.pullRequestUrl) throw providerFailure("stale-reviewed-revision", "The stored pull request no longer matches this task");
+    await this.github.checkAuthentication();
+    const current = await this.github.getPullRequest({ repository: release.repository, number: release.pullRequestNumber });
+    if (current.url !== release.pullRequestUrl || current.repository.toLowerCase() !== release.repository.toLowerCase() || current.headBranch !== release.headBranch || current.baseBranch !== release.baseBranch || current.headSha.toLowerCase() !== release.headSha.toLowerCase() || current.state !== "open" || current.isDraft) throw providerFailure("ambiguous-provider-state", "The pull request no longer matches the reviewed revision");
+    if (!this.github.mergePullRequest) throw providerFailure("provider-unavailable", "GitHub pull-request merging is unavailable");
+    await this.github.mergePullRequest({ repository: release.repository, number: release.pullRequestNumber, headSha: current.headSha });
   }
 
   /** Push a reviewed task branch without creating a release or pull request. */

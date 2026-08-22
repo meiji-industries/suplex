@@ -6,9 +6,9 @@ Code in the main pane) diagnoses, writes the brief, launches, waits in the
 background, verifies, relays, and closes the pane.
 
 Default sub-agent: **omp** (`oh-my-pi`) with `gpt-5.6-terra`, thinking
-`medium`, service tier `priority` (OpenAI "fast"), approvals bypassed.
+`medium`, approvals bypassed.
 Codex CLI (`codex exec … --model gpt-5.6-terra -c model_reasoning_effort=medium
--c service_tier=fast`) remains a supported fallback via `herdr pane run`.
+`) remains a supported fallback via `herdr pane run`.
 
 ## The flow (Herdr agent API)
 
@@ -20,8 +20,7 @@ herdr pane rename "$pane" "<short task name>"
 
 # 2. start the agent in it — returns once Herdr sees omp ready for input
 herdr agent start <name> --kind omp --pane "$pane" -- \
-  --model gpt-5.6-terra --thinking medium --service-tier priority \
-  --approval-mode yolo --auto-approve --cwd "$PWD"
+  --model gpt-5.6-terra --thinking medium --approval-mode yolo --auto-approve --cwd "$PWD"
 
 # 3. submit the brief by path; ask for the report as a file
 herdr agent prompt <name> "Read and carry out the brief in <brief.md> exactly. When completely \

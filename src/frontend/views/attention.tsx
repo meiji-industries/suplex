@@ -46,16 +46,16 @@ export function AttentionView(): ReactElement {
   const visibleCompanies = currentCompany ? companies.filter((company) => company.companyId === currentCompany.id) : companies;
   const companyId = currentCompany?.id ?? "";
   return (
-    <SettingsLayout title="Attention" companyId={companyId} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/attention", companyId)} contentClassName="">
+    <SettingsLayout title="Tasks that need you" companyId={companyId} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/attention", companyId)} contentClassName="">
       <div>
-        <div className="flex h-9 items-center justify-between px-3 text-xs sm:px-4"><span className="font-medium">Attention</span><Button variant="ghost" size="sm" onClick={() => void reload()}>Refresh</Button></div>
+        <div className="flex h-9 items-center justify-between px-3 text-xs sm:px-4"><span className="font-medium">Tasks that need you</span><Button variant="ghost" size="sm" onClick={() => void reload()}>Refresh</Button></div>
         {visibleCompanies.map((company) => <section className="bg-background" key={company.companyId}>
-          <div className="flex items-center justify-between border-y px-3 py-2 text-xs sm:px-4"><span className="font-medium">{company.companyName}</span><span className="text-muted-foreground">{company.attentionCount} needs a person</span></div>
-          {company.attention.map((item) => <div className="grid gap-2 border-b px-3 py-3 text-xs sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-4" key={item.taskId}>
-            <div className="min-w-0"><div className="font-medium">{item.issueKey ? <span className="mr-1.5 text-muted-foreground">{item.issueKey}</span> : null}{item.taskTitle}</div>{item.summary ? <div className="mt-0.5 text-muted-foreground">{item.summary}</div> : null}<div className="mt-1 text-[11px] text-muted-foreground">{relativeTime(item.activatedAt)}</div></div>
-            <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">{item.actions.map((action) => <Button key={action.command} size="sm" variant={action.destructive ? "destructive" : "outline"} onClick={() => requestAction(item, action)} disabled={Boolean(actionBusy)}>{action.label}</Button>)}<a className="px-2 text-foreground underline underline-offset-2" href={withCompany(`/tasks/${encodeURIComponent(item.taskId)}`, item.companyId)}>Open issue</a></div>
+          <div className="flex items-center justify-between border-y px-3 py-2 text-xs sm:px-4"><span className="font-medium">{company.companyName}</span><span className="text-muted-foreground">{company.attentionCount}</span></div>
+          {company.attention.map((item) => <div className="grid gap-2 border-b px-3 py-2.5 text-xs sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-4" key={item.taskId}>
+            <div className="min-w-0"><a className="font-medium hover:underline" href={withCompany(`/tasks/${encodeURIComponent(item.taskId)}`, item.companyId)}>{item.taskTitle}</a><div className="mt-0.5 text-muted-foreground">{item.summary ?? "This task needs your input."}</div></div>
+            <div className="flex flex-wrap items-center gap-1.5 sm:justify-end">{item.actions.map((action) => <Button key={action.command} size="sm" variant={action.destructive ? "destructive" : "outline"} onClick={() => requestAction(item, action)} disabled={Boolean(actionBusy)}>{action.label}</Button>)}<span className="whitespace-nowrap text-[11px] text-muted-foreground">{relativeTime(item.activatedAt)}</span></div>
           </div>)}
-          {company.attention.length === 0 ? <div className="px-3 py-5 text-center text-xs text-muted-foreground sm:px-4">No tasks need a person.</div> : null}
+          {company.attention.length === 0 ? <div className="px-3 py-5 text-center text-xs text-muted-foreground sm:px-4">Nothing needs you right now.</div> : null}
         </section>)}
         {visibleCompanies.length === 0 && !error ? <div className="p-8 text-center text-xs text-muted-foreground">No companies visible.</div> : null}
         {status ? <div role="status" aria-live="polite" className="px-4 py-2 text-xs text-amber-700">{status}</div> : null}

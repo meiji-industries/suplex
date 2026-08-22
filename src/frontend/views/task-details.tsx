@@ -22,7 +22,6 @@ import { TaskProgress } from "../components/app/task-progress.js";
 import { taskIsProcessing, taskPresentationPhase, TaskStatus } from "../components/app/task-status.js";
 import { DeveloperRecoveryStatus } from "../components/app/developer-recovery-status.js";
 import type { DeveloperRecoveryAction } from "../components/app/developer-recovery-actions.js";
-import { CommitSha } from "../components/app/commit-sha.js";
 import { PlanBlockerResponseForm } from "../components/app/plan-blocker-response-form.js";
 import { PlanDecisionForm } from "../components/app/plan-decision-form.js";
 import { SupplementalReviewPanel } from "../components/app/supplemental-review-panel.js";
@@ -221,7 +220,7 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
           <Field><FieldLabel htmlFor="revision-reason">Why revise this plan?</FieldLabel><Textarea id="revision-reason" required value={revisionReason} onChange={(event) => setRevisionReason(event.target.value)} placeholder="Describe the changed requirement or observed problem." /></Field>
           <Button type="submit" size="sm" disabled={disabled || !revisionReason.trim()}>{busy ? "Submitting…" : "Submit revision"}</Button>
         </form> : null}
-        {continueOpen ? <form className="max-w-xl space-y-3 border-l-2 pl-3" onSubmit={(event) => { event.preventDefault(); void onContinueWork(continueReason); }}><Field><FieldLabel htmlFor="continue-reason">Why continue this work?</FieldLabel><Textarea id="continue-reason" required value={continueReason} onChange={(event) => setContinueReason(event.target.value)} placeholder="Describe the next bounded outcome." /></Field><Button type="submit" size="sm" disabled={disabled || !continueReason.trim()}>{busy ? "Creating successor…" : "Create successor"}</Button></form> : null}
+        {continueOpen ? <form className="max-w-xl space-y-3 border-l-2 pl-3" onSubmit={(event) => { event.preventDefault(); void onContinueWork(continueReason); }}><Field><FieldLabel htmlFor="continue-reason">Why continue this work?</FieldLabel><Textarea id="continue-reason" required value={continueReason} onChange={(event) => setContinueReason(event.target.value)} placeholder="Describe the next outcome." /></Field><Button type="submit" size="sm" disabled={disabled || !continueReason.trim()}>{busy ? "Creating successor…" : "Create successor"}</Button></form> : null}
       </CardContent> : null}
       <CardFooter>
         <div className="flex w-full flex-wrap justify-end gap-2 [&>[data-variant=default]]:order-1">
@@ -245,7 +244,7 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
       {task.allowedCommands.includes("repair_ci") ? <Button size="sm" onClick={() => void onPlanAction("repair-ci")} disabled={disabled}>{busy ? "Repairing…" : "Repair CI"}</Button> : null}
       {task.allowedCommands.includes("request_delivery_changes") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("request-delivery-changes", "Member requested delivery changes")} disabled={disabled}>Request Changes</Button> : null}
       {task.allowedCommands.includes("final_review") ? <Button size="sm" onClick={() => void onPlanAction("final-review")} disabled={disabled}>{busy ? "Reviewing…" : "Final review"}</Button> : null}
-      {task.allowedCommands.includes("reconcile_acceptance") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reconcile-acceptance")} disabled={disabled}>{busy ? "Checking…" : "Reconcile ready state"}</Button> : null}
+      {task.allowedCommands.includes("reconcile_acceptance") ? <Button size="sm" variant="outline" onClick={() => void onPlanAction("reconcile-acceptance")} disabled={disabled}>{busy ? "Checking…" : "Check ready state"}</Button> : null}
       {task.allowedCommands.includes("reconcile_merge") ? <Button size="sm" onClick={() => void onPlanAction("reconcile-merge")} disabled={disabled}>{busy ? "Checking…" : "Check merge"}</Button> : null}
       {!task.developerRecovery && canRevise ? <Button size="sm" variant="outline" onClick={() => setRevisionOpen((open) => !open)} disabled={disabled}>{revisionOpen ? "Close revision" : "Revise plan"}</Button> : null}
       {canContinue ? <Button size="sm" variant="outline" onClick={() => setContinueOpen((open) => !open)} disabled={disabled}>{continueOpen ? "Close continuation" : "Continue work"}</Button> : null}
@@ -266,10 +265,9 @@ function ReleasePanel({ task }: { task: ApiTask }): ReactElement | null {
       <CardAction><Badge variant={release.status === "blocked" ? "destructive" : "secondary"}>{statusLabel}</Badge></CardAction>
     </CardHeader>
     <CardContent>
-      <div className="flex flex-wrap gap-2 text-[11px] text-muted-foreground"><CommitSha sha={release.reviewedCommit.full} abbreviated={release.reviewedCommit.abbreviated} repository={release.repository} /><code title={release.reviewedTree.full}>{release.reviewedTree.abbreviated}</code></div>
       {release.pullRequestUrl ? <a className="text-xs underline underline-offset-2" href={release.pullRequestUrl} target="_blank" rel="noreferrer">Pull request #{release.pullRequestNumber}</a> : null}
       {release.failureSummary ? <Alert variant="destructive"><AlertDescription>{release.failureCode ? releaseFailureCopy[release.failureCode] ?? "Release publication is blocked." : release.failureSummary}{release.retryAt ? ` Retry after ${adminDate(release.retryAt)}.` : ""}</AlertDescription></Alert> : null}
-      {release.operation ? <div className="text-[11px] text-muted-foreground">{release.operation.kind} · attempt {release.operation.attempt ?? "—"} · {release.operation.status}</div> : null}
+      {release.operation ? <div className="text-[11px] text-muted-foreground">{release.operation.kind} · {release.operation.status}</div> : null}
       <Collapsible.Root>
         <Collapsible.Trigger className="text-xs underline underline-offset-2">Preview title and body</Collapsible.Trigger>
         <Collapsible.Panel className="mt-2 min-w-0 whitespace-pre-wrap break-words border-l pl-3 text-[11px] text-muted-foreground">{release.title}{release.bodyPreview ? `\n\n${release.bodyPreview}` : "\n\nBody is not available."}</Collapsible.Panel>
@@ -349,31 +347,31 @@ function CopyBranchButton({ value, label = "Copy branch comparison" }: { value: 
   return <span className="shrink-0"><Button variant="ghost" size="icon-xs" aria-label={label} title="Copy to clipboard" onClick={() => void copy()}>{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}</Button>{copied ? <span className="pointer-events-none fixed bottom-4 right-4 z-50 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-[11px] text-popover-foreground" role="status" aria-live="polite">Copied to Clipboard</span> : null}</span>;
 }
 
-function CiDiagnostics({ task, ci }: { task: ApiTask; ci: ApiCi }): ReactElement {
+function CiDiagnostics({ ci }: { ci: ApiCi }): ReactElement {
   const latestAttempt = ci.attempts[0];
   return <div className="space-y-4" data-task-ci-diagnostics>
-    <Card size="sm" aria-label="Exact-head CI">
+    <Card size="sm" aria-label="CI status">
       <CardHeader>
-        <CardTitle><h3>Exact-head CI</h3></CardTitle>
+        <CardTitle><h3>CI status</h3></CardTitle>
         <CardDescription>{ci.repository} · PR #{ci.pullRequestNumber} · {ci.baseBranch} ← {ci.headBranch}</CardDescription>
         <CardAction><Badge variant={ci.outcome === "failed" ? "destructive" : "secondary"}>{ci.outcome ?? ci.status}</Badge></CardAction>
       </CardHeader>
       <CardContent>
         <a className="text-xs underline" href={ci.pullRequestUrl} target="_blank" rel="noreferrer">Open pull request #{ci.pullRequestNumber}</a>
-        <div className="grid gap-2 text-[11px] text-muted-foreground sm:grid-cols-2"><span>Expected <CommitSha sha={ci.expectedHeadSha} abbreviated={`${ci.expectedHeadSha.slice(0, 10)}…`} repository={ci.repository} /></span><span>Observed <CommitSha sha={latestAttempt?.observedHeadSha} abbreviated={latestAttempt?.observedHeadSha ? `${latestAttempt.observedHeadSha.slice(0, 10)}…` : "—"} repository={ci.repository} /></span><span>Revision {ci.policy.projectRevisionId.slice(0, 10)}… · policy {ci.policyHash.slice(0, 8)}…</span><span>{ci.baseBranch} → {ci.headBranch}</span></div>
+        <div className="text-[11px] text-muted-foreground">{ci.baseBranch} → {ci.headBranch}</div>
       </CardContent>
     </Card>
     <Card size="sm" aria-label="CI run details">
       <CardHeader>
         <CardTitle><h3>Run details</h3></CardTitle>
-        <CardDescription>Retry window, deadlines, ownership, and evidence</CardDescription>
+        <CardDescription>Retry window and deadlines</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span>Next retry {ci.nextRetryAt ? adminDate(ci.nextRetryAt) : "—"}</span><span>Propagation {ci.propagationDeadline ? adminDate(ci.propagationDeadline) : "—"}</span><span>Overall deadline {ci.overallDeadline ? adminDate(ci.overallDeadline) : "—"}</span><span>Owner {ci.owner === "system" ? "Forge" : ci.owner === "integrator" ? "Integrator" : ci.owner ?? "—"}</span></div>
         {ci.reason || latestAttempt?.summary ? <p className="break-words text-[12px]">{ci.reason ? `${ci.reason}: ` : ""}{latestAttempt?.summary ?? ""}</p> : null}
       </CardContent>
       <CardFooter>
-        <div className="flex flex-wrap gap-2 text-[11px]">{latestAttempt?.evidenceArtifactId ? <a className="underline" href={`/api/tasks/${task.id}/artifacts/${latestAttempt.evidenceArtifactId}`}>CI evidence</a> : null}{ci.repairPlan ? <a className="underline" href={`/api/tasks/${task.id}/artifacts/${ci.repairPlan.planArtifactId}`}>Repair plan · {ci.repairPlan.status}</a> : null}<span>Planner continuity {ci.leadSessionContinuity ? "verified" : "—"}</span><span>Builder continuity {ci.developerSessionContinuity ? "verified" : "—"}</span></div>
+        <div className="flex flex-wrap gap-2 text-[11px]"><span>Planner session {ci.leadSessionContinuity ? "continued" : "—"}</span><span>Builder session {ci.developerSessionContinuity ? "continued" : "—"}</span></div>
       </CardFooter>
     </Card>
   </div>;
@@ -385,7 +383,7 @@ function CiPanel({ ci }: { ci: ApiCi }): ReactElement {
     <Card size="sm" aria-label="Required checks">
       <CardHeader>
         <CardTitle><h3>Required checks</h3></CardTitle>
-        <CardDescription>{ci.policy.requiredChecks.length} required check{ci.policy.requiredChecks.length === 1 ? "" : "s"} · exact-head evaluation</CardDescription>
+        <CardDescription>{ci.policy.requiredChecks.length} required check{ci.policy.requiredChecks.length === 1 ? "" : "s"}</CardDescription>
       </CardHeader>
       <CardContent>
         <div className="space-y-1">{ci.policy.requiredChecks.map((name) => { const check = latestAttempt?.checks.find((candidate) => candidate.name === name && candidate.selectedForEvaluation); return <div className="flex items-center justify-between gap-2 border-b py-1 text-[11px]" key={name}><span className="min-w-0 break-words">{name}</span><span className="shrink-0 text-muted-foreground">{check ? `${check.status}${check.conclusion ? ` · ${check.conclusion}` : ""}` : "missing"}</span></div>; })}</div>
@@ -406,24 +404,42 @@ function FinalGatePanel({ task }: { task: ApiTask }): ReactElement | null {
       <CardContent>
         <dl className="grid gap-2 text-[11px] sm:grid-cols-2">
         <div><dt className="text-muted-foreground">Pull request</dt><dd><a className="underline underline-offset-2" href={gate.release.pullRequestUrl} target="_blank" rel="noreferrer">#{gate.release.pullRequestNumber}</a> · {gate.release.repository}</dd></div>
-        <div><dt className="text-muted-foreground">Exact identity</dt><dd className="break-all">base <CommitSha sha={gate.release.baseSha} repository={gate.release.repository} /> · head <CommitSha sha={gate.release.headSha} repository={gate.release.repository} /> · tree <code title={gate.release.headTree}>{gate.release.headTree.slice(0, 8)}…</code></dd></div>
         <div><dt className="text-muted-foreground">CI</dt><dd>{gate.ci ? `${gate.ci.status}: ${gate.ci.summary}` : "Not recorded"}</dd>{gate.ci?.checks.length ? <ul className="mt-1 space-y-0.5 text-muted-foreground">{gate.ci.checks.map((check) => <li key={check.name}>{check.name}: {check.conclusion ?? check.status}</li>)}</ul> : null}</div>
-        <div><dt className="text-muted-foreground">Final review</dt><dd>{gate.finalReview ? `${gate.finalReview.outcome}: ${gate.finalReview.summary}` : "Not recorded"}</dd>{gate.finalReview ? <div className="text-muted-foreground">Planner session: <span className="break-all">{gate.finalReview.sessionRef}</span></div> : null}</div>
-        <div><dt className="text-muted-foreground">Acceptance</dt><dd>{gate.acceptance ? `${gate.acceptance.decision}: ${gate.acceptance.status} by ${gate.acceptance.actorUserId}` : "Not recorded"}</dd>{gate.acceptance ? <div className="text-muted-foreground">decided {adminDate(gate.acceptance.decidedAt)}{gate.acceptance.readyAt ? ` · ready ${adminDate(gate.acceptance.readyAt)}` : ""}</div> : null}</div>
-        <div><dt className="text-muted-foreground">Merge</dt><dd>{gate.merge.outcome ?? "Not observed"}{gate.merge.observationId ? ` · observation ${gate.merge.observationId}` : ""}{gate.merge.observedAt ? ` · observed ${adminDate(gate.merge.observedAt)}` : ""}{gate.merge.mergedAt ? ` · merged ${adminDate(gate.merge.mergedAt)}` : ""}{gate.merge.receiptId ? ` · receipt ${gate.merge.receiptId}` : ""}</dd></div>
+        <div><dt className="text-muted-foreground">Final review</dt><dd>{gate.finalReview ? `${gate.finalReview.outcome}: ${gate.finalReview.summary}` : "Not recorded"}</dd></div>
+        <div><dt className="text-muted-foreground">Acceptance</dt><dd>{gate.acceptance ? `${gate.acceptance.decision}: ${gate.acceptance.status}` : "Not recorded"}</dd>{gate.acceptance ? <div className="text-muted-foreground">decided {adminDate(gate.acceptance.decidedAt)}{gate.acceptance.readyAt ? ` · ready ${adminDate(gate.acceptance.readyAt)}` : ""}</div> : null}</div>
+        <div><dt className="text-muted-foreground">Merge</dt><dd>{gate.merge.outcome ?? "Not observed"}{gate.merge.observedAt ? ` · observed ${adminDate(gate.merge.observedAt)}` : ""}{gate.merge.mergedAt ? ` · merged ${adminDate(gate.merge.mergedAt)}` : ""}</dd></div>
         <div><dt className="text-muted-foreground">Deployment</dt><dd>Deployment: unknown / out of scope</dd></div>
         </dl>
         {gate.finalReview?.findings.length ? <div className="space-y-2">{gate.finalReview.findings.map((finding) => <div className="text-[11px]" key={finding.id}><span className="font-medium">{finding.severity}</span> · {finding.rationale}</div>)}</div> : null}
-        <div className="flex flex-wrap gap-3 text-[11px]">
-          {gate.finalReview ? <><a className="underline underline-offset-2" href={`/api/tasks/${task.id}/artifacts/${gate.finalReview.opinionArtifactId}`}>Review opinion</a><a className="underline underline-offset-2" href={`/api/tasks/${task.id}/artifacts/${gate.finalReview.evidenceArtifactId}`}>Review evidence</a></> : null}
-          {gate.acceptance?.reasonArtifactId ? <a className="underline underline-offset-2" href={`/api/tasks/${task.id}/artifacts/${gate.acceptance.reasonArtifactId}`}>Decision reason</a> : null}
-          {gate.acceptance?.evidenceArtifactId ? <a className="underline underline-offset-2" href={`/api/tasks/${task.id}/artifacts/${gate.acceptance.evidenceArtifactId}`}>Acceptance evidence</a> : null}
-          {gate.merge.evidenceArtifactId ? <a className="underline underline-offset-2" href={`/api/tasks/${task.id}/artifacts/${gate.merge.evidenceArtifactId}`}>Merge evidence</a> : null}
-          {gate.merge.receiptArtifactId ? <a className="underline underline-offset-2" href={`/api/tasks/${task.id}/artifacts/${gate.merge.receiptArtifactId}`}>Completion receipt</a> : null}
-        </div>
       </CardContent>
     </Card>
   );
+}
+
+function deliveryTargetLabel(target: ApiTask["deliveryTarget"]): string {
+  return target === "local_worktree" ? "Keep in worktree" : target === "remote_branch" ? "Push branch" : target === "pull_request_ready" ? "Ready for review" : target === "merged" ? "Fully merged" : "Draft pull request";
+}
+
+function TaskConfigurationCard({ task }: { task: ApiTask }): ReactElement {
+  return <Card size="sm" aria-label="Configuration used">
+    <CardHeader><CardTitle><h3>Configuration used</h3></CardTitle></CardHeader>
+    <CardContent><dl className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><div><dt>Plan review</dt><dd className="text-foreground">{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div><div><dt>Second review</dt><dd className="text-foreground">{task.executionControls.supplementalReview ? "Requested" : "Off"}</dd></div><div><dt>Visual proof</dt><dd className="text-foreground">{task.executionControls.visualEvidence === "required" ? "Required" : task.executionControls.visualEvidence === "capture" ? "Capture when useful" : "Off"}</dd></div></dl></CardContent>
+  </Card>;
+}
+
+function DeliveryChecksCard({ task }: { task: ApiTask }): ReactElement {
+  return <Card size="sm" aria-label="Delivery and checks">
+    <CardHeader><CardTitle><h3>Delivery &amp; checks</h3></CardTitle></CardHeader>
+    <CardContent><dl className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><div><dt>Delivery target</dt><dd className="text-foreground">{deliveryTargetLabel(task.deliveryTarget)}</dd></div><div><dt>Project tests</dt><dd className="text-foreground">{task.executionControls.runProjectTests ? "Run" : "Skipped for this task"}</dd></div></dl></CardContent>
+  </Card>;
+}
+
+function ReviewersTakeCard({ task }: { task: ApiTask }): ReactElement {
+  const review = task.governance.supplementalReview;
+  return <Card size="sm" aria-label="Reviewer’s take">
+    <CardHeader><CardTitle><h3>Reviewer’s take</h3></CardTitle></CardHeader>
+    <CardContent>{review ? <SupplementalReviewPanel value={{ reviewer: { name: review.reviewerProfile.name }, verdict: review.verdict, summary: review.summary, concerns: review.concerns, plannerResponse: review.plannerResponse }} /> : <p className="text-[11px] text-muted-foreground">No second review was requested.</p>}</CardContent>
+  </Card>;
 }
 
 function TaskOptions({ canCancel, busy, resyncBusy, onCancel, onDuplicate, onResync }: { canCancel: boolean; busy: boolean; resyncBusy: boolean; onCancel: () => void; onDuplicate: () => void; onResync: () => void }): ReactElement {
@@ -451,7 +467,7 @@ function RescueControls({ task, busy, onRescue }: { task: ApiTask; busy: boolean
     </CardHeader>
     {report || diagnosticsOpen ? <CardContent>
       {report ? <div className="space-y-1 text-xs" data-rescue-report>{report.steps.map((step) => <div key={step.name}><span className="font-medium">{step.name}</span> · {step.outcome}: {step.detail}</div>)}</div> : null}
-      {diagnosticsOpen ? <div className="border-l pl-3 text-xs" data-task-diagnostics>{diagnostics ? <><div>Workflow: {diagnostics.workflow.status}{diagnostics.workflow.pendingWorkflowTaskAgeSeconds !== null ? ` · pending ${diagnostics.workflow.pendingWorkflowTaskAgeSeconds}s` : ""}</div>{diagnostics.workflow.lastWorkflowTaskFailure ? <div>Last failure: {diagnostics.workflow.lastWorkflowTaskFailure}</div> : null}<div>Executions: {diagnostics.executions.map((entry) => `${entry.kind} ${entry.status}${entry.pid ? ` (pid ${entry.pid})` : ""}`).join(", ") || "none"}</div><div>Capacity: {diagnostics.capacityRequests.map((entry) => `${entry.status}${entry.executionId ? ` (${entry.executionId})` : ""}`).join(", ") || "none"}</div><div>Leases: {diagnostics.leases.map((entry) => `${entry.executionId} ${entry.status}`).join(", ") || "none"}</div></> : "Loading diagnostics…"}</div> : null}
+      {diagnosticsOpen ? <div className="border-l pl-3 text-xs" data-task-diagnostics>{diagnostics ? <><div>Workflow: {diagnostics.workflow.status}{diagnostics.workflow.pendingWorkflowTaskAgeSeconds !== null ? ` · pending ${diagnostics.workflow.pendingWorkflowTaskAgeSeconds}s` : ""}</div>{diagnostics.workflow.lastWorkflowTaskFailure ? <div>Last failure: {diagnostics.workflow.lastWorkflowTaskFailure}</div> : null}<div>Executions: {diagnostics.executions.map((entry) => `${entry.kind} ${entry.status}`).join(", ") || "none"}</div><div>Capacity: {diagnostics.capacityRequests.map((entry) => entry.status).join(", ") || "none"}</div><div>Leases: {diagnostics.leases.map((entry) => entry.status).join(", ") || "none"}</div></> : "Loading diagnostics…"}</div> : null}
     </CardContent> : null}
     <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Rescue this task?</AlertDialogTitle><AlertDialogDescription>Forge will re-dispatch the workflow to the current worker, release stale locks, and retry the current step.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => void run()}>Rescue task</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
   </Card>;
@@ -596,7 +612,6 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   const activityCount = task.activity.length;
   const activityContent = <>
     <TaskActivity taskId={task.id} timeline={task.activity} release={task.release} ci={task.ci} onViewChanges={openDiff} />
-    {task.governance.supplementalReview ? <SupplementalReviewPanel value={{ reviewer: { name: task.governance.supplementalReview.reviewerProfile.name }, verdict: task.governance.supplementalReview.verdict, summary: task.governance.supplementalReview.summary, concerns: task.governance.supplementalReview.concerns, plannerResponse: task.governance.supplementalReview.plannerResponse }} /> : null}
   </>;
   const developerExecution = task.developerExecution;
   const hasChanges = developerExecution !== undefined;
@@ -648,7 +663,10 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                 <Tabs data-task-work-tabs value={activeWorkTab} onValueChange={setActiveWorkTab}>
                   {workContent}
                   <TabsContent value="other" className="space-y-4">
-                {hasChecks ? <CiDiagnostics task={task} ci={task.ci!} /> : null}
+                <TaskConfigurationCard task={task} />
+                <DeliveryChecksCard task={task} />
+                <ReviewersTakeCard task={task} />
+                {hasChecks ? <CiDiagnostics ci={task.ci!} /> : null}
                 {task.release ? <ReleasePanel task={task} /> : null}
                 {task.targetBaseReconciliation.status ? <Card size="sm" aria-label="Target-base reconciliation">
                   <CardHeader>
@@ -657,8 +675,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                     <CardAction><Badge variant={task.targetBaseReconciliation.status === "blocked" ? "destructive" : "secondary"}>{task.targetBaseReconciliation.status}</Badge></CardAction>
                   </CardHeader>
                   <CardContent>
-                    <dl className="grid gap-1 text-[11px] sm:grid-cols-2"><div><dt className="text-muted-foreground">Expected base</dt><dd><CommitSha sha={task.targetBaseReconciliation.expectedBaseSha} repository={project?.repository} /></dd></div><div><dt className="text-muted-foreground">Observed base</dt><dd><CommitSha sha={task.targetBaseReconciliation.observedBaseSha} repository={project?.repository} /></dd></div><div><dt className="text-muted-foreground">Result</dt><dd><CommitSha sha={task.targetBaseReconciliation.resultHead} repository={project?.repository} /></dd></div><div><dt className="text-muted-foreground">Verification</dt><dd>{task.targetBaseReconciliation.verificationArtifact ? <a className="underline" href={`/api/tasks/${task.id}/reconciliation-artifacts/${task.targetBaseReconciliation.verificationArtifact.id}`} target="_blank" rel="noreferrer">Evidence</a> : "—"}</dd></div></dl>
-                    {task.targetBaseReconciliation.releaseId && task.targetBaseReconciliation.pullRequestUrl ? <div className="text-[11px]"><a className="underline" href={task.targetBaseReconciliation.pullRequestUrl} target="_blank" rel="noreferrer">PR #{task.targetBaseReconciliation.pullRequestNumber}</a> · same PR continuity</div> : null}
+                    {task.targetBaseReconciliation.releaseId && task.targetBaseReconciliation.pullRequestUrl ? <div className="text-[11px]"><a className="underline" href={task.targetBaseReconciliation.pullRequestUrl} target="_blank" rel="noreferrer">Open pull request</a></div> : null}
                     {task.targetBaseReconciliation.summary ? <div className="text-[12px] text-muted-foreground">{task.targetBaseReconciliation.summary}</div> : null}
                   </CardContent>
                 </Card> : null}
@@ -676,15 +693,12 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
               <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary" data-status={task.phase}><TaskStatus phase={task.phase} presentationPhase={taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands })} processing={taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status })} /></Badge></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Owner</dt><dd>{workflowOwnerLabel(task)}</dd></div>
-              <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approve" : "Manual approval"}</dd></div>
-              <div className="space-y-1"><dt className="text-muted-foreground">Delivery &amp; checks</dt><dd>{task.deliveryTarget === "local_worktree" ? "Keep in worktree" : task.deliveryTarget === "remote_branch" ? "Push branch" : task.deliveryTarget === "pull_request_ready" ? "Ready for review" : task.deliveryTarget === "merged" ? "Fully merged" : "Draft pull request"}<br /><span className="text-muted-foreground">Project tests: {task.executionControls.runProjectTests ? "Run" : "Project tests skipped by task setting"} · Visual evidence: {task.executionControls.visualEvidence} · Second review: {task.executionControls.supplementalReview ? "Requested" : "Off"}</span>{task.deliveryReceipt ? <><br /><span className="text-muted-foreground">{task.deliveryReceipt.branchName ? `Branch ${task.deliveryReceipt.branchName}` : task.deliveryReceipt.worktreePath ? `Worktree ${task.deliveryReceipt.worktreePath}` : ""}{task.deliveryReceipt.commit ? ` · ${task.deliveryReceipt.commit.slice(0, 12)}` : ""}</span>{task.deliveryReceipt.branchName ? <><br /><a className="underline" href={`https://github.com/${project?.repository}/compare/${task.deliveryReceipt.branchName}`} target="_blank" rel="noreferrer">View changes</a></> : null}</> : null}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd><NextAction value={task.pendingAction} /></dd></div>
-              <div className="space-y-1"><dt className="text-muted-foreground">Projection</dt><dd>{task.projection.status === "lagging" ? `Lagging r${task.projection.projectedRevision} → r${task.projection.authoritativeRevision}` : `Current · r${task.projection.projectedRevision}`}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Sync</dt><dd>{task.projection.status === "lagging" ? "Updating" : "Up to date"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Updated</dt><dd>{adminDate(task.updatedAt)}</dd></div>
               {task.issueKey ? <div className="space-y-1"><dt className="text-muted-foreground">Issue key</dt><dd><code>{task.issueKey}</code></dd></div> : null}
-              <div className="space-y-1"><dt className="text-muted-foreground">Task ID</dt><dd><code className="break-all text-[11px]">{task.id}</code></dd></div>
-              <div className="space-y-1"><dt className="text-muted-foreground">Workflow</dt><dd><code className="break-all text-[11px]">{task.workflowId}</code></dd></div>
             </dl>
           </aside>
         </div>

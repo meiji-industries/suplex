@@ -20,4 +20,5 @@ export interface GithubPullRequestObservationResult {
 
 export interface GithubSyncActivities {
   observeGithubPullRequest(input: ObserveGithubPullRequestActivityInput): Promise<GithubPullRequestObservationResult>;
+  applyGithubPullRequestAction(input: { repository: string; number: number; headSha: string; action: "mark_ready" | "enable_auto_merge" | "merge" }): Promise<void>;
 }

@@ -4,12 +4,14 @@ import { ProbeWorkflowInputSchema, type ProbeWorkflowInput, type ProbeWorkflowSt
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, normalizeSafeSummary, type IssueBlocker, type IssueBlockerAction, type IssueCommand, type IssueWorkflowInput, type IssueWorkflowState, type LeadPlanningResult, type ReconcileTargetBaseActivityResult, type TargetBaseCheckpoint } from "./issue-contracts.js";
 import { assertContinuationStateWithinLimit, assertPayloadWithinLimit, WORKFLOW_HISTORY_EVENT_LIMIT } from "./policy.js";
 import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "./target-base.js";
+import { reconcile, type PullRequestTarget } from "../pull-request-reconciler.js";
 import {
   planMergeConflict,
   projectIssueStateActivity,
   reconcileTargetBase,
   recordProbeStarted,
   observeGithubPullRequest,
+  applyGithubPullRequestAction,
 } from "./workflow/activity-proxies.js";
 import { syncGithubPullRequestSignal } from "./issue-updates.js";
 import { evidencePointer, humanBlocker } from "./workflow/state-transitions.js";
@@ -246,6 +248,20 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const syncGithubPullRequest = async (): Promise<void> => {
     if (!state.releaseRepository || !state.branchName) return;
     const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }), number = state.pullRequestNumber, wasDraft = state.githubPullRequestDraft, common = { githubObservedAt: new Date().toISOString(), githubPullRequestExists: observed.exists, githubPullRequestState: observed.state, githubPullRequestDraft: observed.isDraft, githubPullRequestChecks: observed.checks, githubPullRequestReviewDecision: observed.reviewDecision, githubPullRequestAutoMergeEnabled: observed.autoMergeEnabled, ...(observed.number ? { pullRequestNumber: observed.number } : {}), ...(observed.url ? { pullRequestUrl: observed.url } : {}), ...(observed.headSha ? { expectedHeadSha: observed.headSha } : {}), ...(observed.baseSha ? { targetBaseSha: observed.baseSha } : {}) };
+    if (patched("forge-pr-reconciler-v1")) {
+      const target: PullRequestTarget = validatedInput.deliveryTarget === "merged" ? "merged" : validatedInput.deliveryTarget === "pull_request_ready" ? "ready" : "draft";
+      const checks = observed.checks.failing > 0 ? "failed" : observed.checks.pending > 0 ? "pending" : observed.checks.total > 0 && observed.checks.successful === observed.checks.total ? "success" : "none";
+      const reconciliation = reconcile({ observed: { exists: observed.exists, number: observed.number, state: observed.state, isDraft: observed.isDraft, headSha: observed.headSha, mergeable: observed.mergeable, checks, reviewDecision: observed.reviewDecision, autoMergeEnabled: observed.autoMergeEnabled }, target, current: { phase: state.phase, ...(state.pullRequestNumber !== undefined ? { pullRequestNumber: state.pullRequestNumber } : {}), ...(state.expectedHeadSha !== undefined ? { observedHeadSha: state.expectedHeadSha } : {}), ...(state.githubPullRequestObservationKey !== undefined ? { adoptedObservationKey: state.githubPullRequestObservationKey } : {}) } });
+      const revision = state.revision + 1;
+      state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, phase: reconciliation.phase === "Done" ? "done" : reconciliation.phase === "Merging" ? "manual_merge" : reconciliation.phase === "Waiting for CI" ? "ci_waiting" : reconciliation.phase === "Opening PR" ? "releasing" : "delivery_blocked", owner: reconciliation.owner === "human" ? "human" : "lead", allowedCommands: reconciliation.allowedCommands.filter((command): command is IssueCommand => command === "publish_draft" || command === "cancel_issue" || command === "send_planner_note"), pendingAction: reconciliation.pendingAction, githubPullRequestObservationKey: [observed.number ?? "none", observed.state ?? "none", observed.isDraft ?? "none", observed.headSha ?? "none", observed.reviewDecision ?? "none"].join(":"), mergeOutcome: observed.state === "merged" ? "merged" : state.mergeOutcome, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${revision}` });
+      await projectIssueState(state);
+      for (const action of reconciliation.actions) {
+        if ((action.kind === "enable_auto_merge" || action.kind === "merge" || action.kind === "mark_ready") && state.releaseRepository) await applyGithubPullRequestAction({ repository: state.releaseRepository, number: action.number, headSha: "headSha" in action ? action.headSha : observed.headSha ?? "", action: action.kind });
+        else if ((action.kind === "push_open_draft" || action.kind === "push_open_ready") && state.phase === "releasing") await workflowContext.runPublishTurn();
+        else if (action.kind === "repair_ci" && state.phase === "ci_waiting") await workflowContext.reconcileCiTurn();
+      }
+      return;
+    }
     const revision = state.revision + 1, event = `${state.workflowId}:${revision}`, changedAt = new Date().toISOString();
     if (observed.state === "merged") state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Merged on GitHub", mergeOutcome: "merged", resultCommit: observed.headSha ?? state.resultCommit, stateChangedAt: changedAt, lastEventId: event });
     else if (observed.state === "closed" || (!observed.exists && number != null)) { const summary = observed.state === "closed" ? `Pull request #${number} was closed on GitHub` : "Branch no longer on GitHub"; state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, phase: "delivery_blocked", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: summary, blocker: humanBlocker("target_drift", summary, [{ command: "publish_draft", label: "Reopen or re-publish", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], undefined), stateChangedAt: changedAt, lastEventId: event }); }
@@ -405,6 +421,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         if (workflowContext.state.phase !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
         if (patched("forge-pr-reconciler-v1")) await syncGithubPullRequest();
         if (workflowContext.state.phase === "ci_waiting") await workflowContext.reconcileCiTurn();
+        continue;
+      }
+      if (workflowContext.state.phase === "manual_merge" && patched("forge-pr-reconciler-v1")) {
+        await sleep("60 seconds");
+        if (workflowContext.state.phase === "manual_merge") await syncGithubPullRequest();
         continue;
       }
       if (workflowContext.state.phase === "ready_reconciliation") {

@@ -12,7 +12,7 @@ import { AuthService } from "../src/auth.js";
 import { BackupService, checkBackupHealth, reconcileRestoredState } from "../src/backup.js";
 import { CapacityManager } from "../src/capacity.js";
 import { CI_TRANSIENT_BACKOFF_MS, CiProviderFailure, CiService, type CheckObservation } from "../src/ci.js";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";

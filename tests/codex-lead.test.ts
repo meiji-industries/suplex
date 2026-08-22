@@ -14,7 +14,6 @@ import { CodexLeadOutputJsonSchema } from "../src/codex-lead-contracts.js";
 import { DeveloperService } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase, ProjectionIntegrityFailure } from "../src/database.js";
-import { DeveloperReconciliationArtifactSchema } from "../src/developer-reconciliation.js";
 import { asNonRetryableApplicationFailure, createActivities } from "../src/temporal/activities.js";
 import { DeliveryOperationBlockCodeSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeveloperRepairActivityResultSchema } from "../src/temporal/issue-contracts.js";
 
@@ -143,32 +142,6 @@ function verifyRoutinePlanOutput(database: ForgeDatabase, input: { outputId: str
   };
 }
 
-async function repairFixture() {
-  const value = await fixture();
-  const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const worktreePath = join(value.root, "worktrees", "task-1");
-  await execFileAsync("git", ["worktree", "add", "-b", "forge/issue/task_1", worktreePath, "HEAD"], { cwd: join(value.root, "repo") });
-  const targetBaseSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).stdout.trim();
-  await writeFile(join(worktreePath, "DELIVERED.md"), "delivery\n");
-  await execFileAsync("git", ["add", "DELIVERED.md"], { cwd: worktreePath });
-  await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Deliver repair fixture"], { cwd: worktreePath });
-  const subjectCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).stdout.trim();
-  const subjectTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: worktreePath })).stdout.trim();
-  const delivery = await artifactStore.put("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from("{\"kind\":\"delivery\"}\n") });
-  const developerEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "developer.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"developer\"}\n") });
-  const opinion = await artifactStore.put("company_1", "delivery-review", { filename: "review.json", mimeType: "application/json", bytes: Buffer.from("{\"outcome\":\"blocking\"}\n") });
-  const reviewEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "review.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"review\"}\n") });
-  const now = new Date().toISOString();
-  value.database.authTransaction((db) => {
-    for (const artifact of [delivery, developerEvidence, opinion, reviewEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_repair_fixture', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, reviewEvidence.id);
-    db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, current_step, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_repair_fixture', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'completed', 'forge/issue/task_1', ?, ?, 'session_developer', 1, ?, ?, ?, ?, 'clean', ?, ?)").run(worktreePath, targetBaseSha, now, now, subjectCommit, subjectTree, delivery.id, developerEvidence.id);
-    db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, supersedes_review_id, created_at) VALUES ('delivery_review_fixture', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, ?, ?, ?, 'agent_repair_fixture', 'session_lead', 'blocking', 'Repair fixture needs correction.', ?, ?, 0, NULL, ?)").run(targetBaseSha, subjectCommit, subjectTree, opinion.id, reviewEvidence.id, now);
-  });
-  const sessionStore: SessionStore = { async create() { return "session_developer"; }, async read(ref) { return ref === "session_developer" ? "raw-developer" : ""; } };
-  const repairInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", developerSessionRef: "session_developer", developerExecutionId: "developer_repair_fixture", reviewId: "delivery_review_fixture", repairCycleLimit: 5, worktreePath, branchName: "forge/issue/task_1", targetBaseSha, subjectCommit, subjectTree, blockingFindings: [{ findingId: "finding_blocking", severity: "blocking" as const, rationale: "The marker is incomplete.", evidenceRef: "DELIVERED.md", disposition: "open" as const, repairInstruction: "Complete the marker." }], repairPlan: "Complete the marker." };
-  return { ...value, worktreePath, subjectCommit, subjectTree, sessionStore, repairInput };
-}
 
 test("Lead planning resumes the same opaque session after malformed JSON and stores only sanitized evidence", async () => {
   const value = await fixture();

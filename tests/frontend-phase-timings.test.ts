@@ -25,17 +25,37 @@ test("derives chronological phase visits and duration labels from activity-feed 
   expect(phaseTimingDuration(7_260_000)).toBe("2h 1m");
 });
 
-test("renders proportional timing segments, the current pulse, and accessible timestamps", () => {
+test("renders proportional timing segments, an active accessible current bar, and timestamps", () => {
   const html = renderToStaticMarkup(createElement(PhaseTimings, { activity, phase: "reviewing_delivery", updatedAt: "2026-08-22T12:20:00.000Z" }));
 
   expect(html).toContain('data-phase-timings');
   expect(html).toContain("Timeline");
   expect(html).toContain('data-phase-timing="development"');
-  expect(html).toContain("animate-pulse");
+  expect(html).toContain("phase-timing-active");
+  expect(html).toContain('data-phase-timing-active="true"');
+  expect(html).toContain('role="listitem"');
+  expect(html).toContain("In progress.");
+  expect(html).toContain("motion-reduce:animate-none");
   expect(html).toContain("Total");
   expect(html).toContain("2026");
   expect(html).toContain('data-phase-time-axis');
   expect(html).toContain('data-phase-lane="development"');
+});
+
+test("keeps the active Needs attention visit green-striped while retaining its destructive indicator", () => {
+  const html = renderToStaticMarkup(createElement(PhaseTimings, {
+    activity: [
+      { eventType: "phase_planning", createdAt: "2026-08-22T12:00:00.000Z" },
+      { eventType: "phase_delivery_blocked", createdAt: "2026-08-22T12:04:00.000Z" },
+    ],
+    phase: "delivery_blocked",
+    updatedAt: "2026-08-22T12:20:00.000Z",
+  }));
+
+  expect(html).toContain('data-phase-timing="delivery_blocked"');
+  expect(html).toContain("phase-timing-active");
+  expect(html).toContain("bg-destructive");
+  expect(html).toContain("Needs attention");
 });
 
 const thirtySegmentFixture = [

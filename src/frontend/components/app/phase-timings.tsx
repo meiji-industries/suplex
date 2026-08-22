@@ -55,8 +55,12 @@ export function PhaseTimings({ activity, phase, updatedAt }: { activity: Activit
             {lane.timings.map((timing) => {
               const left = ((Date.parse(timing.startAt) - startMs) / axisDuration) * 100;
               const width = Math.max(0.5, (timing.durationMs / axisDuration) * 100);
-              const label = `${timing.label}: ${timestamp(timing.startAt)} to ${timestamp(timing.endAt)}, ${phaseTimingDuration(timing.durationMs)}.`;
-              return <button className={`absolute top-2 h-5 overflow-hidden rounded-sm px-1 text-left text-[10px] leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${timing.current ? "animate-pulse bg-primary/30 text-foreground" : timing.label === "Needs attention" ? "bg-destructive/20 text-destructive" : "bg-primary/15 text-foreground"}`} data-phase-timing={timing.phase} type="button" role="listitem" key={`${timing.phase}-${timing.startAt}`} aria-current={timing.current ? "step" : undefined} aria-label={label} title={label} style={{ left: `${left}%`, width: `${width}%` }}><span className="sr-only">{label}</span></button>;
+              const label = `${timing.label}: ${timestamp(timing.startAt)} to ${timestamp(timing.endAt)}, ${phaseTimingDuration(timing.durationMs)}${timing.current ? ". In progress." : "."}`;
+              const active = timing.current;
+              return <button className={`absolute top-2 flex h-5 items-center gap-1 overflow-hidden rounded-sm px-1 text-left text-[10px] leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${active ? "phase-timing-active text-emerald-950 motion-reduce:animate-none" : timing.label === "Needs attention" ? "bg-destructive/20 text-destructive" : "bg-primary/15 text-foreground"}`} data-phase-timing={timing.phase} data-phase-timing-active={active || undefined} type="button" role="listitem" key={`${timing.phase}-${timing.startAt}`} aria-current={active ? "step" : undefined} aria-label={label} title={label} style={{ left: `${left}%`, width: `${width}%` }}>
+                {active && timing.label === "Needs attention" && <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-destructive" />}
+                <span className="truncate">{timing.label}</span>
+              </button>;
             })}
           </div>
         </div>)}

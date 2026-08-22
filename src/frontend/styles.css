@@ -169,3 +169,22 @@
     text-decoration: none;
   }
 }
+
+@keyframes phase-timing-candy-stripes {
+  to {
+    background-position: 28px 0;
+  }
+}
+
+.phase-timing-active {
+  background-color: var(--success);
+  background-image: repeating-linear-gradient(45deg, color-mix(in oklab, var(--success), white 20%) 0 14px, var(--success) 14px 28px);
+  background-size: 28px 28px;
+  animation: phase-timing-candy-stripes 1s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .phase-timing-active {
+    animation: none;
+  }
+}

@@ -1257,7 +1257,7 @@ export class TaskService {
       return { task, created: false };
     }
     if (intent.state === "workflow_starting") {
-      const task = this.database.authQuery((db) => db.prepare("SELECT t.id, t.company_id, t.project_id, t.project_revision_id, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.workflow_id, b.sha256 AS brief_sha256 FROM forge_tasks t JOIN forge_artifacts b ON b.id = t.brief_artifact_id WHERE t.id = ? AND t.company_id = ?").get(intent.task_id, intent.company_id) as { id: string; company_id: string; project_id: string; project_revision_id: string; brief_artifact_id: string; image_artifact_ids_json: string; role_agents_json: string; supplemental_review: number; workflow_id: string; brief_sha256: string } | undefined);
+      const task = this.database.authQuery((db) => db.prepare("SELECT t.id, t.company_id, t.project_id, t.project_revision_id, t.request_hash, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.workflow_id, b.sha256 AS brief_sha256 FROM forge_tasks t JOIN forge_artifacts b ON b.id = t.brief_artifact_id WHERE t.id = ? AND t.company_id = ?").get(intent.task_id, intent.company_id) as { id: string; company_id: string; project_id: string; project_revision_id: string; request_hash: string; brief_artifact_id: string; image_artifact_ids_json: string; role_agents_json: string; supplemental_review: number; workflow_id: string; brief_sha256: string } | undefined);
       if (task) {
         const imageIds = parseImageIds(task.image_artifact_ids_json);
         const images = this.database.authQuery((db) => {
@@ -1267,7 +1267,7 @@ export class TaskService {
         });
         const autoApprovePlan = input.autoApprovePlan === true && authority.kind === "user";
         const pullRequestMode = input.pullRequestMode ?? "draft";
-        await this.startCreationWorkflow(intent.id, intent.lease_token, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), JSON.parse(task.role_agents_json) as RoleAssignments, task.supplemental_review === 1, autoApprovePlan, authority.kind === "user" && autoApprovePlan ? authority.userId : undefined, pullRequestMode, authority.kind === "user" && pullRequestMode === "auto_merge" ? authority.userId : undefined, intent.request_hash, task.workflow_id);
+        await this.startCreationWorkflow(intent.id, intent.lease_token, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), JSON.parse(task.role_agents_json) as RoleAssignments, task.supplemental_review === 1, autoApprovePlan, authority.kind === "user" && autoApprovePlan ? authority.userId : undefined, pullRequestMode, authority.kind === "user" && pullRequestMode === "auto_merge" ? authority.userId : undefined, task.request_hash, task.workflow_id);
         const updated = this.getTaskByIdInternal(task.id);
         return { task: updated, created: false };
       }
@@ -2073,7 +2073,7 @@ export class TaskService {
       evidenceArtifactId: snapshotState.data.developerEvidenceArtifactId ?? developerExecution?.evidenceArtifactId ?? null,
       nextAction: nextRecoveryCommand ? { command: nextRecoveryCommand, label: nextRecoveryCommand === "retry_development" ? "Retry development" : nextRecoveryCommand === "cancel_development" ? "Cancel development" : "Cancel issue", requiresConfirmation: true } : null,
     } : undefined;
-    const planAuthorization: { id: string; plan_sha256: string } | undefined = undefined;
+    const planAuthorization = null as unknown as { id: string; plan_sha256: string } | undefined;
     const decision = this.database.authQuery((db) => db.prepare("SELECT artifact_id FROM forge_delivery_decisions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { artifact_id: string } | undefined);
     const review = this.database.authQuery((db) => db.prepare("SELECT id, outcome, summary, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, opinion_artifact_id, evidence_artifact_id, repair_cycle FROM forge_delivery_reviews WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC, id DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { id: string; outcome: "approved" | "blocking"; summary: string; plan_revision: number; base_sha: string; subject_commit: string; subject_tree: string; lead_execution_id: string; opinion_artifact_id: string; evidence_artifact_id: string; repair_cycle: number } | undefined);
     const findings = review ? this.database.authQuery((db) => db.prepare("SELECT id, severity, rationale, evidence_ref, disposition, repair_instruction FROM forge_delivery_findings WHERE review_id = ? AND task_id = ? AND company_id = ? ORDER BY id").all(review.id, row.id, row.company_id) as Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidence_ref: string; disposition: string; repair_instruction: string | null }>) : [];

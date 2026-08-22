@@ -4,7 +4,7 @@ import { Button, buttonVariants } from "../components/ui/button.js";
 import { Badge } from "../components/ui/badge.js";
 import { Card, CardAction, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "../components/ui/card.js";
 import { Collapsible } from "../components/ui/collapsible.js";
-import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../components/ui/field.js";
+import { Field, FieldLabel } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { Textarea } from "../components/ui/textarea.js";
 import { Skeleton } from "../components/ui/skeleton.js";
@@ -145,7 +145,7 @@ function LiveExecutionRun({ taskId, eventPath, activityLabel, onStatus = noopExe
 }
 
 export type TaskPlanAction = Exclude<IssueCommandSlug, "revise-plan" | "continue-work" | "record-progress" | "resolve-decision-blocker"> | "reject-plan";
-export type PlanRevisionInput = { worktreeDisposition: "reuse" | "new"; reason: string; exactBaseSha?: string };
+export type PlanRevisionInput = { reason: string };
 
 export function nextPullRequestReviewAction(allowedCommands: ApiTask["allowedCommands"]): TaskPlanAction | undefined {
   if (allowedCommands.includes("review_delivery")) return "review-delivery";
@@ -174,8 +174,6 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
   const { snapshot: healthSnapshot } = useSystemHealth();
   const [revisionOpen, setRevisionOpen] = useState(false);
   const [revisionReason, setRevisionReason] = useState("");
-  const [worktreeDisposition, setWorktreeDisposition] = useState<"reuse" | "new">(task.developerExecution ? "reuse" : "new");
-  const [exactBaseSha, setExactBaseSha] = useState("");
   const [continueOpen, setContinueOpen] = useState(false);
   const [continueReason, setContinueReason] = useState("");
   const disabled = busy || task.projection.status === "lagging" || Boolean(getWorkerHealthFailure(healthSnapshot));
@@ -213,13 +211,13 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
     <Card data-task-actions data-task-blocked-card={isBlocked && !awaitingDeliveryReview || undefined} size="sm">
       <CardHeader>
         <CardTitle><h3>{canReviewDelivery ? deliveryAgent?.agentName && deliveryAgent.avatarSeed ? <span className="inline-flex items-center gap-1.5"><ProfileAvatar name={deliveryAgent.agentName} seed={deliveryAgent.avatarSeed} size="xs" />{deliveryAgent.agentName} completed the approved work.</span> : "Completed the approved work" : canRetryFinalReview ? "Final review did not finish" : canRepairDelivery ? "More proof is needed" : canPublishDraft ? "Ready to Create Pull Request" : canAcceptDelivery ? "Ready to publish" : task.pendingAction ?? "Next action"}</h3></CardTitle>
-        {canReviewDelivery ? <CardDescription>Forge confirmed the recorded delivery is clean and consistent.</CardDescription> : canRetryFinalReview ? <CardDescription>Forge could not finish its last review. Try again, or choose Request Changes to send the work back.</CardDescription> : canRepairDelivery ? <CardDescription>{repairInstruction ? <>Missing verification: {repairInstruction}</> : "A required verification result is missing."}</CardDescription> : canAcceptDelivery ? <CardDescription>The work is ready. Publish makes the pull request available for review. Request Changes sends it back to the Developer.</CardDescription> : null}
+        {canReviewDelivery ? <CardDescription>Ready for your review.</CardDescription> : canRetryFinalReview ? <CardDescription>Forge could not finish its last review. Try again, or choose Request Changes to send the work back.</CardDescription> : canRepairDelivery ? <CardDescription>{repairInstruction ? <>Missing verification: {repairInstruction}</> : "A required verification result is missing."}</CardDescription> : canAcceptDelivery ? <CardDescription>The work is ready. Publish makes the pull request available for review. Request Changes sends it back to the Developer.</CardDescription> : null}
         {isBlocked && task.lastHandlerError ? <CardDescription>Last {task.lastHandlerError.command} error: {task.lastHandlerError.reason}</CardDescription> : null}
         {isBlocked ? <CardAction>{awaitingDeliveryReview ? <TaskStatus phase={task.phase} presentationPhase={presentationPhase} /> : <Badge variant="destructive">{phaseLabel(task.phase)}</Badge>}</CardAction> : null}
       </CardHeader>
       {canReviewDelivery ? <CardContent className="space-y-3" data-delivery-handoff>
         <div className="text-[12px]">
-          <section className="space-y-1"><h4 className="font-medium">What you need to do</h4><p className="text-muted-foreground">Review the diff against the approved plan, then choose whether to move it toward release or send it back.</p></section>
+          <p className="text-muted-foreground">Review the changes, then choose what happens next.</p>
         </div>
         <dl className="grid min-w-0 gap-x-6 gap-y-3 border-t pt-3 text-[11px] sm:grid-cols-2">
           <div><dt className="text-muted-foreground">Branch</dt><dd className="break-all"><code>{task.developerExecution?.branchName ?? "Unavailable"}</code></dd></div>
@@ -229,14 +227,9 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
       </CardContent> : null}
       {canPublishDraft ? <CardContent className="space-y-3" data-task-publish-preview><PublicationPreview release={task.release} planned={plannedPublication} loading={busy} /></CardContent> : null}
       {(revisionOpen || continueOpen) ? <CardContent>
-        {revisionOpen ? <form className="max-w-xl space-y-3 border-l-2 pl-3" onSubmit={(event) => { event.preventDefault(); void onRevisePlan({ worktreeDisposition, reason: revisionReason, ...(worktreeDisposition === "new" ? { exactBaseSha } : {}) }); }}>
+        {revisionOpen ? <form className="max-w-xl space-y-3 border-l-2 pl-3" onSubmit={(event) => { event.preventDefault(); void onRevisePlan({ reason: revisionReason }); }}>
           <Field><FieldLabel htmlFor="revision-reason">Why revise this plan?</FieldLabel><Textarea id="revision-reason" required value={revisionReason} onChange={(event) => setRevisionReason(event.target.value)} placeholder="Describe the changed requirement or observed problem." /></Field>
-          <FieldSet><FieldLegend>Worktree</FieldLegend><FieldGroup>
-            <label className="flex items-center gap-2 text-xs"><input name="worktree-disposition" type="radio" checked={worktreeDisposition === "reuse"} onChange={() => setWorktreeDisposition("reuse")} disabled={!task.developerExecution} /> Reuse the verified clean worktree {task.developerExecution ? <span className="text-muted-foreground">({task.developerExecution.branchName})</span> : <span className="text-muted-foreground">(unavailable)</span>}</label>
-            <label className="flex items-center gap-2 text-xs"><input name="worktree-disposition" type="radio" checked={worktreeDisposition === "new"} onChange={() => setWorktreeDisposition("new")} /> Start from an exact base commit</label>
-            {worktreeDisposition === "new" ? <Field><FieldLabel htmlFor="revision-base-sha">Exact base SHA</FieldLabel><Input id="revision-base-sha" required value={exactBaseSha} onChange={(event) => setExactBaseSha(event.target.value)} placeholder="40–64 character commit SHA" /></Field> : null}
-          </FieldGroup></FieldSet>
-          <Button type="submit" size="sm" disabled={disabled || !revisionReason.trim() || (worktreeDisposition === "reuse" && !task.developerExecution) || (worktreeDisposition === "new" && !exactBaseSha.trim())}>{busy ? "Submitting…" : "Submit revision"}</Button>
+          <Button type="submit" size="sm" disabled={disabled || !revisionReason.trim()}>{busy ? "Submitting…" : "Submit revision"}</Button>
         </form> : null}
         {continueOpen ? <form className="max-w-xl space-y-3 border-l-2 pl-3" onSubmit={(event) => { event.preventDefault(); void onContinueWork(continueReason); }}><Field><FieldLabel htmlFor="continue-reason">Why continue this work?</FieldLabel><Textarea id="continue-reason" required value={continueReason} onChange={(event) => setContinueReason(event.target.value)} placeholder="Describe the next bounded outcome." /></Field><Button type="submit" size="sm" disabled={disabled || !continueReason.trim()}>{busy ? "Creating successor…" : "Create successor"}</Button></form> : null}
       </CardContent> : null}
@@ -653,7 +646,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                     {pullRequestInMain ? <div data-active-pull-request><PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} {...(task.allowedCommands.includes("reconcile_ci") ? { onCheckCi: () => onPlanAction("reconcile-ci") } : {})} {...(task.allowedCommands.includes("reconcile_merge") ? { onCheckMerge: () => onPlanAction("reconcile-merge") } : {})} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
                     <RescueControls task={task} busy={busy} onRescue={onRescue} />
                     {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} developmentStatus={developerLiveness ? <DevelopmentStatus state={developerLiveness} now={developmentNow} inline /> : undefined} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} compact /></DeveloperRecoveryStatus> : <LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
-                    {task.developerExecution ? <DeveloperEvidence taskId={task.id} execution={task.developerExecution} repository={project?.repository} /> : null}
+                    {task.developerExecution ? <DeveloperEvidence execution={task.developerExecution} onViewChanges={openDiff} /> : null}
                     <ActivityPanel task={task} />
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
                     {currentPlan ?? decisionControls}

@@ -44,28 +44,26 @@ test("renders the approved plan as static numbered instructions", () => {
   expect(html).toContain("Approve Plan");
 });
 
-test("renders one flat delivery evidence group", () => {
+test("shows the Builder's work without execution bookkeeping", () => {
   const execution = {
     id: "developer_1",
     status: "completed",
     attempt: 1,
     branchName: "work/evidence",
+    startedAt: "2026-08-13T00:00:00.000Z",
+    finishedAt: "2026-08-13T00:01:30.000Z",
+    summary: "Added the requested evidence view.",
     targetBaseSha: "a".repeat(40),
-    manifestArtifactId: "manifest_1",
-    rawReportArtifactId: "raw_1",
-    beforeProviderArtifactId: null,
-    afterProviderArtifactId: "provider_1",
-    reconciliationArtifactId: "reconciliation_1",
   } as DeveloperExecutionView;
-  const html = renderToStaticMarkup(createElement(DeveloperEvidence, { taskId: "task_1", execution }));
+  const html = renderToStaticMarkup(createElement(DeveloperEvidence, { execution, onViewChanges: () => {} }));
 
   expect(html.match(/data-developer-evidence="true"/g)).toHaveLength(1);
-  expect(html.match(/data-delivery-report="true"/g)).toHaveLength(1);
-  for (const label of ["Manifest", "Raw delivery", "After provider", "Reconciliation"]) {
-    expect(html.match(new RegExp(`>${label}<`, "g"))).toHaveLength(1);
-  }
-  expect(html).not.toContain("Before provider");
-  expect(html).not.toContain("data-plan-steps");
+  expect(html).toContain("Attempt 1");
+  expect(html).toContain("1:30");
+  expect(html).toContain("Added the requested evidence view.");
+  expect(html).toContain("View changes");
+  expect(html).not.toContain("Boundary");
+  expect(html).not.toContain("Provider observation");
 });
 
 test("places plan activity at its planning revision", () => {

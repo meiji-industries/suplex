@@ -48,15 +48,19 @@ export const PlanCommandInputSchema = z.object({
   planArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
 });
 
-const RevisionCommandBaseSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000) }).strict();
-export const PlanRevisionCommandSchema = z.discriminatedUnion("worktreeDisposition", [
-  RevisionCommandBaseSchema.extend({ worktreeDisposition: z.literal("reuse") }).strict(),
-  RevisionCommandBaseSchema.extend({ worktreeDisposition: z.literal("new"), exactBaseSha: exactSha }).strict(),
-]);
+const RevisionCommandBaseSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000), worktreeDisposition: z.enum(["reuse", "new"]).optional(), exactBaseSha: exactSha.optional() }).strict();
+type ParsedPlanRevisionCommand =
+  | { expectedRevision: number; actorUserId: string; reason: string; worktreeDisposition: "reuse" }
+  | { expectedRevision: number; actorUserId: string; reason: string; worktreeDisposition: "new"; exactBaseSha: string };
+// Old workflow histories include a worktree choice. New requests always reuse when possible;
+// retain those fields solely so historical update payloads can still be parsed.
+export const PlanRevisionCommandSchema = RevisionCommandBaseSchema.transform(({ worktreeDisposition: _worktreeDisposition, exactBaseSha: _exactBaseSha, ...input }): ParsedPlanRevisionCommand => ({ ...input, worktreeDisposition: "reuse" }));
 export const ContinueWorkCommandSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000) }).strict();
 
 export type StartPlanningInput = z.input<typeof StartPlanningInputSchema>;
 export type RecordProgressInput = z.input<typeof RecordProgressInputSchema>;
 export type PlanCommandInput = z.input<typeof PlanCommandInputSchema>;
-export type PlanRevisionCommand = z.infer<typeof PlanRevisionCommandSchema>;
+// Preserve the historical input shape for workflow handlers and replay typing; parsing above
+// canonicalizes every new command to `reuse` before it reaches them.
+export type PlanRevisionCommand = z.input<typeof PlanRevisionCommandSchema>;
 export type ContinueWorkCommand = z.infer<typeof ContinueWorkCommandSchema>;

@@ -3,13 +3,7 @@ import { z } from "zod";
 import { ExpectedRevisionBodySchema, HttpSupplementalReviewBodySchema } from "../../http/contracts/common.js";
 import { defineIssueCommand } from "../kit.js";
 
-const HashSchema = z.string().regex(/^[a-f0-9]{40,64}$/i);
-const RevisionCommandBaseSchema = z.object({ expectedRevision: z.number().int().nonnegative(), reason: z.string().trim().min(1).max(4_000) }).strict();
-
-export const PlanRevisionBodySchema = z.discriminatedUnion("worktreeDisposition", [
-  RevisionCommandBaseSchema.extend({ worktreeDisposition: z.literal("reuse") }).strict(),
-  RevisionCommandBaseSchema.extend({ worktreeDisposition: z.literal("new"), exactBaseSha: HashSchema }).strict(),
-]);
+export const PlanRevisionBodySchema = z.object({ expectedRevision: z.number().int().nonnegative(), reason: z.string().trim().min(1).max(4_000) }).strict();
 
 export const planningCommands = {
   start_planning: defineIssueCommand({

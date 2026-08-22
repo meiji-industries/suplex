@@ -1,55 +1,29 @@
 import { Badge } from "../ui/badge.js";
 import { Button } from "../ui/button.js";
-import { Collapsible } from "../ui/collapsible.js";
-import { CommitSha } from "../app/commit-sha.js";
 import type { ReactElement } from "react";
+import { useEffect, useState } from "react";
 import type { DeveloperExecutionEventResponse, TaskResponse } from "../../../http/contracts/tasks.js";
 
 export type DeveloperExecutionView = NonNullable<TaskResponse["developerExecution"]>;
 export type DeveloperExecutionEventView = DeveloperExecutionEventResponse;
 
-function artifactHref(taskId: string, artifactId: string): string {
-  return `/api/tasks/${encodeURIComponent(taskId)}/developer-artifacts/${encodeURIComponent(artifactId)}`;
+function duration(startedAt: string, finishedAt: string | null, now: number): string {
+  const seconds = Math.max(0, Math.floor(((finishedAt ? Date.parse(finishedAt) : now) - Date.parse(startedAt)) / 1_000));
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-export function DevelopmentStatus({ execution, repository }: { execution: DeveloperExecutionView; repository?: string | undefined }): ReactElement {
-  const completed = execution.status === "completed";
-  return (
-    <section className="space-y-3" data-developer-status>
-      <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold">Builder execution</h3><Badge variant={completed ? "secondary" : execution.status === "blocked" || execution.status === "failed" ? "destructive" : "outline"}>{execution.status}</Badge></div>
-      <div className="min-w-0 truncate text-xs text-muted-foreground">Attempt {execution.attempt} · <code title={execution.branchName}>{execution.branchName}</code></div>
-      {execution.failureSummary ? <p className="text-xs text-destructive">{execution.failureSummary}</p> : null}
-      <Collapsible.Root>
-        <Collapsible.Trigger render={<Button variant="ghost" size="sm" />}>Execution details</Collapsible.Trigger>
-        <Collapsible.Panel><div className="grid gap-x-4 gap-y-2 pt-2 text-xs sm:grid-cols-2">
-          <div><span className="text-muted-foreground">Boundary</span><div>{(execution.boundaryMode ?? "owner_controlled_observed") === "owner_controlled_observed" ? "Owner-controlled local execution; provider state observed" : execution.boundaryMode}</div></div>
-          <div><span className="text-muted-foreground">Starting commit/tree</span><div className="break-all"><CommitSha sha={execution.startingCommit ?? execution.targetBaseSha} repository={repository} /> / <code>{execution.startingTree ? `${execution.startingTree.slice(0, 8)}…` : "—"}</code></div></div>
-          <div><span className="text-muted-foreground">Final commit/tree</span><div className="break-all"><CommitSha sha={execution.resultCommit} repository={repository} /> / <code>{execution.resultTree ? `${execution.resultTree.slice(0, 8)}…` : "—"}</code></div></div>
-          <div><span className="text-muted-foreground">Worktree</span><div>{execution.dirtyState ?? "not reconciled"}</div></div>
-          <div><span className="text-muted-foreground">Provider observation</span><div>{execution.providerObservation ?? "unavailable"}</div></div>
-        </div></Collapsible.Panel>
-      </Collapsible.Root>
-    </section>
-  );
-}
-
-export function DeliveryReportPanel({ taskId, execution }: { taskId: string; execution: DeveloperExecutionView }): ReactElement | null {
-  const links = [
-    ["Manifest", execution.manifestArtifactId],
-    ["Raw delivery", execution.rawReportArtifactId],
-    ["Before provider", execution.beforeProviderArtifactId],
-    ["After provider", execution.afterProviderArtifactId],
-    ["Reconciliation", execution.reconciliationArtifactId],
-  ] as const;
-  if (!links.some(([, artifactId]) => artifactId)) return null;
-  return (
-    <section className="space-y-2" data-delivery-report>
-      <h3 className="text-xs font-semibold">Delivery details</h3>
-      <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">{links.map(([label, artifactId]) => artifactId ? <a className="underline underline-offset-2" href={artifactHref(taskId, artifactId)} target="_blank" rel="noreferrer" key={label}>{label}</a> : null)}</div>
-    </section>
-  );
-}
-
-export function DeveloperEvidence({ taskId, execution, repository }: { taskId: string; execution: DeveloperExecutionView; repository?: string | undefined }): ReactElement {
-  return <div className="space-y-5" data-developer-evidence><DevelopmentStatus execution={execution} repository={repository} /><DeliveryReportPanel taskId={taskId} execution={execution} /></div>;
+export function DeveloperEvidence({ execution, onViewChanges }: { execution: DeveloperExecutionView; onViewChanges: () => void }): ReactElement {
+  const running = ["starting", "running", "cancelling"].includes(execution.status) && !execution.finishedAt;
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    if (!running) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [running]);
+  const blocked = execution.status === "blocked";
+  return <section className="space-y-2" data-developer-evidence>
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"><span className="min-w-0 truncate">Attempt {execution.attempt} · <code title={execution.branchName}>{execution.branchName}</code></span><Badge variant={execution.status === "completed" ? "secondary" : blocked || execution.status === "failed" ? "destructive" : "outline"}>{execution.status}</Badge><span className="tabular-nums text-muted-foreground">{duration(execution.startedAt, execution.finishedAt, now)}</span></div>
+    {execution.summary ? <p className={blocked ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{execution.summary}</p> : null}
+    <Button variant="link" size="sm" onClick={onViewChanges}>View changes</Button>
+  </section>;
 }

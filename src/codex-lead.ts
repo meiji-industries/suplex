@@ -22,6 +22,7 @@ import { classifyPlanMateriality, materialitySummary } from "./plan-governance.j
 import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./temporal/issue-contracts.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { parseAcceptedProjectRevision } from "./projects.js";
+import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { defaultProcessController, type ProcessController, type ProcessInspection } from "./process-manager.js";
 
@@ -420,9 +421,9 @@ export class AgentService {
     const input = DeliveryRepairPlanInputSchema.parse(rawInput);
     const scoped = this.database.authQuery((db) => db.prepare(`SELECT t.id
       FROM forge_tasks t
-      JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ? AND t.project_revision_id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId, input.projectRevisionId) as { id: string } | undefined);
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId) as { id: string } | undefined);
     if (!scoped) throw new AgentFailure("scoped-input-missing", "Delivery repair planning evidence is unavailable");
+    this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input));
     const openFindings = input.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
     if (!openFindings.length) throw new AgentFailure("repair-plan-invalid", "Delivery repair planning requires an open blocking finding");
     const rawSessionId = await this.sessionStore.read(input.leadSessionRef);
@@ -505,11 +506,12 @@ export class AgentService {
 
   async runLeadPlanning(rawInput: LeadPlanningActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<LeadPlanningResult> {
     const input = LeadPlanningActivityInputSchema.parse(rawInput);
-    const row = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256
-      FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
+    const row = this.database.authQuery((db) => db.prepare(`SELECT t.title, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256
+      FROM forge_tasks t
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id
-      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId, input.projectRevisionId, input.briefArtifactId) as PlanningRow | undefined);
+      WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ? AND b.id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId, input.briefArtifactId) as PlanningRow | undefined);
     if (!row) throw new AgentFailure("scoped-input-missing", "Lead planning evidence is unavailable");
+    row.normalized_json = JSON.stringify(this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input)));
     const completed = await this.completedPlanningResult(input);
     if (completed) return completed;
     const active = this.database.authQuery((db) => db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at, wrapper_pid, wrapper_process_group, wrapper_start_identity, process_pid, process_start_identity, spool_relative_path, status_relative_path, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND role = 'planner' AND turn_key = ? AND status IN ('starting', 'running', 'cancelling', 'failed') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`) as (ActiveLeadExecution & { profile_id: string | null }) | undefined);

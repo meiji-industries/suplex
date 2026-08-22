@@ -234,7 +234,7 @@ export class ForwardMergeService {
       commandEvidence: { command: "git diff --cc --no-ext-diff", complete: true },
     }, null, 2);
     if (Buffer.byteLength(payload, "utf8") > 256 * 1024) return undefined;
-    const artifact = await this.artifacts!.put(input.companyId!, "forward-merge-conflict", { filename: `${input.taskId ?? "forward-merge"}.json`, mimeType: "application/json", bytes: Buffer.from(payload, "utf8") });
+    const artifact = await this.artifacts!.putArtifact(input.companyId!, "forward-merge-conflict", { filename: `${input.taskId ?? "forward-merge"}.json`, mimeType: "application/json", bytes: Buffer.from(payload, "utf8") });
     if (this.database) this.database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
     return { id: artifact.id, sha256: artifact.sha256, kind: artifact.kind };
   }

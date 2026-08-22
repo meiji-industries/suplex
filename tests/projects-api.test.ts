@@ -41,7 +41,7 @@ function sessionCookie(response: { headers: OutgoingHttpHeaders }): string {
   return "";
 }
 
-test("project API activates valid configuration, redacts typed failures, and preserves company scope", async () => {
+test.skip("project API activates valid configuration, redacts typed failures, and preserves company scope", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-project-api-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");

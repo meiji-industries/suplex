@@ -537,9 +537,7 @@ export interface ForgeTask {
     sessionRef: string;
     executionId: string;
     outputArtifactId: string;
-    outputSha256: string;
     evidenceArtifactId: string;
-    evidenceSha256: string;
     content: PersistedLeadOutput;
   };
   targetBaseReconciliation: {
@@ -2214,7 +2212,7 @@ export class TaskService {
       WHERE o.task_id = ? AND o.company_id = ? ORDER BY o.revision DESC LIMIT 1`).get(taskId, companyId) as LeadOutputRow | undefined);
     if (!row) return undefined;
     const content = PersistedLeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
-    return { kind: row.kind, summary: row.summary, sessionRef: row.session_ref, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, outputSha256: row.output_sha256, evidenceArtifactId: row.evidence_artifact_id, evidenceSha256: row.evidence_sha256, content };
+    return { kind: row.kind, summary: row.summary, sessionRef: row.session_ref, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };
   }
 
   private ciProjection(taskId: string, companyId: string): TaskCiProjection | undefined {

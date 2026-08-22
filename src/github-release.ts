@@ -7,7 +7,6 @@ import { z } from "zod";
 import type { ArtifactStore, StoredArtifact } from "./artifacts.js";
 import type { ForgeDatabase } from "./database.js";
 import type { GitPresentation } from "./git-presentation.js";
-import { redact } from "./logging.js";
 import type { ReleaseFailureCode } from "./release-failures.js";
 import { jsonRequired } from "./task-utils.js";
 
@@ -145,13 +144,8 @@ function bounded(value: string): string {
   return value.length <= MAX_OUTPUT ? value : `${value.slice(0, MAX_OUTPUT)}…`;
 }
 
-function safeSummary(value: unknown): string {
-  const redacted = String(redact(typeof value === "string" ? value : "provider command failed"));
-  return redacted.replace(/(?:\/private)?\/(?:Users|home|var|tmp)\/[^\s)]+/g, "[path-redacted]").replace(/(?:prompt|reasoning|credential|token|authorization)[:=][^\n]*/gi, "[redacted]").slice(0, 500).trim() || "provider command failed";
-}
-
 function providerFailure(code: ReleaseFailureCode, summary = "GitHub provider request failed", retryAt: string | null = null): GithubReleaseFailure {
-  return new GithubReleaseFailure(code, safeSummary(summary), retryAt);
+  return new GithubReleaseFailure(code, summary, retryAt);
 }
 
 export class GithubReleaseFailure extends Error {
@@ -200,12 +194,11 @@ function parseJson(value: string): unknown {
 
 function classifyCommandFailure(error: unknown, operation: string): GithubReleaseFailure {
   if (!(error instanceof GithubCommandFailure)) return providerFailure("provider-unavailable", operation);
-  const output = `${bounded(error.result.stdout)}\n${bounded(error.result.stderr)}`;
   const parsed = restError(error.result.stdout);
   if (parsed?.status === 403 || parsed?.status === 429) return providerFailure("provider-rate-limited", parsed.message);
   if (operation === "authentication") return providerFailure("authentication-required", "GitHub CLI authentication is unavailable");
   if (error.timedOut) return providerFailure("provider-unavailable", `${operation} timed out`);
-  return providerFailure("provider-unavailable", safeSummary(output));
+  return new GithubReleaseFailure("provider-unavailable", error.result.stderr || error.result.stdout || operation);
 }
 
 const defaultRunner: GithubCommandRunner = async ({ command, args, cwd, timeout, maxBuffer }) => {
@@ -367,39 +360,26 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
   } as GithubReleasePort & GithubAcceptancePort;
 }
 
-function normalizeText(value: string): string {
-  return value.replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function unsafePublicValue(value: string): boolean {
-  return /\b(?:task|session|artifact|developer|release|provider|output|review)_[A-Za-z0-9][A-Za-z0-9._:-]{7,}\b/i.test(value)
-    || /\bworkflow-[A-Za-z0-9._:-]{8,}\b/i.test(value)
-    || /(?:^|\s)(?:prompt|reasoning)(?:\s|:)/i.test(value)
-    || /(?:^|\s)(?:https?:\/\/|ssh:\/\/|git@)/i.test(value)
-    || /(?:Bearer\s+|(?:gho_|github_pat_|sk-)[A-Za-z0-9_-]+|(?:token|password|secret|api[_-]?key)\s*[:=])/i.test(value)
-    || /\b[a-f0-9]{40,64}\b/i.test(value)
-    || /(?:^|\s)[A-Za-z]:[\\/]|(?:^|\s)\/(?:Users|home|private|tmp|var)\//i.test(value);
-}
-
-function safePath(value: string): string {
-  const normalized = value.trim();
-  if (!normalized || /[\u0000-\u001f\u007f]/.test(normalized) || Buffer.byteLength(normalized, "utf8") > 500 || normalized.startsWith("/") || /^[A-Za-z]:[\\/]/.test(normalized) || normalized.includes("\\") || normalized.split("/").some((part) => part === ".." || part === "." || part === "") || unsafePublicValue(normalized)) throw providerFailure("public-projection-unsafe", "Public changed-file projection is unsafe");
-  return normalized;
-}
-
 function truncateUtf8(value: string, byteLimit: number): string {
   const bytes = Buffer.from(value, "utf8");
   if (bytes.length <= byteLimit) return value;
-  let end = byteLimit;
+  const ellipsis = "…";
+  const ellipsisBytes = Buffer.byteLength(ellipsis, "utf8");
+  let end = Math.max(0, byteLimit - ellipsisBytes);
   while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
-  return bytes.subarray(0, end).toString("utf8").trimEnd();
+  return `${bytes.subarray(0, end).toString("utf8").trimEnd()}${ellipsis}`;
 }
 
-function safeRow(value: string, byteLimit = 300): string {
-  if (/[\u0000-\u001f\u007f]/.test(value)) throw providerFailure("public-projection-unsafe", "Public verification projection is unsafe");
-  if (unsafePublicValue(value)) throw providerFailure("public-projection-unsafe", "Public verification projection is unsafe");
-  const normalized = normalizeText(String(redact(value)));
-  if (!normalized || unsafePublicValue(normalized)) throw providerFailure("public-projection-unsafe", "Public verification projection is unsafe");
+function truncateCharacters(value: string, characterLimit: number): string {
+  const characters = [...value];
+  return characters.length <= characterLimit ? value : `${characters.slice(0, Math.max(0, characterLimit - 1)).join("")}…`;
+}
+
+/** Makes generated PR text readable while retaining useful delivery evidence. */
+export function sanitizePublicText(value: string, byteLimit = 300): string {
+  const normalized = value
+    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/Bearer\s+\S+|\b(?:gho_|github_pat_|sk-)[A-Za-z0-9_-]+\b|\b(?:token|password|secret|api[_-]?key)\s*[:=]\s*\S+/gi, "[redacted]");
   return truncateUtf8(normalized, byteLimit);
 }
 
@@ -421,29 +401,26 @@ export function buildDraftPullRequestProjection(input: {
   testResults?: string[];
 }): DraftPullRequestProjection {
   const rawTitle = input.pullRequestTitle ?? input.taskTitle;
-  if (/[\u0000-\u001f\u007f]/.test(rawTitle)) throw providerFailure("public-projection-unsafe", "Public title is unsafe");
-  const title = normalizeText(rawTitle);
-  if (!title || title.length > 160 || unsafePublicValue(title)) throw providerFailure("public-projection-unsafe", "Public title is unsafe");
-  const paths = [...new Set((input.filesChanged ?? []).map(safePath))].slice(0, 10);
-  const description = safeRow(input.pullRequestDescription ?? input.deliverySummary ?? title, 2_000);
-  const deliverySummary = input.deliverySummary ? safeRow(input.deliverySummary, 2_000) : undefined;
-  const changes = [...new Set((input.changes ?? []).map((change) => safeRow(change, 400)))].slice(0, 10);
-  const commands = [...new Set((input.commandsRun ?? []).map((command) => safeRow(command, 300)))].slice(0, 10);
-  const tests = [...new Set((input.testResults ?? []).map((result) => safeRow(result, 300)))].slice(0, 10);
+  const title = truncateCharacters(sanitizePublicText(rawTitle, 20_000), 160);
+  const paths = [...new Set((input.filesChanged ?? []).map((path) => sanitizePublicText(path, 300)))].slice(0, 10);
+  const description = sanitizePublicText(input.pullRequestDescription ?? input.deliverySummary ?? title);
+  const deliverySummary = input.deliverySummary ? sanitizePublicText(input.deliverySummary) : undefined;
+  const changes = [...new Set((input.changes ?? []).map((change) => sanitizePublicText(change)))].slice(0, 10);
+  const commands = [...new Set((input.commandsRun ?? []).map((command) => sanitizePublicText(command, 300)))].slice(0, 10);
+  const tests = [...new Set((input.testResults ?? []).map((result) => sanitizePublicText(result, 300)))].slice(0, 10);
   const changeRows = changes.length ? changes.map((change) => `- ${change}`) : paths.length ? paths.map((path) => `- ${inlineCode(path)}`) : ["- No implementation details were reported."];
   const testingRows = [
     ...commands.map((command) => `- ${inlineCode(command)}`),
     ...tests.map((result) => `- ${result}`),
   ];
   const summaryRows = deliverySummary && deliverySummary !== description ? [description, "", deliverySummary] : [description];
-  const body = ["## Summary", "", ...summaryRows, "", "## Changes", "", ...changeRows, "", "## Testing", "", ...(testingRows.length ? testingRows : ["- Not run (no verification was reported)."]), ""].join("\n");
+  const body = truncateUtf8(["## Summary", "", ...summaryRows, "", "## Changes", "", ...changeRows, "", "## Testing", "", ...(testingRows.length ? testingRows : ["- Not run (no verification was reported)."]), ""].join("\n"), 20_000);
   const projection = { title, body, bodySha256: createHash("sha256").update(body, "utf8").digest("hex") };
-  assertSafePublicProjection(projection);
   return projection;
 }
 
-export function assertSafePublicProjection(input: Pick<DraftPullRequestProjection, "title" | "body">): void {
-  if (!input.title || input.title.length > 160 || Buffer.byteLength(input.body, "utf8") > 20_000 || unsafePublicValue(input.title) || unsafePublicValue(input.body)) throw providerFailure("public-projection-unsafe", "Public pull request projection is unsafe");
+export function assertPublicProjectionBounds(input: Pick<DraftPullRequestProjection, "title" | "body">): void {
+  if (input.title.length > 160 || Buffer.byteLength(input.body, "utf8") > 20_000) throw new Error("Public pull request projection exceeds its size limit");
 }
 
 export interface PublishReleaseInput {

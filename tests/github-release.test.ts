@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { buildDraftPullRequestProjection, createGithubReleasePort, GithubReleaseFailure, type GithubCommandSpec, type GithubCommandResult } from "../src/github-release.js";
+import { buildDraftPullRequestProjection, createGithubReleasePort, GithubReleaseFailure, sanitizePublicText, type GithubCommandSpec, type GithubCommandResult } from "../src/github-release.js";
 import { isRetryableReleaseFailure } from "../src/release-failures.js";
 import { jsonRequired } from "../src/task-utils.js";
 
@@ -149,7 +149,7 @@ test("enables protected auto-merge for the exact reviewed commit", async () => {
   expect(squashOnly.calls[1]!.args).toContain("--squash");
 });
 
-test("rejects malformed provider identities and redacts provider failure summaries", async () => {
+test("rejects malformed provider identities and retains provider failure summaries", async () => {
   const malformed = runnerFor([{ stdout: pull({ html_url: "https://evil.example/pull/7" }), stderr: "" }]);
   await expect(createGithubReleasePort({ runner: malformed.runner }).getPullRequest({ repository: "acme/forge", number: 7 })).rejects.toMatchObject({ code: "invalid-provider-response" });
 
@@ -157,14 +157,22 @@ test("rejects malformed provider identities and redacts provider failure summari
   await expect(createGithubReleasePort({ runner: crossRepository.runner }).getPullRequest({ repository: "acme/forge", number: 7 })).rejects.toMatchObject({ code: "invalid-provider-response" });
 
   const failed = runnerFor([{ stdout: "", stderr: "/Users/dev/private/repo token=secret_value prompt=do-not-persist", error: true }]);
-  try { await createGithubReleasePort({ runner: failed.runner }).getBranchHead({ repository: "acme/forge", branch: "main" }); } catch (error) {
+  try { await createGithubReleasePort({ runner: failed.runner }).pushNormal({ cwd: "/worktree", branch: "issue/7" }); } catch (error) {
     expect(error).toBeInstanceOf(GithubReleaseFailure);
-    expect((error as GithubReleaseFailure).summary).not.toContain("/Users/dev");
-    expect((error as GithubReleaseFailure).summary).not.toContain("secret_value");
+    expect((error as GithubReleaseFailure).summary).toBe("/Users/dev/private/repo token=secret_value prompt=do-not-persist");
   }
 });
 
-test("builds a deterministic bounded public projection and rejects private content", () => {
+test("sanitizes public PR text without removing delivery evidence", () => {
+  expect(sanitizePublicText("line\u0000\nnext\u007f")).toBe("linenext");
+  expect(sanitizePublicText("Bearer token-value gho_abcdef github_pat_abcdef sk-abcdef token=abc password: xyz secret = value api-key=key")).toBe("[redacted] [redacted] [redacted] [redacted] [redacted] [redacted] [redacted] [redacted]");
+  expect(sanitizePublicText(`commit ${headSha} https://github.com/acme/forge /Users/dev/code/forge`)).toContain(`commit ${headSha} https://github.com/acme/forge /Users/dev/code/forge`);
+  const truncated = sanitizePublicText("🌟".repeat(200), 300);
+  expect(Buffer.byteLength(truncated, "utf8")).toBeLessThanOrEqual(300);
+  expect(truncated).toMatch(/…$/);
+});
+
+test("builds a deterministic bounded public projection", () => {
   const projection = buildDraftPullRequestProjection({ taskTitle: "Original task title", pullRequestTitle: "Improve release publishing", pullRequestDescription: "Give reviewers clear context before they open the diff.", deliverySummary: "Implemented the approved release presentation.", changes: ["Use the approved plan for public Git metadata.", "Use the approved plan for public Git metadata."], filesChanged: ["src/main.ts", "src/main.ts"], commandsRun: ["pnpm test", "pnpm test"], testResults: ["2 passed"] });
   expect(projection.title).toBe("Improve release publishing");
   expect(projection.body).toBe(`## Summary
@@ -198,19 +206,13 @@ Implemented the approved release presentation.
 
   expect(() => buildDraftPullRequestProjection({ taskTitle: "Improve Forge releases", filesChanged: ["src/main.ts"] })).not.toThrow();
 
-  for (const input of [
-    { filesChanged: ["/Users/dev/private.txt"] },
-    { filesChanged: ["../secret.txt"] },
-    { filesChanged: ["C:\\Users\\private.txt"] },
-    { commandsRun: ["token=secret_value"] },
-    { commandsRun: ["prompt: private reasoning"] },
-    { commandsRun: [headSha] },
-    { changes: ["Expose task_1234567890abcdef"] },
-  ]) {
-    expect(() => buildDraftPullRequestProjection({ taskTitle: "Safe title", ...input })).toThrowError(GithubReleaseFailure);
-  }
+  const evidence = buildDraftPullRequestProjection({ taskTitle: "Safe title", pullRequestDescription: "Expose task_1234567890abcdef", filesChanged: ["/Users/dev/private.txt"], commandsRun: [`git show ${headSha}`, "token=secret_value"] });
+  expect(evidence.body).toContain("/Users/dev/private.txt");
+  expect(evidence.body).toContain(headSha);
+  expect(evidence.body).toContain("task_1234567890abcdef");
+  expect(evidence.body).toContain("[redacted]");
 });
 
-test("allows a corrected unsafe public projection to be retried", () => {
-  expect(isRetryableReleaseFailure("public-projection-unsafe")).toBe(true);
+test("keeps the historical public projection failure parseable without offering it as a retry path", () => {
+  expect(isRetryableReleaseFailure("public-projection-unsafe")).toBe(false);
 });

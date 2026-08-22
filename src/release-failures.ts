@@ -14,9 +14,9 @@ export const releaseFailureCopy: Record<ReleaseFailureCode, string> = {
   "ambiguous-provider-state": "GitHub returned contradictory pull-request state. Inspect it before retrying.",
   "provider-rate-limited": "GitHub rate-limited this release. Forge will retry at the recorded reset time.",
   "provider-unavailable": "GitHub release state could not be confirmed. Retry after checking provider availability.",
-  "public-projection-unsafe": "The public release preview contains unsafe content and must be corrected before publishing.",
+  "public-projection-unsafe": "A historical release projection needs attention.",
 };
 
 export function isRetryableReleaseFailure(code: ReleaseFailureCode): boolean {
-  return ["authentication-required", "invalid-provider-response", "remote-head-conflict", "ambiguous-provider-state", "provider-unavailable", "provider-rate-limited", "target-base-drift", "public-projection-unsafe"].includes(code);
+  return ["authentication-required", "invalid-provider-response", "remote-head-conflict", "ambiguous-provider-state", "provider-unavailable", "provider-rate-limited", "target-base-drift"].includes(code);
 }

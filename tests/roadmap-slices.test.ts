@@ -120,6 +120,25 @@ test("release adopts an existing open pull request for the branch identity", asy
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("release publishes a verification body containing a commit SHA and local path", async () => {
+  const value = await fixture();
+  try {
+    addReleaseFixtures(value.database);
+    const github = fakeGithub();
+    const service = new ReleaseService(value.database, new ArtifactStore(value.config.artifactRoot), github);
+    const release = await service.publish({
+      taskId: "task-a", companyId: "company-a", workflowId: "workflow-a",
+      coordinates: { projectRevisionId: "revision-a", repositoryPath: value.root, worktreePath: value.root, repository: "acme/forge", owner: "acme", headBranch: "issue/task-a", baseBranch: "main", expectedBaseSha: baseSha },
+      reviewedRevision: { reviewId: "review-a", developerExecutionId: "developer-a", commitSha: headSha, treeSha },
+      taskTitle: "Task A",
+      delivery: { commandsRun: [`git show ${headSha} /Users/dev/code/forge/src/github-release.ts`] },
+    });
+    expect(release.pullRequest.number).toBe(12);
+    expect(github.createdInput?.body).toContain(headSha);
+    expect(github.createdInput?.body).toContain("/Users/dev/code/forge/src/github-release.ts");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("release reconciles push and create timeouts after success without duplicate mutations", async () => {
   const value = await fixture();
   try {

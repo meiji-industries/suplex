@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 import { ArtifactStore } from "../src/artifacts.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { assertSafePublicProjection, createGithubReleasePort } from "../src/github-release.js";
+import { assertPublicProjectionBounds, createGithubReleasePort } from "../src/github-release.js";
 import { createActivities } from "../src/temporal/activities.js";
 import { jsonRequired } from "../src/task-utils.js";
 
@@ -84,7 +84,7 @@ test.skipIf(!enabled)("publishes and replays one owner-controlled GitHub draft",
     expect(observed).toHaveLength(1);
     expect(observed[0]).toMatchObject({ repository, headBranch: branch, baseBranch, headSha: reviewedCommit, baseSha: expectedBaseSha, isDraft: true, state: "open" });
     const published = jsonRequired(await command("gh", ["api", `repos/${repository}/pulls/${observed[0]!.number}`])) as { title: string; body: string };
-    assertSafePublicProjection(published);
+    assertPublicProjectionBounds(published);
     expect(published.title).toBe("Improve release publishing");
     expect(published.body).toContain("## Summary");
     expect(published.body).toContain("## Changes");

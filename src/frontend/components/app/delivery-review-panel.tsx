@@ -1,36 +1,44 @@
-import { Badge } from "../ui/badge.js";
 import { Card, CardContent, CardHeader, CardTitle } from "../ui/card.js";
-import { ReviewFindingRow } from "./review-finding-row.js";
-import { ReviewLineage } from "./review-lineage.js";
-import { RevisionIdentity } from "./revision-identity.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
 import type { ReactElement } from "react";
 
 type Task = TaskResponse;
 
-function artifactLink(taskId: string, artifactId: string, label: string): ReactElement {
-  return <a className="break-all text-primary underline underline-offset-2" href={`/api/tasks/${taskId}/review-artifacts/${artifactId}`} target="_blank" rel="noreferrer">{label}</a>;
+function reviewDate(createdAt: string): string {
+  return createdAt.slice(0, 10);
 }
 
-export function DeliveryReviewPanel({ task, repository }: { task: Task; repository?: string | undefined }): ReactElement | null {
+function completedRepairAttempt(task: Task, reviewId: string): number | undefined {
+  return task.reviewLineage.repairAttempts
+    .filter((attempt) => attempt.reviewId === reviewId && attempt.status === "completed")
+    .reduce<number | undefined>((latest, attempt) => latest === undefined || attempt.cycle > latest ? attempt.cycle : latest, undefined);
+}
+
+export function DeliveryReviewPanel({ task }: { task: Task; repository?: string | undefined }): ReactElement | null {
   const review = task.reviewLineage.currentReview;
   const blockerCode = task.deliveryReviewBlockerCode ?? task.deliveryRepairBlockerCode;
   if (!review && !blockerCode && !task.reviewLineage.reviewAttempts.length && !task.reviewLineage.repairAttempts.length && !task.reviewLineage.priorReviews.length) return null;
   const blockerSummary = task.deliveryReviewBlockerSummary ?? task.deliveryRepairBlockerSummary;
-  const blockerArtifactId = task.deliveryReviewBlockerEvidenceArtifactId ?? task.deliveryRepairBlockerEvidenceArtifactId;
+  const findings = review ? [...review.findings].sort((left, right) => Number(right.severity === "blocking") - Number(left.severity === "blocking")) : [];
   return (
-    <Card data-delivery-review-card size="sm" className="min-w-0 gap-0">
-      <CardHeader className="border-b py-2">
-        <CardTitle className="flex items-center justify-between gap-2 text-xs">
-          <span id="delivery-review-heading">Delivery review</span>
-          {review ? <Badge variant={review.outcome === "blocking" ? "destructive" : "secondary"}>{review.outcome}</Badge> : blockerCode ? <Badge variant="destructive">blocked</Badge> : null}
-        </CardTitle>
+    <Card data-delivery-review-card size="sm">
+      <CardHeader>
+        <CardTitle id="delivery-review-heading">Delivery review</CardTitle>
       </CardHeader>
-      <CardContent className="gap-3 py-3">
-        <section className="min-w-0 space-y-3" aria-labelledby="delivery-review-heading">
-          {blockerCode ? <div className="min-w-0 space-y-1 border-l-2 border-destructive pl-2 text-[12px]" role="alert"><div className="font-medium">{blockerCode}</div><p className="whitespace-pre-wrap break-words text-muted-foreground">{blockerSummary}</p>{blockerArtifactId ? artifactLink(task.id, blockerArtifactId, "blocker evidence") : null}<div className="text-[11px] text-muted-foreground">Owner: {task.owner} · Allowed: {task.allowedCommands.join(", ") || "none"}</div></div> : null}
-          {review ? <><p className="whitespace-pre-wrap break-words text-[13px]">{review.summary}</p><RevisionIdentity revision={review} repository={repository} /><div className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[11px]">{artifactLink(task.id, review.opinionArtifactId, "opinion")}{artifactLink(task.id, review.evidenceArtifactId, "evidence")}</div><div className="min-w-0 divide-y border-y">{review.findings.map((finding) => <ReviewFindingRow finding={finding} key={finding.id} />)}</div></> : null}
-          <ReviewLineage taskId={task.id} lineage={task.reviewLineage} repository={repository} />
+      <CardContent>
+        <section className="space-y-3" aria-labelledby="delivery-review-heading">
+          {review ? <>
+            <p className="whitespace-pre-wrap break-words text-[13px]">{review.summary}</p>
+            {findings.length ? <ul className="space-y-2 text-[12px]" aria-label="Review findings">{findings.map((finding) => {
+              const attempt = finding.disposition === "open" ? undefined : completedRepairAttempt(task, review.id);
+              const addressed = finding.disposition !== "open";
+              return <li className="flex min-w-0 items-start gap-2" key={finding.id}>
+                <input aria-label={addressed ? "Finding addressed" : "Finding open"} checked={addressed} className="mt-0.5 size-3.5 shrink-0 accent-foreground" readOnly type="checkbox" />
+                <span className="min-w-0"><span>{finding.rationale}</span>{attempt !== undefined ? <span className="ml-1 text-muted-foreground">fixed in attempt {attempt}</span> : addressed ? <span className="ml-1 text-muted-foreground">accepted</span> : null}<code className="ml-2 break-all text-[11px] text-muted-foreground">{finding.evidenceRef}</code></span>
+              </li>;
+            })}</ul> : null}
+          </> : blockerCode ? <p className="whitespace-pre-wrap break-words text-[13px]" role="alert">{blockerSummary ?? blockerCode}</p> : null}
+          {task.reviewLineage.priorReviews.length ? <details className="text-[12px]"><summary className="cursor-pointer text-muted-foreground">Previous reviews ({task.reviewLineage.priorReviews.length})</summary><ul className="mt-2 space-y-2 border-l pl-3">{task.reviewLineage.priorReviews.map((priorReview) => <li key={priorReview.id}><p className="whitespace-pre-wrap break-words">{priorReview.summary}</p><time className="text-[11px] text-muted-foreground" dateTime={priorReview.createdAt}>{reviewDate(priorReview.createdAt)}</time></li>)}</ul></details> : null}
         </section>
       </CardContent>
     </Card>

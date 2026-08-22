@@ -167,9 +167,6 @@ function artifactReference(artifact: Pick<StoredArtifact, "id" | "kind">) {
   return ArtifactReferenceSchema.parse({ id: artifact.id, kind: artifact.kind });
 }
 
-function registerArtifact(database: ForgeDatabase, artifact: StoredArtifact): void {
-  database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
-}
 
 function reconcileBlocker(error: unknown): { code: TargetBaseBlockerCode; owner: "human" | "provider" | "lead"; retryable: boolean; summary: string } {
   const code = error instanceof ForwardMergeFailure ? error.code : "provider-unavailable";
@@ -407,7 +404,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     durableArtifactReference,
     verifiedArtifactBytes,
     artifactReference,
-    registerArtifact,
+    registerArtifact: undefined,
     reconcileBlocker,
     asNonRetryableCapacityFailure,
     asNonRetryableApplicationFailure,

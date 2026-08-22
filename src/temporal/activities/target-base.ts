@@ -32,7 +32,7 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
       }
       let pinned: ReturnType<typeof parseAcceptedProjectRevision>;
       try { pinned = parseAcceptedProjectRevision(context.normalizedJson); } catch { return blocked("artifact_unavailable", "human", false, "The accepted project revision is unavailable or incomplete"); }
-      const artifacts = new ArtifactStore(config.artifactRoot);
+      const artifacts = new ArtifactStore(config.artifactRoot, database);
       const service = new ForwardMergeService(database, githubRelease, artifacts);
       let merge;
       try {
@@ -64,7 +64,6 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
       try {
         const verification = await runPinnedVerification({ worktreePath: context.worktreePath, setupCommand: pinned.setupCommand, verificationCommand: pinned.verificationCommand, runtimeRoot: config.runtimeRoot }, { guard });
         const verificationArtifact = await artifacts.putArtifact(input.companyId, "forward-merge-verification", { filename: `${merge.forwardMergeId ?? checkId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(verification), "utf8") });
-        registerArtifact(database, verificationArtifact);
         const recordVerification = (code: string, summary: string): void => {
           database.authTransaction((db) => db.prepare("UPDATE forge_forward_merges SET result_head = ?, result_tree = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, failure_code = ?, failure_summary = ?, updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ?").run(merge.mergeCommit, merge.tree, verificationArtifact.id, verificationArtifact.sha256, code, summary, new Date().toISOString(), merge.forwardMergeId ?? "", input.taskId, input.companyId));
         };

@@ -501,7 +501,6 @@ export class CiService {
       evidenceArtifact = artifact;
       evidenceArtifactId = artifact.id;
       evidenceArtifactSha256 = artifact.sha256;
-      this.database.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
     }
     try {
       this.database.authTransaction((db) => {

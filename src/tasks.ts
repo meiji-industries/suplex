@@ -1042,7 +1042,6 @@ export class TaskService {
     const brief = input.description === undefined ? undefined : await this.artifacts.putArtifact(current.companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from(description, "utf8") });
     const now = this.now().toISOString();
     this.database.authTransaction((db) => {
-      if (brief) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(brief.id, brief.companyId, brief.kind, brief.filename, brief.mimeType, brief.byteSize, brief.sha256, brief.storagePath, brief.createdAt);
       db.prepare("UPDATE forge_tasks SET title = ?, brief_artifact_id = COALESCE(?, brief_artifact_id), updated_at = ? WHERE id = ? AND company_id = ?").run(title, brief?.id, now, taskId, current.companyId);
       this.auth.recordAuditEventInTransaction(db, actorUserId, "task_details_updated", undefined, current.companyId, { taskId, ...(input.title !== undefined ? { title } : {}), ...(input.description !== undefined ? { descriptionUpdated: "true" } : {}) });
     });
@@ -1360,7 +1359,6 @@ export class TaskService {
     const blocker = this.database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'decision-blocker'").get(blockerOutput.outputArtifactId, task.companyId) as { sha256: string } | undefined);
     if (!blocker) throw new TaskFailure("Decision blocker evidence is unavailable", [], 409);
     const artifact = await this.artifacts.putArtifact(task.companyId, "decision-answer", { filename: `decision-answer-${task.id}.md`, mimeType: "text/markdown", bytes: Buffer.from(normalizedAnswer, "utf8") });
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
     try {
       const input: ResolveDecisionBlockerInput = { expectedRevision, actorUserId, answerArtifactId: artifact.id };
       const state = await this.workflow.resolveDecisionBlocker(task.workflowId, input);

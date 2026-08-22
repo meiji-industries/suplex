@@ -442,7 +442,7 @@ export class AgentService {
     } catch (error) {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("repair-plan-failed", "Codex Lead delivery repair planning failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
-      this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); });
+      this.database.authTransaction((db) => { db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); });
       await this.cleanupTerminalWrapper(executionId);
       throw failure;
     }
@@ -480,12 +480,6 @@ export class AgentService {
       this.artifacts.putArtifact(input.companyId, "agent-evidence", { filename: `${input.source}-${input.planRevision}-repair.json`, mimeType: "application/json", bytes: Buffer.from(evidenceText, "utf8") }),
     ]);
     const planId = `repair_plan_${createHash("sha256").update(JSON.stringify({ workflowId: input.workflowId, source: input.source, planRevision: input.planRevision, leadSessionRef: input.leadSessionRef, findings: openFindings.map((finding) => finding.findingId), subjectCommit: input.subjectCommit, subjectTree: input.subjectTree })).digest("hex").slice(0, 32)}`;
-    this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-        planArtifact.id, planArtifact.companyId, planArtifact.kind, planArtifact.filename, planArtifact.mimeType, planArtifact.byteSize, planArtifact.sha256, planArtifact.storagePath, planArtifact.createdAt,
-        evidenceArtifact.id, evidenceArtifact.companyId, evidenceArtifact.kind, evidenceArtifact.filename, evidenceArtifact.mimeType, evidenceArtifact.byteSize, evidenceArtifact.sha256, evidenceArtifact.storagePath, evidenceArtifact.createdAt,
-      );
-    });
     this.database.authTransaction((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidenceArtifact.id, executionId));
     await this.cleanupTerminalWrapper(executionId);
     return DeliveryRepairPlanResultSchema.parse({ planId, leadExecutionId: executionId, planArtifactId: planArtifact.id, planSha256: planArtifact.sha256, evidenceArtifactId: evidenceArtifact.id, leadSessionRef: input.leadSessionRef, summary, findings: openFindings });
@@ -581,9 +575,6 @@ export class AgentService {
       repositoryEvidence: { artifactId: repositoryEvidenceArtifact.id, sha256: repositoryEvidenceArtifact.sha256 },
     };
     const manifestArtifact = await this.artifacts.putArtifact(input.companyId, "planning-evidence-manifest", { filename: `${input.taskId}-${input.revision}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(planningManifest), "utf8") });
-    this.database.authTransaction((db) => {
-      for (const artifact of [repositoryEvidenceArtifact, manifestArtifact]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    });
     let executionId = `agent_${randomBytes(12).toString("hex")}`;
     let sessionRef: string | undefined = resumeSessionRef;
     let rawSessionId: string | undefined = resumeSessionRef ? await this.sessionStore.read(resumeSessionRef) : undefined;
@@ -657,7 +648,6 @@ export class AgentService {
     const revisionIdentity = JSON.parse(row.normalized_json) as Record<string, unknown>;
     const inputManifestArtifact = await this.artifacts.putArtifact(input.companyId, "lead-input-manifest", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ companyId: input.companyId, taskId: input.taskId, projectId: input.projectId, workflowId: input.workflowId, briefArtifactId: input.briefArtifactId, briefSha256: row.brief_sha256, imageArtifacts: input.imageArtifactIds.map((id) => { const image = images.find((candidate) => candidate.id === id); return image ? { artifactId: id, sha256: image.sha256, mimeType: image.mime_type, filename: image.filename } : { artifactId: id }; }), projectRevisionId: input.projectRevisionId, normalizedRevisionSha256: createHash("sha256").update(row.normalized_json).digest("hex"), repositoryEvidenceArtifactId: executionRepositoryEvidenceArtifact.id, repositoryEvidenceSha256: executionRepositoryEvidenceArtifact.sha256, repository: { repository: revisionIdentity.repository, baseBranch: revisionIdentity.baseBranch, targetBranch: revisionIdentity.targetBranch, baseSha: revisionIdentity.baseSha, targetSha: revisionIdentity.targetSha }, leadProfile: { id: leadProfile.id, provider: leadProfile.provider, model: leadProfile.model, reasoningLevel: leadProfile.reasoningLevel, servicePriority: leadProfile.servicePriority }, ...(sessionRef ? { leadSessionRef: sessionRef } : {}), ...(input.resume ? { instructionArtifactId: input.resume.instructionArtifactId, instructionSha256: input.resume.instructionSha256, resumeReason: input.resume.reason } : {}) }, null, 2), "utf8") });
     this.database.authTransaction((db) => {
-      for (const artifact of [executionRepositoryEvidenceArtifact, inputManifestArtifact]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
       db.prepare("UPDATE forge_agent_executions SET session_ref = ? WHERE id = ?").run(sessionRef ?? null, executionId);
     });
     try {
@@ -749,7 +739,6 @@ export class AgentService {
       const cancelled = runtime.signal?.aborted === true;
       const failure = cancelled ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("lead-failed", "Codex Lead execution failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
-      this.database.authQuery((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt));
       await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, cancelled_at = ?, evidence_artifact_id = ? WHERE id = ?").run(cancelled ? "cancelled" : "failed", this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, cancelled ? this.now().toISOString() : null, evidence.id, executionId));
       throw failure;
     } finally {
@@ -846,7 +835,6 @@ export class AgentService {
       const planArtifact = await this.artifacts.putArtifact(input.companyId, "merge-conflict-plan", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(output, null, 2), "utf8") });
       const now = this.now().toISOString();
       this.database.authTransaction((db) => {
-        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, planArtifact.id, planArtifact.companyId, planArtifact.kind, planArtifact.filename, planArtifact.mimeType, planArtifact.byteSize, planArtifact.sha256, planArtifact.storagePath, planArtifact.createdAt);
         db.prepare("INSERT INTO forge_merge_conflict_resolutions (id, task_id, company_id, workflow_id, forward_merge_id, prior_head, target_base_sha, conflict_files_json, plan_artifact_id, plan_evidence_artifact_id, lead_execution_id, lead_session_ref, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?) ON CONFLICT(workflow_id, prior_head, target_base_sha) DO UPDATE SET plan_artifact_id = excluded.plan_artifact_id, plan_evidence_artifact_id = excluded.plan_evidence_artifact_id, lead_execution_id = excluded.lead_execution_id, lead_session_ref = excluded.lead_session_ref, status = 'planned', updated_at = excluded.updated_at").run(planId, input.taskId, input.companyId, input.workflowId, input.forwardMergeId, input.priorHead, input.targetBaseSha, JSON.stringify(conflict.conflictFiles), planArtifact.id, evidence.id, executionId, input.leadSessionRef, now, now);
         db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(now, now, evidence.id, executionId);
       });
@@ -856,7 +844,6 @@ export class AgentService {
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const finalStatus = failure.code === "cancelled" ? "cancelled" : "failed";
       this.database.authTransaction((db) => {
-        db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
         db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, cancelled_at = ?, evidence_artifact_id = ? WHERE id = ?").run(finalStatus, this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, finalStatus === "cancelled" ? this.now().toISOString() : null, evidence.id, executionId);
       });
       throw failure;
@@ -879,7 +866,6 @@ export class AgentService {
     const { developerExecution, deliveryArtifact, developerEvidence } = references;
     const evidence = await this.persistEvidence(input.companyId, executionId, [JSON.stringify({ type: "forge.review-preflight-blocked", code })]);
     this.database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
       db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, failure_code, failure_summary, evidence_artifact_id) VALUES (?, ?, ?, ?, 'planner', 'blocked', 1, ?, ?, ?, ?, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.subject.leadSessionRef, startedAt, this.now().toISOString(), code, summary, evidence.id);
       db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, developer_execution_id, delivery_artifact_id, developer_evidence_artifact_id, lead_execution_id, lead_session_ref, developer_session_ref, status, correction_attempts, evidence_artifact_id, failure_code, failure_summary, supersedes_review_id, created_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'blocked', 0, ?, ?, ?, ?, ?, ?)").run(attemptId, input.taskId, input.companyId, input.workflowId, input.subject.planRevision, input.subject.targetBaseSha, input.subject.subjectCommit, input.subject.subjectTree, developerExecution.id, deliveryArtifact.id, developerEvidence.id, executionId, input.subject.leadSessionRef, input.subject.developerSessionRef, evidence.id, code, summary, input.supersedesReviewId, startedAt, this.now().toISOString());
     });
@@ -943,7 +929,6 @@ export class AgentService {
       const planArtifact = await this.artifacts.putArtifact(input.companyId, "ci-repair-plan", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(validatedPlan, null, 2), "utf8") });
       const planId = `ci_plan_${randomBytes(12).toString("hex")}`;
       this.database.authTransaction((db) => {
-        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, planArtifact.id, planArtifact.companyId, planArtifact.kind, planArtifact.filename, planArtifact.mimeType, planArtifact.byteSize, planArtifact.sha256, planArtifact.storagePath, planArtifact.createdAt);
         db.prepare("INSERT INTO forge_ci_repair_plans (id, task_id, company_id, workflow_id, ci_run_id, ci_attempt_id, failed_head_sha, lead_execution_id, lead_session_ref, plan_artifact_id, evidence_artifact_id, status, summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'planned', ?, ?, ?)").run(planId, input.taskId, input.companyId, input.workflowId, input.ciRunId, input.ciAttemptId, input.failedHeadSha, executionId, input.leadSessionRef, planArtifact.id, evidence.id, validatedPlan.rootCause, this.now().toISOString(), this.now().toISOString());
         db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidence.id, executionId);
       });
@@ -951,7 +936,7 @@ export class AgentService {
     } catch (error) {
       const reason = error instanceof AgentFailure ? error : new AgentFailure("ci-repair-plan-failed", "CI repair planning failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
-      this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), reason.code, reason.message, evidence.id, executionId); });
+      this.database.authTransaction((db) => { db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), reason.code, reason.message, evidence.id, executionId); });
       throw reason;
     }
   }
@@ -1167,7 +1152,6 @@ export class AgentService {
       const priorReview = isFinalReview ? undefined : this.database.authQuery((db) => db.prepare("SELECT id FROM forge_delivery_reviews WHERE workflow_id = ? AND subject_commit = ?").get(input.workflowId, subjectCommit) as { id: string } | undefined);
       const reviewId = priorReview?.id ?? `delivery_review_${randomBytes(12).toString("hex")}`;
       this.database.authTransaction((db) => {
-        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, opinion.id, opinion.companyId, opinion.kind, opinion.filename, opinion.mimeType, opinion.byteSize, opinion.sha256, opinion.storagePath, opinion.createdAt);
         if (isFinalReview) {
           db.prepare("INSERT INTO forge_final_reviews (id, task_id, company_id, workflow_id, release_id, ci_run_id, delivery_review_id, developer_execution_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.releaseId, input.ciRunId, input.deliveryReviewId, subject.developerExecutionId, subject.planRevision, targetBaseSha, subjectCommit, subjectTree, executionId, leadSessionRef, review.outcome, review.summary, opinion.id, evidence.id, this.now().toISOString());
           for (const finding of review.findings) db.prepare("INSERT INTO forge_final_review_findings (id, review_id, task_id, company_id, severity, rationale, evidence_ref, disposition, repair_instruction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(finding.findingId, reviewId, input.taskId, input.companyId, finding.severity, finding.rationale, finding.evidenceRef, finding.disposition, finding.repairInstruction);
@@ -1193,7 +1177,6 @@ export class AgentService {
       const summary = code === "cancelled" ? failure.message : safeBlockSummary(code, code === "correction-exhausted", failure.message);
       const finalStatus = failure.code === "cancelled" ? "cancelled" : isFinalReview || !expectedFailure ? "failed" : "blocked";
       this.database.authTransaction((db) => {
-        db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
         db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, cancelled_at = ?, evidence_artifact_id = ? WHERE id = ?").run(finalStatus, this.now().toISOString(), this.now().toISOString(), code, summary, finalStatus === "cancelled" ? this.now().toISOString() : null, evidence.id, executionId);
         if (!isFinalReview) db.prepare("UPDATE forge_delivery_review_attempts SET status = ?, correction_attempts = ?, evidence_artifact_id = ?, failure_code = ?, failure_summary = ?, finished_at = ? WHERE id = ?").run(finalStatus === "cancelled" ? "failed" : expectedFailure ? "blocked" : "failed", correctionAttempts, evidence.id, code, summary, this.now().toISOString(), attemptId);
       });
@@ -1293,7 +1276,6 @@ export class AgentService {
       const reviewArtifact = await this.artifacts.putArtifact(input.companyId, "supplemental-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
       const reviewId = `review_${randomBytes(12).toString("hex")}`;
       this.database.authTransaction((db) => {
-        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, reviewArtifact.id, reviewArtifact.companyId, reviewArtifact.kind, reviewArtifact.filename, reviewArtifact.mimeType, reviewArtifact.byteSize, reviewArtifact.sha256, reviewArtifact.storagePath, reviewArtifact.createdAt);
         db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidence.id, executionId);
       });
       this.database.authTransaction((db) => db.prepare("INSERT INTO forge_plan_reviews (id, task_id, company_id, workflow_id, plan_revision, profile_id, execution_id, session_ref, opinion_artifact_id, evidence_artifact_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.revision, profile.id, executionId, sessionRef, reviewArtifact.id, evidence.id, review.summary, this.now().toISOString()));
@@ -1303,7 +1285,6 @@ export class AgentService {
       const evidence = await this.persistEvidence(input.companyId, executionId, lines);
       const finalStatus = failure.code === "cancelled" ? "cancelled" : "failed";
       this.database.authTransaction((db) => {
-        db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
         db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, cancelled_at = ?, evidence_artifact_id = ? WHERE id = ?").run(finalStatus, this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, finalStatus === "cancelled" ? this.now().toISOString() : null, evidence.id, executionId);
       });
       throw failure;
@@ -1353,7 +1334,6 @@ export class AgentService {
       const manifest = undefined;
       const persisted = await this.persistOutput({ taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, projectId: rawInput.projectId, projectRevisionId: rawInput.projectRevisionId, briefArtifactId: rawInput.briefArtifactId, imageArtifactIds: rawInput.imageArtifactIds, roleProfiles: rawInput.roleProfiles, revision: rawInput.revision }, executionId, rawInput.leadSessionRef, lines, output, manifest, { finalVersion: 2, ...(rawInput.originalPlanSubject ? { originalPlanRevision: rawInput.originalPlanSubject.originalPlanRevision, supersedesOutputId: rawInput.originalPlanSubject.outputId } : {}) });
       const responseArtifact = await this.artifacts.putArtifact(rawInput.companyId, "lead-review-response", { filename: `${executionId}-review-response.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(response, null, 2), "utf8") });
-      this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(responseArtifact.id, responseArtifact.companyId, responseArtifact.kind, responseArtifact.filename, responseArtifact.mimeType, responseArtifact.byteSize, responseArtifact.sha256, responseArtifact.storagePath, responseArtifact.createdAt));
       const reviewRow = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_plan_reviews WHERE opinion_artifact_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(rawInput.supplementalReviewArtifactId, rawInput.taskId, rawInput.companyId, rawInput.workflowId) as { id: string } | undefined);
       if (reviewRow && rawInput.originalPlanSubject) new PlanGovernanceRepository(this.database).appendLeadReviewResponse({ reviewId: reviewRow.id, taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, originalPlanRevision: rawInput.originalPlanSubject.originalPlanRevision, leadExecutionId: executionId, leadSessionRef: rawInput.leadSessionRef, responseArtifactId: responseArtifact.id, responseArtifactSha256: responseArtifact.sha256, ...(persisted.result.planSubject ? { resultOutputId: persisted.result.planSubject.outputId } : {}), ...(persisted.result.blockerSubject ? { resultBlockerArtifactId: persisted.result.blockerSubject.artifactId } : {}) });
       await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), persisted.evidence.id, executionId));
@@ -1362,7 +1342,7 @@ export class AgentService {
       const failure = runtime.signal?.aborted ? new AgentFailure("cancelled", "The Codex Lead consolidation was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("consolidation-failed", "Lead consolidation failed");
       const evidence = await this.persistEvidence(rawInput.companyId, executionId, lines);
       const finalStatus = failure.code === "cancelled" ? "cancelled" : "failed";
-      this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, cancelled_at = ?, evidence_artifact_id = ? WHERE id = ?").run(finalStatus, this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, finalStatus === "cancelled" ? this.now().toISOString() : null, evidence.id, executionId); });
+      this.database.authTransaction((db) => { db.prepare("UPDATE forge_agent_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, cancelled_at = ?, evidence_artifact_id = ? WHERE id = ?").run(finalStatus, this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, finalStatus === "cancelled" ? this.now().toISOString() : null, evidence.id, executionId); });
       throw failure;
     } finally { clearInterval(heartbeat); stopCancellationTracking(); await this.cleanupTerminalWrapper(executionId); }
   }
@@ -1649,13 +1629,6 @@ export class AgentService {
     const planSubject = manifest ? { companyId: input.companyId, issueId: input.taskId, workflowId: input.workflowId, originalPlanRevision: options.originalPlanRevision ?? input.revision + 1, outputId, outputRevision: input.revision, finalVersion, artifactId: outputArtifact.id, artifactSha256: outputArtifact.sha256, leadSessionRef: sessionRef, leadExecutionId: executionId, evidenceManifestArtifactId: manifest.id, evidenceManifestSha256: manifest.sha256 } as const : undefined;
     const materialityEvidence = materialityArtifact ? { categories, artifactId: materialityArtifact.id, artifactSha256: materialityArtifact.sha256 } as const : undefined;
     const blockerSubject = output.kind === "decision_blocker" && manifest ? { companyId: input.companyId, issueId: input.taskId, workflowId: input.workflowId, artifactId: outputArtifact.id, artifactSha256: outputArtifact.sha256, leadSessionRef: sessionRef, leadExecutionId: executionId, evidenceManifestArtifactId: manifest.id, evidenceManifestSha256: manifest.sha256, category: "human_decision" as const, resumePhase: "planning" as const } : undefined;
-    this.database.authTransaction((db) => {
-      db.prepare(`INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt,
-        outputArtifact.id, outputArtifact.companyId, outputArtifact.kind, outputArtifact.filename, outputArtifact.mimeType, outputArtifact.byteSize, outputArtifact.sha256, outputArtifact.storagePath, outputArtifact.createdAt,
-      );
-      if (materialityArtifact) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(materialityArtifact.id, materialityArtifact.companyId, materialityArtifact.kind, materialityArtifact.filename, materialityArtifact.mimeType, materialityArtifact.byteSize, materialityArtifact.sha256, materialityArtifact.storagePath, materialityArtifact.createdAt);
-    });
     if (planSubject && manifest) {
       new PlanGovernanceRepository(this.database).appendPlanVersion({ subject: planSubject, kind: output.kind, evidenceArtifactId: evidence.id, evidenceArtifactSha256: evidence.sha256, ...(materialityArtifact ? { materialityEvidenceArtifactId: materialityArtifact.id, materialityEvidenceSha256: materialityArtifact.sha256 } : {}), summary, ...(options.supersedesOutputId ? { supersedesOutputId: options.supersedesOutputId } : {}) });
     } else {

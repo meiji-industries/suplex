@@ -1,6 +1,6 @@
 import { isApiError } from "./api.js";
 import { ISSUE_PHASES, type IssuePhase } from "../../issue-phases.js";
-import type { AttentionActionResponse, AttentionEvidenceResponse, AttentionItemResponse, CompanyAttentionResponse } from "../../http/contracts/attention.js";
+import type { AttentionActionResponse, AttentionItemResponse, CompanyAttentionResponse } from "../../http/contracts/attention.js";
 import type { CredentialResponse, InvitationSummaryResponse } from "../../http/contracts/common.js";
 import type { AgentResponse, ModelResponse, ProfileResponse, ProjectCheckResponse, ProjectResponse } from "../../http/contracts/projects.js";
 import type { HermesAdminAgent } from "../../http/contracts/hermes.js";
@@ -17,7 +17,6 @@ export type ApiProject = ProjectResponse;
 export type ApiAttentionAction = AttentionActionResponse;
 export type ApiAttentionItem = AttentionItemResponse;
 export type ApiAttentionCompany = CompanyAttentionResponse;
-export type ApiAttentionEvidence = AttentionEvidenceResponse;
 export type ApiTask = TaskResponse;
 export type TaskPhase = IssuePhase;
 export type ApiCi = NonNullable<ApiTask["ci"]>;

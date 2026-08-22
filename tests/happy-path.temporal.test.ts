@@ -212,7 +212,6 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
     expect(projections.find((state) => state.phase === "delivery_reviewed")).toMatchObject({ resultCommit: observedCommit, resultTree: observedTree });
 
     expect(projectedDatabase.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = ?").get(issueId))).toEqual({ revision: done.revision, phase: "done", pending_action: "Merged" });
-    expect(projectedDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_attention_items WHERE task_id = ? AND active = 1").get(issueId))).toEqual({ count: 0 });
 
     const phaseSequence = projections.map((state) => state.phase).filter((phase, index, all) => phase !== all[index - 1]);
     expect(phaseSequence).toEqual([

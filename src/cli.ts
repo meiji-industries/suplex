@@ -11,7 +11,6 @@ import { startForge } from "./runtime.js";
 import { StructuredLogger } from "./logging.js";
 import { runSetup } from "./setup.js";
 import { BackupService, reconcileRestoredState } from "./backup.js";
-import { AttentionService } from "./attention.js";
 import { CapacityManager } from "./capacity.js";
 import { createGithubReleasePort } from "./github-release.js";
 import { ProjectionRebuildFailure, ProjectionRebuildService } from "./projection-rebuild.js";
@@ -86,7 +85,7 @@ async function main(): Promise<void> {
           rebuildFailure = { code: error.code, summary: error.message };
         }
         const restoredAuth = new AuthService(restoredDatabase, config);
-        const companies = new AttentionService(restoredDatabase, restoredAuth).rebuildAll();
+        const companies = restoredAuth.listVisibleCompanies("admin").length;
         await reconcileAgentExecutions(restoredDatabase);
         await reconcileDeveloperExecutions(restoredDatabase);
         new CapacityManager(restoredDatabase, config).reconcileFromLedgers();
@@ -119,8 +118,6 @@ async function main(): Promise<void> {
     const database = new ForgeDatabase(config.databasePath);
     try {
       const rebuild = await new ProjectionRebuildService(database, config).rebuild();
-      const attention = new AttentionService(database, new AuthService(database, config));
-      attention.rebuildAll();
       await reconcileAgentExecutions(database);
       await reconcileDeveloperExecutions(database);
       new CapacityManager(database, config).reconcileFromLedgers();

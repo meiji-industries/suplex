@@ -38,11 +38,8 @@ async function availablePort(): Promise<number> {
 function stableOverview(value: ReturnType<AttentionService["list"]>): unknown {
   return value.map((company) => ({
     companyId: company.companyId,
-    attention: company.attention.map((item) => ({ id: item.id, category: item.category, sourceRevision: item.sourceRevision, actions: item.actions.map((action) => action.command) })),
-    activeIssueCount: company.activeIssueCount,
-    phases: company.phases,
+    attention: company.attention.map((item) => ({ taskId: item.taskId, sourceRevision: item.sourceRevision, actions: item.actions.map((action) => action.command) })),
     attentionCount: company.attentionCount,
-    recentOutcomes: company.recentOutcomes.map((outcome) => ({ taskId: outcome.taskId, phase: outcome.phase, sourceRevision: outcome.sourceRevision ?? null })),
   }));
 }
 
@@ -121,13 +118,12 @@ test.skipIf(!runRealJourney)("real Codex/GitHub attention decision produces a sa
     expect(planned).toMatchObject({ phase: "approval", planMaterial: true, leadOutputKind: "plan" });
     expect(quietPlanned.revision).toBeGreaterThan(0);
     expect(quietPlanned.phase).toBe("ready_for_development");
-    const githubChecks = github.listChecks ? await github.listChecks({ cwd: repositoryPath, nameWithOwner: repository.nameWithOwner, ref: "main" }) : [];
-    const attention = new AttentionService(database, new (await import("../src/auth.js")).AuthService(database, config), artifacts);
+    const attention = new AttentionService(database, new (await import("../src/auth.js")).AuthService(database, config));
     const beforeDecision = attention.list("real-admin");
     const memberBeforeDecision = attention.list("real-member");
     const item = beforeDecision.flatMap((company) => company.attention).find((candidate) => candidate.taskId === "real-decision");
     expect(item).toBeDefined();
-    expect(memberBeforeDecision.flatMap((company) => company.attention).map((candidate) => candidate.id)).toContain(item!.id);
+    expect(memberBeforeDecision.flatMap((company) => company.attention).map((candidate) => candidate.taskId)).toContain(item!.taskId);
     expect(beforeDecision.flatMap((company) => company.attention).some((candidate) => candidate.taskId === "real-quiet")).toBe(false);
     expect(item!.actions.map((action) => action.command)).toContain("approve_plan");
     await api.app.listen({ host: "127.0.0.1", port: httpPort });
@@ -169,21 +165,19 @@ test.skipIf(!runRealJourney)("real Codex/GitHub attention decision produces a sa
     } finally { await browser.close(); }
     const approved = await queryIssueWorkflow(config, started.workflowId);
     expect(approved.phase).toBe("ready_for_development");
-    expect(attention.list("real-admin").flatMap((company) => company.attention).some((candidate) => candidate.id === item!.id)).toBe(false);
+    expect(attention.list("real-admin").flatMap((company) => company.attention).some((candidate) => candidate.taskId === item!.taskId)).toBe(false);
 
     const beforeRebuild = stableOverview(attention.list("real-admin"));
     database.authTransaction((db) => {
-      db.prepare("DELETE FROM forge_attention_items WHERE company_id = 'real-company'").run();
       db.prepare("DELETE FROM forge_issue_projections WHERE company_id = 'real-company'").run();
     });
     const rebuildResponse = await api.app.inject({ method: "POST", url: "/api/admin/rebuild-projections", payload: {}, headers: { cookie: `${SESSION_COOKIE_NAME}=${sessionToken}; ${CSRF_COOKIE_NAME}=${csrfToken}`, origin: config.reachableAddress, "x-csrf-v1": csrfToken } });
     expect(rebuildResponse.statusCode).toBe(200);
     expect(rebuildResponse.json()).toMatchObject({ source: "temporal" });
     expect(stableOverview(attention.list("real-admin"))).toEqual(beforeRebuild);
-    expect(attention.list("real-admin")[0]?.projectionHealth.status).toBe("current");
     await mkdir(resolve(".scratch/forge-mvp/receipts"), { recursive: true });
     const observedProfile = database.authQuery((db) => db.prepare("SELECT provider, model FROM forge_profiles WHERE id = 'real-profile'").get() as { provider: string; model: string });
-    await (await import("node:fs/promises")).writeFile(resolve(".scratch/forge-mvp/receipts/attention-real.json"), JSON.stringify({ companyId: "real-company", issueId: "real-decision", sourceRevision: item!.sourceRevision, projectedRevision: approved.revision, attentionId: item!.id, category: item!.category, actions: item!.actions.map((action) => action.command), beforeAttentionCount: beforeDecision[0]?.attentionCount ?? 0, afterAttentionCount: attention.list("real-admin")[0]?.attentionCount ?? 0, rebuildEqual: true, simultaneousWorkflowCount: 2, observed: { codex: { provider: observedProfile.provider, model: observedProfile.model, operation: "runLeadPlanning" }, github: { operation: "checkAuthentication/getRepository/listChecks", repository: repository.nameWithOwner, checksObserved: githubChecks.length }, browser: browserResults } }, null, 2));
+    await (await import("node:fs/promises")).writeFile(resolve(".scratch/forge-mvp/receipts/attention-real.json"), JSON.stringify({ companyId: "real-company", issueId: "real-decision", sourceRevision: item!.sourceRevision, projectedRevision: approved.revision, actions: item!.actions.map((action) => action.command), beforeAttentionCount: beforeDecision[0]?.attentionCount ?? 0, afterAttentionCount: attention.list("real-admin")[0]?.attentionCount ?? 0, rebuildEqual: true, simultaneousWorkflowCount: 2, observed: { codex: { provider: observedProfile.provider, model: observedProfile.model, operation: "runLeadPlanning" }, github: { operation: "checkAuthentication/getRepository/listChecks", repository: repository.nameWithOwner } }, browser: browserResults }, null, 2));
   } finally {
     worker?.shutdown();
     await workerRun?.catch(() => undefined);

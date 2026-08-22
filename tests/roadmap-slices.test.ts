@@ -104,18 +104,13 @@ test("capacity is durable, FIFO, bounded, and restart-reconcilable", async () =>
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
-test("attention rebuild is deterministic, scoped, and quiet for ordinary work", async () => {
+test("attention is quiet for ordinary projected work", async () => {
   const value = await fixture();
   try {
-    const auth = new AuthService(value.database, value.config);
-    const attention = new AttentionService(value.database, auth);
-    const first = attention.list("admin");
-    expect(first[0]).toMatchObject({ companyId: "company-a", attentionCount: 0, attention: [], projectionHealth: expect.objectContaining({ status: "unknown" }) });
+    const attention = new AttentionService(value.database, new AuthService(value.database, value.config));
+    expect(attention.list("admin")[0]).toMatchObject({ companyId: "company-a", attentionCount: 0, attention: [] });
     value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'development', allowed_commands_json = '[]' WHERE task_id = 'task-a'").run());
-    const rebuilt = attention.list("admin");
-    expect(rebuilt.find((company) => company.companyId === "company-a")?.attention).toEqual([]);
-    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_attention_items WHERE company_id = 'company-a' AND active = 1").get())).toEqual({ count: 0 });
-    expect(() => attention.get("admin", "missing-task")).toThrow(expect.objectContaining({ statusCode: 404 }));
+    expect(attention.list("admin").find((company) => company.companyId === "company-a")?.attention).toEqual([]);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -393,8 +388,6 @@ test("restore drill preserves users, completed work, artifacts, and draft releas
       expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_hermes_pairing_codes").get())).toEqual({ count: 0 });
       expect(restoredDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_external_agent_credentials").get())).toEqual({ count: 0 });
 
-      restoredDatabase.authTransaction((db) => db.prepare("DELETE FROM forge_attention_items").run());
-      expect(new AttentionService(restoredDatabase, new AuthService(restoredDatabase, value.config)).rebuildAll()).toBe(2);
       new CapacityManager(restoredDatabase, value.config).reconcileFromLedgers();
 
       let providerReads = 0;

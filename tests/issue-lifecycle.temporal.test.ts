@@ -125,12 +125,6 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     const ciProviderFailure = await startCiFixture("ci-provider-failure");
     const providerFailureState = await waitForPhase(ciProviderFailure.workflowId, "delivery_blocked");
     expect(providerFailureState).toMatchObject({ phase: "delivery_blocked", ciOutcome: "provider_unavailable", blocker: { category: "provider_connectivity_exhausted", evidence: { artifactId: artifacts.ciProviderEvidence.id, sha256: artifacts.ciProviderEvidence.sha256, kind: "ci-evidence" }, actions: expect.arrayContaining([expect.objectContaining({ command: "reconcile_ci" }), expect.objectContaining({ command: "cancel_issue" })]) } });
-    let providerFailureAttention = database.authQuery((db) => db.prepare("SELECT active, category, evidence_artifact_id FROM forge_attention_items WHERE task_id = 'ci-provider-failure'").get());
-    for (let attempt = 0; attempt < 40 && !providerFailureAttention; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      providerFailureAttention = database.authQuery((db) => db.prepare("SELECT active, category, evidence_artifact_id FROM forge_attention_items WHERE task_id = 'ci-provider-failure'").get());
-    }
-    expect(providerFailureAttention).toMatchObject({ active: 1, category: "provider_connectivity_exhausted", evidence_artifact_id: artifacts.ciProviderEvidence.id });
 
     const ciRepair = await startCiFixture("ci-repair");
     // The CI repair itself lands delivery_ready, but the auto-chain immediately runs the review
@@ -231,7 +225,6 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     expect(failedIssue).toMatchObject({ phase: "failed", revision: 3, owner: "human", allowedCommands: ["start_planning", "continue_work", "cancel_issue"], pendingAction: "The configured model is unavailable for the active provider account. Select a supported model, then retry.", blocker: { category: "provider_ambiguity", actions: expect.arrayContaining([expect.objectContaining({ command: "start_planning" }), expect.objectContaining({ command: "cancel_issue" })]), evidence: { kind: "attention-evidence" } } });
     expect(state.permanentPlanningCalls).toBe(1);
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = 'issue-permanent-failure'").get())).toEqual({ revision: 3, phase: "failed", pending_action: "The configured model is unavailable for the active provider account. Select a supported model, then retry." });
-    expect(database.authQuery((db) => db.prepare("SELECT active, category, evidence_artifact_id FROM forge_attention_items WHERE task_id = 'issue-permanent-failure'").get())).toMatchObject({ active: 1, category: "provider_ambiguity" });
     state.permanentPlanningFailure = false;
     const recoveredIssue = await executeIssueCommand(config, startedPermanentFailure.workflowId, "start_planning", { expectedRevision: 3, actorUserId: "issue-admin" });
     expect(recoveredIssue).toMatchObject({ phase: "approval", revision: 7, planRevision: 4 });

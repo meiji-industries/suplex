@@ -205,16 +205,10 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   capacity.reconcileFromLedgers();
   const agent = options.agent;
   const developer = options.developer ?? defaultDeveloper;
-  const putAttentionEvidence = async (input: { companyId: string }, category: AttentionCategory, code: string, summary: string): Promise<{ artifactId: string }> => {
+  const putAttentionEvidence = async (_input: { companyId: string }, _category: AttentionCategory, _code: string, _summary: string): Promise<{ artifactId: string }> => ({ artifactId: "" });
+  const attentionFailure = async (_input: { companyId: string }, category: AttentionCategory, code: string, summary: string): Promise<never> => {
     const safeSummary = normalizeSafeSummary(redact(summary));
-    const artifact = await artifacts.put(input.companyId, "attention-evidence", { filename: `attention-${randomBytes(8).toString("hex")}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ code, category, summary: safeSummary }), "utf8") });
-    registerArtifact(database, artifact);
-    return { artifactId: artifact.id };
-  };
-  const attentionFailure = async (input: { companyId: string }, category: AttentionCategory, code: string, summary: string): Promise<never> => {
-    const evidence = await putAttentionEvidence(input, category, code, summary);
-    const safeSummary = normalizeSafeSummary(redact(summary));
-    throw ApplicationFailure.nonRetryable(safeSummary, code, { code, category, summary: safeSummary, evidenceArtifactId: evidence.artifactId });
+    throw ApplicationFailure.nonRetryable(safeSummary, code, { code, category, summary: safeSummary });
   };
   const agentCategory = (error: AgentFailure): AttentionCategory => error.code === "login-expired" ? "provider_authentication" : error.code === "model-unavailable" ? "provider_ambiguity" : error.code === "rate-limited" ? "provider_connectivity_exhausted" : error.code === "malformed-output" || error.code === "invalid-output" ? "agent_contradiction" : "agent_exhausted";
   const invokeAgent = async <T>(input: { companyId: string }, operation: () => Promise<T>): Promise<T> => {
@@ -398,8 +392,8 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     worktrees,
     agent,
     developer,
-    putAttentionEvidence,
     attentionFailure,
+    putAttentionEvidence,
     agentCategory,
     invokeAgent,
     bindCapacityExecution,

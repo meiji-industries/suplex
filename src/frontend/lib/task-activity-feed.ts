@@ -29,6 +29,17 @@ export type ActivityFeedRow = {
     at: string;
     entries?: Array<{ stream: "stdout" | "stderr"; text: string }> | undefined;
   };
+  commands?: Array<{
+    id: string;
+    command: string;
+    cwd?: string | undefined;
+    exitCode: number | null;
+    durationMs: number;
+    stdout: string;
+    stderr: string;
+    at: string;
+    entries?: Array<{ stream: "stdout" | "stderr"; text: string }> | undefined;
+  }>;
 };
 
 export function activityRole(entry: ActivityEntry): ActivityRole {

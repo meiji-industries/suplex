@@ -445,7 +445,7 @@ export class DeveloperService {
       const revision = this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input));
       let parsed;
       try { parsed = revision; } catch { throw new AgentFailure("artifact_unavailable", "The task project configuration does not contain valid pinned verification commands"); }
-      const verification = await runPinnedVerification({ worktreePath: input.worktreePath, setupCommand: parsed.setupCommand, verificationCommand: parsed.verificationCommand }, { guard });
+      const verification = await runPinnedVerification({ taskId: input.taskId, stepId: executionId, worktreePath: input.worktreePath, setupCommand: parsed.setupCommand, verificationCommand: parsed.verificationCommand }, { guard });
       const verificationArtifactRecord = await this.artifacts.putArtifact(input.companyId, "forward-merge-verification", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(verification), "utf8") });
       verificationArtifact = verificationArtifactRecord;
       const afterVerification = await this.worktrees.inspectDelivery(input.worktreePath);

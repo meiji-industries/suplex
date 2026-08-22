@@ -1,10 +1,7 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
-
 import { redact } from "./logging.js";
+import { runCommand } from "./command-runner.js";
 import { createGitCommandGuard, type GitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
 
-const execFileAsync = promisify(execFile);
 const tail = (value: string): string => value.length > 64 * 1024 ? value.slice(-64 * 1024) : value;
 const truncateBytes = (value: string, maxBytes: number): string => {
   const bytes = Buffer.from(value, "utf8");
@@ -69,6 +66,9 @@ interface ExecuteOptions {
 type Execute = (command: string, args: string[], options: ExecuteOptions) => Promise<{ stdout: string; stderr: string }>;
 
 export interface PinnedVerificationInput {
+  /** Present for task execution: makes the individual shell-outs visible in Activity. */
+  taskId?: string;
+  stepId?: string;
   worktreePath: string;
   setupCommand: string;
   verificationCommand: string;
@@ -81,13 +81,25 @@ export interface VerificationDependencies {
   now?: () => string;
 }
 
-const defaultExecute: Execute = async (command, args, options) => execFileAsync(command, args, options);
+const defaultExecute: Execute = async (command, args, options) => {
+  // Standalone callers (for example project validation) intentionally remain
+  // usable without a task. Task execution always supplies these coordinates.
+  const result = await runCommand({ taskId: "system", stepId: "system", command, args, cwd: options.cwd, env: options.env, timeout: options.timeout });
+  if (result.exitCode === 0 && !result.timedOut) return result;
+  throw Object.assign(new Error(`${command} exited with status ${result.exitCode ?? "unknown"}`), { code: result.exitCode, killed: result.timedOut, stdout: result.stdout, stderr: result.stderr });
+};
 
 export async function runPinnedVerification(input: PinnedVerificationInput, dependencies: VerificationDependencies = {}): Promise<VerificationResult> {
   const setupArgv = commandArgv(input.setupCommand);
   const verificationArgv = commandArgv(input.verificationCommand);
   if (!setupArgv || !verificationArgv) return { outcome: "failed", code: "verification_failed", summary: "Project verification commands must be non-empty single lines", commands: [] };
-  const execute = dependencies.execute ?? defaultExecute;
+  const execute = dependencies.execute ?? (input.taskId && input.stepId
+    ? async (command: string, args: string[], options: ExecuteOptions) => {
+      const result = await runCommand({ taskId: input.taskId!, stepId: input.stepId!, command, args, cwd: options.cwd, env: options.env, timeout: options.timeout });
+      if (result.exitCode === 0 && !result.timedOut) return result;
+      throw Object.assign(new Error(`${command} exited with status ${result.exitCode ?? "unknown"}`), { code: result.exitCode, killed: result.timedOut, stdout: result.stdout, stderr: result.stderr });
+    }
+    : defaultExecute);
   const now = dependencies.now ?? (() => new Date().toISOString());
   const ownedGuard = dependencies.guard ? undefined : await createGitCommandGuard(input.runtimeRoot ?? input.worktreePath);
   const guard = dependencies.guard ?? ownedGuard!;

@@ -12,6 +12,7 @@ import { CapacityManager } from "./capacity.js";
 import type { PublicCapacityStatus } from "./capacity-contracts.js";
 import { ForgeDatabase, projectionStateHash } from "./database.js";
 import { redact } from "./logging.js";
+import { configureCommandActivityStore } from "./command-runner.js";
 import { ProjectFailure, ProjectService, resolveAgentProfiles, type Project, type ProjectRole, type RoleAssignments } from "./projects.js";
 import { TaskProjectConfigurationSchema } from "./task-project-configuration.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
@@ -829,6 +830,7 @@ export class TaskService {
     private readonly config: ForgeConfig,
     options: TaskServiceOptions = {},
   ) {
+    configureCommandActivityStore(database);
     this.now = options.now ?? (() => new Date());
     this.fault = options.fault;
     this.artifacts = options.artifactStore ?? new ArtifactStore(config.artifactRoot, database);
@@ -1561,18 +1563,19 @@ export class TaskService {
     throw new TaskFailure("Not found", [], 404);
   }
 
-  getTaskActivity(actorUserId: string, taskId: string, limit = 200): { execution: { id: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: string; currentStep: string | null } | null; events: TaskActivityEvent[] } {
+  getTaskActivity(actorUserId: string, taskId: string, limit = 200): { execution: { id: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: string; currentStep: string | null } | null; events: TaskActivityEvent[]; commands: Array<{ id: string; stepId: string; command: string; cwd: string | null; exitCode: number | null; durationMs: number; stdout: string; stderr: string; entries: Array<{ stream: "stdout" | "stderr"; text: string }>; at: string }> } {
     const task = this.getTask(actorUserId, taskId);
+    const commands = this.database.authQuery((db) => db.prepare("SELECT id, step_id AS stepId, command, cwd, exit_code AS exitCode, duration_ms AS durationMs, stdout, stderr, entries_json AS entriesJson, finished_at AS at FROM forge_task_command_activity WHERE task_id = ? ORDER BY finished_at DESC LIMIT 50").all(task.id) as Array<{ id: string; stepId: string; command: string; cwd: string | null; exitCode: number | null; durationMs: number; stdout: string; stderr: string; entriesJson: string; at: string }>).map((row) => ({ id: row.id, stepId: row.stepId, command: row.command, cwd: row.cwd, exitCode: row.exitCode, durationMs: row.durationMs, stdout: row.stdout, stderr: row.stderr, at: row.at, entries: (json<Array<{ stream?: unknown; text?: unknown }>>(row.entriesJson, [])).flatMap((entry): Array<{ stream: "stdout" | "stderr"; text: string }> => (entry.stream === "stdout" || entry.stream === "stderr") && typeof entry.text === "string" ? [{ stream: entry.stream, text: entry.text }] : []) }));
     const execution = this.database.authQuery((db) => db.prepare(`SELECT id, role, status, currentStep FROM (
       SELECT id, 'builder' AS role, status, current_step AS currentStep, started_at AS startedAt FROM forge_developer_executions WHERE task_id = ? AND company_id = ?
       UNION ALL
       SELECT id, role, status, NULL AS currentStep, started_at AS startedAt FROM forge_agent_executions WHERE task_id = ? AND company_id = ?
     ) ORDER BY CASE WHEN status IN ('starting', 'running', 'active', 'reconnecting', 'cancelling', 'result_pending_claim') THEN 0 ELSE 1 END, startedAt DESC LIMIT 1`).get(task.id, task.companyId, task.id, task.companyId) as { id: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: string; currentStep: string | number | null } | undefined);
-    if (!execution || !["starting", "running", "active", "reconnecting", "cancelling", "result_pending_claim"].includes(execution.status) || !/^[A-Za-z0-9_-]+$/.test(execution.id)) return { execution: null, events: [] };
+    if (!execution || !["starting", "running", "active", "reconnecting", "cancelling", "result_pending_claim"].includes(execution.status) || !/^[A-Za-z0-9_-]+$/.test(execution.id)) return { execution: null, events: [], commands };
     const currentStep = execution.currentStep === null ? null : String(execution.currentStep);
     const root = resolve(this.config.runtimeRoot);
     const directory = resolve(root, execution.role === "builder" ? "developer-executions" : "agent-turns", execution.id);
-    if (relative(root, directory).startsWith("..")) return { execution: null, events: [] };
+    if (relative(root, directory).startsWith("..")) return { execution: null, events: [], commands };
     const paths = execution.role === "builder" ? [resolve(directory, "events.jsonl")] : [resolve(directory, "events.jsonl"), resolve(directory, "spool.ndjson")];
     let source = "";
     for (const path of paths) try { source = readFileSync(path, "utf8"); if (source) break; } catch { /* The execution may not have written its spool yet. */ }
@@ -1580,7 +1583,7 @@ export class TaskService {
     const status = execution.status === "running" || execution.status === "active" ? `${execution.role[0]!.toUpperCase()}${execution.role.slice(1)} is working${currentStep ? `: ${currentStep}` : ""}` : `${execution.role[0]!.toUpperCase()}${execution.role.slice(1)}: ${execution.status}`;
     const statusEvent: TaskActivityEvent = { at: new Date().toISOString(), kind: "status", text: String(redact(status)) };
     const boundedLimit = Math.min(300, Math.max(1, Math.trunc(limit)));
-    return { execution: { ...execution, currentStep }, events: [statusEvent, ...activity.slice(-(boundedLimit - 1))] };
+    return { execution: { ...execution, currentStep }, events: [statusEvent, ...activity.slice(-(boundedLimit - 1))], commands };
   }
 
   getDeveloperProgress(actorUserId: string, taskId: string, after?: { executionId: string; sequence: number }): { status: string; execution: { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; currentStep: string | null } | null; events: DeveloperExecutionEvent[] } {

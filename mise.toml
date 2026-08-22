@@ -146,6 +146,14 @@ run = "pnpm run smoke"
 description = "Tail merged, readable Forge API and worker logs (pass filters after --)"
 run = "pnpm exec tsx src/cli.ts logs \"$@\""
 
+[tasks.task]
+description = "Inspect a task, including its recent recorded commands"
+run = "pnpm exec tsx src/cli.ts task \"$@\""
+
+[tasks.doctor]
+description = "Check this Forge checkout and its configured providers"
+run = "pnpm exec tsx src/cli.ts doctor \"$@\""
+
 [tasks.test]
 description = "Run unit and integration tests (excludes Temporal and browser tests)"
 run = "pnpm run test"

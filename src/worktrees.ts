@@ -1,14 +1,13 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { access, constants, lstat, mkdir, readFile, realpath, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { delimiter, join, relative, resolve, sep } from "node:path";
-import { promisify } from "node:util";
 
 import type { ForgeDatabase } from "./database.js";
 import { OwnedWorktreeSchema, type OwnedWorktree } from "./developer-contracts.js";
+import { runCommand } from "./command-runner.js";
 
-const execFileAsync = promisify(execFile);
 
 export class WorktreeFailure extends Error {
   readonly code: string;
@@ -27,6 +26,8 @@ export interface WorktreeInput {
   targetBaseSha: string;
   branchName?: string;
   pathSegment?: string;
+  /** Timeline step which caused this worktree operation. */
+  stepId?: string;
 }
 
 export interface WorktreeRecord {
@@ -116,7 +117,7 @@ export interface OwnedWorktreeInspection {
 }
 
 interface GitAdapter {
-  run(args: string[], cwd: string): Promise<string>;
+  run(args: string[], cwd: string, activity?: { taskId: string; stepId: string }): Promise<string>;
 }
 
 const taskIdPattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
@@ -140,8 +141,9 @@ function exactRegisteredWorktree(output: string, worktreePath: string, branchNam
 }
 
 const defaultGit: GitAdapter = {
-  async run(args, cwd) {
-    const result = await execFileAsync("git", args, { cwd, timeout: 30_000, maxBuffer: 2 * 1024 * 1024 });
+  async run(args, cwd, activity) {
+    const result = await runCommand({ taskId: activity?.taskId ?? "system", stepId: activity?.stepId ?? "system", command: "git", args, cwd, timeout: 30_000 });
+    if (result.exitCode !== 0 || result.timedOut) throw Object.assign(new Error("git command failed"), { stdout: result.stdout, stderr: result.stderr, code: result.exitCode });
     return result.stdout.trim();
   },
 };
@@ -151,7 +153,10 @@ const liveDiffMaxBytes = 2 * 1024 * 1024;
 const liveUntrackedFileMaxBytes = 256 * 1024;
 
 async function runLiveGit(args: string[], cwd: string, maxBuffer = liveDiffMaxBytes): Promise<string> {
-  return (await execFileAsync("git", args, { cwd, timeout: 5_000, maxBuffer })).stdout;
+  void maxBuffer;
+  const result = await runCommand({ taskId: "system", stepId: "system", command: "git", args, cwd, timeout: 5_000 });
+  if (result.exitCode !== 0 || result.timedOut) throw Object.assign(new Error("git command failed"), { stdout: result.stdout, stderr: result.stderr, code: result.exitCode });
+  return result.stdout;
 }
 
 function untrackedPatch(path: string, bytes: Buffer): string {
@@ -220,24 +225,25 @@ export class WorktreeManager {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new WorktreeFailure("worktree-unavailable", "The deterministic issue worktree cannot be inspected");
     }
     try {
-      const status = await this.git.run(["status", "--porcelain", "--untracked-files=all"], repositoryPath);
+      const activity = { taskId: input.taskId, stepId: input.stepId ?? input.taskId };
+      const status = await this.git.run(["status", "--porcelain", "--untracked-files=all"], repositoryPath, activity);
       if (status) throw new WorktreeFailure("repository-dirty", "The recorded target repository must be clean before development starts");
       let resolvedBase: string;
-      try { resolvedBase = await this.git.run(["rev-parse", "--verify", `${input.targetBaseSha}^{commit}`], repositoryPath); } catch { throw new WorktreeFailure("base-commit-mismatch", "Target-base revision does not resolve to a commit in the repository"); }
+      try { resolvedBase = await this.git.run(["rev-parse", "--verify", `${input.targetBaseSha}^{commit}`], repositoryPath, activity); } catch { throw new WorktreeFailure("base-commit-mismatch", "Target-base revision does not resolve to a commit in the repository"); }
       if (resolvedBase.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new WorktreeFailure("base-commit-mismatch", "Target-base revision does not resolve to the recorded commit");
       try {
-        await this.git.run(["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repositoryPath);
+        await this.git.run(["show-ref", "--verify", "--quiet", `refs/heads/${branchName}`], repositoryPath, activity);
         throw new WorktreeFailure("branch-exists", "The deterministic issue branch already exists and cannot be reused implicitly");
       } catch (error) {
         if (error instanceof WorktreeFailure) throw error;
       }
       await assertWorktreeDiskHeadroom(worktreeRoot);
-      await this.git.run(["worktree", "add", "-b", branchName, worktreePath, input.targetBaseSha], repositoryPath);
+      await this.git.run(["worktree", "add", "-b", branchName, worktreePath, input.targetBaseSha], repositoryPath, activity);
       const canonicalWorktree = await realpath(worktreePath);
       if (canonicalWorktree !== worktreePath) throw new WorktreeFailure("worktree-symlink", "Created worktree path resolved through a symbolic link");
-      const actualRoot = await this.git.run(["rev-parse", "--show-toplevel"], worktreePath);
-      const actualBranch = await this.git.run(["symbolic-ref", "--short", "HEAD"], worktreePath);
-      const actualHead = await this.git.run(["rev-parse", "HEAD"], worktreePath);
+      const actualRoot = await this.git.run(["rev-parse", "--show-toplevel"], worktreePath, activity);
+      const actualBranch = await this.git.run(["symbolic-ref", "--short", "HEAD"], worktreePath, activity);
+      const actualHead = await this.git.run(["rev-parse", "HEAD"], worktreePath, activity);
       if (actualRoot !== worktreePath || actualBranch !== branchName || actualHead.toLowerCase() !== input.targetBaseSha.toLowerCase()) throw new WorktreeFailure("worktree-verification", "Created worktree did not match its recorded branch and base revision");
       return { branchName, worktreePath, targetBaseSha: input.targetBaseSha };
     } catch (error) {

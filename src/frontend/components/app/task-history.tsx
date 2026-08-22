@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
 
 import { ProfileAvatar } from "./profile-avatar.js";
 import { CommandOutputBlock, type CommandOutput } from "./command-output.js";
@@ -10,7 +10,8 @@ import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
 export type TaskActivityEntry = TaskResponse["activity"][number];
 type LiveActivityEvent = { at: string; kind: "thinking" | "command" | "output" | "message" | "status"; text: string; command?: string; cwd?: string; exitCode?: number | null; durationMs?: number; stdout?: string; stderr?: string; entries?: Array<{ stream: "stdout" | "stderr"; text: string }> };
-type ActivityFeed = { execution: { id: string; role: Exclude<ActivityRole, "you" | "forge">; status: string; currentStep: string | null } | null; events: LiveActivityEvent[] };
+type RecordedCommand = CommandOutput & { id: string; stepId: string };
+type ActivityFeed = { execution: { id: string; role: Exclude<ActivityRole, "you" | "forge">; status: string; currentStep: string | null } | null; events: LiveActivityEvent[]; commands: RecordedCommand[] };
 type FeedRow = ActivityFeedRow;
 
 export const activityRelativeDate = relativeTime;
@@ -65,8 +66,14 @@ function useLiveActivity(taskId: string): ActivityFeed | null {
     stream.addEventListener("activity", (message) => {
       try {
         const event = JSON.parse((message as MessageEvent<string>).data) as LiveActivityEvent;
-        if (active) setFeed((current) => ({ execution: current?.execution ?? null, events: [...(current?.events ?? []), event].slice(-300) }));
+        if (active) setFeed((current) => ({ execution: current?.execution ?? null, commands: current?.commands ?? [], events: [...(current?.events ?? []), event].slice(-300) }));
       } catch { /* Ignore malformed live activity. */ }
+    });
+    stream.addEventListener("command", (message) => {
+      try {
+        const command = JSON.parse((message as MessageEvent<string>).data) as RecordedCommand;
+        if (active) setFeed((current) => ({ execution: current?.execution ?? null, events: current?.events ?? [], commands: [...(current?.commands ?? []).filter((item) => item.id !== command.id), command].slice(-50) }));
+      } catch { /* Ignore malformed command activity. */ }
     });
     return () => { active = false; stream.close(); };
   }, [taskId]);
@@ -94,7 +101,8 @@ export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRow
     const durable = timeline.map((entry): FeedRow => {
       const role = activityRole(entry);
       const link = timelineLink(entry, release, ci);
-      return { id: entry.id, at: entry.createdAt, role, text: activitySentence(entry, role), revision: entry.revision, ...(isAutomaticActivity(entry, role) ? { automatic: true } : {}), ...(link ? { link } : {}) };
+      const commands = feed?.commands.filter((command) => command.stepId === entry.id) ?? [];
+      return { id: entry.id, at: entry.createdAt, role, text: activitySentence(entry, role), revision: entry.revision, ...(commands.length ? { commands } : {}), ...(isAutomaticActivity(entry, role) ? { automatic: true } : {}), ...(link ? { link } : {}) };
     });
     const live = (feed?.events ?? []).map((event, index): FeedRow => {
       const command = commandOutput(event);
@@ -104,16 +112,26 @@ export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRow
   }, [ci, feed, optimisticRows, release, timeline]);
   return <section data-task-activity-feed className="space-y-1" aria-label="Activity">
     <div data-task-activity className="divide-y">
-      {rows.map((row) => <div className={`flex min-w-0 gap-2 py-2 text-xs${row.command ? " items-start" : " items-center"}`} key={row.id} data-task-activity-kind={row.role} {...(row.revision === undefined ? {} : { "data-task-activity-revision": row.revision })}>
-        <ProfileAvatar name={activityRoleLabel(row.role)} seed={row.role} size="xs" />
-        <span className="shrink-0 font-medium">{activityRoleLabel(row.role)}</span>
-        {row.automatic ? <Badge variant="secondary">auto</Badge> : null}
-        {row.command ? <div className="min-w-0 flex-1"><CommandOutputBlock output={row.command} /></div> : <span className="min-w-0 flex-1 text-muted-foreground">{row.text.replace(new RegExp(`^${activityRoleLabel(row.role)}\\s+`), "")}</span>}
-        {row.count ? <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground" aria-label={`${row.count} identical events`}>×{row.count}</span> : null}
-        {row.link ? <a className="shrink-0 underline underline-offset-2" href={row.link.href} onClick={row.link.label === "View changes" && onViewChanges ? (event) => { event.preventDefault(); onViewChanges(); } : undefined} target={row.link.href.startsWith("http") ? "_blank" : undefined} rel={row.link.href.startsWith("http") ? "noreferrer" : undefined}>{row.link.label}</a> : null}
-        <time className="shrink-0 text-[11px] text-muted-foreground" dateTime={row.at} title={new Date(row.at).toLocaleString()}>{row.live ? `updated ${activityRelativeDate(row.at)}` : activityRelativeDate(row.at)}</time>
-      </div>)}
+      {rows.map((row) => <ActivityRow key={row.id} row={row} {...(onViewChanges ? { onViewChanges } : {})} />)}
       {!rows.length ? <p className="py-2 text-xs text-muted-foreground">No activity yet.</p> : null}
     </div>
   </section>;
+}
+
+function ActivityRow({ row, onViewChanges }: { row: FeedRow; onViewChanges?: () => void }): ReactElement {
+  const [expanded, setExpanded] = useState(false);
+  const failed = row.commands?.some((command) => command.exitCode !== null && command.exitCode !== 0) ?? false;
+  return <div className={`min-w-0 py-2 text-xs${row.command ? " items-start" : ""}`} data-task-activity-kind={row.role} {...(row.revision === undefined ? {} : { "data-task-activity-revision": row.revision })}>
+    <div className="flex min-w-0 items-center gap-2">
+      <ProfileAvatar name={activityRoleLabel(row.role)} seed={row.role} size="xs" />
+      <span className="shrink-0 font-medium">{activityRoleLabel(row.role)}</span>
+      {row.automatic ? <Badge variant="secondary">auto</Badge> : null}
+      {row.command ? <div className="min-w-0 flex-1"><CommandOutputBlock output={row.command} /></div> : <span className="min-w-0 flex-1 text-muted-foreground">{row.text.replace(new RegExp(`^${activityRoleLabel(row.role)}\\s+`), "")}</span>}
+      {row.commands?.length ? <button type="button" data-command-chip className={failed ? "shrink-0 rounded bg-red-500/15 px-1 py-0.5 text-[11px] text-red-600 dark:text-red-400" : "shrink-0 rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground"} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{row.commands.length} commands{failed ? ` · ${row.commands.filter((command) => command.exitCode !== null && command.exitCode !== 0).length} failed` : ""}</button> : null}
+      {row.count ? <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground" aria-label={`${row.count} identical events`}>×{row.count}</span> : null}
+      {row.link ? <a className="shrink-0 underline underline-offset-2" href={row.link.href} onClick={row.link.label === "View changes" && onViewChanges ? (event) => { event.preventDefault(); onViewChanges(); } : undefined} target={row.link.href.startsWith("http") ? "_blank" : undefined} rel={row.link.href.startsWith("http") ? "noreferrer" : undefined}>{row.link.label}</a> : null}
+      <time className="shrink-0 text-[11px] text-muted-foreground" dateTime={row.at} title={new Date(row.at).toLocaleString()}>{row.live ? `updated ${activityRelativeDate(row.at)}` : activityRelativeDate(row.at)}</time>
+    </div>
+    {expanded && row.commands?.length ? <div className="ml-7 mt-1 space-y-1" data-step-commands>{row.commands.map((command) => <CommandOutputBlock key={command.id} output={command} />)}</div> : null}
+  </div>;
 }

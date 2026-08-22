@@ -14,6 +14,7 @@ import { createDeliveryReviewActivities } from "../src/temporal/activities/deliv
 import { createDevelopmentActivities } from "../src/temporal/activities/development.js";
 import { createFinalReviewActivities } from "../src/temporal/activities/final-review.js";
 import { createGovernanceActivities } from "../src/temporal/activities/governance.js";
+import { createGithubSyncActivities } from "../src/temporal/activities/github-sync.js";
 import { createMergeConflictActivities } from "../src/temporal/activities/merge-conflict.js";
 import { createPlanningActivities } from "../src/temporal/activities/planning.js";
 import { createProjectionActivities } from "../src/temporal/activities/projection.js";
@@ -28,6 +29,7 @@ const expectedActivityKeys = [
   "createSuccessor",
   "finalReview",
   "findActiveDeveloperExecution",
+  "observeGithubPullRequest",
   "planCiRepair",
   "planDeliveryRepair",
   "planMergeConflict",
@@ -71,6 +73,7 @@ test("activity factories compose the frozen activity key set without overlap", a
       createProjectionActivities(context),
       createPlanningActivities(context),
       createGovernanceActivities(context),
+      createGithubSyncActivities(context),
       createDevelopmentActivities(context),
       createDeliveryReviewActivities(context),
       createReleaseActivities(context),

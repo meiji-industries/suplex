@@ -46,8 +46,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   });
   typed.get("/api/tasks/:taskId/activity", { schema: { params: TaskIdParamsSchema, response: { 200: TaskActivityResponseSchema } } }, async (request, reply) => reply.header("Cache-Control", "private, no-store").send(tasks.getTaskActivity(request.forgeUser.id, request.params.taskId)));
   typed.get("/api/tasks/:taskId/activity/stream", { schema: { params: TaskIdParamsSchema } }, async (request, reply) => {
-    let closed = false;
-    let known = new Set<string>();
+    let closed = false, known = new Set<string>(), knownCommands = new Set<string>();
     const key = (event: { at: string; kind: string; text: string; exitCode?: number }): string => JSON.stringify(event);
     const send = (initial = false): void => {
       if (closed || reply.raw.destroyed) return;
@@ -55,7 +54,10 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
         const feed = tasks.getTaskActivity(request.forgeUser.id, request.params.taskId, 300);
         const events = initial ? [...feed.events.filter((event) => event.kind === "status").slice(-1), ...feed.events.filter((event) => event.kind !== "status").slice(-49)] : feed.events.filter((event) => !known.has(key(event)));
         for (const event of events) reply.raw.write(`event: activity\ndata: ${JSON.stringify(event)}\n\n`);
+        const commands = initial ? feed.commands : feed.commands.filter((command) => !knownCommands.has(command.id));
+        for (const command of commands) reply.raw.write(`event: command\ndata: ${JSON.stringify(command)}\n\n`);
         known = new Set(feed.events.map(key));
+        knownCommands = new Set(feed.commands.map((command) => command.id));
       } catch { close(true); }
     };
     let timer: NodeJS.Timeout | undefined;

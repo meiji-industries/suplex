@@ -33,6 +33,7 @@ import hermesPairing from "./http/routes/hermes-pairing.js";
 import { registerHermesTaskRoutes } from "./http/routes/hermes-tasks.js";
 
 export interface AppDependencies {
+  fullApp?: boolean;
   config: ForgeConfig;
   health: HostHealthDependencies;
   getHealth?: () => Promise<HealthSnapshot>;
@@ -73,6 +74,10 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
       responseTime,
     }, "request");
   });
+  if (dependencies.fullApp) {
+    app.addHook("onRequest", (request, _reply, done) => { request.log.info({ req: request.raw }, "incoming request"); done(); });
+    app.addHook("onSend", (request, reply, payload, done) => { request.log.info({ responseTime: Number(reply.elapsedTime ?? 0), statusCode: reply.statusCode }, "request completed"); done(null, payload); });
+  }
 
   const configuredOrigin = new URL(dependencies.config.reachableAddress).origin;
   const developmentOrigins = new Set([`http://localhost:${dependencies.config.port}`, `http://127.0.0.1:${dependencies.config.port}`, `http://[::1]:${dependencies.config.port}`]);
@@ -114,7 +119,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
 }
 
 export function createApp(dependencies: AppDependencies): FastifyInstance {
-  const app = createAppServer(dependencies);
+  const app = createAppServer({ ...dependencies, fullApp: true });
   registerAppRoutes(app, dependencies);
   return app;
 }

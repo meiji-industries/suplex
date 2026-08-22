@@ -11,6 +11,12 @@ export type PhaseTiming = {
   current: boolean;
 };
 
+export type PhaseTimingLane = {
+  phase: IssuePhase;
+  label: string;
+  timings: PhaseTiming[];
+};
+
 function phaseFromEvent(eventType: string): IssuePhase | undefined {
   if (!eventType.startsWith("phase_")) return undefined;
   const phase = eventType.slice("phase_".length);
@@ -25,7 +31,7 @@ export function phaseTimings(activity: PhaseTimingActivity[], currentPhase: Issu
     .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
   const end = Number.isFinite(Date.parse(asOf)) ? asOf : new Date().toISOString();
 
-  return phaseChanges.map((entry, index) => {
+  const visits = phaseChanges.map((entry, index) => {
     const endAt = phaseChanges[index + 1]?.at ?? end;
     return {
       phase: entry.phase,
@@ -36,6 +42,29 @@ export function phaseTimings(activity: PhaseTimingActivity[], currentPhase: Issu
       current: index === phaseChanges.length - 1 && entry.phase === currentPhase,
     };
   });
+
+  return visits.reduce<PhaseTiming[]>((merged, visit) => {
+    const previous = merged.at(-1);
+    if (previous && previous.phase === visit.phase && previous.endAt === visit.startAt) {
+      previous.endAt = visit.endAt;
+      previous.durationMs += visit.durationMs;
+      previous.current = visit.current;
+    } else {
+      merged.push(visit);
+    }
+    return merged;
+  }, []);
+}
+
+/** Groups merged visits into phase lanes, retaining the workflow's first-seen order. */
+export function phaseTimingLanes(timings: PhaseTiming[]): PhaseTimingLane[] {
+  const lanes = new Map<IssuePhase, PhaseTimingLane>();
+  for (const timing of timings) {
+    const lane = lanes.get(timing.phase);
+    if (lane) lane.timings.push(timing);
+    else lanes.set(timing.phase, { phase: timing.phase, label: timing.label, timings: [timing] });
+  }
+  return [...lanes.values()];
 }
 
 export function phaseTimingDuration(durationMs: number): string {

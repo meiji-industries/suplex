@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 
 import { PhaseTimings } from "../src/frontend/components/app/phase-timings.js";
-import { phaseTimingDuration, phaseTimings } from "../src/frontend/lib/phase-timings.js";
+import { phaseTimingDuration, phaseTimingLanes, phaseTimings } from "../src/frontend/lib/phase-timings.js";
 
 const activity = [
   { eventType: "phase_planning", createdAt: "2026-08-22T12:00:00.000Z" },
@@ -33,4 +33,35 @@ test("renders proportional timing segments, the current pulse, and accessible ti
   expect(html).toContain("animate-pulse");
   expect(html).toContain("Total");
   expect(html).toContain("2026");
+  expect(html).toContain('data-phase-time-axis');
+  expect(html).toContain('data-phase-lane="development"');
+});
+
+const thirtySegmentFixture = [
+  ["ready_for_development", 1], ["development", 1], ["development", 11], ["delivery_ready", 1], ["reviewing_delivery", 1], ["reviewing_delivery", 2],
+  ["repair_required", 1], ["repair_required", 1], ["repair_required", 1], ["delivery_reviewed", 1], ["releasing", 1], ["delivery_blocked", 63],
+  ["releasing", 80], ["ci_waiting", 4], ["final_review", 1], ["repair_required", 3], ["development", 2], ["delivery_ready", 1],
+  ["reviewing_delivery", 2], ["delivery_reviewed", 1], ["releasing", 3], ["ci_waiting", 5], ["final_review", 1], ["repair_required", 2],
+  ["development", 4], ["delivery_ready", 1], ["reviewing_delivery", 1], ["delivery_reviewed", 1], ["releasing", 1], ["final_review", 1],
+] as const;
+
+const fixtureStart = Date.parse("2026-08-22T12:00:00.000Z");
+const thirtySegmentActivity = (() => {
+  let elapsed = fixtureStart;
+  return thirtySegmentFixture.map(([phase, minutes]) => {
+    const activity = { eventType: `phase_${phase}`, createdAt: new Date(elapsed).toISOString() };
+    elapsed += minutes * 60_000;
+    return activity;
+  });
+})();
+
+test("merges consecutive visits and groups the thirty-segment history into first-seen lanes", () => {
+  const asOf = new Date(fixtureStart + (thirtySegmentFixture.reduce((total, [, minutes]) => total + minutes, 0) * 60_000)).toISOString();
+  const timings = phaseTimings(thirtySegmentActivity, "final_review", asOf);
+  const lanes = phaseTimingLanes(timings);
+
+  expect(thirtySegmentActivity).toHaveLength(30);
+  expect(timings.find((timing) => timing.phase === "development")).toMatchObject({ durationMs: 12 * 60_000 });
+  expect(lanes.map((lane) => lane.label)).toEqual(["Ready", "In Development", "Delivered", "In Review", "Fixing review findings", "Reviewed", "Opening PR", "Needs attention", "Waiting for CI", "Final review"]);
+  expect(lanes.find((lane) => lane.phase === "repair_required")?.timings).toHaveLength(3);
 });

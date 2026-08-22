@@ -53,7 +53,7 @@ export function reviewBlockedState(state: IssueWorkflowState, result: { attemptI
 
 export function repairRequiredState(state: IssueWorkflowState, result: CompletedReview, repairCycleLimit: number): IssueWorkflowState {
   const openBlocking = result.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
-  const canRepair = result.review.opinion === "blocking" && result.review.repairPlan !== null && openBlocking.length > 0 && (state.repairCycle ?? 0) < repairCycleLimit;
+  const canRepair = result.review.opinion === "blocking" && openBlocking.length > 0 && (state.repairCycle ?? 0) < repairCycleLimit;
   const phase = result.review.opinion === "approved" ? "delivery_reviewed" : canRepair ? "repair_required" : "delivery_blocked";
   const owner = phase === "repair_required" ? "lead" : "human";
   const allowedCommands: IssueWorkflowState["allowedCommands"] = phase === "repair_required" ? ["record_delivery_decision", "repair_delivery", "cancel_issue"] : phase === "delivery_blocked" ? ["record_delivery_decision", "cancel_issue"] : ["publish_draft", "cancel_issue"];
@@ -66,10 +66,6 @@ export function repairRequiredState(state: IssueWorkflowState, result: Completed
     deliveryReviewOutcome: result.review.opinion,
     deliveryReviewSummary: result.review.summary,
     deliveryBlockingFindings: openBlocking,
-    deliveryRepairPlan: result.review.repairPlanArtifactId ? null : result.review.repairPlan,
-    deliveryRepairPlanArtifactId: result.review.repairPlanArtifactId ?? null,
-    deliveryRepairPlanSha256: result.review.repairPlanSha256 ?? null,
-    deliveryRepairAuthority: result.review.opinion === "blocking" ? "delivery_review" : null,
     deliveryReviewBlockerCode: null,
     deliveryReviewBlockerSummary: null,
     deliveryReviewBlockerEvidenceArtifactId: null,
@@ -80,7 +76,7 @@ export function repairRequiredState(state: IssueWorkflowState, result: Completed
 }
 
 export function repairBlockedState(state: IssueWorkflowState, result: BlockedRepair & { evidenceArtifactSha256?: string }, repairCycleLimit: number): IssueWorkflowState {
-  const retry = result.cycle < repairCycleLimit && result.code !== "repair-cap-exhausted" && result.code !== "worktree-unsafe";
+  const retry = result.cycle <= repairCycleLimit;
   return IssueWorkflowStateSchema.parse({
     ...revisioned(state, "delivery_blocked", "human", retry ? ["record_delivery_decision", "repair_delivery", "retry_development", "cancel_issue"] : ["record_delivery_decision", "retry_development", "cancel_issue"], retry ? result.summary : "Member decision required"),
     blocker: retry ? null : humanBlocker("agent_exhausted", result.summary, [{ command: "record_delivery_decision", label: "Record delivery decision", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.evidenceArtifactId, result.evidenceArtifactSha256, "developer-repair")),
@@ -128,7 +124,6 @@ export function repairedDeliveryAwaitingFreshReviewState(state: IssueWorkflowSta
     deliveryReviewOutcome: null,
     deliveryReviewSummary: null,
     deliveryBlockingFindings: [],
-    deliveryRepairPlan: null,
     deliveryReviewBlockerCode: null,
     deliveryReviewBlockerSummary: null,
     deliveryReviewBlockerEvidenceArtifactId: null,

@@ -39,14 +39,13 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
       return ctx.state;
     }
     const artifactBackedReview = ctx.patched(ctx.artifactBackedReviewPatch);
-    ctx.patched(ctx.exactDeliveryReviewPatch);
     if (!("attemptId" in result)) {
       const legacyResult = result as LegacyReviewResult;
       if (artifactBackedReview && !legacyResult.reviewArtifact) throw ApplicationFailure.nonRetryable("Delivery review artifact is missing", "delivery_review_artifact_missing");
       const openBlocking = (legacyResult.findings ?? []).filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
       const canRepair = legacyResult.outcome === "blocking" && (ctx.state.repairCycle ?? 0) < ctx.repairCycleLimit;
       const nextPhase = legacyResult.outcome === "approved" ? "delivery_reviewed" : canRepair ? "repair_required" : "delivery_blocked";
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...stateTransitions.revisioned(ctx.state, nextPhase, nextPhase === "repair_required" ? "lead" : "human", nextPhase === "repair_required" ? ["repair_delivery", "cancel_issue"] : nextPhase === "delivery_blocked" ? ["record_delivery_decision", "cancel_issue"] : ["publish_draft", "cancel_issue"], nextPhase === "repair_required" ? "Developer repair of blocking findings" : nextPhase === "delivery_blocked" ? "Member decision required" : "Publish draft pull request"), deliveryReviewId: legacyResult.reviewId, deliveryReviewOutcome: legacyResult.outcome, deliveryReviewSummary: legacyResult.summary, ...(legacyResult.reviewArtifact ? { deliveryReviewArtifact: legacyResult.reviewArtifact } : {}), deliveryBlockingFindings: openBlocking, deliveryRepairPlan: legacyResult.repairPlan ?? null, repairCycle: ctx.state.repairCycle ?? 0 });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...stateTransitions.revisioned(ctx.state, nextPhase, nextPhase === "repair_required" ? "lead" : "human", nextPhase === "repair_required" ? ["repair_delivery", "cancel_issue"] : nextPhase === "delivery_blocked" ? ["record_delivery_decision", "cancel_issue"] : ["publish_draft", "cancel_issue"], nextPhase === "repair_required" ? "Developer repair of blocking findings" : nextPhase === "delivery_blocked" ? "Member decision required" : "Publish draft pull request"), deliveryReviewId: legacyResult.reviewId, deliveryReviewOutcome: legacyResult.outcome, deliveryReviewSummary: legacyResult.summary, ...(legacyResult.reviewArtifact ? { deliveryReviewArtifact: legacyResult.reviewArtifact } : {}), deliveryBlockingFindings: openBlocking, repairCycle: ctx.state.repairCycle ?? 0 });
     } else {
       const exactResult = result as contracts.DeliveryReviewActivityResult;
       // A review observes the branch while it runs.  That observation is the
@@ -93,7 +92,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision) throw new Error("Stale workflow revision");
     if (ctx.state.phase !== "repair_required" && ctx.state.phase !== "delivery_blocked") throw new Error("Delivery repair is not available in the current phase");
-    if (!ctx.state.deliveryReviewId || (!ctx.state.deliveryReviewArtifact && ((!ctx.state.deliveryRepairPlan && !ctx.state.deliveryRepairPlanArtifactId) || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open")))) throw new Error("Open blocking findings and a bounded repair plan are required");
+    if (!ctx.state.deliveryReviewId || !(ctx.state.deliveryBlockingFindings ?? []).some((finding) => finding.severity === "blocking" && finding.disposition === "open")) throw new Error("Open blocking findings are required");
     if (ctx.state.phase === "delivery_blocked" && !ctx.state.deliveryRepairBlockerCode) throw new Error("A repair blocker is required before retrying delivery repair");
     if ((ctx.state.repairCycle ?? 0) >= ctx.repairCycleLimit) throw new Error("Delivery repair limit is exhausted");
     if (!ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree || !ctx.state.leadSessionRef) throw new Error("The prior Developer delivery must be preserved before repair");
@@ -121,13 +120,12 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
     const priorExecutionId = ctx.state.developerExecutionId!;
     const turnExecutionId = developerExecutionId(ctx.state.workflowId, planRevision, developerAttempt, "repair");
-    const priorDelivery = { developerSessionRef: ctx.state.developerSessionRef!, reviewId: ctx.state.deliveryReviewId!, branchName: ctx.state.branchName!, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, reviewArtifact: ctx.state.deliveryReviewArtifact, blockingFindings: ctx.state.deliveryBlockingFindings ?? [], repairPlan: ctx.state.deliveryRepairPlan! };
+    const priorDelivery = { developerSessionRef: ctx.state.developerSessionRef!, reviewId: ctx.state.deliveryReviewId!, branchName: ctx.state.branchName!, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, blockingFindings: ctx.state.deliveryBlockingFindings ?? [] };
     await ctx.withStateMutation(() => {
       if (ctx.state.revision !== command.expectedRevision || (ctx.state.phase !== "repair_required" && ctx.state.phase !== "delivery_blocked")) throw new Error("Developer repair was superseded by another command");
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: `Developer repair cycle ${cycle}`, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerExecutionId: ctx.supervisedDeveloperTurns ? turnExecutionId : ctx.state.developerExecutionId, developerAttempt, developerTurnKind: "repair", ...ctx.recoveryFields("starting", null, "Starting the bounded Developer repair.", null), activeOperation: { commandId: command.commandId, kind: "repair", startedRevision: ctx.state.revision + 1 } });
     });
     await ctx.project();
-    const artifactBackedReview = ctx.patched(ctx.artifactBackedReviewPatch);
     const repairInput = {
       taskId: ctx.input.issueId,
       companyId: ctx.input.companyId,
@@ -146,12 +144,7 @@ export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnT
       targetBaseSha: priorDelivery.targetBaseSha,
       subjectCommit: priorDelivery.subjectCommit,
       subjectTree: priorDelivery.subjectTree,
-      repairAuthority: ctx.state.deliveryRepairAuthority ?? "delivery_review",
-      ...(ctx.state.deliveryRepairAuthority === "delivery_review" && artifactBackedReview && priorDelivery.reviewArtifact
-        ? { reviewArtifact: priorDelivery.reviewArtifact }
-        : ctx.state.deliveryRepairPlanArtifactId && ctx.state.deliveryRepairPlanSha256
-          ? { repairPlanArtifactId: ctx.state.deliveryRepairPlanArtifactId, repairPlanSha256: ctx.state.deliveryRepairPlanSha256, blockingFindings: priorDelivery.blockingFindings }
-          : { blockingFindings: priorDelivery.blockingFindings, repairPlan: priorDelivery.repairPlan }),
+      blockingFindings: priorDelivery.blockingFindings,
     };
     let outcome: Awaited<ReturnType<typeof activityProxies.runDeveloperRepairSupervised>> | { status: "completed"; result: contracts.WorkflowDeveloperRepairResult | LegacyDeveloperRepairResult; resultHash: string };
     try {

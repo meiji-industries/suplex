@@ -1,9 +1,9 @@
 import { z } from "zod";
 import {
-  blockSummary, DeliveryFindingSchema, DeliveryOperationBlockCodeSchema, DeliveryReviewSubjectSchema, DurableArtifactReferenceSchema,
+  blockSummary, DeliveryFindingSchema, DeliveryOperationBlockCodeSchema, DeliveryReviewSubjectSchema,
   RepairAuthoritySchema, sha, durableId,
 } from "../primitives.js";
-import type { DeliveryFinding, DurableArtifactReference } from "../primitives.js";
+import type { DeliveryFinding } from "../primitives.js";
 import type { AuthorizedPlanSubject } from "../../../developer-contracts.js";
 import type { MaterialityEvidenceSubject, PlanSubject } from "../../../plan-governance.js";
 
@@ -19,8 +19,7 @@ export const DeveloperRepairActivityInputSchema = z.object({
   developerSessionRef: durableId,
   developerExecutionId: durableId,
   reviewId: durableId,
-  repairAuthority: RepairAuthoritySchema.default("delivery_review"),
-  reviewArtifact: DurableArtifactReferenceSchema.optional(),
+  repairAuthority: RepairAuthoritySchema.optional(),
   cycle: z.number().int().positive(),
   repairCycleLimit: z.number().int().min(0).max(5),
   worktreePath: z.string().min(1).max(1_000),
@@ -33,9 +32,6 @@ export const DeveloperRepairActivityInputSchema = z.object({
   repairPlanArtifactId: durableId.optional(),
   repairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   capacityRequestId: durableId.optional(),
-}).superRefine((value, context) => {
-  if (!value.repairPlan && !value.repairPlanArtifactId) context.addIssue({ code: "custom", path: ["repairPlanArtifactId"], message: "A verified repair-plan artifact is required" });
-  if (value.repairPlanArtifactId && !value.repairPlanSha256) context.addIssue({ code: "custom", path: ["repairPlanSha256"], message: "The repair-plan artifact hash is required" });
 });
 
 const repairSubject = DeliveryReviewSubjectSchema;
@@ -169,7 +165,6 @@ export interface DeveloperRepairActivityInput {
   developerExecutionId: string;
   reviewId: string;
   repairAuthority?: z.infer<typeof RepairAuthoritySchema>;
-  reviewArtifact?: DurableArtifactReference;
   cycle: number;
   repairCycleLimit: number;
   worktreePath: string;

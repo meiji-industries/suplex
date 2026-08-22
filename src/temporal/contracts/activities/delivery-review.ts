@@ -47,7 +47,7 @@ export const DeliveryReviewActivityResultSchema = z.discriminatedUnion("outcome"
       evidenceArtifactId: durableId,
       opinion: z.enum(["approved", "blocking"]),
       summary: z.string().min(1).max(2_000),
-      repairPlan: z.string().max(12_000).nullable(),
+      repairPlan: z.string().max(12_000).nullable().optional(),
       repairPlanArtifactId: durableId.nullable().optional(),
       repairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
       findings: z.array(DeliveryFindingSchema).max(64),

@@ -41,24 +41,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
     async runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput) {
       const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null } | undefined) ?? { worktreePath: latestWorktree(input, input.developerExecutionId), branchName: input.branchName, targetBaseSha: input.targetBaseSha, resultCommit: input.subjectCommit, resultTree: input.subjectTree };
       if (!execution) throw new Error("Developer execution context is unavailable");
-      let blockingFindings = input.blockingFindings;
-      let repairPlan = input.repairPlan;
-      let artifactRepairPlan: string | undefined;
-      if (input.repairPlanArtifactId) {
-        const reference = await durableArtifactReference(database, artifacts, input.companyId, input.repairPlanArtifactId, "delivery-repair-plan");
-        if (!input.repairPlanSha256 || reference.sha256 !== input.repairPlanSha256) throw new Error("Repair plan artifact hash mismatch");
-        artifactRepairPlan = (await verifiedArtifactBytes(database, artifacts, input.companyId, { ...reference, sha256: input.repairPlanSha256 }, "delivery-repair-plan")).toString("utf8");
-        repairPlan = artifactRepairPlan;
-      }
-      if (input.reviewArtifact) {
-        const review = DeliveryReviewSchema.parse(JSON.parse((await verifiedArtifactBytes(database, artifacts, input.companyId, input.reviewArtifact, "delivery-review")).toString("utf8")));
-        if (typeof review.repairPlan !== "string") throw new Error("Delivery review artifact is not repairable");
-        blockingFindings = review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
-        if (artifactRepairPlan && artifactRepairPlan !== review.repairPlan) throw new Error("Repair plan artifact does not match the authoritative delivery review");
-        repairPlan = review.repairPlan;
-      }
-      if (!blockingFindings || !repairPlan) throw new Error("Delivery review repair evidence is unavailable");
-      const serviceInput = { ...input, worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree!, blockingFindings, repairPlan };
+      const serviceInput = { ...input, blockingFindings: input.blockingFindings ?? [], worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree! };
       const result = await invokeAgent(input, async () => normalizeRepairResult(await (developer.runRepair ?? defaultDeveloper.runRepair.bind(defaultDeveloper))(serviceInput), serviceInput));
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
@@ -69,16 +52,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
     async runDeveloperRepairSupervised(input) {
       return invokeAgent(input, () => runSupervised<WorkflowDeveloperRepairResult>(input, async (service) => {
         const execution = database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit, result_tree AS resultTree FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string; targetBaseSha: string; resultCommit: string | null; resultTree: string | null } | undefined) ?? { worktreePath: latestWorktree(input, input.developerExecutionId), branchName: input.branchName, targetBaseSha: input.targetBaseSha, resultCommit: input.subjectCommit, resultTree: input.subjectTree };
-        let blockingFindings = input.blockingFindings;
-        let repairPlan = input.repairPlan;
-        if (input.reviewArtifact) {
-          const review = DeliveryReviewSchema.parse(JSON.parse((await verifiedArtifactBytes(database, artifacts, input.companyId, input.reviewArtifact, "delivery-review")).toString("utf8")));
-          if (typeof review.repairPlan !== "string") throw new Error("Delivery review artifact is not repairable");
-          blockingFindings = review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open");
-          repairPlan = review.repairPlan;
-        }
-        if (!blockingFindings || !repairPlan) throw new Error("Delivery review repair evidence is unavailable");
-        const result = await service.runRepair({ ...input, worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree!, blockingFindings, repairPlan });
+        const result = await service.runRepair({ ...input, blockingFindings: input.blockingFindings ?? [], worktreePath: input.worktreePath ?? execution.worktreePath, branchName: input.branchName || execution.branchName, targetBaseSha: input.targetBaseSha || execution.targetBaseSha, subjectCommit: input.subjectCommit || execution.resultCommit!, subjectTree: input.subjectTree || execution.resultTree! });
         activityWorktrees.set(result.developerExecutionId, result.worktreePath);
         activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
         const { worktreePath: _worktreePath, ...safeResult } = result;

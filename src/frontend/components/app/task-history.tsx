@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { ProfileAvatar } from "./profile-avatar.js";
+import { CommandOutputBlock, type CommandOutput } from "./command-output.js";
 import { Badge } from "../ui/badge.js";
 import { relativeTime } from "../../lib/view-shared.js";
 import { readJson } from "../../lib/api.js";
@@ -8,7 +9,7 @@ import { activityRole, activityRoleLabel, activitySentence, compactActivityRows,
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
 export type TaskActivityEntry = TaskResponse["activity"][number];
-type LiveActivityEvent = { at: string; kind: "thinking" | "command" | "output" | "message" | "status"; text: string; exitCode?: number };
+type LiveActivityEvent = { at: string; kind: "thinking" | "command" | "output" | "message" | "status"; text: string; command?: string; cwd?: string; exitCode?: number | null; durationMs?: number; stdout?: string; stderr?: string; entries?: Array<{ stream: "stdout" | "stderr"; text: string }> };
 type ActivityFeed = { execution: { id: string; role: Exclude<ActivityRole, "you" | "forge">; status: string; currentStep: string | null } | null; events: LiveActivityEvent[] };
 type FeedRow = ActivityFeedRow;
 
@@ -39,6 +40,11 @@ function liveText(event: LiveActivityEvent, role: Exclude<ActivityRole, "you" | 
   if (event.kind === "status") return /completed|finished/i.test(event.text) ? `${subject} finished work` : `${subject} is working`;
   if (event.kind === "thinking") return `${subject} is thinking`;
   return `${subject} sent an update`;
+}
+
+function commandOutput(event: LiveActivityEvent): CommandOutput | undefined {
+  if (event.kind !== "command" || !event.command || event.durationMs === undefined) return undefined;
+  return { command: event.command, cwd: event.cwd, exitCode: event.exitCode ?? null, durationMs: event.durationMs, stdout: event.stdout ?? "", stderr: event.stderr ?? "", at: event.at, entries: event.entries };
 }
 
 
@@ -90,16 +96,19 @@ export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRow
       const link = timelineLink(entry, release, ci);
       return { id: entry.id, at: entry.createdAt, role, text: activitySentence(entry, role), revision: entry.revision, ...(isAutomaticActivity(entry, role) ? { automatic: true } : {}), ...(link ? { link } : {}) };
     });
-    const live = (feed?.events ?? []).map((event, index): FeedRow => ({ id: `live-${event.at}-${event.kind}-${index}`, at: event.at, role: feed?.execution?.role ?? "integrator", text: liveText(event, feed?.execution?.role ?? "integrator"), live: event.kind === "status" || event.kind === "thinking" }));
+    const live = (feed?.events ?? []).map((event, index): FeedRow => {
+      const command = commandOutput(event);
+      return { id: `live-${event.at}-${event.kind}-${index}`, at: event.at, role: feed?.execution?.role ?? "integrator", text: liveText(event, feed?.execution?.role ?? "integrator"), live: event.kind === "status" || event.kind === "thinking", ...(command ? { command } : {}) };
+    });
     return compactActivityRows([...durable, ...live, ...optimisticRows]);
   }, [ci, feed, optimisticRows, release, timeline]);
   return <section data-task-activity-feed className="space-y-1" aria-label="Activity">
     <div data-task-activity className="divide-y">
-      {rows.map((row) => <div className="flex min-w-0 items-center gap-2 py-2 text-xs" key={row.id} data-task-activity-kind={row.role} {...(row.revision === undefined ? {} : { "data-task-activity-revision": row.revision })}>
+      {rows.map((row) => <div className={`flex min-w-0 gap-2 py-2 text-xs${row.command ? " items-start" : " items-center"}`} key={row.id} data-task-activity-kind={row.role} {...(row.revision === undefined ? {} : { "data-task-activity-revision": row.revision })}>
         <ProfileAvatar name={activityRoleLabel(row.role)} seed={row.role} size="xs" />
         <span className="shrink-0 font-medium">{activityRoleLabel(row.role)}</span>
         {row.automatic ? <Badge variant="secondary">auto</Badge> : null}
-        <span className="min-w-0 flex-1 text-muted-foreground">{row.text.replace(new RegExp(`^${activityRoleLabel(row.role)}\\s+`), "")}</span>
+        {row.command ? <div className="min-w-0 flex-1"><CommandOutputBlock output={row.command} /></div> : <span className="min-w-0 flex-1 text-muted-foreground">{row.text.replace(new RegExp(`^${activityRoleLabel(row.role)}\\s+`), "")}</span>}
         {row.count ? <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground" aria-label={`${row.count} identical events`}>×{row.count}</span> : null}
         {row.link ? <a className="shrink-0 underline underline-offset-2" href={row.link.href} onClick={row.link.label === "View changes" && onViewChanges ? (event) => { event.preventDefault(); onViewChanges(); } : undefined} target={row.link.href.startsWith("http") ? "_blank" : undefined} rel={row.link.href.startsWith("http") ? "noreferrer" : undefined}>{row.link.label}</a> : null}
         <time className="shrink-0 text-[11px] text-muted-foreground" dateTime={row.at} title={new Date(row.at).toLocaleString()}>{row.live ? `updated ${activityRelativeDate(row.at)}` : activityRelativeDate(row.at)}</time>

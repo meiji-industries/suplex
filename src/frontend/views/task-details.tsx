@@ -1,4 +1,3 @@
-import { File } from "@pierre/diffs/react";
 import { Alert, AlertDescription } from "../components/ui/alert.js";
 import { Button, buttonVariants } from "../components/ui/button.js";
 import { Badge } from "../components/ui/badge.js";
@@ -15,8 +14,9 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { ApplicationFrame } from "../components/app/application-frame.js";
 import { getWorkerHealthFailure, useSystemHealth } from "../components/app/system-health.js";
 import { TaskActivity } from "../components/app/task-history.js";
+import { CommandOutputBlock } from "../components/app/command-output.js";
 import { TellPlannerForm } from "../components/app/tell-planner-form.js";
-import DeveloperDiff, { useAppThemeType } from "../components/app/developer-diff.js";
+import DeveloperDiff from "../components/app/developer-diff.js";
 import { TaskLeadPlan } from "../components/app/task-lead-plan.js";
 import { invocationActorLabel, workflowOwnerLabel } from "../components/app/task-invocations.js";
 import { TaskProgress } from "../components/app/task-progress.js";
@@ -35,7 +35,7 @@ import { BLOCKED_PHASES, TERMINAL_PHASES, phaseLabel } from "../../issue-phases.
 import { releaseFailureCopy } from "../../release-failures.js";
 import type { ActivityFeedRow } from "../lib/task-activity-feed.js";
 import { Check, Copy, Ellipsis, ExternalLink, GitPullRequest, LoaderCircle } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 
 type DevelopmentExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; lastOutputAt?: string | null; currentStep: string | null };
 type DevelopmentState = { status: string; execution: DevelopmentExecution | null };
@@ -76,15 +76,13 @@ export function formatDuration(milliseconds: number): string {
 function DeveloperActivityLine({ event, open }: { event: DeveloperExecutionEventView; open: boolean }): ReactElement {
   const [headline, ...detail] = event.summary.split("\n");
   const label = event.kind === "agent_update" ? "Agent update: " : event.kind === "tool_call" ? "Tool call: " : "";
-  return <li className="break-words"><span className={label ? "font-medium text-foreground" : undefined}>{label}</span>{headline}{detail.length ? <details className="mt-1" open={open}><summary className="cursor-pointer">{event.kind === "command_finished" || event.kind === "test_result" ? "Output" : "Details"}</summary><ShellOutput value={detail.join("\n")} /></details> : null}</li>;
+  const command = headline ?? "Agent output";
+  return <li className="break-words"><span className={label ? "font-medium text-foreground" : undefined}>{label}</span>{command}{detail.length ? <details className="mt-1" open={open}><summary className="cursor-pointer">{event.kind === "command_finished" || event.kind === "test_result" ? "Output" : "Details"}</summary><ShellOutput value={detail.join("\n")} command={command} exitCode={event.exitCode ?? null} at={event.occurredAt ?? new Date().toISOString()} /></details> : null}</li>;
 }
 
-function ShellOutput({ value }: { value: string }): ReactElement {
-  const themeType = useAppThemeType();
-  // ponytail: Detect terminal-native ANSI and git diffs; add formats only when real output proves the fallback insufficient.
-  const file = useMemo(() => ({ name: "output", contents: value, lang: value.includes("\u001b[") ? "ansi" as const : /(^|\n)(diff --git |@@ -\d)/.test(value) ? "diff" as const : "shellsession" as const }), [value]);
-  const options = useMemo(() => ({ disableFileHeader: true, disableLineNumbers: true, overflow: "wrap" as const, themeType }), [themeType]);
-  return <div className="mt-1 max-h-48 overflow-auto" data-shell-output><File file={file} options={options} disableWorkerPool /></div>;
+function ShellOutput({ value, command, exitCode, at }: { value: string; command: string; exitCode: number | null; at: string }): ReactElement {
+  const failed = exitCode !== null && exitCode !== 0;
+  return <div className="mt-1" data-shell-output><CommandOutputBlock defaultExpanded output={{ command, exitCode, durationMs: 0, stdout: failed ? "" : value, stderr: failed ? value : "", at }} /></div>;
 }
 
 function DevelopmentStatus({ state, now, inline = false, activityLabel }: { state: DevelopmentState; now: number; inline?: boolean; activityLabel?: string }): ReactElement | null {

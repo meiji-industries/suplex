@@ -6,12 +6,20 @@ export const planningStateFields = {
   leadSessionRef: durableId.nullable().optional(),
   leadExecutionId: durableId.nullable().optional(),
   leadEvidenceArtifactId: durableId.nullable().optional(),
+  /** Historical compatibility only; ignored after deserialization. */
+  leadEvidenceSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   leadOutputArtifactId: durableId.nullable().optional(),
+  /** Historical compatibility only; ignored after deserialization. */
+  leadOutputSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   leadInputManifestArtifactId: durableId.nullable().optional(),
+  /** Historical compatibility only; ignored after deserialization. */
+  leadInputManifestSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   leadOutputKind: IssueLeadOutputKindSchema.nullable().optional(),
   leadSummary: SafeSummarySchema.nullable().optional(),
   originalPlanSubject: PlanSubjectSchema.nullable().optional(),
   finalPlanSubject: PlanSubjectSchema.nullable().optional(),
   materialityEvidence: MaterialityEvidenceSubjectSchema.nullable().optional(),
   supplementalReviewSubject: SupplementalReviewSubjectSchema.nullable().optional(),
+  /** Historical compatibility only; ignored after deserialization. */
+  supplementalReviewArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
 };

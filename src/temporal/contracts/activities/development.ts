@@ -107,6 +107,8 @@ export interface DeveloperExecutionResult {
   resultTree: string | null;
   dirtyState: "clean" | "dirty";
   deliveryArtifactId: string;
+  evidenceArtifactId: string;
+  attentionEvidenceArtifactId?: string;
   deliverySummary: string;
   outcome: "completed" | "blocked";
   failureCode?: string | null;

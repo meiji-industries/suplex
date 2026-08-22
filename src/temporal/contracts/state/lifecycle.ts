@@ -10,6 +10,8 @@ export const lifecycleStateFields = {
   blockerCode: z.string().max(128).nullable().optional(),
   lastEventId: durableId,
   continuationCount: z.number().int().nonnegative(),
+  /** Historical compatibility only; ignored after deserialization. */
+  lastSummaryHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
   blocker: IssueBlockerSchema.nullable().optional(),
   stateChangedAt: z.string().datetime().optional(),
   activeOperation: ActiveOperationSchema.optional(),

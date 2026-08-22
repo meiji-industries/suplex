@@ -64,11 +64,8 @@ export interface MergeConflictResolutionActivitySuccess {
   resultCommit: string;
   resultTree: string;
   deliveryArtifactId: string;
-  deliveryArtifactSha256: string;
   evidenceArtifactId: string;
-  evidenceArtifactSha256: string;
   verificationArtifactId: string;
-  verificationArtifactSha256: string;
   summary: string;
 }
 
@@ -107,7 +104,6 @@ export interface ReconcileMergeActivityResult {
   blockerCode?: string;
   blockerSummary?: string;
   evidenceArtifactId?: string | null;
-  evidenceArtifactSha256?: string;
 }
 
 export interface MergeConflictActivities {

@@ -29,7 +29,6 @@ export interface AcceptDeliveryActivityResult {
   blockerCode?: string;
   blockerSummary?: string;
   evidenceArtifactId?: string | null;
-  evidenceArtifactSha256?: string;
   pullRequestNumber: number;
   pullRequestUrl: string;
   reasonArtifactId?: string | null;
@@ -52,7 +51,6 @@ export interface ReconcileAcceptanceActivityResult {
   blockerCode?: string;
   blockerSummary?: string;
   evidenceArtifactId?: string | null;
-  evidenceArtifactSha256?: string;
   pullRequestNumber: number;
   pullRequestUrl: string;
 }

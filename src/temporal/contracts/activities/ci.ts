@@ -13,7 +13,6 @@ export interface ReconcileCiActivityResult {
   expectedHeadSha: string;
   observedHeadSha: string | null;
   evidenceArtifactId: string | null;
-  evidenceArtifactSha256?: string;
   outcome: "waiting" | "passed" | "failed" | "missing_required" | "cancelled" | "timed_out" | "non_success" | "stale_head" | "rate_limited" | "provider_unavailable" | "invalid_provider_response";
   reason: string;
   owner: "system" | "integrator" | "human" | null;
@@ -21,7 +20,6 @@ export interface ReconcileCiActivityResult {
   summary: string;
   retryAt: string | null;
   nextPollAt: string | null;
-  policyHash: string;
   propagationDeadline: string | null;
   overallDeadline: string | null;
 }
@@ -84,7 +82,7 @@ export interface UpdateCiFromBaseActivityInput {
 export type UpdateCiFromBaseActivityResult =
   | { outcome: "no_drift"; summary: string }
   | { outcome: "updated"; baseSha: string; headSha: string; headTree: string; summary: string }
-  | { outcome: "conflict"; forwardMergeId: string; priorHead: string; priorTree: string; baseSha: string; conflictArtifactId: string; conflictArtifactSha256: string; conflictFileCount: number; summary: string };
+  | { outcome: "conflict"; forwardMergeId: string; priorHead: string; priorTree: string; baseSha: string; conflictArtifactId: string; conflictFileCount: number; summary: string };
 
 export interface CiRepairActivityInput {
   taskId: string;
@@ -122,7 +120,6 @@ export interface CiRepairActivityResult {
   deliveryArtifactId: string;
   evidenceArtifactId: string;
   attentionEvidenceArtifactId?: string;
-  attentionEvidenceSha256?: string;
   summary: string;
   outcome: "completed" | "blocked";
 }

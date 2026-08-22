@@ -335,7 +335,6 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
     throw new Error(`Developer supervisor prompt file is missing or unreadable: ${promptPath}`, { cause: error });
   }
   const childProcess = spawn(invocation.command, invocation.args, { cwd: invocation.cwd, detached: true, stdio: [promptHandle.fd, "pipe", "pipe"], env: { ...process.env, ...invocation.env } });
-  await promptHandle.close();
   const childExitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolvePromise, reject) => {
     childProcess.once("error", reject);
     childProcess.once("exit", (code, signal) => resolvePromise({ code, signal }));
@@ -391,6 +390,7 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
       reader.on("close", () => resolvePromise());
     }));
     const childExit = await childExitPromise;
+    await promptHandle.close();
     await Promise.race([Promise.all(readers), new Promise<void>((resolvePromise) => setTimeout(resolvePromise, 2_000))]);
     await Promise.allSettled([...pendingWrites]);
     if (state.cancellationTask) await Promise.allSettled([state.cancellationTask]);

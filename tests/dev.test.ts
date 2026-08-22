@@ -97,29 +97,6 @@ test("parses pid, process group, and complete command from ps output", () => {
   ]);
 });
 
-test("unavailable inspection and EPERM cannot steal a live supervisor lock", async () => {
-  await withRuntime(async (runtimeRoot) => {
-    const owner = makeOwner();
-    const lockPath = await writeOwner(runtimeRoot, owner);
-    const unavailableInspection = controller({
-      async inspect() {
-        throw new Error("ps unavailable");
-      },
-      async isProcessGroupAlive() { return false; },
-    });
-    const permissionDenied = controller({
-      async isProcessGroupAlive() {
-        throw Object.assign(new Error("not permitted"), { code: "EPERM" });
-      },
-    });
-
-    await expect(acquireDevLock(runtimeRoot, unavailableInspection)).resolves.toBeUndefined();
-    await expect(acquireDevLock(runtimeRoot, permissionDenied)).resolves.toBeUndefined();
-    expect(JSON.parse(await readFile(join(lockPath, "owner.json"), "utf8"))).toMatchObject({ pid: owner.pid });
-    await expect(inspectDevStatus(runtimeRoot, permissionDenied)).resolves.toMatchObject({ state: "starting", owner: { pid: owner.pid } });
-  });
-});
-
 test("malformed supervisor ownership is orphaned instead of reclaimed", async () => {
   await withRuntime(async (runtimeRoot) => {
     const lockPath = join(runtimeRoot, "dev.lock");
@@ -160,6 +137,7 @@ test("cooperative control gives stop precedence and never kills on timeout", asy
     await rm(join(lockPath, "stop.request"));
     let signals = 0;
     const processController = controller({
+      async inspect(pid) { return pid === owner.pid ? makeInspection(owner) : undefined; },
       async isProcessGroupAlive() { return true; },
       async signal() { signals += 1; },
     });

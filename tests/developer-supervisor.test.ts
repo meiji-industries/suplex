@@ -24,7 +24,7 @@ test("supervisor feeds the durable prompt file to the child stdin", async () => 
   const executionId = `developer_${"d".repeat(24)}`;
   const executionRoot = join(root, "developer-executions", executionId);
   try {
-    const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId, command: process.execPath, args: ["-e", "process.stdin.on('data', (chunk) => process.stdout.write(chunk))"], cwd: root, env: {} });
+    const invocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId, command: process.execPath, args: ["-e", "process.stdin.on('data', (chunk) => { process.stdout.write(chunk); setTimeout(() => process.exit(0), 100); })"], cwd: root, env: {} });
     await mkdir(executionRoot, { recursive: true, mode: 0o700 });
     await writeFile(join(executionRoot, "invocation.json"), `${JSON.stringify(invocation)}\n`);
     await writeFile(join(executionRoot, "prompt.txt"), "durable retry prompt\n", { mode: 0o600 });
@@ -33,13 +33,17 @@ test("supervisor feeds the durable prompt file to the child stdin", async () => 
     const child = spawn(process.execPath, ["--import", "tsx", source, executionRoot], { stdio: ["ignore", "pipe", "pipe"] });
     child.unref();
     const resultPath = join(executionRoot, "result.json");
-    for (let attempt = 0; attempt < 100; attempt += 1) {
+    for (let attempt = 0; attempt < 400; attempt += 1) {
       try {
         DeveloperSupervisorResultSchema.parse(JSON.parse(await readFile(resultPath, "utf8")));
         break;
       } catch { await new Promise((resolve) => setTimeout(resolve, 25)); }
     }
-    const events = await readFile(join(executionRoot, "events.jsonl"), "utf8");
+    let events = "";
+    for (let attempt = 0; attempt < 400 && !events.includes("durable retry prompt"); attempt += 1) {
+      try { events = await readFile(join(executionRoot, "events.jsonl"), "utf8"); } catch { /* supervisor is still initializing */ }
+      if (!events.includes("durable retry prompt")) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
     expect(events).toContain("durable retry prompt");
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 3 }); }
 });

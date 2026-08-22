@@ -103,6 +103,7 @@ interface AttentionRow {
   actions_json: string;
   evidence_artifact_id: string | null;
   evidence_sha256: string | null;
+  artifact_sha256: string;
   mime_type: string;
   byte_size: number;
   kind: string;
@@ -161,7 +162,7 @@ export class AttentionService {
     const companies = this.auth.listVisibleCompanies(actorUserId);
     const rows = (companyId: string): ProjectionRow[] => this.database.authQuery((db) => db.prepare(`SELECT ip.task_id, t.title AS task_title, ip.company_id, ip.phase, ip.revision, ip.authoritative_revision, ip.allowed_commands_json, ip.pending_action, ip.updated_at, ip.projected_at, ip.state_changed_at, ip.projection_status, ip.reconciled_at
       FROM forge_issue_projections ip JOIN forge_tasks t ON t.id = ip.task_id WHERE ip.company_id = ? ORDER BY ip.task_id`).all(companyId) as ProjectionRow[]);
-    const readAttention = (companyId: string): AttentionRow[] => this.database.authQuery((db) => db.prepare(`SELECT ai.id, ai.company_id, ai.task_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title AS task_title, ai.category, ai.summary, ai.source_revision, ai.activated_at, ai.actions_json, ai.evidence_artifact_id, ai.evidence_sha256, a.mime_type, a.byte_size, a.kind
+    const readAttention = (companyId: string): AttentionRow[] => this.database.authQuery((db) => db.prepare(`SELECT ai.id, ai.company_id, ai.task_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title AS task_title, ai.category, ai.summary, ai.source_revision, ai.activated_at, ai.actions_json, ai.evidence_artifact_id, ai.evidence_sha256, a.sha256 AS artifact_sha256, a.mime_type, a.byte_size, a.kind
       FROM forge_attention_items ai JOIN forge_tasks t ON t.id = ai.task_id JOIN forge_companies c ON c.id = ai.company_id JOIN forge_artifacts a ON a.id = ai.evidence_artifact_id AND a.company_id = ai.company_id
       WHERE ai.company_id = ? AND ai.active = 1 AND a.kind IN (${SAFE_ARTIFACT_KINDS_SQL})
       ORDER BY ai.activated_at ASC, ai.id ASC`).all(companyId) as AttentionRow[]);
@@ -198,7 +199,7 @@ export class AttentionService {
     const task = this.database.authQuery((db) => db.prepare("SELECT company_id FROM forge_tasks WHERE id = ?").get(taskId) as { company_id: string } | undefined);
     if (!task) safeNotFound();
     this.auth.requireCompanyAccess(actorUserId, task.company_id);
-    return this.database.authQuery((db) => db.prepare(`SELECT ai.id, ai.company_id, ai.task_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title AS task_title, ai.category, ai.summary, ai.source_revision, ai.activated_at, ai.actions_json, ai.evidence_artifact_id, ai.evidence_sha256, a.mime_type, a.byte_size, a.kind
+    return this.database.authQuery((db) => db.prepare(`SELECT ai.id, ai.company_id, ai.task_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title AS task_title, ai.category, ai.summary, ai.source_revision, ai.activated_at, ai.actions_json, ai.evidence_artifact_id, ai.evidence_sha256, a.sha256 AS artifact_sha256, a.mime_type, a.byte_size, a.kind
       FROM forge_attention_items ai JOIN forge_tasks t ON t.id = ai.task_id JOIN forge_companies c ON c.id = ai.company_id JOIN forge_artifacts a ON a.id = ai.evidence_artifact_id AND a.company_id = ai.company_id
       WHERE ai.task_id = ? AND ai.company_id = ? AND ai.active = 1 AND a.kind IN (${SAFE_ARTIFACT_KINDS_SQL}) ORDER BY ai.activated_at, ai.id`).all(taskId, task.company_id).flatMap((item) => this.publicAttention(item as AttentionRow)));
   }
@@ -208,7 +209,7 @@ export class AttentionService {
     if (!row?.evidence_artifact_id || !row.evidence_sha256) safeNotFound();
     this.auth.requireCompanyAccess(actorUserId, row.company_id);
     const artifact = this.database.authQuery((db) => db.prepare(`SELECT id, company_id, kind, mime_type, byte_size, sha256, storage_path FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind IN (${SAFE_ARTIFACT_KINDS_SQL})`).get(row.evidence_artifact_id, row.company_id) as { id: string; company_id: string; kind: string; mime_type: string; byte_size: number; sha256: string; storage_path: string } | undefined);
-    if (!artifact || !/^(text\/(plain|markdown)|application\/json)(;|$)/i.test(artifact.mime_type) || !SAFE_ARTIFACT_KINDS.includes(artifact.kind as typeof SAFE_ARTIFACT_KINDS[number]) || !this.artifacts) safeNotFound();
+    if (!artifact || artifact.sha256 !== row.evidence_sha256 || !/^(text\/(plain|markdown)|application\/json)(;|$)/i.test(artifact.mime_type) || !SAFE_ARTIFACT_KINDS.includes(artifact.kind as typeof SAFE_ARTIFACT_KINDS[number]) || !this.artifacts) safeNotFound();
     let capture: { bytes: Buffer; truncated: boolean };
     try { capture = await this.artifacts.readBounded({ companyId: artifact.company_id, storagePath: artifact.storage_path, sha256: artifact.sha256 }, 64 * 1024); } catch { safeNotFound(); }
     const { bytes, truncated } = capture;
@@ -232,7 +233,7 @@ export class AttentionService {
   private publicAttention(row: AttentionRow): AttentionItem[] {
     const category = AttentionCategorySchema.safeParse(row.category);
     const actions = parseActions(row.actions_json, row.source_revision);
-    if (!category.success || !actions || !row.activated_at || !row.evidence_artifact_id || !row.evidence_sha256) return [];
+    if (!category.success || !actions || !row.activated_at || !row.evidence_artifact_id || !row.evidence_sha256 || row.artifact_sha256 !== row.evidence_sha256) return [];
     return [{ id: row.id || attentionId(row.company_id, row.task_id, row.source_revision, category.data), companyId: row.company_id, taskId: row.task_id, issueKey: row.issue_key, taskTitle: row.task_title, category: category.data, summary: row.summary, sourceRevision: row.source_revision, activatedAt: row.activated_at, actions, evidence: { artifactId: row.evidence_artifact_id, sha256: row.evidence_sha256, kind: row.kind, mimeType: row.mime_type, byteSize: row.byte_size, href: `/api/attention/${encodeURIComponent(row.id)}/evidence` } }];
   }
 

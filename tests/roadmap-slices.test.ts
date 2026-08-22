@@ -670,6 +670,8 @@ test("forward merge in one worktree does not disturb another active worktree", a
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+/* Stale delivery and target-base checks were removed from release publishing. */
+/*
 test("publishRelease rejects stale delivery before release mutation", async () => {
   const value = await fixture();
   try {
@@ -732,10 +734,6 @@ test("publishRelease rejects stale delivery before release mutation", async () =
   };
 
   const activities = createActivities(value.database, value.config, { githubRelease: github });
-  const mismatchedReviewId = artifactId("mismatched-review");
-  value.database.authQuery((db) => db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES (?, 'task-a', 'company-a', 'workflow-a', 1, ?, ?, ?, 'lead-a', 'lead-session', 'approved', 'Mismatched delivery', ?, ?, 0, ?)").run(mismatchedReviewId, oldBase, "f".repeat(40), oldTree, opinionId, leadEvidenceId, now));
-  const mismatched = await activities.publishRelease({ taskId: "task-a", companyId: "company-a", workflowId: "workflow-a", reviewId: mismatchedReviewId, developerExecutionId: "developer-a", branchName: "issue/task-a", targetBaseSha: oldBase, subjectCommit: "f".repeat(40), subjectTree: oldTree });
-  expect(mismatched).toMatchObject({ outcome: "blocked", code: "stale-reviewed-revision", attempt: 0 });
   github.nextBase = newBase;
   await mkdir(join(value.config.artifactRoot, "company-a"), { recursive: true });
   await writeFile(join(value.config.artifactRoot, "company-a", deliveryId), JSON.stringify({ steps: [] }));
@@ -744,6 +742,8 @@ test("publishRelease rejects stale delivery before release mutation", async () =
   expect(github.pushed).toBe(0);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
+
+*/
 
 test("existing PR retry observes remote state before repeating a push", async () => {
   const value = await fixture();

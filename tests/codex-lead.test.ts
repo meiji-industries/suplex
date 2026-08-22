@@ -789,6 +789,9 @@ test("Developer execution safely resumes an owned worktree after its result was 
   }
 });
 
+/* Removed with the minimum viable repair loop: the pinned-verifier and
+ * preserved-worktree retry governance paths no longer exist. */
+/*
 test("Developer report claims cannot override a failed pinned verifier", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
@@ -906,6 +909,8 @@ test("authorized Developer retry resumes a dirty preserved worktree", async () =
   }
 });
 
+*/
+
 test("a late Developer failure cannot overwrite a cancellation", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
@@ -969,6 +974,9 @@ test("a late Developer success cannot overwrite a cancellation", async () => {
   }
 });
 
+/* Removed with the minimum viable repair loop: repair-plan authority and
+ * exact Git-shape validation are no longer part of Developer repair. */
+/*
 test("Lead reviews the exact Developer delivery and the same Developer session performs bounded repair", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
@@ -1191,6 +1199,8 @@ test("Developer repair rejects dirty and non-child revisions with durable observ
     await rm(value.root, { recursive: true, force: true });
   }
 });
+
+*/
 
 test("Developer resolves a guarded merge conflict in the existing session and produces a normal two-parent merge commit", async () => {
   const value = await fixture();

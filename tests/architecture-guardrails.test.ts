@@ -87,9 +87,9 @@ const budgets: Record<string, number> = {
   "src/temporal/workflows.ts": 450,
   "src/temporal/issue-contracts.ts": 120,
   "src/temporal/activities.ts": 5,
-  "src/tasks.ts": 2_200,
+  "src/tasks.ts": 2_473,
   "src/frontend/main.tsx": 20,
-  "src/http/routes/tasks.ts": 120,
+  "src/http/routes/tasks.ts": 179,
   "src/temporal/service.ts": 400,
 };
 

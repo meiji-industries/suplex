@@ -29,6 +29,7 @@ test("renders proportional timing segments, the current pulse, and accessible ti
   const html = renderToStaticMarkup(createElement(PhaseTimings, { activity, phase: "reviewing_delivery", updatedAt: "2026-08-22T12:20:00.000Z" }));
 
   expect(html).toContain('data-phase-timings');
+  expect(html).toContain("Timeline");
   expect(html).toContain('data-phase-timing="development"');
   expect(html).toContain("animate-pulse");
   expect(html).toContain("Total");

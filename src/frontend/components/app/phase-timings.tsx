@@ -41,7 +41,7 @@ export function PhaseTimings({ activity, phase, updatedAt }: { activity: Activit
   const ticks = Array.from({ length: Math.ceil(axisDuration / tickMs) }, (_, index) => startMs + index * tickMs);
 
   return <section data-phase-timings aria-label="Phase timings" className="border-t border-border/70 pt-2">
-    <div className="mb-2 flex items-center justify-between text-[11px] text-muted-foreground"><span>Phase timeline</span><span className="tabular-nums" title="Total elapsed across recorded phases">Total {phaseTimingDuration(totalDuration)}</span></div>
+    <div className="mb-2 flex items-center gap-2"><h3 className="text-xs font-semibold">Timeline</h3><span className="text-[11px] tabular-nums text-muted-foreground" title="Elapsed phase time">Total {phaseTimingDuration(totalDuration)}</span></div>
     <div className="overflow-x-auto" aria-label="Phase timeline Gantt chart">
       <div className="grid min-w-[42rem] grid-cols-[10rem_minmax(32rem,1fr)] text-[11px]">
         <div className="sticky left-0 z-20 border-b border-border bg-background px-2 py-1 text-muted-foreground">Phase</div>

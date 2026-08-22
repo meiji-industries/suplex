@@ -201,7 +201,7 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
     <Card data-task-actions data-task-blocked-card={isBlocked && !awaitingDeliveryReview || undefined} size="sm">
       <CardHeader>
         <CardTitle><h3>{canReviewDelivery ? deliveryAgent?.agentName && deliveryAgent.avatarSeed ? <span className="inline-flex items-center gap-1.5"><ProfileAvatar name={deliveryAgent.agentName} seed={deliveryAgent.avatarSeed} size="xs" />{deliveryAgent.agentName} completed the approved work.</span> : "Completed the approved work" : canRetryFinalReview ? "Final review did not finish" : canRepairDelivery ? "More proof is needed" : canPublishDraft ? "Ready to Create Pull Request" : canAcceptDelivery ? "Pull request review" : task.pendingAction ?? "Next action"}</h3></CardTitle>
-        {canReviewDelivery ? <CardDescription>Ready for your review.</CardDescription> : canRetryFinalReview ? <CardDescription>Forge could not finish its last review. Try again, or choose Request Changes to send the work back.</CardDescription> : canRepairDelivery ? <CardDescription>{repairInstruction ? <>Missing verification: {repairInstruction}</> : "A required verification result is missing."}</CardDescription> : null}
+        {canReviewDelivery ? <CardDescription>Ready for your review.</CardDescription> : canAcceptDelivery ? <CardDescription>Ready to publish. The work is ready. Publish makes the pull request available for review. Request Changes sends it back to the Developer.</CardDescription> : canRetryFinalReview ? <CardDescription>Forge could not finish its last review. Try again, or choose Request Changes to send the work back.</CardDescription> : canRepairDelivery ? <CardDescription>{repairInstruction ? <>Missing verification: {repairInstruction}</> : "A required verification result is missing."}</CardDescription> : null}
         {isBlocked && task.lastHandlerError ? <CardDescription>Last {task.lastHandlerError.command} error: {task.lastHandlerError.reason}</CardDescription> : null}
         {isBlocked ? <CardAction>{awaitingDeliveryReview ? <TaskStatus phase={task.phase} presentationPhase={presentationPhase} /> : <Badge variant="destructive">{phaseLabel(task.phase)}</Badge>}</CardAction> : null}
       </CardHeader>
@@ -615,6 +615,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   const plannerFeedbackEnded = TERMINAL_PHASES.has(task.phase) || Boolean(task.successorTaskId);
   const plannerFeedbackDisabledReason = plannerFeedbackEnded ? "Planner feedback is unavailable after this task has ended." : !tellPlannerCommand ? "Planner feedback is unavailable while the task refreshes." : undefined;
   const activityContent = <>
+    <PhaseTimings activity={task.activity} phase={task.phase} updatedAt={task.updatedAt} />
     <TaskActivity taskId={task.id} timeline={task.activity} release={task.release} ci={task.ci} optimisticRows={optimisticPlannerNotes} onViewChanges={openDiff} />
     <TellPlannerForm disabled={busy || !tellPlannerCommand} disabledReason={plannerFeedbackDisabledReason} onSubmit={async (note, commandId) => {
       setOptimisticPlannerNotes((rows) => [...rows, { id: `optimistic-planner-note-${commandId}`, at: new Date().toISOString(), role: "you", text: `You told the Planner: ${note}`, revision: task.revision }]);
@@ -649,7 +650,6 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
             <header className="px-4 pt-4 pb-3 sm:px-6 lg:px-10">
               <div data-task-header-content className="mx-auto max-w-4xl space-y-4">
                 <h2 className="min-w-0"><InlineTaskEditor field="title" value={task.title} onSave={async (title) => onUpdateDetails({ title })} /></h2>
-                <PhaseTimings activity={task.activity} phase={task.phase} updatedAt={task.updatedAt} />
               </div>
             </header>
             <div data-task-content className="min-w-0 px-4 pt-4 pb-6 sm:px-6 lg:px-10">

@@ -21,6 +21,7 @@
     "build": "tsc && cp src/temporal/payload-converter.cjs dist/src/temporal/payload-converter.cjs && node dist/scripts/build-workflow-bundle.js && vite build",
     "dev": "tsx src/cli.ts start --foreground",
     "migration:new": "tsx scripts/create-migration.ts",
+    "smoke": "tsx scripts/smoke.mts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "check": "pnpm run typecheck && pnpm run lint && vitest run --project unit tests/forge-guardrails.test.ts",

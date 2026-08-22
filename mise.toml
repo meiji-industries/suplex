@@ -138,6 +138,10 @@ run = "pnpm run build"
 description = "Type-check the project without emitting"
 run = "pnpm run typecheck"
 
+[tasks.smoke]
+description = "Run the authenticated happy-path smoke test against an already-running dev stack"
+run = "pnpm run smoke"
+
 [tasks.test]
 description = "Run unit and integration tests (excludes Temporal and browser tests)"
 run = "pnpm run test"

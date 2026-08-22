@@ -119,7 +119,6 @@ export interface CiRepairActivityResult {
   resultTree: string | null;
   deliveryArtifactId: string;
   evidenceArtifactId: string;
-  attentionEvidenceArtifactId?: string;
   summary: string;
   outcome: "completed" | "blocked";
 }

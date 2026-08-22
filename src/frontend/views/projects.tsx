@@ -1,17 +1,20 @@
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
 import { Button } from ".././components/ui/button.js";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from ".././components/ui/card.js";
+import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle } from ".././components/ui/card.js";
 import { Checkbox } from ".././components/ui/checkbox.js";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from ".././components/ui/dropdown-menu.js";
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from ".././components/ui/field.js";
 import { Input } from ".././components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".././components/ui/select.js";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from ".././components/ui/dialog.js";
 import { CreateButton } from ".././components/ui/create-button.js";
+import { Badge as ReuiBadge } from ".././components/reui/badge.js";
 import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
+import { Ellipsis } from "lucide-react";
 import { reconcileScopedNotFound, type ApiAgent, type ApiCheck, type ApiProject } from "../lib/view-shared.js";
 
 function CreateProjectDialog({
@@ -123,6 +126,26 @@ function settingsForm(project: ApiProject): ProjectSettingsForm {
     reviewerAgent: project.roleDefaults.reviewer ?? "",
     integratorAgent: project.roleDefaults.integrator ?? "",
   };
+}
+
+const projectRoles = ["planner", "builder", "reviewer", "integrator"] as const;
+
+function ProjectDefaultAgents({ project, agents }: { project: ApiProject; agents: ApiAgent[] }): ReactElement {
+  return (
+    <div className="flex flex-wrap gap-x-3 gap-y-1.5" aria-label="Default agents">
+      {projectRoles.map((role) => {
+        const agent = agents.find((candidate) => candidate.id === project.roleDefaults[role]);
+        const label = role.slice(0, 1).toUpperCase() + role.slice(1);
+        return (
+          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground" key={role} title={`${label}: ${agent?.name ?? "Unassigned"}`}>
+            {agent ? <ProfileAvatar name={agent.name} seed={agent.avatarSeed} size="xs" /> : null}
+            <span>{label}</span>
+            <span className="text-foreground">{agent?.name ?? "Unassigned"}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 function ProjectSettingsDialog({
@@ -326,18 +349,33 @@ export function ProjectsView(): ReactElement {
                   <Card size="sm">
                     <CardHeader>
                       <CardTitle><span className="text-[13px]">{project.name}</span></CardTitle>
+                      <CardAction>
+                        <div className="flex items-center gap-1">
+                          <Button variant="ghost" size="sm" onClick={() => setSettingsProject(project)}>Configure</Button>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${project.name} actions`} title={`${project.name} actions`} />}><Ellipsis /></DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem render={<a href={`/api/projects/${project.id}`} />}>Inspect</DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </div>
+                      </CardAction>
                     </CardHeader>
                     <CardContent>
-                      <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2">
-                        <span className="truncate">{project.repositoryPath}</span>
-                        <span className="truncate">{project.repository ?? "Repository unavailable"}</span>
-                        <span>Base {project.baseBranch}</span>
-                        <span>Target {project.targetBranch}</span>
-                        <span>{project.requiredChecks.length} required checks</span>
-                        <span>Defaults: Planner {agents.find((agent) => agent.id === project.roleDefaults.planner)?.name ?? "—"} · Reviewer {agents.find((agent) => agent.id === project.roleDefaults.reviewer)?.name ?? "—"} · Builder {agents.find((agent) => agent.id === project.roleDefaults.builder)?.name ?? "—"} · Integrator {agents.find((agent) => agent.id === project.roleDefaults.integrator)?.name ?? "—"}</span>
+                      <div className="grid gap-3 text-xs">
+                        <div className="min-w-0">
+                          <div className="truncate font-medium" title={project.repository}>{project.repository ?? "Repository unavailable"}</div>
+                          <div className="truncate text-[11px] text-muted-foreground" title={project.repositoryPath}>{project.repositoryPath}</div>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+                          <span>Base <span className="font-mono text-foreground">{project.baseBranch}</span></span>
+                          <span aria-hidden="true">→</span>
+                          <span>Target <span className="font-mono text-foreground">{project.targetBranch}</span></span>
+                          <ReuiBadge variant="secondary" size="sm">{project.requiredChecks.length} {project.requiredChecks.length === 1 ? "check" : "checks"}</ReuiBadge>
+                        </div>
+                        <ProjectDefaultAgents project={project} agents={agents} />
                       </div>
                     </CardContent>
-                    <CardFooter className="border-t"><div className="flex w-full flex-wrap justify-end gap-1.5"><Button variant="ghost" size="sm" onClick={() => setSettingsProject(project)}>Configure</Button><a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></CardFooter>
                   </Card>
                 </article>
               ))}

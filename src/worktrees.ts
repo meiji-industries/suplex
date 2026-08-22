@@ -555,6 +555,49 @@ export function withWorktreeMiseTrust(env: NodeJS.ProcessEnv, worktreePath: stri
   return { ...env, MISE_TRUSTED_CONFIG_PATHS: [env.MISE_TRUSTED_CONFIG_PATHS, worktreePath].filter(Boolean).join(delimiter) };
 }
 
+export interface WorktreeBuildCacheInput {
+  env: NodeJS.ProcessEnv;
+  worktreeRoot: string;
+  worktreePath: string;
+  projectId: string;
+}
+
+/**
+ * Give task worktrees a per-project cache without putting build output in a
+ * disposable worktree. Callers supply their fully assembled environment, so a
+ * project-specific or user-supplied setting always wins.
+ */
+export async function withWorktreeBuildCaches(input: WorktreeBuildCacheInput): Promise<NodeJS.ProcessEnv> {
+  if (!pathSegmentPattern.test(input.projectId)) throw new WorktreeFailure("unsafe-project-id", "Project identity is not safe for a shared build-cache path");
+  const worktreeRoot = resolve(input.worktreeRoot);
+  const cacheRoot = resolve(worktreeRoot, ".cache", input.projectId);
+  if (!withinRoot(worktreeRoot, cacheRoot)) throw new WorktreeFailure("build-cache-escape", "Shared build-cache path escaped the configured worktree root");
+
+  const has = (filename: string): boolean => existsSync(join(input.worktreePath, filename));
+  const isCargo = has("Cargo.toml");
+  const isNode = has("package.json");
+  const isGo = has("go.mod");
+  const isPython = has("pyproject.toml") || has("requirements.txt");
+  const isCOrCpp = ["CMakeLists.txt", "Makefile", "meson.build", "configure.ac"].some(has);
+  const cachePaths: Array<[string, string, boolean]> = [
+    ["CARGO_TARGET_DIR", "cargo-target", isCargo],
+    ["PNPM_STORE_PATH", "pnpm-store", isNode],
+    ["npm_config_cache", "npm-cache", isNode],
+    ["GOCACHE", "go-cache", isGo],
+    ["PIP_CACHE_DIR", "pip-cache", isPython],
+    ["UV_CACHE_DIR", "uv-cache", isPython],
+    ["CCACHE_DIR", "ccache", isCOrCpp],
+  ];
+  const additions: NodeJS.ProcessEnv = {};
+  for (const [variable, directory, enabled] of cachePaths) {
+    if (!enabled || input.env[variable] !== undefined) continue;
+    const path = join(cacheRoot, directory);
+    await mkdir(path, { recursive: true, mode: 0o700 });
+    additions[variable] = path;
+  }
+  return { ...input.env, ...additions };
+}
+
 export async function createGitCommandGuard(runtimeRoot: string): Promise<GitCommandGuard> {
   const directory = join(resolve(runtimeRoot), `developer-guard-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   await mkdir(directory, { recursive: true, mode: 0o700 });

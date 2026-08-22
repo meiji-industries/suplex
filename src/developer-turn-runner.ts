@@ -64,7 +64,7 @@ async function sleep(milliseconds: number): Promise<void> {
 export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<DeveloperTurnRunResult> {
   const root = join(input.config.runtimeRoot, "developer-executions", input.executionId);
   await mkdir(root, { recursive: true, mode: 0o700 });
-  const invocation: DeveloperSupervisorInvocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId: input.executionId, command: input.command, args: input.args, cwd: input.cwd, env: Object.fromEntries(Object.entries(input.env).filter(([key]) => key === "PATH" || key === "FORGE_GIT_REAL_BIN" || key === "FORGE_GIT_GUARD_DIR" || key === "MISE_TRUSTED_CONFIG_PATHS")) });
+  const invocation: DeveloperSupervisorInvocation = DeveloperSupervisorInvocationSchema.parse({ version: 1, executionId: input.executionId, command: input.command, args: input.args, cwd: input.cwd, env: Object.fromEntries(Object.entries(input.env).filter(([key]) => key === "PATH" || key === "FORGE_GIT_REAL_BIN" || key === "FORGE_GIT_GUARD_DIR" || key === "MISE_TRUSTED_CONFIG_PATHS" || ["CARGO_TARGET_DIR", "PNPM_STORE_PATH", "npm_config_cache", "GOCACHE", "PIP_CACHE_DIR", "UV_CACHE_DIR", "CCACHE_DIR"].includes(key))) });
   await writeFile(join(root, "invocation.json"), `${JSON.stringify(invocation)}\n`, { flag: "a", mode: 0o600 });
   const prompt = input.stdin ?? input.args.at(-1);
   if (!prompt || prompt === "-") throw new Error("Builder prompt is missing");

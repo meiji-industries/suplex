@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { expect, test } from "vitest";
 
 import { asNonRetryableApplicationFailure } from "../src/temporal/activities/context.js";
-import { createGitCommandGuard, reserveOwnedWorktree, WorktreeFailure, WorktreeManager } from "../src/worktrees.js";
+import { createGitCommandGuard, reserveOwnedWorktree, withWorktreeBuildCaches, WorktreeFailure, WorktreeManager } from "../src/worktrees.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +30,32 @@ async function fixture() {
   await git(["commit", "-m", "fixture"], repositoryPath);
   return { root, repositoryPath, worktreeRoot, baseSha: await git(["rev-parse", "HEAD"], repositoryPath) };
 }
+
+test("assigns Cargo task worktrees a mode-0700 shared per-project target directory", async () => {
+  const value = await fixture();
+  const worktreePath = join(value.worktreeRoot, "cargo-task");
+  try {
+    await mkdir(worktreePath);
+    await writeFile(join(worktreePath, "Cargo.toml"), "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\n");
+    const env = await withWorktreeBuildCaches({ env: {}, worktreeRoot: value.worktreeRoot, worktreePath, projectId: "project_1" });
+    const target = join(value.worktreeRoot, ".cache", "project_1", "cargo-target");
+    expect(env.CARGO_TARGET_DIR).toBe(target);
+    expect(await stat(target).then((entry) => entry.mode & 0o777)).toBe(0o700);
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("does not assign Cargo caches to non-Cargo worktrees and preserves configured values", async () => {
+  const value = await fixture();
+  const worktreePath = join(value.worktreeRoot, "node-task");
+  try {
+    await mkdir(worktreePath);
+    await writeFile(join(worktreePath, "package.json"), "{}\n");
+    const env = await withWorktreeBuildCaches({ env: { PNPM_STORE_PATH: "/configured/pnpm" }, worktreeRoot: value.worktreeRoot, worktreePath, projectId: "project_1" });
+    expect(env.CARGO_TARGET_DIR).toBeUndefined();
+    expect(env.PNPM_STORE_PATH).toBe("/configured/pnpm");
+    expect(env.npm_config_cache).toBe(join(value.worktreeRoot, ".cache", "project_1", "npm-cache"));
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
 
 test("creates a deterministic exact-base worktree and guards prohibited Git/provider operations", async () => {
   const value = await fixture();

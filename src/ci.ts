@@ -497,7 +497,7 @@ export class CiService {
     let evidenceArtifactId: string | null = null;
     let evidenceArtifactSha256: string | undefined;
     if (this.artifacts) {
-      const artifact = await this.artifacts.put(input.companyId, "ci-evidence", { filename: `${run.id}-${input.attemptNumber}.json`, mimeType: "application/json", bytes: Buffer.from(evidence, "utf8") });
+      const artifact = await this.artifacts.putArtifact(input.companyId, "ci-evidence", { filename: `${run.id}-${input.attemptNumber}.json`, mimeType: "application/json", bytes: Buffer.from(evidence, "utf8") });
       evidenceArtifact = artifact;
       evidenceArtifactId = artifact.id;
       evidenceArtifactSha256 = artifact.sha256;

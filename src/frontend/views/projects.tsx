@@ -1,6 +1,6 @@
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
 import { Button } from ".././components/ui/button.js";
-import { Card, CardAction, CardContent, CardFooter, CardHeader, CardTitle } from ".././components/ui/card.js";
+import { Card, CardAction, CardContent, CardHeader, CardTitle } from ".././components/ui/card.js";
 import { Checkbox } from ".././components/ui/checkbox.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from ".././components/ui/dropdown-menu.js";
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from ".././components/ui/field.js";

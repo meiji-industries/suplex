@@ -499,6 +499,6 @@ export class AcceptanceService {
 
   private async putArtifact(companyId: string, kind: StoredArtifact["kind"], filename: string, contents: string): Promise<StoredArtifact | undefined> {
     if (!this.artifacts) return undefined;
-    return this.artifacts.put(companyId, kind, { filename, mimeType: "application/json", bytes: Buffer.from(contents, "utf8") });
+    return this.artifacts.putArtifact(companyId, kind, { filename, mimeType: "application/json", bytes: Buffer.from(contents, "utf8") });
   }
 }

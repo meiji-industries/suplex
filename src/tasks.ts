@@ -1039,7 +1039,7 @@ export class TaskService {
     if (!titlePattern.test(title)) findings.push(finding("invalid-title", "title", "Title must contain 1 to 160 characters"));
     if (!description || description.length > 200_000) findings.push(finding("invalid-description", "description", "Markdown description is required and must be at most 200,000 characters"));
     if (findings.length) throw new TaskFailure("Task details are invalid", findings, 422);
-    const brief = input.description === undefined ? undefined : await this.artifacts.put(current.companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from(description, "utf8") });
+    const brief = input.description === undefined ? undefined : await this.artifacts.putArtifact(current.companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from(description, "utf8") });
     const now = this.now().toISOString();
     this.database.authTransaction((db) => {
       if (brief) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(brief.id, brief.companyId, brief.kind, brief.filename, brief.mimeType, brief.byteSize, brief.sha256, brief.storagePath, brief.createdAt);
@@ -1144,13 +1144,13 @@ export class TaskService {
       const workflowId = reserved.intent.workflow_id;
       this.updateCreationIntent(reserved.intent.id, { state: "staging", errorCode: null, attempt: reserved.intent.attempt + 1 }, reserved.intent.lease_token);
       const briefBytes = Buffer.from(normalizeText(input.description), "utf8");
-      configurationArtifact = await this.artifacts.put(companyId, "task-project-configuration", { filename: `project-configuration-${taskId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(taskConfiguration), "utf8"), taskId });
+      configurationArtifact = await this.artifacts.putArtifact(companyId, "task-project-configuration", { filename: `project-configuration-${taskId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(taskConfiguration), "utf8"), taskId });
       await this.maybeFault("after_manifest_persisted", { intentId: reserved.intent.id, taskId });
-      briefArtifact = await this.artifacts.put(companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: briefBytes, taskId });
+      briefArtifact = await this.artifacts.putArtifact(companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: briefBytes, taskId });
       await this.maybeFault("after_artifact_finalized", { intentId: reserved.intent.id, taskId, artifactIndex: 0 });
       this.updateCreationIntent(reserved.intent.id, { artifactIds: [briefArtifact.id] }, reserved.intent.lease_token);
       for (const [imageIndex, { image, bytes }] of decodedImages.entries()) {
-        const artifact = await this.artifacts.put(companyId, "task-image", { filename: image.filename, mimeType: image.mimeType, bytes, taskId });
+        const artifact = await this.artifacts.putArtifact(companyId, "task-image", { filename: image.filename, mimeType: image.mimeType, bytes, taskId });
         await this.maybeFault("after_artifact_finalized", { intentId: reserved.intent.id, taskId, artifactIndex: imageIndex + 1 });
         imageArtifacts.push(artifact);
         this.updateCreationIntent(reserved.intent.id, { artifactIds: [briefArtifact, ...imageArtifacts].filter((entry): entry is StoredArtifact => Boolean(entry)).map((entry) => entry.id) }, reserved.intent.lease_token);
@@ -1359,7 +1359,7 @@ export class TaskService {
     if (normalizedAnswer.length < 1 || normalizedAnswer.length > 8_000) throw new TaskFailure("Decision answer must contain 1 to 8,000 characters", [finding("invalid-answer", "answer", "Provide a concise decision")], 422);
     const blocker = this.database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'decision-blocker'").get(blockerOutput.outputArtifactId, task.companyId) as { sha256: string } | undefined);
     if (!blocker) throw new TaskFailure("Decision blocker evidence is unavailable", [], 409);
-    const artifact = await this.artifacts.put(task.companyId, "decision-answer", { filename: `decision-answer-${task.id}.md`, mimeType: "text/markdown", bytes: Buffer.from(normalizedAnswer, "utf8") });
+    const artifact = await this.artifacts.putArtifact(task.companyId, "decision-answer", { filename: `decision-answer-${task.id}.md`, mimeType: "text/markdown", bytes: Buffer.from(normalizedAnswer, "utf8") });
     this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
     try {
       const input: ResolveDecisionBlockerInput = { expectedRevision, actorUserId, answerArtifactId: artifact.id };
@@ -1544,7 +1544,7 @@ export class TaskService {
     const task = this.getTask(actorUserId, taskId);
     const artifact = this.database.authQuery((db) => db.prepare("SELECT id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-image'").get(artifactId, task.companyId) as ArtifactRow | undefined);
     if (!artifact || !parseImageIds(JSON.stringify(task.images.map((image) => image.artifactId))).includes(artifactId)) throw new TaskFailure("Not found", [], 404);
-    const bytes = await this.artifacts.read({ companyId: task.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 });
+    const bytes = await this.artifacts.getArtifact({ companyId: task.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 });
     return { artifact: { artifactId: artifact.id, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }, bytes };
   }
 
@@ -1554,7 +1554,7 @@ export class TaskService {
       FROM forge_artifacts a JOIN forge_developer_executions e ON (e.delivery_artifact_id = a.id OR e.evidence_artifact_id = a.id)
       WHERE e.task_id = ? AND e.company_id = ? AND a.id = ? AND a.company_id = ?`).get(task.id, task.companyId, artifactId, task.companyId) as StoredArtifact | undefined);
     if (!artifact) throw new TaskFailure("Not found", [], 404);
-    return { artifact, bytes: await this.artifacts.read({ companyId: artifact.companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 }) };
+    return { artifact, bytes: await this.artifacts.getArtifact({ companyId: artifact.companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 }) };
   }
 
   getDeveloperExecutionEvents(actorUserId: string, taskId: string, executionId: string, limit = 100): { events: DeveloperExecutionEvent[]; hasMore: boolean } {
@@ -1656,7 +1656,7 @@ export class TaskService {
         )
     `).get(artifactId, task.companyId, task.id, task.id, task.id, task.id, task.workflowId) as { id: string; company_id: string; filename: string; mime_type: string; byte_size: number; sha256: string; storage_path: string } | undefined);
     if (!artifact) throw new TaskFailure("Not found", [], 404);
-    const bytes = await this.artifacts.read({ companyId: artifact.company_id, storagePath: artifact.storage_path, sha256: artifact.sha256 });
+    const bytes = await this.artifacts.getArtifact({ companyId: artifact.company_id, storagePath: artifact.storage_path, sha256: artifact.sha256 });
     return { artifact: { artifactId: artifact.id, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }, bytes };
   }
 
@@ -1686,7 +1686,7 @@ export class TaskService {
         OR EXISTS (SELECT 1 FROM forge_ci_repairs cx JOIN forge_ci_repair_plans cp ON cp.id = cx.repair_plan_id WHERE (cx.delivery_artifact_id = a.id OR cx.evidence_artifact_id = a.id) AND cp.task_id = ? AND cp.company_id = ?)
       )`).get(artifactId, task.companyId, ...Array.from({ length: 12 }, () => [task.id, task.companyId]).flat()) as { id: string; kind: string; filename: string; mime_type: string; byte_size: number; storage_path: string; sha256: string } | undefined);
     if (!artifact) throw new TaskFailure("Not found", [], 404);
-    const bytes = await this.artifacts.read({ companyId: task.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 });
+    const bytes = await this.artifacts.getArtifact({ companyId: task.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 });
     return { artifact: { artifactId: artifact.id, kind: artifact.kind, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }, bytes };
   }
 
@@ -1697,7 +1697,7 @@ export class TaskService {
       WHERE m.task_id = ? AND m.company_id = ? AND a.id = ? AND a.kind IN ('forward-merge-conflict', 'forward-merge-verification', 'forward-merge-delivery')`).get(task.id, task.companyId, artifactId) as ArtifactRow | undefined);
     if (!allowed) throw new TaskFailure("Not found", [], 404);
     try {
-      const bytes = await this.artifacts.read({ companyId: allowed.company_id, storagePath: allowed.storage_path, sha256: allowed.sha256 });
+      const bytes = await this.artifacts.getArtifact({ companyId: allowed.company_id, storagePath: allowed.storage_path, sha256: allowed.sha256 });
       return { artifact: { artifactId: allowed.id, filename: allowed.filename, mimeType: allowed.mime_type, byteSize: allowed.byte_size }, bytes };
     } catch (error) {
       if (error instanceof ArtifactFailure) throw new TaskFailure("Not found", [], 404);
@@ -2192,7 +2192,7 @@ export class TaskService {
     const task = this.getTask(actorUserId, taskId);
     const artifact = this.database.authQuery((db) => db.prepare(`SELECT a.mime_type AS mimeType, a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_releases r ON r.body_artifact_id = a.id AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ? AND r.superseded_at IS NULL WHERE a.id = ? AND a.company_id = ? AND a.kind = 'release-public-body'`).get(task.id, task.companyId, task.workflowId, artifactId, task.companyId) as { mimeType: string; storagePath: string; sha256: string } | undefined);
     if (!artifact) throw new TaskFailure("Not found", [], 404);
-    return { mimeType: artifact.mimeType, bytes: await this.artifacts.read({ companyId: task.companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 }) };
+    return { mimeType: artifact.mimeType, bytes: await this.artifacts.getArtifact({ companyId: task.companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 }) };
   }
 
   private deliveryGate(row: TaskRow, state: IssueWorkflowState | undefined): ForgeTask["deliveryGate"] {

@@ -146,7 +146,7 @@ async function durableArtifactReference(database: ForgeDatabase, store: Artifact
   const row = database.authQuery((db) => db.prepare("SELECT id AS artifactId, company_id AS companyId, kind, sha256, byte_size AS byteSize, mime_type AS mimeType, storage_path AS storagePath FROM forge_artifacts WHERE id = ? AND company_id = ?").get(artifactId, companyId) as ({ artifactId: string; companyId: string; kind: string; sha256: string; byteSize: number; mimeType: string; storagePath: string } | undefined));
   if (!row || (kind && row.kind !== kind)) throw new Error("Scoped artifact reference is unavailable");
   const reference = DurableArtifactReferenceSchema.parse({ artifactId: row.artifactId, companyId: row.companyId, kind: row.kind, byteSize: row.byteSize, mimeType: row.mimeType });
-  const bytes = await store.read({ companyId: row.companyId, storagePath: row.storagePath, sha256: row.sha256 });
+  const bytes = await store.getArtifact({ companyId: row.companyId, storagePath: row.storagePath, sha256: row.sha256 });
   if (bytes.byteLength !== reference.byteSize) throw new Error("Scoped artifact size verification failed");
   return reference;
 }
@@ -160,7 +160,7 @@ async function verifiedArtifactBytes(database: ForgeDatabase, store: ArtifactSto
   if (!row) throw new Error("Scoped artifact storage is unavailable");
   const stored = database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(actual.artifactId, companyId) as { sha256: string } | undefined);
   if (!stored) throw new Error("Scoped artifact storage is unavailable");
-  return store.read({ companyId, storagePath: row.storagePath, sha256: stored.sha256 });
+  return store.getArtifact({ companyId, storagePath: row.storagePath, sha256: stored.sha256 });
 }
 
 function artifactReference(artifact: Pick<StoredArtifact, "id" | "kind">) {

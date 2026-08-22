@@ -476,8 +476,8 @@ export class AgentService {
       evidenceArtifactIds: input.evidenceArtifactIds,
     }, null, 2);
     const [planArtifact, evidenceArtifact] = await Promise.all([
-      this.artifacts.put(input.companyId, "delivery-repair-plan", { filename: `${input.source}-${input.planRevision}.md`, mimeType: "text/markdown", bytes: Buffer.from(planText, "utf8") }),
-      this.artifacts.put(input.companyId, "agent-evidence", { filename: `${input.source}-${input.planRevision}-repair.json`, mimeType: "application/json", bytes: Buffer.from(evidenceText, "utf8") }),
+      this.artifacts.putArtifact(input.companyId, "delivery-repair-plan", { filename: `${input.source}-${input.planRevision}.md`, mimeType: "text/markdown", bytes: Buffer.from(planText, "utf8") }),
+      this.artifacts.putArtifact(input.companyId, "agent-evidence", { filename: `${input.source}-${input.planRevision}-repair.json`, mimeType: "application/json", bytes: Buffer.from(evidenceText, "utf8") }),
     ]);
     const planId = `repair_plan_${createHash("sha256").update(JSON.stringify({ workflowId: input.workflowId, source: input.source, planRevision: input.planRevision, leadSessionRef: input.leadSessionRef, findings: openFindings.map((finding) => finding.findingId), subjectCommit: input.subjectCommit, subjectTree: input.subjectTree })).digest("hex").slice(0, 32)}`;
     this.database.authTransaction((db) => {
@@ -517,7 +517,7 @@ export class AgentService {
     const active = this.database.authQuery((db) => db.prepare("SELECT id, status, attempt, session_ref, heartbeat_at, wrapper_pid, wrapper_process_group, wrapper_start_identity, process_pid, process_start_identity, spool_relative_path, status_relative_path, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND role = 'planner' AND turn_key = ? AND status IN ('starting', 'running', 'cancelling', 'failed') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, `${input.workflowId}:lead-planning:${input.revision}`) as (ActiveLeadExecution & { profile_id: string | null }) | undefined);
     const turnSupervisor = this.provider.createTurnSupervisor(this.processController);
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
-    const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
+    const brief = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
     const revisionNote = input.revisionNoteArtifactId
       ? this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'plan-decision'").get(input.revisionNoteArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined)
       : undefined;
@@ -526,8 +526,8 @@ export class AgentService {
       ? this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'plan-blocker-response'").get(input.memberResponseArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined)
       : undefined;
     if (input.memberResponseArtifactId && !memberResponse) throw new AgentFailure("scoped-input-missing", "The member blocker response is unavailable");
-    const revisionNoteText = revisionNote ? (await this.artifacts.read({ companyId: input.companyId, storagePath: revisionNote.storagePath, sha256: revisionNote.sha256 })).toString("utf8") : undefined;
-    const memberResponseText = memberResponse ? (await this.artifacts.read({ companyId: input.companyId, storagePath: memberResponse.storagePath, sha256: memberResponse.sha256 })).toString("utf8") : undefined;
+    const revisionNoteText = revisionNote ? (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: revisionNote.storagePath, sha256: revisionNote.sha256 })).toString("utf8") : undefined;
+    const memberResponseText = memberResponse ? (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: memberResponse.storagePath, sha256: memberResponse.sha256 })).toString("utf8") : undefined;
     const images = this.database.authQuery((db) => {
       if (!input.imageArtifactIds.length) return [] as ImageRow[];
       const placeholders = input.imageArtifactIds.map(() => "?").join(",");
@@ -536,7 +536,7 @@ export class AgentService {
       return input.imageArtifactIds.flatMap((imageId) => { const row = byId.get(imageId); return row ? [row] : []; });
     });
     if (images.length !== input.imageArtifactIds.length) throw new AgentFailure("scoped-input-missing", "Lead image evidence is unavailable");
-    for (const image of images) await this.artifacts.read({ companyId: input.companyId, storagePath: image.storage_path, sha256: image.sha256 });
+    for (const image of images) await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: image.storage_path, sha256: image.sha256 });
     const profileSettings = this.database.authQuery((db) => {
       const profileIds = Object.values(input.roleProfiles).filter((value): value is string => typeof value === "string");
       if (!profileIds.length) return [] as ProfileSettings[];
@@ -561,13 +561,13 @@ export class AgentService {
       FROM forge_plan_revision_requests r JOIN forge_artifacts a ON a.id = r.reason_artifact_id AND a.company_id = r.company_id AND a.kind = 'plan-revision-reason'
       WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { disposition: "reuse" | "new"; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null; reasonPath: string; reasonSha: string } | undefined) : undefined;
     if (input.revisionRequestId && !revisionRequest) throw new AgentFailure("revision-request-missing", "The plan revision request is unavailable");
-    const revisionContext = revisionRequest ? { ...revisionRequest, reason: (await this.artifacts.read({ companyId: input.companyId, storagePath: revisionRequest.reasonPath, sha256: revisionRequest.reasonSha })).toString("utf8") } : undefined;
+    const revisionContext = revisionRequest ? { ...revisionRequest, reason: (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: revisionRequest.reasonPath, sha256: revisionRequest.reasonSha })).toString("utf8") } : undefined;
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(leadProfile.model) || !["low", "medium", "high", "xhigh"].includes(leadProfile.reasoningLevel) || !["standard", "priority", "fast"].includes(leadProfile.servicePriority)) {
       throw new AgentFailure("scope_configuration", "The configured Lead profile has invalid turn settings", { nonRetryable: true });
     }
     await this.assertTurnCompatibility(leadProfile);
     const repositoryEvidence = await this.repositoryEvidence(repositoryPath);
-    const repositoryEvidenceArtifact = await this.artifacts.put(input.companyId, "repository-evidence", { filename: `${input.taskId}-${input.revision}.json`, mimeType: "application/json", bytes: Buffer.from(repositoryEvidence, "utf8") });
+    const repositoryEvidenceArtifact = await this.artifacts.putArtifact(input.companyId, "repository-evidence", { filename: `${input.taskId}-${input.revision}.json`, mimeType: "application/json", bytes: Buffer.from(repositoryEvidence, "utf8") });
     const planningManifest = {
       version: 1,
       companyId: input.companyId,
@@ -580,7 +580,7 @@ export class AgentService {
       profiles: { lead: leadProfile, reviewer: input.roleProfiles.reviewer ? profileSettings.find((profile) => profile.id === input.roleProfiles.reviewer) ?? null : null },
       repositoryEvidence: { artifactId: repositoryEvidenceArtifact.id, sha256: repositoryEvidenceArtifact.sha256 },
     };
-    const manifestArtifact = await this.artifacts.put(input.companyId, "planning-evidence-manifest", { filename: `${input.taskId}-${input.revision}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(planningManifest), "utf8") });
+    const manifestArtifact = await this.artifacts.putArtifact(input.companyId, "planning-evidence-manifest", { filename: `${input.taskId}-${input.revision}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(planningManifest), "utf8") });
     this.database.authTransaction((db) => {
       for (const artifact of [repositoryEvidenceArtifact, manifestArtifact]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
     });
@@ -591,7 +591,7 @@ export class AgentService {
     if (input.resume) {
       const instruction = this.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(input.resume!.instructionArtifactId, input.companyId) as { storage_path: string; sha256: string } | undefined);
       if (!instruction) throw new AgentFailure("scoped-input-missing", "The Lead resume instruction is unavailable");
-      resumeInstruction = (await this.artifacts.read({ companyId: input.companyId, storagePath: instruction.storage_path, sha256: instruction.sha256 })).toString("utf8");
+      resumeInstruction = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: instruction.storage_path, sha256: instruction.sha256 })).toString("utf8");
     }
     const startedAt = this.now().toISOString();
     if (!sessionRef && !rawSessionId && this.sessionStore.reserve) sessionRef = await this.sessionStore.reserve();
@@ -653,9 +653,9 @@ export class AgentService {
     await mkdir(schemaRoot, { recursive: true, mode: 0o700 });
     await writeFile(schemaPath, JSON.stringify(CodexLeadOutputJsonSchema), { encoding: "utf8", mode: 0o600 });
     await chmod(schemaPath, 0o600);
-    const executionRepositoryEvidenceArtifact = await this.artifacts.put(input.companyId, "agent-evidence", { filename: `${executionId}-repository.json`, mimeType: "application/json", bytes: Buffer.from(repositoryEvidence, "utf8") });
+    const executionRepositoryEvidenceArtifact = await this.artifacts.putArtifact(input.companyId, "agent-evidence", { filename: `${executionId}-repository.json`, mimeType: "application/json", bytes: Buffer.from(repositoryEvidence, "utf8") });
     const revisionIdentity = JSON.parse(row.normalized_json) as Record<string, unknown>;
-    const inputManifestArtifact = await this.artifacts.put(input.companyId, "lead-input-manifest", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ companyId: input.companyId, taskId: input.taskId, projectId: input.projectId, workflowId: input.workflowId, briefArtifactId: input.briefArtifactId, briefSha256: row.brief_sha256, imageArtifacts: input.imageArtifactIds.map((id) => { const image = images.find((candidate) => candidate.id === id); return image ? { artifactId: id, sha256: image.sha256, mimeType: image.mime_type, filename: image.filename } : { artifactId: id }; }), projectRevisionId: input.projectRevisionId, normalizedRevisionSha256: createHash("sha256").update(row.normalized_json).digest("hex"), repositoryEvidenceArtifactId: executionRepositoryEvidenceArtifact.id, repositoryEvidenceSha256: executionRepositoryEvidenceArtifact.sha256, repository: { repository: revisionIdentity.repository, baseBranch: revisionIdentity.baseBranch, targetBranch: revisionIdentity.targetBranch, baseSha: revisionIdentity.baseSha, targetSha: revisionIdentity.targetSha }, leadProfile: { id: leadProfile.id, provider: leadProfile.provider, model: leadProfile.model, reasoningLevel: leadProfile.reasoningLevel, servicePriority: leadProfile.servicePriority }, ...(sessionRef ? { leadSessionRef: sessionRef } : {}), ...(input.resume ? { instructionArtifactId: input.resume.instructionArtifactId, instructionSha256: input.resume.instructionSha256, resumeReason: input.resume.reason } : {}) }, null, 2), "utf8") });
+    const inputManifestArtifact = await this.artifacts.putArtifact(input.companyId, "lead-input-manifest", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ companyId: input.companyId, taskId: input.taskId, projectId: input.projectId, workflowId: input.workflowId, briefArtifactId: input.briefArtifactId, briefSha256: row.brief_sha256, imageArtifacts: input.imageArtifactIds.map((id) => { const image = images.find((candidate) => candidate.id === id); return image ? { artifactId: id, sha256: image.sha256, mimeType: image.mime_type, filename: image.filename } : { artifactId: id }; }), projectRevisionId: input.projectRevisionId, normalizedRevisionSha256: createHash("sha256").update(row.normalized_json).digest("hex"), repositoryEvidenceArtifactId: executionRepositoryEvidenceArtifact.id, repositoryEvidenceSha256: executionRepositoryEvidenceArtifact.sha256, repository: { repository: revisionIdentity.repository, baseBranch: revisionIdentity.baseBranch, targetBranch: revisionIdentity.targetBranch, baseSha: revisionIdentity.baseSha, targetSha: revisionIdentity.targetSha }, leadProfile: { id: leadProfile.id, provider: leadProfile.provider, model: leadProfile.model, reasoningLevel: leadProfile.reasoningLevel, servicePriority: leadProfile.servicePriority }, ...(sessionRef ? { leadSessionRef: sessionRef } : {}), ...(input.resume ? { instructionArtifactId: input.resume.instructionArtifactId, instructionSha256: input.resume.instructionSha256, resumeReason: input.resume.reason } : {}) }, null, 2), "utf8") });
     this.database.authTransaction((db) => {
       for (const artifact of [executionRepositoryEvidenceArtifact, inputManifestArtifact]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
       db.prepare("UPDATE forge_agent_executions SET session_ref = ? WHERE id = ?").run(sessionRef ?? null, executionId);
@@ -782,7 +782,7 @@ export class AgentService {
     const conflictRow = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_forward_merges f ON f.conflict_artifact_id = a.id AND f.id = ? AND f.task_id = ? AND f.company_id = ? AND f.project_revision_id = ? WHERE a.id = ? AND a.company_id = ? AND a.kind = 'forward-merge-conflict'").get(input.forwardMergeId, input.taskId, input.companyId, input.projectRevisionId, input.conflictArtifact.id, input.companyId) as { storagePath: string; sha256: string } | undefined);
     if (!conflictRow) throw new AgentFailure("scoped-input-missing", "Forward-merge conflict evidence is unavailable");
     try {
-      conflict = ForwardMergeConflictArtifactSchema.parse(JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: conflictRow.storagePath, sha256: conflictRow.sha256 })).toString("utf8")));
+      conflict = ForwardMergeConflictArtifactSchema.parse(JSON.parse((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: conflictRow.storagePath, sha256: conflictRow.sha256 })).toString("utf8")));
     } catch {
       throw new AgentFailure("scoped-input-corrupt", "Forward-merge conflict evidence failed integrity validation");
     }
@@ -797,13 +797,13 @@ export class AgentService {
     const planId = `merge_plan_${createHash("sha256").update(`${input.workflowId}:${input.priorHead}:${input.targetBaseSha}`).digest("hex").slice(0, 32)}`;
     const existingPlan = this.database.authQuery((db) => db.prepare("SELECT r.plan_artifact_id AS planArtifactId, r.plan_evidence_artifact_id AS evidenceArtifactId, r.lead_execution_id AS leadExecutionId, r.lead_session_ref AS leadSessionRef, p.storage_path AS planStoragePath, p.sha256 AS planSha256 FROM forge_merge_conflict_resolutions r JOIN forge_artifacts p ON p.id = r.plan_artifact_id WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ? AND r.status = 'planned'").get(planId, input.taskId, input.companyId, input.workflowId) as { planArtifactId: string; evidenceArtifactId: string; leadExecutionId: string; leadSessionRef: string; planStoragePath: string; planSha256: string } | undefined);
     if (existingPlan) {
-      const output = MergeConflictPlanSchema.parse(JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: existingPlan.planStoragePath, sha256: existingPlan.planSha256 })).toString("utf8")));
+      const output = MergeConflictPlanSchema.parse(JSON.parse((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: existingPlan.planStoragePath, sha256: existingPlan.planSha256 })).toString("utf8")));
       return { planId, planArtifactId: existingPlan.planArtifactId, evidenceArtifactId: existingPlan.evidenceArtifactId, leadExecutionId: existingPlan.leadExecutionId, leadSessionRef: existingPlan.leadSessionRef, summary: output.summary };
     }
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
     const [brief, plan] = await Promise.all([
-      this.artifacts.read({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
-      this.artifacts.read({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
+      this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
+      this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
     ]);
     const rawSessionId = await this.sessionStore.read(input.leadSessionRef);
     const leadProfile = await this.resolveTurnProfile(input.roleProfiles?.[executionRole] ?? input.roleProfiles?.planner, input.leadSessionRef, "Integrator", executionRole);
@@ -843,7 +843,7 @@ export class AgentService {
       const extraFiles = output.resolutions.filter((resolution) => !conflict.conflictFiles.includes(resolution.file));
       if (missingFiles.length || extraFiles.length || plannedFiles.size !== output.resolutions.length) throw new AgentFailure("incomplete-merge-conflict-plan", "The Lead plan must cover each conflict file exactly once");
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
-      const planArtifact = await this.artifacts.put(input.companyId, "merge-conflict-plan", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(output, null, 2), "utf8") });
+      const planArtifact = await this.artifacts.putArtifact(input.companyId, "merge-conflict-plan", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(output, null, 2), "utf8") });
       const now = this.now().toISOString();
       this.database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, planArtifact.id, planArtifact.companyId, planArtifact.kind, planArtifact.filename, planArtifact.mimeType, planArtifact.byteSize, planArtifact.sha256, planArtifact.storagePath, planArtifact.createdAt);
@@ -923,7 +923,7 @@ export class AgentService {
     const outputLines: string[] = [];
     // Actions check-run summaries are empty; the failing job log tail recorded with the CI evidence is the real signal.
     const evidenceRow = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(input.evidenceArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined);
-    const failedLogs = evidenceRow ? await this.artifacts.read({ companyId: input.companyId, storagePath: evidenceRow.storagePath, sha256: evidenceRow.sha256 }).then((bytes) => (JSON.parse(bytes.toString("utf8")) as { failedCheckLogs?: Array<{ name: string; runId: string; log: string }> }).failedCheckLogs ?? []).catch(() => []) : [];
+    const failedLogs = evidenceRow ? await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: evidenceRow.storagePath, sha256: evidenceRow.sha256 }).then((bytes) => (JSON.parse(bytes.toString("utf8")) as { failedCheckLogs?: Array<{ name: string; runId: string; log: string }> }).failedCheckLogs ?? []).catch(() => []) : [];
     const prompt = this.ciRepairPrompt(context.title, { ...input, requiredChecks, localVerification }, failedChecks, failedLogs);
     let plan: import("./temporal/issue-contracts.js").CiRepairPlan | undefined;
     let failure: AgentFailure | undefined;
@@ -939,8 +939,8 @@ export class AgentService {
       }
       if (!plan) throw failure ?? new AgentFailure("invalid-ci-repair-plan", "CI repair plan is unavailable");
       const validatedPlan = plan;
-      const evidence = await this.artifacts.put(input.companyId, "ci-repair-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
-      const planArtifact = await this.artifacts.put(input.companyId, "ci-repair-plan", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(validatedPlan, null, 2), "utf8") });
+      const evidence = await this.artifacts.putArtifact(input.companyId, "ci-repair-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });
+      const planArtifact = await this.artifacts.putArtifact(input.companyId, "ci-repair-plan", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(validatedPlan, null, 2), "utf8") });
       const planId = `ci_plan_${randomBytes(12).toString("hex")}`;
       this.database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, planArtifact.id, planArtifact.companyId, planArtifact.kind, planArtifact.filename, planArtifact.mimeType, planArtifact.byteSize, planArtifact.sha256, planArtifact.storagePath, planArtifact.createdAt);
@@ -1049,10 +1049,10 @@ export class AgentService {
     let gitEvidence: Awaited<ReturnType<typeof readDeliveryGitEvidence>>;
     try {
       [brief, plan, delivery, developerEvidence, gitEvidence] = await Promise.all([
-        this.artifacts.read({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
-        this.artifacts.read({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
-        this.artifacts.read({ companyId: input.companyId, storagePath: context.deliveryStoragePath, sha256: context.deliverySha256 }).then((bytes) => bytes.toString("utf8")),
-        this.artifacts.read({ companyId: input.companyId, storagePath: context.evidenceStoragePath, sha256: context.evidenceSha256 }).then((bytes) => bytes.toString("utf8")),
+        this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
+        this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
+        this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.deliveryStoragePath, sha256: context.deliverySha256 }).then((bytes) => bytes.toString("utf8")),
+        this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.evidenceStoragePath, sha256: context.evidenceSha256 }).then((bytes) => bytes.toString("utf8")),
         readDeliveryGitEvidence(worktreePath, targetBaseSha, subjectCommit, repositoryPath),
       ]);
     } catch (error) {
@@ -1163,7 +1163,7 @@ export class AgentService {
         catch { throw new AgentFailure("correction-exhausted", safeBlockSummary("correction-exhausted", true)); }
       }
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
-      const opinion = await this.artifacts.put(input.companyId, "delivery-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
+      const opinion = await this.artifacts.putArtifact(input.companyId, "delivery-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
       const priorReview = isFinalReview ? undefined : this.database.authQuery((db) => db.prepare("SELECT id FROM forge_delivery_reviews WHERE workflow_id = ? AND subject_commit = ?").get(input.workflowId, subjectCommit) as { id: string } | undefined);
       const reviewId = priorReview?.id ?? `delivery_review_${randomBytes(12).toString("hex")}`;
       this.database.authTransaction((db) => {
@@ -1218,7 +1218,7 @@ export class AgentService {
       const pinnedManifest = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'planning-evidence-manifest'").get(input.evidenceManifestArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined);
       if (!pinnedManifest) throw new AgentFailure("scoped-input-missing", "The supplemental review manifest is unavailable");
       try {
-        const manifest = JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: pinnedManifest.storagePath, sha256: pinnedManifest.sha256 })).toString("utf8")) as { profiles?: { reviewer?: ProfileSettings | null } };
+        const manifest = JSON.parse((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: pinnedManifest.storagePath, sha256: pinnedManifest.sha256 })).toString("utf8")) as { profiles?: { reviewer?: ProfileSettings | null } };
         const pinnedReviewer = manifest.profiles?.reviewer;
         if (!pinnedReviewer || pinnedReviewer.id !== profile.id || pinnedReviewer.provider !== this.provider.id || !pinnedReviewer.model) throw new AgentFailure("reviewer-profile-unavailable", "The reviewer settings are not present in the pinned manifest");
         reviewerProfile = { id: pinnedReviewer.id, model: pinnedReviewer.model, reasoningLevel: pinnedReviewer.reasoningLevel as "low" | "medium" | "high" | "xhigh", servicePriority: pinnedReviewer.servicePriority as "standard" | "priority" | "fast" };
@@ -1228,14 +1228,14 @@ export class AgentService {
       }
     }
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(context.normalized_json)));
-    const brief = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
-    const draft = (await this.artifacts.read({ companyId: input.companyId, storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
+    const brief = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
+    const draft = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
     const active = this.activeCapacityExecution(input, "reviewer");
     const manifest = input.evidenceManifestArtifactId
       ? this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'planning-evidence-manifest'").get(input.evidenceManifestArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined)
       : undefined;
     if (input.evidenceManifestArtifactId && !manifest) throw new AgentFailure("scoped-input-missing", "Supplemental review manifest is unavailable");
-    const manifestText = manifest ? (await this.artifacts.read({ companyId: input.companyId, storagePath: manifest.storagePath, sha256: manifest.sha256 })).toString("utf8") : "";
+    const manifestText = manifest ? (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: manifest.storagePath, sha256: manifest.sha256 })).toString("utf8") : "";
     const images = this.database.authQuery((db) => {
       if (!input.imageArtifactIds.length) return [] as ImageRow[];
       const placeholders = input.imageArtifactIds.map(() => "?").join(",");
@@ -1244,7 +1244,7 @@ export class AgentService {
       return input.imageArtifactIds.flatMap((imageId) => { const row = byId.get(imageId); return row ? [row] : []; });
     });
     if (images.length !== input.imageArtifactIds.length) throw new AgentFailure("scoped-input-missing", "Supplemental review image evidence is unavailable");
-    for (const image of images) await this.artifacts.read({ companyId: input.companyId, storagePath: image.storage_path, sha256: image.sha256 });
+    for (const image of images) await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: image.storage_path, sha256: image.sha256 });
     const schemaPath = await this.ensureLeadSchema();
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
@@ -1258,7 +1258,7 @@ export class AgentService {
     const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
     const stopCancellationTracking = this.trackCancellation(executionId, runtime.signal);
     try {
-      const reviewEvidence = input.originalPlanSubject ? manifestText : (await this.artifacts.read({ companyId: input.companyId, storagePath: context.evidence_storage_path, sha256: context.evidence_sha256 })).toString("utf8");
+      const reviewEvidence = input.originalPlanSubject ? manifestText : (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.evidence_storage_path, sha256: context.evidence_sha256 })).toString("utf8");
       const wrapper = await this.prepareTurnWrapper(executionId, reviewerProfile, repositoryPath, schemaPath, this.reviewPrompt(context.title, brief, context.normalized_json, draft, reviewEvidence), { ...(images.length ? { imagePaths: images.map((image) => resolve(this.config.artifactRoot, image.storage_path)) } : {}) });
       const result = await this.processRunner({
         command: wrapper.command,
@@ -1290,7 +1290,7 @@ export class AgentService {
       if (!sessionRef) throw new AgentFailure("missing-session", "Supplemental review did not return a session reference");
       if (input.primaryLeadSessionRef && sessionRef === input.primaryLeadSessionRef) throw new AgentFailure("session-identity-conflict", "Supplemental reviewer must use a fresh session");
       const evidence = await this.persistEvidence(input.companyId, executionId, lines);
-      const reviewArtifact = await this.artifacts.put(input.companyId, "supplemental-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
+      const reviewArtifact = await this.artifacts.putArtifact(input.companyId, "supplemental-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
       const reviewId = `review_${randomBytes(12).toString("hex")}`;
       this.database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, reviewArtifact.id, reviewArtifact.companyId, reviewArtifact.kind, reviewArtifact.filename, reviewArtifact.mimeType, reviewArtifact.byteSize, reviewArtifact.sha256, reviewArtifact.storagePath, reviewArtifact.createdAt);
@@ -1317,8 +1317,8 @@ export class AgentService {
     const review = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.supplementalReviewArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
     if (!draft || !review) throw new AgentFailure("scoped-input-missing", "Consolidation evidence is unavailable");
     const repositoryPath = await this.consolidationRepositoryPath(rawInput);
-    const draftText = (await this.artifacts.read({ ...draft, companyId: rawInput.companyId })).toString("utf8");
-    const reviewText = (await this.artifacts.read({ ...review, companyId: rawInput.companyId })).toString("utf8");
+    const draftText = (await this.artifacts.getArtifact({ ...draft, companyId: rawInput.companyId })).toString("utf8");
+    const reviewText = (await this.artifacts.getArtifact({ ...review, companyId: rawInput.companyId })).toString("utf8");
     const schemaPath = await this.ensureLeadSchema();
     const active = this.activeCapacityExecution(rawInput, "planner");
     const executionId = active?.id ?? `agent_${randomBytes(12).toString("hex")}`;
@@ -1352,7 +1352,7 @@ export class AgentService {
       const output = response.result;
       const manifest = undefined;
       const persisted = await this.persistOutput({ taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, projectId: rawInput.projectId, projectRevisionId: rawInput.projectRevisionId, briefArtifactId: rawInput.briefArtifactId, imageArtifactIds: rawInput.imageArtifactIds, roleProfiles: rawInput.roleProfiles, revision: rawInput.revision }, executionId, rawInput.leadSessionRef, lines, output, manifest, { finalVersion: 2, ...(rawInput.originalPlanSubject ? { originalPlanRevision: rawInput.originalPlanSubject.originalPlanRevision, supersedesOutputId: rawInput.originalPlanSubject.outputId } : {}) });
-      const responseArtifact = await this.artifacts.put(rawInput.companyId, "lead-review-response", { filename: `${executionId}-review-response.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(response, null, 2), "utf8") });
+      const responseArtifact = await this.artifacts.putArtifact(rawInput.companyId, "lead-review-response", { filename: `${executionId}-review-response.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(response, null, 2), "utf8") });
       this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(responseArtifact.id, responseArtifact.companyId, responseArtifact.kind, responseArtifact.filename, responseArtifact.mimeType, responseArtifact.byteSize, responseArtifact.sha256, responseArtifact.storagePath, responseArtifact.createdAt));
       const reviewRow = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_plan_reviews WHERE opinion_artifact_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(rawInput.supplementalReviewArtifactId, rawInput.taskId, rawInput.companyId, rawInput.workflowId) as { id: string } | undefined);
       if (reviewRow && rawInput.originalPlanSubject) new PlanGovernanceRepository(this.database).appendLeadReviewResponse({ reviewId: reviewRow.id, taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, originalPlanRevision: rawInput.originalPlanSubject.originalPlanRevision, leadExecutionId: executionId, leadSessionRef: rawInput.leadSessionRef, responseArtifactId: responseArtifact.id, responseArtifactSha256: responseArtifact.sha256, ...(persisted.result.planSubject ? { resultOutputId: persisted.result.planSubject.outputId } : {}), ...(persisted.result.blockerSubject ? { resultBlockerArtifactId: persisted.result.blockerSubject.artifactId } : {}) });
@@ -1551,7 +1551,7 @@ export class AgentService {
 
   private async persistEvidence(companyId: string, executionId: string, lines: string[]): Promise<StoredArtifact> {
     const content = Buffer.from(`${lines.join("\n")}\n`, "utf8");
-    return this.artifacts.put(companyId, "agent-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: content.length ? content : Buffer.from("{\"type\":\"empty\"}\n") });
+    return this.artifacts.putArtifact(companyId, "agent-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: content.length ? content : Buffer.from("{\"type\":\"empty\"}\n") });
   }
 
   private async completedPlanningResult(input: LeadPlanningActivityInput): Promise<LeadPlanningResult | undefined> {
@@ -1576,11 +1576,11 @@ export class AgentService {
     if (!persisted) return undefined;
     if (!/^session_[A-Za-z0-9._:-]{1,128}$/.test(persisted.sessionRef)) throw new AgentFailure("internal_persistence", "The completed Lead session reference is invalid", { nonRetryable: true });
     await this.sessionStore.read(persisted.sessionRef);
-    const output = PersistedLeadOutputSchema.parse(JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: persisted.outputStoragePath, sha256: persisted.outputSha256 })).toString("utf8")));
-    await this.artifacts.read({ companyId: input.companyId, storagePath: persisted.evidenceStoragePath, sha256: persisted.evidenceSha256 });
+    const output = PersistedLeadOutputSchema.parse(JSON.parse((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: persisted.outputStoragePath, sha256: persisted.outputSha256 })).toString("utf8")));
+    await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: persisted.evidenceStoragePath, sha256: persisted.evidenceSha256 });
     const manifest = this.database.authQuery((db) => db.prepare("SELECT id, sha256, storage_path FROM forge_artifacts WHERE company_id = ? AND kind = 'lead-input-manifest' AND filename = ?").get(input.companyId, `${persisted.executionId}.json`) as { id: string; sha256: string; storage_path: string } | undefined);
     if (!manifest) throw new AgentFailure("internal_persistence", "The completed Lead input manifest is unavailable", { nonRetryable: true });
-    await this.artifacts.read({ companyId: input.companyId, storagePath: manifest.storage_path, sha256: manifest.sha256 });
+    await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: manifest.storage_path, sha256: manifest.sha256 });
     const categories = output.kind === "plan" ? classifyPlanMateriality(`${output.summary}\n${output.steps.map((step) => step.instruction).join("\n")}`, output.materialCategories) : [];
     const result: LeadPlanningResult = output.kind === "plan"
       ? { kind: "plan", leadOutputKind: "plan", leadSessionRef: persisted.sessionRef, leadExecutionId: persisted.executionId, leadEvidenceArtifactId: persisted.evidenceArtifactId, leadEvidenceSha256: persisted.evidenceSha256, leadOutputArtifactId: persisted.outputArtifactId, leadOutputSha256: persisted.outputSha256, leadInputManifestArtifactId: manifest.id, leadInputManifestSha256: manifest.sha256, leadSummary: persisted.summary, materialCategories: categories, material: categories.length > 0 }
@@ -1640,11 +1640,11 @@ export class AgentService {
   private async persistOutput(input: LeadPlanningActivityInput, executionId: string, sessionRef: string, lines: string[], output: LeadOutput, manifest?: { id: string; sha256: string }, options: { finalVersion?: number; originalPlanRevision?: number; supersedesOutputId?: string } = {}): Promise<{ evidence: StoredArtifact; result: LeadPlanningResult }> {
     const evidence = await this.persistEvidence(input.companyId, executionId, lines);
     const outputKind = output.kind === "plan" ? "lead-plan" : "decision-blocker";
-    const outputArtifact = await this.artifacts.put(input.companyId, outputKind, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(output, null, 2), "utf8") });
+    const outputArtifact = await this.artifacts.putArtifact(input.companyId, outputKind, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(output, null, 2), "utf8") });
     const categories = output.kind === "plan" ? classifyPlanMateriality(`${output.summary}\n${output.steps.map((step) => step.instruction).join("\n")}`, output.materialCategories, output.affectedPaths) : [];
     const summary = output.kind === "plan" ? `${output.summary} (${materialitySummary(categories)})` : output.summary;
     const outputId = `output_${randomBytes(12).toString("hex")}`;
-    const materialityArtifact = output.kind === "plan" ? await this.artifacts.put(input.companyId, "materiality-evidence", { filename: `${executionId}-materiality.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, categories, affectedPaths: output.affectedPaths, evidence: output.materiality }), "utf8") }) : undefined;
+    const materialityArtifact = output.kind === "plan" ? await this.artifacts.putArtifact(input.companyId, "materiality-evidence", { filename: `${executionId}-materiality.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, categories, affectedPaths: output.affectedPaths, evidence: output.materiality }), "utf8") }) : undefined;
     const finalVersion: 1 | 2 = options.finalVersion === 2 ? 2 : 1;
     const planSubject = manifest ? { companyId: input.companyId, issueId: input.taskId, workflowId: input.workflowId, originalPlanRevision: options.originalPlanRevision ?? input.revision + 1, outputId, outputRevision: input.revision, finalVersion, artifactId: outputArtifact.id, artifactSha256: outputArtifact.sha256, leadSessionRef: sessionRef, leadExecutionId: executionId, evidenceManifestArtifactId: manifest.id, evidenceManifestSha256: manifest.sha256 } as const : undefined;
     const materialityEvidence = materialityArtifact ? { categories, artifactId: materialityArtifact.id, artifactSha256: materialityArtifact.sha256 } as const : undefined;

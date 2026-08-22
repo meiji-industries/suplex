@@ -1,7 +1,6 @@
 export {
   ArtifactStore,
   ArtifactFailure,
-  ArtifactKinds,
   ArtifactManifestEntrySchema,
   SAFE_ARTIFACT_KINDS,
   SAFE_ARTIFACT_KINDS_SQL,

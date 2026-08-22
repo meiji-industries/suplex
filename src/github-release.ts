@@ -577,7 +577,7 @@ export class ReleaseService {
     const release = this.database.authQuery((db) => db.prepare(`SELECT id, release_key AS releaseKey, repository, head_branch AS headBranch, base_branch AS baseBranch, head_sha AS priorHeadSha, pr_number AS pullRequestNumber, pr_url AS pullRequestUrl
       FROM forge_releases WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND superseded_at IS NULL`).get(input.releaseId, input.taskId, input.companyId, input.workflowId) as { id: string; releaseKey: string; repository: string; headBranch: string; baseBranch: string; priorHeadSha: string; pullRequestNumber: number | null; pullRequestUrl: string | null } | undefined);
     if (!release || release.repository.toLowerCase() !== coordinates.repository || release.headBranch !== coordinates.headBranch || release.baseBranch !== coordinates.baseBranch || release.pullRequestNumber === null || !release.pullRequestUrl) throw providerFailure("stale-reviewed-revision", "Existing release identity does not match the pinned repository and pull request");
-    const bodyArtifact = await this.artifacts.put(input.companyId, "release-public-body", { filename: `${input.taskId}-release.md`, mimeType: "text/markdown", bytes: Buffer.from(projection.body, "utf8") });
+    const bodyArtifact = await this.artifacts.putArtifact(input.companyId, "release-public-body", { filename: `${input.taskId}-release.md`, mimeType: "text/markdown", bytes: Buffer.from(projection.body, "utf8") });
     const operationKey = `${release.id}:${reviewed.commitSha}:push`;
     const now = new Date().toISOString();
     this.database.authTransaction((db) => {
@@ -624,7 +624,7 @@ export class ReleaseService {
       const projection = buildDraftPullRequestProjection({ taskTitle: title, ...(input.gitPresentation ?? {}), ...(bodyInput.summary ? { deliverySummary: bodyInput.summary } : {}), ...(bodyInput.changes ? { changes: bodyInput.changes } : {}), ...(bodyInput.filesChanged ? { filesChanged: bodyInput.filesChanged } : {}), ...(bodyInput.commandsRun ? { commandsRun: bodyInput.commandsRun } : {}), ...(bodyInput.testResults ? { testResults: bodyInput.testResults } : {}) });
       if (input.releaseId) return await this.publishExisting(input, activeCoordinates, adoptedReviewed, projection);
       const releaseKey = releaseKeyFor(input, activeCoordinates, adoptedReviewed);
-      const bodyArtifact = this.existingBodyArtifact(input.companyId, releaseKey, projection.bodySha256) ?? await this.artifacts.put(input.companyId, "release-public-body", { filename: `${input.taskId}-release.md`, mimeType: "text/markdown", bytes: Buffer.from(projection.body, "utf8") });
+      const bodyArtifact = this.existingBodyArtifact(input.companyId, releaseKey, projection.bodySha256) ?? await this.artifacts.putArtifact(input.companyId, "release-public-body", { filename: `${input.taskId}-release.md`, mimeType: "text/markdown", bytes: Buffer.from(projection.body, "utf8") });
       const { releaseId } = this.persistIntent(input, activeCoordinates, adoptedReviewed, projection, bodyArtifact);
       const pushKey = `${releaseKey}:push`;
       const remoteHead = await this.observeHead(activeCoordinates, pushKey);

@@ -15,13 +15,12 @@ export interface ArtifactInput {
   taskId?: string;
 }
 
-export const ArtifactKinds = ["task-brief", "task-image", "task-project-configuration", "agent-evidence", "attention-evidence", "lead-plan", "decision-blocker", "lead-input-manifest", "decision-answer", "supplemental-review", "plan-decision", "plan-blocker-response", "plan-revision-reason", "continuation-reason", "developer-delivery", "delivery-review", "delivery-repair-plan", "developer-repair", "delivery-blocker", "delivery-decision", "ci-evidence", "ci-repair-plan", "ci-repair-evidence", "merge-conflict-evidence", "merge-conflict-plan", "merge-conflict-resolution", "planning-evidence-manifest", "repository-evidence", "materiality-evidence", "lead-review-response", "release-public-body", "forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery", "developer-evidence-manifest", "developer-command-output", "developer-git-snapshot", "developer-provider-observation", "developer-delivery-raw"] as const;
-export type ArtifactKind = (typeof ArtifactKinds)[number];
+export type ArtifactKind = string;
 
 export interface StoredArtifact {
   id: string;
   companyId: string;
-  kind: ArtifactKind;
+  kind: string;
   filename: string;
   mimeType: string;
   byteSize: number;
@@ -32,7 +31,7 @@ export interface StoredArtifact {
 
 export const ArtifactManifestEntrySchema = z.object({
   id: z.string().min(1).max(256),
-  kind: z.enum(ArtifactKinds),
+  kind: z.string().min(1),
   filename: z.string().min(1).max(160),
   mimeType: z.string().min(1).max(120),
   byteSize: z.number().int().positive().max(8 * 1024 * 1024),
@@ -42,7 +41,7 @@ export const ArtifactManifestEntrySchema = z.object({
 
 export type ArtifactManifestEntry = z.infer<typeof ArtifactManifestEntrySchema>;
 
-export const SAFE_ARTIFACT_KINDS = ["attention-evidence", "lead-plan", "decision-blocker", "delivery-review", "developer-delivery", "developer-repair", "ci-evidence", "merge-conflict-plan", "merge-conflict-resolution"] as const satisfies readonly ArtifactKind[];
+export const SAFE_ARTIFACT_KINDS = ["attention-evidence", "lead-plan", "decision-blocker", "delivery-review", "developer-delivery", "developer-repair", "ci-evidence", "merge-conflict-plan", "merge-conflict-resolution"] as const;
 export const SAFE_ARTIFACT_KINDS_SQL = SAFE_ARTIFACT_KINDS.map((kind) => `'${kind}'`).join(", ");
 
 export interface PlannedArtifact extends ArtifactManifestEntry {
@@ -53,7 +52,7 @@ export interface PlannedArtifact extends ArtifactManifestEntry {
 export interface StagedArtifact {
   ref: string;
   companyId: string;
-  kind: StoredArtifact["kind"];
+  kind: string;
   filename: string;
   mimeType: string;
   byteSize: number;
@@ -186,7 +185,7 @@ export class ArtifactStore {
     await this.options.fault?.(point, { companyId, storagePath, ...(stagingPath ? { stagingPath } : {}) });
   }
 
-  plan(companyId: string, intentId: string, kind: StoredArtifact["kind"], input: ArtifactInput, requestedId?: string): PlannedArtifact {
+  plan(companyId: string, intentId: string, kind: string, input: ArtifactInput, requestedId?: string): PlannedArtifact {
     const validatedCompanyId = CompanyIdSchema.parse(companyId);
     const filename = safeFilename(input.filename);
     if (!input.mimeType || input.mimeType.length > 120 || /[\r\n]/.test(input.mimeType)) throw new ArtifactFailure("invalid-mime-type", "Artifact type is invalid");
@@ -282,32 +281,26 @@ export class ArtifactStore {
     return { id: manifest.id, companyId, kind: manifest.kind, filename: manifest.filename, mimeType: manifest.mimeType, byteSize: manifest.byteSize, sha256: manifest.sha256, storagePath: manifest.storagePath, createdAt: new Date().toISOString() };
   }
 
-  async put(companyId: string, kind: StoredArtifact["kind"], input: ArtifactInput): Promise<StoredArtifact> {
+  async putArtifact(companyId: string, kind: string, input: ArtifactInput): Promise<StoredArtifact> {
     const planned = this.plan(companyId, `put_${randomUUID().replaceAll("-", "")}`, kind, input);
     const artifact = await this.write(planned, input.bytes);
     this.database?.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, input.taskId ?? "", artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
     return artifact;
   }
-  async putArtifact(companyId: string, taskId: string, kind: string, bytes: Buffer | object, filename?: string): Promise<string> {
-    if (!this.database) throw new ArtifactFailure("database-unavailable", "Artifact registration requires a database");
-    const input = Buffer.isBuffer(bytes)
-      ? { bytes, filename: filename ?? `${kind}.bin`, mimeType: "application/octet-stream" }
-      : { bytes: Buffer.from(JSON.stringify(bytes), "utf8"), filename: filename ?? `${kind}.json`, mimeType: "application/json" };
-    const artifact = await this.put(companyId, kind as ArtifactKind, input);
-    this.database.authTransaction((db) => db.prepare("UPDATE forge_artifacts SET task_id = ? WHERE id = ? AND company_id = ?").run(taskId, artifact.id, artifact.companyId));
-    return artifact.id;
+  async put(companyId: string, kind: string, input: ArtifactInput): Promise<StoredArtifact> {
+    return this.putArtifact(companyId, kind, input);
   }
 
-  getArtifact(id: string): StoredArtifact | undefined {
+  lookupArtifact(id: string): StoredArtifact | undefined {
     if (!this.database) throw new ArtifactFailure("database-unavailable", "Artifact lookup requires a database");
     return this.database.authQuery((db) => db.prepare("SELECT id, company_id AS companyId, kind, filename, mime_type AS mimeType, byte_size AS byteSize, sha256, storage_path AS storagePath, created_at AS createdAt FROM forge_artifacts WHERE id = ?").get(id) as StoredArtifact | undefined);
   }
 
-  async putWithId(companyId: string, id: string, kind: StoredArtifact["kind"], input: ArtifactInput): Promise<StoredArtifact> {
+  async putWithId(companyId: string, id: string, kind: string, input: ArtifactInput): Promise<StoredArtifact> {
     return this.write(this.plan(companyId, `put_${id}`, kind, input, id), input.bytes);
   }
 
-  async putIdempotent(companyId: string, kind: StoredArtifact["kind"], stableKey: string, input: ArtifactInput): Promise<StoredArtifact> {
+  async putIdempotent(companyId: string, kind: string, stableKey: string, input: ArtifactInput): Promise<StoredArtifact> {
     const validatedCompanyId = CompanyIdSchema.parse(companyId);
     if (!stableKey || stableKey.length > 512 || /[\u0000-\u001f\u007f]/.test(stableKey)) throw new ArtifactFailure("invalid-idempotency-key", "Artifact idempotency key is invalid");
     const validated = this.plan(validatedCompanyId, `validate_${randomUUID().replaceAll("-", "")}`, kind, input);
@@ -367,7 +360,7 @@ export class ArtifactStore {
     await rm(finalPath, { force: true });
   }
 
-  async stage(companyId: string, kind: StoredArtifact["kind"], input: ArtifactInput): Promise<StagedArtifact> {
+  async stage(companyId: string, kind: string, input: ArtifactInput): Promise<StagedArtifact> {
     const validatedCompanyId = CompanyIdSchema.parse(companyId);
     const filename = safeFilename(input.filename);
     if (!input.mimeType || input.mimeType.length > 120 || /[\r\n]/.test(input.mimeType)) throw new ArtifactFailure("invalid-mime-type", "Artifact type is invalid");
@@ -421,7 +414,7 @@ export class ArtifactStore {
     return removed;
   }
 
-  async read(artifact: Pick<StoredArtifact, "companyId" | "storagePath" | "sha256">): Promise<Buffer> {
+  async getArtifact(artifact: Pick<StoredArtifact, "companyId" | "storagePath" | "sha256">): Promise<Buffer> {
     const companyId = CompanyIdSchema.parse(artifact.companyId);
     const absolutePath = safeStoragePath(this.root, artifact.storagePath);
     const companyRoot = resolve(this.root, companyId);
@@ -450,6 +443,10 @@ export class ArtifactStore {
     const sha256 = createHash("sha256").update(bytes).digest("hex");
     if (sha256 !== artifact.sha256) throw new ArtifactFailure("hash-mismatch", "Artifact hash verification failed");
     return bytes;
+  }
+
+  async read(artifact: Pick<StoredArtifact, "companyId" | "storagePath" | "sha256">): Promise<Buffer> {
+    return this.getArtifact(artifact);
   }
 
   async readBounded(artifact: Pick<StoredArtifact, "companyId" | "storagePath" | "sha256">, maxBytes: number): Promise<{ bytes: Buffer; truncated: boolean }> {

@@ -683,7 +683,7 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
   }
 });
 
-test("Developer execution creates an isolated delivery commit and stores an exact report", async () => {
+test("Developer execution keeps a Builder delivery commit and summary", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
   const sessions = new Map<string, string>();
@@ -712,7 +712,7 @@ test("Developer execution creates an isolated delivery commit and stores an exac
   };
   try {
     const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore });
-    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id })).rejects.toMatchObject({ code: "plan-authority-missing" });
+    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id })).resolves.toMatchObject({ outcome: "completed", deliverySummary: "Marker delivered" });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

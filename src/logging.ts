@@ -1,8 +1,10 @@
 import { Context } from "@temporalio/activity";
+import { appendFileSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
+import { join } from "node:path";
 import pino, { type DestinationStream, type Logger } from "pino";
 
 const sensitiveKey = /(?:authorization|cookie|credential|password|private.?key|secret|token|api.?key|thread[_-]?id|threadId)/i;
-const sensitiveValue = /(?:Bearer|Basic)\s+[^\s,;]+|(?:gho_|github_pat_|sk-|fh[ap]_)[A-Za-z0-9_-]+|\bAKIA[0-9A-Z]{16}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----|\b[a-z][a-z0-9+.-]*:\/\/[^:\s/]+:[^@\s/]+@|\b(?:access[_-]?token|token|password|secret|api[_-]?key|authorization)=[^\s,;]+|\b(?:authorization|x-api-key)\s*:\s*[^\r\n,;]+/gi;
+const sensitiveValue = /(?:Bearer|Basic)\s+[^\s,;]+|\b(?:gho_|github_pat_|sk-|fh[ap]_)[A-Za-z0-9_-]{8,}|\bAKIA[0-9A-Z]{16}\b|-----BEGIN [A-Z ]*PRIVATE KEY-----|\b[a-z][a-z0-9+.-]*:\/\/[^:\s/]+:[^@\s/]+@|\b(?:access[_-]?token|token|password|secret|api[_-]?key|authorization)=[^\s,;]+|\b(?:authorization|x-api-key)\s*:\s*[^\r\n,;]+/gi;
 
 export function redact(value: unknown, key?: string): unknown {
   if (key && sensitiveKey.test(key)) {
@@ -53,6 +55,7 @@ const loggerOptions = {
 
 const fastifyLoggerOptions = {
   ...loggerOptions,
+  timestamp: pino.stdTimeFunctions.isoTime,
   redact: {
     ...loggerOptions.redact,
     paths: [
@@ -76,6 +79,35 @@ const fastifyLoggerOptions = {
 };
 
 type DevLogRecord = Record<string, unknown>;
+
+const maxDevLogBytes = 50 * 1024 * 1024;
+
+/**
+ * Creates the durable half of a development logger. The synchronous writes
+ * preserve Pino's record order and deliberately never take down the process
+ * when an operator's disk is full or unavailable.
+ */
+export function createDevLogFileSink(component: "api" | "worker", directory = join(process.cwd(), ".forge", "logs")): (line: string) => void {
+  const currentPath = join(directory, `${component}.log`);
+  const previousPath = `${currentPath}.1`;
+  return (line: string): void => {
+    try {
+      mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const bytes = Buffer.byteLength(line);
+      try {
+        if (statSync(currentPath).size + bytes > maxDevLogBytes) {
+          rmSync(previousPath, { force: true });
+          renameSync(currentPath, previousPath);
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      appendFileSync(currentPath, line, { encoding: "utf8", mode: 0o600 });
+    } catch {
+      // Logging must not affect API or worker availability.
+    }
+  };
+}
 
 const ansi = {
   dim: "\u001B[2m",
@@ -180,15 +212,26 @@ function prettyDestination(): DestinationStream {
   };
 }
 
+function developmentDestination(component: "api" | "worker"): DestinationStream {
+  const fileSink = createDevLogFileSink(component);
+  const consoleSink = usePrettyLogs() ? prettyDestination() : process.stdout;
+  return {
+    write(raw: string): void {
+      fileSink(raw);
+      consoleSink.write(raw);
+    },
+  };
+}
+
 export function createFastifyLogger(sink?: (line: string) => void): Logger {
-  return pino(fastifyLoggerOptions, sink ? { write: sink } : usePrettyLogs() ? prettyDestination() : process.stdout);
+  return pino(fastifyLoggerOptions, sink ? { write: sink } : developmentDestination("api"));
 }
 
 export class StructuredLogger {
   private logger: Logger;
 
   constructor(sink?: (line: string) => void) {
-    this.logger = pino(loggerOptions, sink ? { write: sink } : usePrettyLogs() ? prettyDestination() : process.stdout);
+    this.logger = pino(loggerOptions, sink ? { write: sink } : developmentDestination(logComponent() === "api" ? "api" : "worker"));
   }
 
   private static fromLogger(logger: Logger): StructuredLogger {

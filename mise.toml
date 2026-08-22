@@ -142,6 +142,10 @@ run = "pnpm run typecheck"
 description = "Run the authenticated happy-path smoke test against an already-running dev stack"
 run = "pnpm run smoke"
 
+[tasks.logs]
+description = "Tail merged, readable Forge API and worker logs (pass filters after --)"
+run = "pnpm exec tsx src/cli.ts logs \"$@\""
+
 [tasks.test]
 description = "Run unit and integration tests (excludes Temporal and browser tests)"
 run = "pnpm run test"

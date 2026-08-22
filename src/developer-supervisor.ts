@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 import { defaultProcessController, type ProcessController, type ProcessInspection } from "./process-manager.js";
 import { DeveloperSupervisorHeartbeatSchema, DeveloperSupervisorInvocationSchema, DeveloperSupervisorRequestSchema, DeveloperSupervisorResponseSchema, DeveloperSupervisorSnapshotSchema, sha256, withSupervisorResultHash, type DeveloperSupervisorIdentity, type DeveloperSupervisorInvocation, type DeveloperSupervisorRequest, type DeveloperSupervisorResponse, type DeveloperSupervisorResult } from "./developer-supervisor-protocol.js";
-import { redact } from "./logging.js";
+import { redact, StructuredLogger } from "./logging.js";
 import { jsonRequired } from "./task-utils.js";
 
 const maxEventsBytes = 8 * 1024 * 1024;
@@ -281,6 +281,8 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
   // race to launch a supervisor, but only the process that creates this file
   // is allowed to spawn the external Developer process.
   if (!(await acquireStartLock(root, supervisor))) return undefined;
+  const logger = new StructuredLogger();
+  logger.info(`Developer supervisor started: ${root}`, { workflowId: executionId });
   const heartbeatAt = new Date().toISOString();
   await atomicWriteJson(join(root, "supervisor.json"), DeveloperSupervisorSnapshotSchema.parse({ version: 1, executionId, status: "starting", supervisor, child: null, heartbeatAt }));
   await atomicWriteJson(join(root, "heartbeat.json"), DeveloperSupervisorHeartbeatSchema.parse({ version: 1, executionId, status: "starting", heartbeatAt }));
@@ -379,6 +381,7 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
     // is durable; closing first opens a window where callers see neither a
     // socket nor a result and misclassify the turn as interrupted.
     const result = await finalize(state, childExit, eventsPath);
+    logger.info(`Developer supervisor ended: ${root}`, { workflowId: executionId });
     server.close();
     return result;
   } catch (error) {
@@ -389,6 +392,7 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
     const failedAt = new Date().toISOString();
     await atomicWriteJson(join(root, "supervisor.json"), DeveloperSupervisorSnapshotSchema.parse({ version: 1, executionId, status: "failed", supervisor, child: null, heartbeatAt: failedAt })).catch(() => undefined);
     await atomicWriteJson(join(root, "heartbeat.json"), DeveloperSupervisorHeartbeatSchema.parse({ version: 1, executionId, status: "failed", heartbeatAt: failedAt })).catch(() => undefined);
+    logger.error(`Developer supervisor ended with failure: ${root}`, { workflowId: executionId }, { error: error instanceof Error ? error.message : "unknown error" });
     throw error;
   }
 }

@@ -19,6 +19,7 @@ import { reconcileAgentExecutions } from "./agent-recovery.js";
 import { reconcileDeveloperExecutions } from "./developer-recovery.js";
 import { formatDoctor, runDoctor } from "./diagnostics/doctor.js";
 import { formatTaskDiagnostic, inspectTask, writeTaskBundle } from "./diagnostics/task.js";
+import { runLogViewer } from "./log-viewer.js";
 
 const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
 const commandArgs = process.argv.slice(process.argv[2] === "--" ? 4 : 3);
@@ -43,8 +44,25 @@ async function main(): Promise<void> {
     await runSetup();
     return;
   }
+  if (command === "logs") {
+    let taskId: string | undefined;
+    let since: string | undefined;
+    let errors = false;
+    let follow = false;
+    for (let index = 0; index < commandArgs.length; index += 1) {
+      const arg = commandArgs[index];
+      if (arg === "--task") taskId = commandArgs[++index];
+      else if (arg === "--since") since = commandArgs[++index];
+      else if (arg === "--errors") errors = true;
+      else if (arg === "--follow") follow = true;
+      else throw new Error(`Unknown logs option: ${arg}`);
+      if ((arg === "--task" && !taskId) || (arg === "--since" && !since)) throw new Error(`${arg} requires a value`);
+    }
+    await runLogViewer({ errors, follow, ...(taskId ? { taskId } : {}), ...(since ? { since } : {}) });
+    return;
+  }
   if (command === "help") {
-    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|rebuild-projections|migrate|task|doctor|start|stop|restart> [--foreground]\n");
+    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|rebuild-projections|migrate|task|doctor|start|stop|restart|logs> [--foreground]\n");
     return;
   }
   const config = loadConfig();

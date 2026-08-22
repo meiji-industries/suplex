@@ -167,8 +167,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   };
   const applyTargetBaseBlocked = (result: Extract<ReconcileTargetBaseActivityResult, { outcome: "blocked" }>): void => {
     const verification = result.code === "verification_failed" || result.code === "verification_timed_out" || result.code === "verification_evidence_too_large";
-    const retryable = result.retryable || (result.code === "merge_state_ownership_mismatch" && Boolean(state.forwardMergeId));
-    const allowedCommands = retryable ? [verification ? "retry_forward_merge_verification" : "retry_target_base_reconciliation", "cancel_issue"] as const : ["cancel_issue"] as const;
+    const allowedCommands = [verification ? "retry_forward_merge_verification" : "retry_target_base_reconciliation", "cancel_issue"] as const;
     const summary = normalizeSafeSummary(result.summary, 200);
     state = IssueWorkflowStateSchema.parse({
       ...state,
@@ -183,7 +182,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       targetBaseOutcome: result.outcome,
       targetBaseBlockerCode: result.code,
       targetBaseBlockerOwner: result.owner,
-      targetBaseBlockerRetryable: retryable,
+      targetBaseBlockerRetryable: true,
       targetBaseBlockerSummary: summary,
       ...recoveryFields(null, null, null, null),
       ...(verification && result.observedBaseSha ? { forwardMergeTargetBaseSha: result.observedBaseSha } : {}),

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import { buildDraftPullRequestProjection, createGithubReleasePort, GithubReleaseFailure, sanitizePublicText, type GithubCommandSpec, type GithubCommandResult } from "../src/github-release.js";
-import { isRetryableReleaseFailure } from "../src/release-failures.js";
+import { ReleaseFailureCodeSchema } from "../src/release-failures.js";
 import { jsonRequired } from "../src/task-utils.js";
 
 const baseSha = "a".repeat(40);
@@ -213,6 +213,6 @@ Implemented the approved release presentation.
   expect(evidence.body).toContain("[redacted]");
 });
 
-test("keeps the historical public projection failure parseable without offering it as a retry path", () => {
-  expect(isRetryableReleaseFailure("public-projection-unsafe")).toBe(false);
+test("keeps the historical public projection failure parseable", () => {
+  expect(ReleaseFailureCodeSchema.parse("public-projection-unsafe")).toBe("public-projection-unsafe");
 });

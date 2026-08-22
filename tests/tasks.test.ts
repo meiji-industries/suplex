@@ -417,6 +417,27 @@ test("retries draft publication from a typed provider-failure state", async () =
   }
 });
 
+test("tells the operator to refresh when the workflow rejects a stale projected action", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Stale release action", description: "Reviewed delivery", idempotencyKey: "stale-release-action-0001", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    const projected = IssueWorkflowStateSchema.parse({ ...initial, revision: 1, phase: "delivery_blocked", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: "Publish again", lastEventId: `${initial.workflowId}:1` });
+    value.stateByTask.set(created.task.id, projected);
+    projectState(value.database, projected);
+    value.workflow.execute = async () => {
+      const current = IssueWorkflowStateSchema.parse({ ...projected, revision: 2, allowedCommands: ["cancel_issue"], pendingAction: "Publication is unavailable", lastEventId: `${initial.workflowId}:2` });
+      value.stateByTask.set(created.task.id, current);
+      projectState(value.database, current);
+      throw new Error("Draft publication is not available in the current phase");
+    };
+
+    await expect(value.tasks.executeCommand(value.adminId, created.task.id, "publish_draft", { expectedRevision: 1 })).rejects.toMatchObject({ message: "Refresh — this action is no longer available" });
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("shows the current target-base blocker instead of stale Developer recovery text", async () => {
   const value = await fixture();
   try {

@@ -1433,7 +1433,8 @@ export class TaskService {
       const stale = error instanceof Error && /stale workflow revision/i.test(error.message);
       const current = this.getTask(actorUserId, taskId);
       const handlerReason = current.lastHandlerError?.reason;
-      const message = stale ? "Task changed before this action was accepted" : handlerReason ?? (command === "start_planning" ? "Planning command could not be accepted" : command === "record_delivery_decision" ? "Delivery decision could not be accepted" : descriptor.family === "start" ? "Plan action could not be accepted" : "Task action could not be accepted");
+      const projectionDisagrees = !current.allowedCommands.includes(command);
+      const message = stale ? "Task changed before this action was accepted" : projectionDisagrees ? "Refresh — this action is no longer available" : handlerReason ?? (command === "start_planning" ? "Planning command could not be accepted" : command === "record_delivery_decision" ? "Delivery decision could not be accepted" : descriptor.family === "start" ? "Plan action could not be accepted" : "Task action could not be accepted");
       throw new TaskFailure(message, [finding(stale ? "stale-revision" : "workflow-update-rejected", stale ? "expectedRevision" : "workflow", message)], 409, current);
     }
   }

@@ -94,18 +94,65 @@ test("workflow patch markers remain append-only", () => {
 
 test("human-owned workflow states always offer an exit and a forward action", () => {
   const terminal = new Set(["cancelled", "done", "merged", "failed-terminal"]);
-  const forward = /^(?:retry_development|retry_.+|start_.+|record_.+|approve_.+|respond_.+|continue_work|final_review|request_delivery_changes|resolve_merge_conflict|publish_draft|reconcile_merge|reconcile_ci|revise_plan|resolve_decision_blocker)$/;
+  const forward = /^(?:repair_ci|repair_delivery|review_delivery|retry_development|retry_.+|start_.+|record_.+|approve_.+|respond_.+|continue_work|final_review|request_delivery_changes|resolve_merge_conflict|publish_draft|reconcile_acceptance|reconcile_merge|reconcile_ci|revise_plan|resolve_decision_blocker)$/;
+  const commandArrays = (text: string, literal: string): string[][] => {
+    const commandStart = literal.search(/allowedCommands\s*:/);
+    if (commandStart < 0) return [];
+    const commandEnd = literal.slice(commandStart).search(/,\s*pendingAction\s*:/);
+    const expression = literal.slice(commandStart, commandEnd < 0 ? undefined : commandStart + commandEnd);
+    const variable = expression.match(/allowedCommands\s*:\s*([A-Za-z_$][\w$]*)\s*(?:,|$)/)?.[1];
+    const helper = expression.match(/allowedCommands\s*:\s*([A-Za-z_$][\w$]*)\s*\(/)?.[1];
+    const assignment = variable ? text.match(new RegExp(`(?:const|let)\\s+${variable}[^=]*=\\s*([\\s\\S]*?);`))?.[1] ?? "" : "";
+    const returned = helper ? text.match(new RegExp(`(?:function\\s+${helper}[^{]*\\{|(?:const|let)\\s+${helper}\\s*=\\s*[^=]*=>\\s*\\{)([\\s\\S]*?)(?:\\n\\}|\\n\\};)`))?.[1] ?? "" : "";
+    return [expression, assignment, returned].filter(Boolean).flatMap((value) => {
+      const arrays: string[][] = [];
+      for (let start = 0; start < value.length; start += 1) {
+        if (value[start] !== "[") continue;
+        let depth = 1;
+        let end = start + 1;
+        for (; end < value.length && depth; end += 1) {
+          if (value[end] === "[") depth += 1;
+          if (value[end] === "]") depth -= 1;
+        }
+        if (!depth) arrays.push(value.slice(start, end).match(/["']([^"']+)["']/g)?.map((command) => command.slice(1, -1)) ?? []);
+        start = end - 1;
+      }
+      return arrays.length ? arrays : [value.match(/["']([^"']+)["']/g)?.map((command) => command.slice(1, -1)) ?? []];
+    });
+  };
+  const stateLiterals = (text: string): Array<{ index: number; literal: string }> => {
+    const states: Array<{ index: number; literal: string }> = [];
+    for (const match of text.matchAll(/(?:\w+\.)?IssueWorkflowStateSchema\.parse\(\{/g)) {
+      let depth = 1;
+      let quote: string | null = null;
+      let end = match.index! + match[0].length;
+      for (; end < text.length && depth; end += 1) {
+        const character = text[end];
+        if (quote) {
+          if (character === "\\") end += 1;
+          else if (character === quote) quote = null;
+          continue;
+        }
+        if (character === "'" || character === '"' || character === "`") { quote = character; continue; }
+        if (character === "{") depth += 1;
+        if (character === "}") depth -= 1;
+      }
+      if (!depth) states.push({ index: match.index!, literal: text.slice(match.index! + match[0].length, end - 1) });
+    }
+    return states;
+  };
   const findings: Finding[] = [];
   for (const { file, text } of source("src/temporal/workflow/**/*.{ts,tsx}")) {
-    for (const match of text.matchAll(/(?:\w+\.)?IssueWorkflowStateSchema\.parse\(\{([\s\S]*?)\}\)/g)) {
-      const literal = match[1];
-      if (!literal) continue;
-      const owner = /owner\s*:\s*["']human["']/.test(literal);
-      const phase = literal.match(/phase\s*:\s*["']([^"']+)["']/)?.[1];
-      const commandLiteral = literal.match(/allowedCommands\s*:\s*\[([^\]]*)\]/)?.[1];
-      const commands = commandLiteral?.match(/["']([^"']+)["']/g)?.map((value) => value.slice(1, -1)) ?? [];
-      if (owner && phase && commandLiteral && !terminal.has(phase) && (!commands.includes("cancel_issue") || !commands.some((command) => forward.test(command)))) {
-        findings.push({ file, line: text.slice(0, match.index).split("\n").length, text: match[0].slice(0, 180) });
+    for (const match of stateLiterals(text)) {
+      const { literal } = match;
+      const owner = /owner\s*:\s*[^,]*["']human["']/.test(literal);
+      const phaseStart = literal.search(/phase\s*:/);
+      const phaseEnd = literal.search(/owner\s*:/);
+      const phases = phaseStart < 0 ? [] : [...literal.slice(phaseStart, phaseEnd < 0 ? undefined : phaseEnd).matchAll(/["']([^"']+)["']/g)].flatMap((value) => value[1] ? [value[1]] : []);
+      const commandSets = commandArrays(text, literal);
+      const humanCommands = /owner\s*:\s*[^?]+\?\s*["'](?:lead|system)["']\s*:\s*["']human["']/.test(literal) && commandSets.length > 1 ? commandSets.slice(1) : commandSets;
+      if (owner && phases.some((phase) => !terminal.has(phase)) && humanCommands.some((commands) => !commands.includes("cancel_issue") || !commands.some((command) => forward.test(command)))) {
+        findings.push({ file, line: text.slice(0, match.index).split("\n").length, text: literal.slice(0, 180) });
       }
     }
   }

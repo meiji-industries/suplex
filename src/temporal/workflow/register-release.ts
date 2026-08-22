@@ -2,7 +2,6 @@ import { ApplicationFailure, setHandler } from "@temporalio/workflow";
 import * as contracts from "../issue-contracts.js";
 import * as activityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
-import * as releaseFailures from "../../release-failures.js";
 import { issueUpdates } from "../issue-updates.js";
 import type { IssueWorkflowContext } from "./context.js";
 export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
@@ -31,9 +30,8 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
         await ctx.project();
         return ctx.state;
       }
-      const retryable = releaseFailures.isRetryableReleaseFailure(result.code);
       const waitingForRateLimit = result.code === "provider-rate-limited" && result.retryAt !== null;
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: waitingForRateLimit ? "releasing" : "delivery_blocked", owner: waitingForRateLimit ? "lead" : "human", allowedCommands: waitingForRateLimit ? ["cancel_issue"] : [...(retryable ? ["publish_draft"] : []), "cancel_issue"], pendingAction: waitingForRateLimit ? "Waiting for GitHub" : result.summary ?? "GitHub needs a retry", releaseStatus: waitingForRateLimit ? "reconciling" : "blocked", releaseFailureCode: result.code ?? "provider-unavailable", releaseFailureSummary: result.summary ?? "GitHub needs a retry", releaseRetryAt: result.retryAt ?? null, releaseOperationAttempt: result.attempt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: waitingForRateLimit ? "releasing" : "delivery_blocked", owner: waitingForRateLimit ? "lead" : "human", allowedCommands: waitingForRateLimit ? ["cancel_issue"] : ["publish_draft", "cancel_issue"], pendingAction: waitingForRateLimit ? "Waiting for GitHub" : result.summary ?? "GitHub needs a retry", releaseStatus: waitingForRateLimit ? "reconciling" : "blocked", releaseFailureCode: result.code ?? "provider-unavailable", releaseFailureSummary: result.summary ?? "GitHub needs a retry", releaseRetryAt: result.retryAt ?? null, releaseOperationAttempt: result.attempt, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.state;
     }

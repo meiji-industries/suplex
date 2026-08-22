@@ -16,7 +16,3 @@ export const releaseFailureCopy: Record<ReleaseFailureCode, string> = {
   "provider-unavailable": "GitHub release state could not be confirmed. Retry after checking provider availability.",
   "public-projection-unsafe": "A historical release projection needs attention.",
 };
-
-export function isRetryableReleaseFailure(code: ReleaseFailureCode): boolean {
-  return ["authentication-required", "invalid-provider-response", "remote-head-conflict", "ambiguous-provider-state", "provider-unavailable", "provider-rate-limited", "target-base-drift"].includes(code);
-}

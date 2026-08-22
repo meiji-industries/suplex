@@ -248,7 +248,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
       if (result.allowedCommands.includes("start_planning")) {
         if (planningUnavailable) { navigate(taskPath); setError(planningUnavailable); return; }
         try {
-          await readJson<ApiTask>(`/api/tasks/${encodeURIComponent(result.id)}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: result.revision }) });
+          await readJson<ApiTask>(`/api/tasks/${encodeURIComponent(result.id)}/start-planning`, { method: "POST", body: JSON.stringify({ expectedRevision: result.revision, automatic: true }) });
         } catch (reason) {
           navigate(taskPath);
           setError(reason instanceof Error ? reason.message : "Unable to start planning");

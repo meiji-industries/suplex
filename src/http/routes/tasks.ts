@@ -106,6 +106,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
         // Human-issued commands always get a unique durable ID. Never allow
         // them to inherit the workflow schema's legacy sentinel.
         commandId: (body.commandId as string | undefined) ?? randomUUID(),
+        ...(body.automatic === true ? { automatic: true } : {}),
         ...(body.note !== undefined ? { note: body.note as string } : {}),
         ...(body.answer !== undefined ? { note: body.answer as string } : {}),
         ...(body.idempotencyKey !== undefined ? { idempotencyKey: body.idempotencyKey as string } : {}),

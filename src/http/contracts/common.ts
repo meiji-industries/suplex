@@ -15,6 +15,7 @@ export const ExpectedRevisionBodySchema = z.object({
   expectedRevision: z.coerce.number().finite().int().min(0).max(Number.MAX_SAFE_INTEGER),
   commandId: z.string().min(1).max(256).optional(),
   idempotencyKey: z.string().min(1).max(256).optional(),
+  automatic: z.boolean().optional(),
 });
 export const ExpectedRevisionNoteBodySchema = ExpectedRevisionBodySchema.extend({ note: z.string().optional() });
 export const RequiredRevisionNoteBodySchema = ExpectedRevisionBodySchema.extend({ note: z.string().trim().min(1).max(4_000) });

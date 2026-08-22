@@ -4,6 +4,7 @@ import { FileTree, useFileTree, useFileTreeSelection } from "@pierre/trees/react
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
 import { Alert, AlertDescription } from "../ui/alert.js";
+import { Button } from "../ui/button.js";
 import { Skeleton } from "../ui/skeleton.js";
 import type { TaskDeveloperDiffResponse } from "../../../http/contracts/tasks.js";
 
@@ -26,6 +27,15 @@ export function useAppThemeType(): "light" | "dark" {
   return themeType;
 }
 
+function DiffList({ files, themeType }: { files: ParsedFile[]; themeType: "light" | "dark" }): ReactElement {
+  const options = useMemo(() => ({ diffStyle: "unified" as const, overflow: "scroll" as const, stickyHeader: true, themeType }), [themeType]);
+  return <div className="overflow-hidden rounded-md border border-border bg-background">
+    <Virtualizer className="h-[36rem] overflow-auto" contentClassName="space-y-3 p-2">
+      {files.map((file) => <FileDiff fileDiff={file} options={options} disableWorkerPool key={file.name} />)}
+    </Virtualizer>
+  </div>;
+}
+
 function DiffTree({ files, themeType }: { files: ParsedFile[]; themeType: "light" | "dark" }): ReactElement {
   const { model } = useFileTree({
     flattenEmptyDirectories: true,
@@ -37,27 +47,19 @@ function DiffTree({ files, themeType }: { files: ParsedFile[]; themeType: "light
   const selectedPaths = useFileTreeSelection(model);
   const selectedFile = files.find((file) => file.name === selectedPaths.at(-1)) ?? files[0]!;
   const options = useMemo(() => ({ diffStyle: "unified" as const, overflow: "scroll" as const, stickyHeader: true, themeType }), [themeType]);
-
-  return files.length === 1 ? (
-    <div className="overflow-hidden rounded-md border border-border bg-background">
-      <Virtualizer className="h-[36rem] overflow-auto" contentClassName="p-2">
-        <FileDiff fileDiff={selectedFile} options={options} disableWorkerPool />
-      </Virtualizer>
-    </div>
-  ) : (
-    <div className="grid overflow-hidden rounded-md border border-border bg-background lg:grid-cols-[14rem_minmax(0,1fr)]">
-      <FileTree model={model} aria-label="Changed files" className="h-48 border-b border-border lg:h-[36rem] lg:border-r lg:border-b-0" style={{ colorScheme: themeType }} />
-      <Virtualizer className="h-[36rem] overflow-auto" contentClassName="p-2">
-        <FileDiff fileDiff={selectedFile} options={options} disableWorkerPool />
-      </Virtualizer>
-    </div>
-  );
+  return <div className="grid overflow-hidden rounded-md border border-border bg-background lg:grid-cols-[14rem_minmax(0,1fr)]">
+    <FileTree model={model} aria-label="Changed files" className="h-48 border-b border-border lg:h-[36rem] lg:border-r lg:border-b-0" style={{ colorScheme: themeType }} />
+    <Virtualizer className="h-[36rem] overflow-auto" contentClassName="p-2">
+      <FileDiff fileDiff={selectedFile} options={options} disableWorkerPool />
+    </Virtualizer>
+  </div>;
 }
 
 export default function DeveloperDiff({ taskId, executionId, poll = false, onFileCount }: DeveloperDiffProps): ReactElement {
   const [diff, setDiff] = useState<ApiDeveloperDiff>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [showAll, setShowAll] = useState(true);
   const etag = useRef<string | undefined>(undefined);
   const themeType = useAppThemeType();
 
@@ -95,7 +97,8 @@ export default function DeveloperDiff({ taskId, executionId, poll = false, onFil
 
   return (
     <div data-task-developer-diff className="space-y-2">
-      <DiffTree files={files} themeType={themeType} />
+      <div><Button type="button" variant="outline" size="sm" aria-pressed={showAll} onClick={() => setShowAll((current) => !current)}>Show all</Button></div>
+      {showAll ? <DiffList files={files} themeType={themeType} /> : <DiffTree files={files} themeType={themeType} />}
     </div>
   );
 }

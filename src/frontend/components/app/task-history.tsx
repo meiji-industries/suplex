@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { ProfileAvatar } from "./profile-avatar.js";
+import { Badge } from "../ui/badge.js";
 import { relativeTime } from "../../lib/view-shared.js";
 import { readJson } from "../../lib/api.js";
-import { activityRole, activityRoleLabel, activitySentence, compactActivityRows, type ActivityFeedRow, type ActivityRole } from "../../lib/task-activity-feed.js";
+import { activityRole, activityRoleLabel, activitySentence, compactActivityRows, isAutomaticActivity, type ActivityFeedRow, type ActivityRole } from "../../lib/task-activity-feed.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
 export type TaskActivityEntry = TaskResponse["activity"][number];
@@ -86,7 +87,7 @@ export function TaskActivity({ taskId = "", timeline, release, ci, onViewChanges
     const durable = timeline.map((entry): FeedRow => {
       const role = activityRole(entry);
       const link = timelineLink(entry, release, ci);
-      return { id: entry.id, at: entry.createdAt, role, text: activitySentence(entry, role), revision: entry.revision, ...(link ? { link } : {}) };
+      return { id: entry.id, at: entry.createdAt, role, text: activitySentence(entry, role), revision: entry.revision, ...(isAutomaticActivity(entry, role) ? { automatic: true } : {}), ...(link ? { link } : {}) };
     });
     const live = (feed?.events ?? []).map((event, index): FeedRow => ({ id: `live-${event.at}-${event.kind}-${index}`, at: event.at, role: feed?.execution?.role ?? "integrator", text: liveText(event, feed?.execution?.role ?? "integrator"), live: event.kind === "status" || event.kind === "thinking" }));
     return compactActivityRows([...durable, ...live]);
@@ -96,6 +97,7 @@ export function TaskActivity({ taskId = "", timeline, release, ci, onViewChanges
       {rows.map((row) => <div className="flex min-w-0 items-center gap-2 py-2 text-xs" key={row.id} data-task-activity-kind={row.role} {...(row.revision === undefined ? {} : { "data-task-activity-revision": row.revision })}>
         <ProfileAvatar name={activityRoleLabel(row.role)} seed={row.role} size="xs" />
         <span className="shrink-0 font-medium">{activityRoleLabel(row.role)}</span>
+        {row.automatic ? <Badge variant="secondary">auto</Badge> : null}
         <span className="min-w-0 flex-1 text-muted-foreground">{row.text.replace(new RegExp(`^${activityRoleLabel(row.role)}\\s+`), "")}</span>
         {row.count ? <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground" aria-label={`${row.count} identical events`}>×{row.count}</span> : null}
         {row.link ? <a className="shrink-0 underline underline-offset-2" href={row.link.href} onClick={row.link.label === "View changes" && onViewChanges ? (event) => { event.preventDefault(); onViewChanges(); } : undefined} target={row.link.href.startsWith("http") ? "_blank" : undefined} rel={row.link.href.startsWith("http") ? "noreferrer" : undefined}>{row.link.label}</a> : null}

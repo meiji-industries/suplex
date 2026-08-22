@@ -8,6 +8,7 @@ import { Field, FieldLabel } from "../components/ui/field.js";
 import { Input } from "../components/ui/input.js";
 import { Textarea } from "../components/ui/textarea.js";
 import { Skeleton } from "../components/ui/skeleton.js";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog.js";
@@ -39,6 +40,24 @@ type DevelopmentExecution = { id: string | null; status: string; startedAt: stri
 type DevelopmentState = { status: string; execution: DevelopmentExecution | null };
 type DeveloperEventState = { executionId: string | null; events: DeveloperExecutionEventView[]; terminalSteps: Record<number, "completed" | "blocked"> };
 const noopExecutionStatus = (): void => {};
+
+function TaskMediaRow({ taskId, images }: { taskId: string; images: ApiTask["images"] }): ReactElement {
+  const [selectedImage, setSelectedImage] = useState<ApiTask["images"][number] | null>(null);
+  const imageUrl = (artifactId: string): string => `/api/tasks/${taskId}/images/${artifactId}`;
+  return <>
+    <div className="flex flex-wrap gap-2" data-task-media-row aria-label="Task media">
+      {images.map((image) => <button className="size-16 overflow-hidden rounded-md border border-border bg-muted/30 outline-none transition-colors hover:border-foreground/30 focus-visible:ring-2 focus-visible:ring-ring" type="button" onClick={() => setSelectedImage(image)} aria-label={`Open ${image.filename}`} key={image.artifactId}>
+        <img className="size-full object-cover" src={imageUrl(image.artifactId)} alt="" />
+      </button>)}
+    </div>
+    <Dialog open={selectedImage !== null} onOpenChange={(open) => { if (!open) setSelectedImage(null); }}>
+      <DialogContent className="w-[min(92vw,960px)] max-w-none gap-0 bg-black/95 p-2 text-white sm:max-w-[960px]" aria-label={selectedImage ? `Preview ${selectedImage.filename}` : "Image preview"}>
+        <DialogHeader className="sr-only"><DialogTitle>{selectedImage?.filename}</DialogTitle></DialogHeader>
+        {selectedImage ? <img className="max-h-[82vh] w-full object-contain" src={imageUrl(selectedImage.artifactId)} alt={selectedImage.filename} /> : null}
+      </DialogContent>
+    </Dialog>
+  </>;
+}
 
 function NextAction({ value }: { value: string | null }): ReactElement {
   if (value === "Lead delivery review" || value?.startsWith("Fresh Lead delivery review")) return <>Forge is checking the completed work against the approved plan.</>;
@@ -576,7 +595,6 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   const activityCount = task.activity.length;
   const activityContent = <>
     <TaskActivity taskId={task.id} timeline={task.activity} release={task.release} ci={task.ci} onViewChanges={openDiff} />
-    {task.images.length ? <section className="space-y-2"><h3 className="text-xs font-semibold">Attachments</h3><div className="flex flex-wrap gap-3">{task.images.map((image) => <a className="text-xs underline underline-offset-2" href={`/api/tasks/${task.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer" key={image.artifactId}>{image.filename}</a>)}</div></section> : null}
     {task.governance.supplementalReview ? <SupplementalReviewPanel value={{ reviewerProfileId: task.governance.supplementalReview.reviewerProfile.name, opinion: task.governance.supplementalReview.opinion, concerns: task.governance.supplementalReview.concerns, requiredChanges: task.governance.supplementalReview.requiredChanges, leadResponse: task.governance.supplementalReview.leadResponse.text }} /> : null}
   </>;
   const developerExecution = task.developerExecution;
@@ -611,6 +629,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
             <div data-task-content className="min-w-0 px-4 pt-4 pb-6 sm:px-6 lg:px-10">
               <div data-task-content-inner className="mx-auto max-w-4xl space-y-7">
                 <InlineTaskEditor field="description" value={task.description} onSave={async (description) => onUpdateDetails({ description })} />
+                {task.images.length ? <TaskMediaRow taskId={task.id} images={task.images} /> : null}
                 <div data-task-current className="-mx-4 border-y border-border/70 bg-background px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10">
                   <div className="mx-auto max-w-4xl space-y-4">
                     <PlanningRunCard task={task} />

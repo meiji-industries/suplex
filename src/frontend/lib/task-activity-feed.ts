@@ -4,6 +4,7 @@ export type ActivityRole = "planner" | "builder" | "reviewer" | "integrator" | "
 
 type ActivityEntry = {
   eventType: string;
+  revision?: number;
   metadata: Record<string, string | number | boolean>;
   actor?: { kind?: string | undefined; id: string } | undefined;
 };
@@ -17,6 +18,7 @@ export type ActivityFeedRow = {
   link?: { href: string; label: string };
   count?: number;
   live?: boolean;
+  automatic?: boolean;
 };
 
 export function activityRole(entry: ActivityEntry): ActivityRole {
@@ -30,6 +32,12 @@ export function activityRole(entry: ActivityEntry): ActivityRole {
 
 export function activityRoleLabel(role: ActivityRole): string {
   return role === "you" ? "You" : `${role[0]!.toUpperCase()}${role.slice(1)}`;
+}
+
+export function isAutomaticActivity(entry: ActivityEntry, role: ActivityRole): boolean {
+  if (role !== "you" || entry.eventType !== "member_action") return false;
+  if (entry.metadata.automatic === true || entry.metadata.automatic === "true") return true;
+  return entry.metadata.command === "start_planning" && entry.revision === 1;
 }
 
 function commandSentence(command: string): string {

@@ -69,7 +69,6 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
         if (error instanceof ProjectionRebuildFailure) return reply.code(503).send({ error: error.message, code: error.code });
         throw error;
       }
-      for (const company of auth.listVisibleCompanies(request.forgeUser.id)) attention.rebuild(company.id);
       return reply.send({ source: "temporal" as const, ...result });
     });
   }

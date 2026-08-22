@@ -283,7 +283,9 @@ export class ArtifactStore {
 
   async put(companyId: string, kind: StoredArtifact["kind"], input: ArtifactInput): Promise<StoredArtifact> {
     const planned = this.plan(companyId, `put_${randomUUID().replaceAll("-", "")}`, kind, input);
-    return this.write(planned, input.bytes);
+    const artifact = await this.write(planned, input.bytes);
+    this.database?.authTransaction((db) => db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
+    return artifact;
   }
   async putArtifact(companyId: string, taskId: string, kind: string, bytes: Buffer | object, filename?: string): Promise<string> {
     if (!this.database) throw new ArtifactFailure("database-unavailable", "Artifact registration requires a database");
@@ -291,7 +293,7 @@ export class ArtifactStore {
       ? { bytes, filename: filename ?? `${kind}.bin`, mimeType: "application/octet-stream" }
       : { bytes: Buffer.from(JSON.stringify(bytes), "utf8"), filename: filename ?? `${kind}.json`, mimeType: "application/json" };
     const artifact = await this.put(companyId, kind as ArtifactKind, input);
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, taskId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
+    this.database.authTransaction((db) => db.prepare("UPDATE forge_artifacts SET task_id = ? WHERE id = ? AND company_id = ?").run(taskId, artifact.id, artifact.companyId));
     return artifact.id;
   }
 

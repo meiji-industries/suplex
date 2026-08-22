@@ -193,7 +193,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   const defaultAgent = new AgentService(database, config);
   const githubRelease = options.githubRelease ?? createGithubReleasePort();
   const defaultDeveloper = new DeveloperService(database, config, { github: githubRelease });
-  const artifacts = new ArtifactStore(config.artifactRoot);
+  const artifacts = new ArtifactStore(config.artifactRoot, database);
   const release = new ReleaseService(database, artifacts, githubRelease);
   const ci = new CiService(database, options.ciProvider ?? createGithubCiProvider(), artifacts);
   const acceptance = new AcceptanceService(database, githubRelease, { artifacts });

@@ -402,7 +402,7 @@ export class AgentService {
   private readonly leadOutputIdleTimeoutMs: number;
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: AgentServiceOptions = {}) {
-    this.artifacts = new ArtifactStore(config.artifactRoot);
+    this.artifacts = new ArtifactStore(config.artifactRoot, database);
     this.provider = options.provider ?? resolveAgentProvider();
     this.command = this.provider.resolveCommand(options.command);
     this.processRunner = options.processRunner ?? this.provider.processRunner;

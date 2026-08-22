@@ -225,7 +225,7 @@ export class DeveloperService {
 
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: DeveloperServiceOptions = {}) {
-    this.artifacts = new ArtifactStore(config.artifactRoot);
+    this.artifacts = new ArtifactStore(config.artifactRoot, database);
     this.provider = options.provider ?? resolveAgentProvider();
     this.command = this.provider.resolveCommand(options.command);
     this.processRunner = options.processRunner ?? this.provider.processRunner;

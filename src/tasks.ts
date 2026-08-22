@@ -834,7 +834,7 @@ export class TaskService {
   ) {
     this.now = options.now ?? (() => new Date());
     this.fault = options.fault;
-    this.artifacts = options.artifactStore ?? new ArtifactStore(config.artifactRoot);
+    this.artifacts = options.artifactStore ?? new ArtifactStore(config.artifactRoot, database);
     this.capacity = options.capacity ?? new CapacityManager(database, config);
     this.workflow = options.workflow ?? {
       start: (input) => startIssueWorkflow(config, input),

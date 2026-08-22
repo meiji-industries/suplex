@@ -25,10 +25,7 @@ export const governanceStateFields = {
   leadResumeInstructionSha256: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   supplementalReviewUsed: z.boolean().optional(),
   supplementalReviewArtifactId: durableId.nullable().optional(),
-  decisionId: durableId.nullable().optional(),
-  planAuthorizationId: durableId.nullable().optional(),
-  /** Historical compatibility only; ignored after deserialization. */
-  planArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
-  planAuthorizationKind: z.enum(["routine_auto", "human_approval"]).nullable().optional(),
-  planAuthorizedAt: z.string().datetime().nullable().optional(),
+  planApproved: z.boolean().optional(),
+  planApprovedAt: z.string().datetime().nullable().optional(),
+  planApprovedBy: durableId.nullable().optional(),
 };

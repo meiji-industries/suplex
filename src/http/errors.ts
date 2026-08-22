@@ -54,11 +54,13 @@ export function installHttpErrorHandlers(app: FastifyInstance): void {
       return;
     }
     if (error instanceof AuthFailure || error instanceof ProjectFailure || error instanceof TaskFailure || error instanceof HermesAgentFailure) {
-      request.log.warn({ requestId: request.id, statusCode: error.statusCode, error: redact(error.publicMessage), ...(error instanceof ProjectFailure || error instanceof TaskFailure ? { findings: redact(error.findings) } : {}) }, "Request rejected");
+      const fields = { requestId: request.id, method: request.method, url: request.url, statusCode: error.statusCode, error: redact(error.publicMessage), ...(error instanceof ProjectFailure || error instanceof TaskFailure ? { findings: redact(error.findings) } : {}) };
+      if (error.statusCode >= 500) request.log.error({ ...fields, err: error }, "Request failed"); else request.log.warn(fields, "Request rejected");
       sendDomainFailure(reply, error);
       return;
     }
-    request.log.error({ requestId: request.id, error: redact(error instanceof Error ? error.message : String(error)) }, "Unhandled request error");
+    // err: pino serialises message, stack and cause; message is still redacted separately.
+    request.log.error({ requestId: request.id, method: request.method, url: request.url, error: redact(error instanceof Error ? error.message : String(error)), err: error instanceof Error ? error : new Error(String(error)) }, "Unhandled request error");
     reply.code(500).send({ error: "Internal server error" });
   });
 

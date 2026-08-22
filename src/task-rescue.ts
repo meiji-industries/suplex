@@ -37,7 +37,6 @@ export class TaskRescueService {
     const local = this.database.authQuery((db) => ({
       executions: db.prepare(`SELECT id, 'developer' AS kind, status, process_pid AS pid FROM forge_developer_executions WHERE task_id = ? UNION ALL SELECT id, 'agent' AS kind, status, process_pid AS pid FROM forge_agent_executions WHERE task_id = ? ORDER BY id`).all(task.id, task.id) as Array<{ id: string; kind: "agent" | "developer"; status: string; pid: number | null }>,
       capacityRequests: db.prepare("SELECT id, status, execution_id AS executionId FROM forge_capacity_requests WHERE task_id = ? ORDER BY requested_at DESC").all(task.id) as Array<{ id: string; status: string; executionId: string | null }>,
-      leases: db.prepare("SELECT execution_id AS executionId, status FROM forge_developer_execution_leases WHERE task_id = ? ORDER BY created_at DESC").all(task.id) as Array<{ executionId: string; status: string }>,
     }));
     let workflow: TaskDiagnostics["workflow"] = { status: "unavailable", lastWorkflowTaskFailure: null, pendingWorkflowTaskAgeSeconds: null, buildId: null, currentBuildId: null };
     try {
@@ -51,7 +50,7 @@ export class TaskRescueService {
         workflow = { status: String(info.status ?? "running"), lastWorkflowTaskFailure: typeof pending?.failure === "object" ? JSON.stringify(pending.failure).slice(0, 500) : null, pendingWorkflowTaskAgeSeconds: seconds === null ? null : Math.max(0, Math.floor((Date.now() - seconds) / 1000)), buildId: typeof info.workerVersionStamp === "object" ? JSON.stringify(info.workerVersionStamp) : null, currentBuildId: null };
       } finally { temporal.connection.close(); }
     } catch { /* diagnostics must remain useful when Temporal is unavailable */ }
-    return { workflow, executions: local.executions.map((entry) => ({ ...entry, terminal: terminalExecution.has(entry.status) })), capacityRequests: local.capacityRequests, leases: local.leases };
+    return { workflow, executions: local.executions.map((entry) => ({ ...entry, terminal: terminalExecution.has(entry.status) })), capacityRequests: local.capacityRequests, leases: [] };
   }
 
   async rescue(actorUserId: string, taskId: string): Promise<{ steps: RescueStep[] }> {
@@ -90,11 +89,10 @@ export class TaskRescueService {
     const released = this.database.authTransaction((db) => {
       const now = new Date().toISOString();
       const capacity = db.prepare(`UPDATE forge_capacity_requests SET status = 'released', released_at = ?, terminal_reason = 'process_failed', wait_reason = NULL, updated_at = ? WHERE task_id = ? AND status = 'active' AND ((execution_kind = 'developer' AND EXISTS (SELECT 1 FROM forge_developer_executions d WHERE d.id = execution_id AND d.status IN ('completed','blocked','interrupted','cancelled','failed'))) OR (execution_kind = 'agent' AND EXISTS (SELECT 1 FROM forge_agent_executions a WHERE a.id = execution_id AND a.status IN ('completed','blocked','interrupted','cancelled','failed'))))`).run(now, now, task.id).changes;
-      const leases = db.prepare(`UPDATE forge_developer_execution_leases SET status = 'terminated', updated_at = ? WHERE task_id = ? AND status IN ('reserved','supervisor_starting','running','result_ready','cancel_requested','cancelling') AND EXISTS (SELECT 1 FROM forge_developer_executions d WHERE d.id = execution_id AND d.status IN ('completed','blocked','interrupted','cancelled','failed'))`).run(now, task.id).changes;
-      const running = db.prepare(`UPDATE forge_developer_executions SET status = 'interrupted', finished_at = COALESCE(finished_at, ?), failure_code = 'rescue-process-missing', failure_summary = 'Forge rescue released a stale execution without a process.', heartbeat_at = ? WHERE task_id = ? AND status = 'running' AND process_pid IS NULL`).run(now, now, task.id).changes;
-      return capacity + leases + running;
+      const running = db.prepare(`UPDATE forge_developer_executions SET status = 'failed', finished_at = COALESCE(finished_at, ?), failure_code = 'rescue-process-missing', failure_summary = 'Builder process is no longer running.', heartbeat_at = ? WHERE task_id = ? AND status = 'running' AND process_pid IS NULL`).run(now, now, task.id).changes;
+      return capacity + running;
     });
-    steps.push(this.record(task, "Release stale bookkeeping", released ? "completed" : "skipped", released ? `Released ${released} stale capacity, lease, or execution record${released === 1 ? "" : "s"}.` : "No terminal or pid-less bookkeeping was found."));
+    steps.push(this.record(task, "Release stale bookkeeping", released ? "completed" : "skipped", released ? `Released ${released} stale capacity or execution record${released === 1 ? "" : "s"}.` : "No terminal or pid-less bookkeeping was found."));
     task = this.task(actorUserId, taskId);
     const command = retryCommands.find((candidate) => task.allowedCommands.includes(candidate));
     if (command && (task.phase === "delivery_blocked" || task.phase === "blocked" || task.phase === "failed" || task.phase === "ci_repair_required" || task.phase === "repair_required" || task.allowedCommands.includes("retry_development"))) {

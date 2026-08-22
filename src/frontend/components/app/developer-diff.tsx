@@ -1,9 +1,8 @@
 import { parsePatchFiles } from "@pierre/diffs";
 import { FileDiff, Virtualizer } from "@pierre/diffs/react";
 import { FileTree, useFileTree, useFileTreeSelection } from "@pierre/trees/react";
-import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
-import { readJson } from "../../lib/api.js";
 import { Alert, AlertDescription } from "../ui/alert.js";
 import { Skeleton } from "../ui/skeleton.js";
 import type { TaskDeveloperDiffResponse } from "../../../http/contracts/tasks.js";
@@ -12,7 +11,7 @@ type ApiDeveloperDiff = TaskDeveloperDiffResponse;
 
 type ParsedFile = ReturnType<typeof parsePatchFiles>[number]["files"][number];
 
-export type DeveloperDiffProps = { taskId: string; executionId: string; onFileCount?: (count: number) => void };
+export type DeveloperDiffProps = { taskId: string; executionId: string; poll?: boolean; onFileCount?: (count: number) => void };
 
 export function useAppThemeType(): "light" | "dark" {
   const readTheme = (): "light" | "dark" => document.documentElement.classList.contains("dark") ? "dark" : "light";
@@ -55,23 +54,38 @@ function DiffTree({ files, themeType }: { files: ParsedFile[]; themeType: "light
   );
 }
 
-export default function DeveloperDiff({ taskId, executionId, onFileCount }: DeveloperDiffProps): ReactElement {
+export default function DeveloperDiff({ taskId, executionId, poll = false, onFileCount }: DeveloperDiffProps): ReactElement {
   const [diff, setDiff] = useState<ApiDeveloperDiff>();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const etag = useRef<string | undefined>(undefined);
   const themeType = useAppThemeType();
 
   useEffect(() => {
-    const controller = new AbortController();
+    let cancelled = false;
+    const controllers = new Set<AbortController>();
+    etag.current = undefined;
     setDiff(undefined); setLoading(true); setError("");
-    void readJson<ApiDeveloperDiff>(`/api/tasks/${encodeURIComponent(taskId)}/developer-diff`, { signal: controller.signal })
-      .then((value) => { setDiff(value); setLoading(false); })
-      .catch((reason: unknown) => {
-        if (controller.signal.aborted) return;
-        setError(reason instanceof Error ? reason.message : "Unable to load the Builder diff"); setLoading(false);
-      });
-    return () => controller.abort();
-  }, [taskId, executionId]);
+    const load = async (): Promise<void> => {
+      const controller = new AbortController();
+      controllers.add(controller);
+      try {
+        const response = await fetch(`/api/tasks/${encodeURIComponent(taskId)}/developer-diff`, { signal: controller.signal, ...(etag.current ? { headers: { "If-None-Match": etag.current } } : {}) });
+        if (cancelled || response.status === 304) { if (!cancelled) setLoading(false); return; }
+        const body = await response.json() as ApiDeveloperDiff & { error?: string };
+        if (!response.ok) throw new Error(body.error ?? "Unable to load the Builder diff");
+        etag.current = response.headers.get("ETag") ?? undefined;
+        setDiff(body); setError(""); setLoading(false);
+      } catch (reason) {
+        if (!cancelled && !(reason instanceof DOMException && reason.name === "AbortError")) { setError(reason instanceof Error ? reason.message : "Unable to load the Builder diff"); setLoading(false); }
+      } finally {
+        controllers.delete(controller);
+      }
+    };
+    void load();
+    const timer = poll ? window.setInterval(() => void load(), 10_000) : undefined;
+    return () => { cancelled = true; if (timer) window.clearInterval(timer); for (const controller of controllers) controller.abort(); };
+  }, [taskId, executionId, poll]);
 
   const files = useMemo(() => diff?.patch ? parsePatchFiles(diff.patch, executionId, true).flatMap((patch) => patch.files) : [], [diff?.patch, executionId]);
   useEffect(() => { if (diff) onFileCount?.(files.length); }, [diff, files.length, onFileCount]);

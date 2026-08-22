@@ -92,8 +92,11 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
     if (updated.allowedCommands.includes("reconcile_ci")) return reply.send(await tasks.executeCommand(request.forgeUser.id, task.id, "reconcile_ci", { expectedRevision: updated.revision }));
     return reply.send(updated);
   });
-  typed.get("/api/tasks/:taskId/developer-diff", { schema: { params: TaskIdParamsSchema, response: { 200: TaskDeveloperDiffResponseSchema } } }, async (request, reply) => {
-    return reply.header("Cache-Control", "private, no-store").send(await tasks.getDeveloperDiff(request.forgeUser.id, request.params.taskId));
+  typed.get("/api/tasks/:taskId/developer-diff", { schema: { params: TaskIdParamsSchema, response: { 200: TaskDeveloperDiffResponseSchema, 304: z.null() } } }, async (request, reply) => {
+    const result = await tasks.getDeveloperDiff(request.forgeUser.id, request.params.taskId);
+    const etag = `\"${result.etag}\"`;
+    if (request.headers["if-none-match"] === etag) return reply.code(304).header("ETag", etag).header("Cache-Control", "private, no-cache").send(null);
+    return reply.header("ETag", etag).header("Cache-Control", "private, no-cache").send(result.diff);
   });
   for (const descriptor of routedIssueCommands) {
     typed.post(`/api/tasks/:taskId/${descriptor.slug!}`, { schema: { params: TaskIdParamsSchema, body: descriptor.body!, response: { 200: TaskResponseSchema } } }, async (request, reply) => {

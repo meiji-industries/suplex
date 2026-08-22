@@ -946,24 +946,30 @@ export class TaskService {
     return this.getTask(actorUserId, taskId);
   }
 
-  async getDeveloperDiff(actorUserId: string, taskId: string): Promise<TaskDeveloperDiff> {
+  async getDeveloperDiff(actorUserId: string, taskId: string): Promise<{ diff: TaskDeveloperDiff; etag: string }> {
     const task = this.getTask(actorUserId, taskId);
-    const execution = this.database.authQuery((db) => db.prepare("SELECT branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, result_commit AS resultCommit FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND result_commit IS NOT NULL ORDER BY attempt DESC, started_at DESC LIMIT 1").get(task.id, task.companyId) as { branchName: string; worktreePath: string; targetBaseSha: string; resultCommit: string } | undefined);
-    if (!execution) throw new TaskFailure("Developer diff is not available until development completes", [], 409);
+    const [execution, recordedResult] = this.database.authQuery((db) => [
+      db.prepare("SELECT branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, result_commit AS resultCommit FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND worktree_path IS NOT NULL ORDER BY attempt DESC, started_at DESC LIMIT 1").get(task.id, task.companyId) as { branchName: string; worktreePath: string; targetBaseSha: string | null; resultCommit: string | null } | undefined,
+      db.prepare("SELECT branch_name AS branchName, target_base_sha AS targetBaseSha, result_commit AS resultCommit FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND result_commit IS NOT NULL ORDER BY attempt DESC, started_at DESC LIMIT 1").get(task.id, task.companyId) as { branchName: string; targetBaseSha: string; resultCommit: string } | undefined,
+    ]);
+    if (!execution) throw new TaskFailure("Developer diff is not available until a worktree exists", [], 409);
     const project = this.projects.getProject(actorUserId, task.projectId);
     if (project.companyId !== task.companyId) throw new TaskFailure("Not found", [], 404);
     try {
-      const diff = await new WorktreeManager().currentDiff({
+      const diff = await new WorktreeManager().liveDiff({
         repositoryPath: project.repositoryPath,
         worktreeRoot: project.worktreeRoot,
-        taskId: task.id,
-        targetBaseSha: execution.targetBaseSha,
-        branchName: execution.branchName,
         worktreePath: execution.worktreePath,
-        resultCommit: execution.resultCommit,
+        branchName: execution.branchName,
+        targetBaseSha: execution.targetBaseSha,
+        baseBranch: project.baseBranch,
       });
-      return { patch: diff.patch, branchName: execution.branchName, repository: project.repository, baseSha: execution.targetBaseSha, headSha: diff.headSha };
+      return { diff: { patch: diff.patch, branchName: diff.branchName, repository: project.repository, baseSha: diff.baseSha, headSha: diff.headSha }, etag: diff.etag };
     } catch (error) {
+      if (error instanceof WorktreeFailure && error.code === "worktree-unavailable" && recordedResult) {
+        const diff = await new WorktreeManager().commitDiff(project.repositoryPath, recordedResult.targetBaseSha, recordedResult.resultCommit);
+        return { diff: { patch: diff.patch, branchName: recordedResult.branchName, repository: project.repository, baseSha: recordedResult.targetBaseSha, headSha: diff.headSha }, etag: `${diff.headSha}:missing:0` };
+      }
       if (error instanceof WorktreeFailure) throw new TaskFailure(error.message, [finding(error.code, "developerExecution", error.message)], 409);
       throw error;
     }

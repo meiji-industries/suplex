@@ -1,7 +1,7 @@
 import { execFile, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { access, constants, lstat, mkdir, realpath, rm, statfs, writeFile } from "node:fs/promises";
+import { access, constants, lstat, mkdir, readFile, realpath, rm, stat, statfs, writeFile } from "node:fs/promises";
 import { delimiter, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
@@ -50,6 +50,21 @@ export interface WorktreeDiffInput extends WorktreeInput {
 export interface WorktreeDiff {
   patch: string;
   headSha: string;
+}
+
+export interface LiveWorktreeDiffInput {
+  repositoryPath: string;
+  worktreeRoot: string;
+  worktreePath: string;
+  branchName: string;
+  targetBaseSha: string | null;
+  baseBranch: string;
+}
+
+export interface LiveWorktreeDiff extends WorktreeDiff {
+  branchName: string;
+  baseSha: string;
+  etag: string;
 }
 
 export interface PlanRevisionInspectionInput {
@@ -132,6 +147,22 @@ const defaultGit: GitAdapter = {
 };
 
 const defaultMinFreeDiskGb = 10;
+const liveDiffMaxBytes = 2 * 1024 * 1024;
+const liveUntrackedFileMaxBytes = 256 * 1024;
+
+async function runLiveGit(args: string[], cwd: string, maxBuffer = liveDiffMaxBytes): Promise<string> {
+  return (await execFileAsync("git", args, { cwd, timeout: 5_000, maxBuffer })).stdout;
+}
+
+function untrackedPatch(path: string, bytes: Buffer): string {
+  const content = bytes.subarray(0, liveUntrackedFileMaxBytes);
+  if (content.includes(0)) return `diff --git a/${path} b/${path}\nnew file mode 100644\nBinary files /dev/null and b/${path} differ\n`;
+  const text = content.toString("utf8");
+  const lines = text.split("\n");
+  const rendered = lines.map((line) => `+${line}`).join("\n");
+  const suffix = bytes.length > content.length ? `\n+… truncated after ${liveUntrackedFileMaxBytes} bytes` : "";
+  return `diff --git a/${path} b/${path}\nnew file mode 100644\n--- /dev/null\n+++ b/${path}\n@@ -0,0 +1,${lines.length} @@\n${rendered}${suffix}\n`;
+}
 
 export async function assertWorktreeDiskHeadroom(worktreeRoot: string, statfsFn: typeof statfs = statfs): Promise<void> {
   const envGb = Number.parseFloat(process.env.FORGE_MIN_FREE_DISK_GB ?? "");
@@ -247,6 +278,74 @@ export class WorktreeManager {
     } catch (error) {
       if (error instanceof WorktreeFailure) throw error;
       throw new WorktreeFailure("diff-unavailable", "Git could not read the current Developer delivery diff");
+    }
+  }
+
+  /** Read a task worktree without repairing or otherwise mutating it. */
+  async liveDiff(input: LiveWorktreeDiffInput): Promise<LiveWorktreeDiff> {
+    if (!branchPattern.test(input.branchName) || !branchPattern.test(input.baseBranch)) throw new WorktreeFailure("unsafe-branch", "Recorded Git branch is unsafe");
+    const [repositoryPath, worktreeRoot] = await Promise.all([
+      canonicalDirectory(input.repositoryPath, "repository-unavailable"),
+      canonicalDirectory(input.worktreeRoot, "worktree-root-unavailable"),
+    ]);
+    const expectedWorktree = resolve(input.worktreePath);
+    if (!withinRoot(worktreeRoot, expectedWorktree) || expectedWorktree === worktreeRoot) throw new WorktreeFailure("worktree-escape", "Recorded worktree is outside the configured worktree root");
+    const worktreePath = await canonicalDirectory(expectedWorktree, "worktree-unavailable");
+    try {
+      const [repositoryGitDir, worktreeGitDir, actualRoot, actualBranch, headSha] = await Promise.all([
+        runLiveGit(["rev-parse", "--path-format=absolute", "--git-common-dir"], repositoryPath),
+        runLiveGit(["rev-parse", "--path-format=absolute", "--git-common-dir"], worktreePath),
+        runLiveGit(["rev-parse", "--show-toplevel"], worktreePath),
+        runLiveGit(["symbolic-ref", "--short", "HEAD"], worktreePath),
+        runLiveGit(["rev-parse", "HEAD"], worktreePath),
+      ]);
+      if (repositoryGitDir.trim() !== worktreeGitDir.trim() || actualRoot.trim() !== worktreePath || actualBranch.trim() !== input.branchName) throw new WorktreeFailure("worktree-not-owned", "Recorded worktree is not the task worktree");
+
+      let baseSha = input.targetBaseSha;
+      if (!baseSha || !shaPattern.test(baseSha)) {
+        baseSha = (await runLiveGit(["merge-base", "HEAD", input.baseBranch], worktreePath)).trim();
+      } else {
+        try { baseSha = (await runLiveGit(["rev-parse", "--verify", `${baseSha}^{commit}`], worktreePath)).trim(); }
+        catch { baseSha = (await runLiveGit(["merge-base", "HEAD", input.baseBranch], worktreePath)).trim(); }
+      }
+      if (!shaPattern.test(baseSha)) throw new WorktreeFailure("diff-unavailable", "Git could not resolve the task base revision");
+
+      const [committed, uncommitted, untrackedOutput, indexPath] = await Promise.all([
+        runLiveGit(["diff", "--no-color", `${baseSha}...HEAD`, "--"], worktreePath),
+        runLiveGit(["diff", "--no-color", "HEAD", "--"], worktreePath),
+        runLiveGit(["ls-files", "--others", "--exclude-standard", "-z"], worktreePath),
+        runLiveGit(["rev-parse", "--git-path", "index"], worktreePath),
+      ]);
+      const untracked = untrackedOutput.split("\0").filter(Boolean);
+      const patches: string[] = [committed, uncommitted];
+      let remaining = liveDiffMaxBytes - Buffer.byteLength(committed) - Buffer.byteLength(uncommitted);
+      for (const path of untracked) {
+        if (remaining <= 0) break;
+        const bytes = await readFile(resolve(worktreePath, path));
+        const patch = untrackedPatch(path, bytes);
+        if (Buffer.byteLength(patch) > remaining) break;
+        patches.push(patch);
+        remaining -= Buffer.byteLength(patch);
+      }
+      const index = await stat(resolve(worktreePath, indexPath.trim()));
+      return { patch: patches.join(""), branchName: actualBranch.trim(), baseSha, headSha: headSha.trim(), etag: `${headSha.trim()}:${index.mtimeMs}:${untracked.length}` };
+    } catch (error) {
+      if (error instanceof WorktreeFailure) throw error;
+      throw new WorktreeFailure("diff-unavailable", "Git could not read the live Developer worktree diff");
+    }
+  }
+
+  async commitDiff(repositoryPath: string, targetBaseSha: string, resultCommit: string): Promise<WorktreeDiff> {
+    if (!shaPattern.test(targetBaseSha) || !shaPattern.test(resultCommit)) throw new WorktreeFailure("invalid-result-commit", "Recorded Developer Git coordinates are invalid");
+    const repository = await canonicalDirectory(repositoryPath, "repository-unavailable");
+    try {
+      const [patch, headSha] = await Promise.all([
+        runLiveGit(["diff", "--no-color", targetBaseSha, resultCommit, "--"], repository),
+        runLiveGit(["rev-parse", "--verify", `${resultCommit}^{commit}`], repository),
+      ]);
+      return { patch, headSha: headSha.trim() };
+    } catch {
+      throw new WorktreeFailure("diff-unavailable", "Git could not read the recorded Developer delivery diff");
     }
   }
 

@@ -205,6 +205,7 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     const resultCommit = await git(["rev-parse", "HEAD"], delivery.worktreePath);
     const resultTree = await git(["rev-parse", "HEAD^{tree}"], delivery.worktreePath);
     const startingTree = await git(["rev-parse", `${targetBaseSha}^{tree}`], delivery.worktreePath);
+    await writeFile(join(delivery.worktreePath, "README.md"), "base\nlive tracked change\n");
     await writeFile(join(delivery.worktreePath, "LATER.md"), "not part of the delivery\n");
     const now = "2026-08-11T00:01:00.000Z";
     database.authTransaction((db) => {
@@ -219,8 +220,12 @@ test("task API command dispatch preserves revision and evidence lineage", async 
     const developerDiff = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/developer-diff`, headers: { cookie, origin } });
     expect(developerDiff.statusCode).toBe(200);
     expect(developerDiff.json()).toMatchObject({ branchName: delivery.branchName, baseSha: targetBaseSha, headSha: resultCommit, patch: expect.stringContaining("+API delivery") });
-    expect(developerDiff.json().patch).not.toContain("+not part of the delivery");
+    expect(developerDiff.json().patch).toContain("+live tracked change");
+    expect(developerDiff.json().patch).toContain("+not part of the delivery");
     expect(JSON.stringify(developerDiff.json())).not.toContain(delivery.worktreePath);
+    expect(developerDiff.headers.etag).toBeTruthy();
+    const unchangedDeveloperDiff = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/developer-diff`, headers: { cookie, origin, "if-none-match": developerDiff.headers.etag! } });
+    expect(unchangedDeveloperDiff.statusCode).toBe(304);
     expect((await app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: { cookie, origin }, payload: approvalPayload })).statusCode).toBe(409);
     expect((await app.inject({ method: "GET", url: "/api/tasks", headers: { cookie, origin } })).json().tasks).toHaveLength(1);
     expect((await app.inject({ method: "GET", url: `/api/tasks/${task.id}/images/does-not-exist`, headers: { cookie, origin } })).statusCode).toBe(404);

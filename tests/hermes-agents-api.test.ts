@@ -75,8 +75,8 @@ beforeEach(async () => {
   companyId = auth.createCompany(adminId, "Hermes API Company").id;
   const now = new Date().toISOString();
   database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES ('project_api', ?, 'API Project', ?, ?, 'meiji/api', 'main', 'main', '', '', '[]', '{}', 'draft', NULL, ?, ?)").run(companyId, join(root, "repo"), join(root, "worktrees"), now, now);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES ('project_api_2', ?, 'API Project 2', ?, ?, 'meiji/api-2', 'main', 'main', '', '', '[]', '{}', 'draft', NULL, ?, ?)").run(companyId, join(root, "repo2"), join(root, "worktrees2"), now, now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project_api', ?, 'API Project', ?, ?, 'meiji/api', 'main', 'main', '', '', '[]', '{}', 'draft', ?, ?)").run(companyId, join(root, "repo"), join(root, "worktrees"), now, now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project_api_2', ?, 'API Project 2', ?, ?, 'meiji/api-2', 'main', 'main', '', '', '[]', '{}', 'draft', ?, ?)").run(companyId, join(root, "repo2"), join(root, "worktrees2"), now, now);
   });
 
   const memberInvitation = auth.inviteUser(adminId, { displayName: "Member User" });

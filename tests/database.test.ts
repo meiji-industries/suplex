@@ -272,7 +272,7 @@ test("reports normalized repository identity collisions before the unique index 
     const legacy = new Database(filename);
     legacy.exec("DROP INDEX forge_projects_repository_identity_unique");
     legacy.exec("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-a', 'Company A', 'active', '2026-08-11T00:00:00.000Z'), ('company-b', 'Company B', 'active', '2026-08-11T00:00:00.000Z')");
-    const insert = legacy.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'main', 'main', 'pnpm install', 'pnpm test', '[]', '{}', 'draft', NULL, ?, ?)");
+    const insert = legacy.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'main', 'main', 'pnpm install', 'pnpm test', '[]', '{}', 'draft', ?, ?)");
     insert.run("project-a", "company-a", "Project A", "/repositories/a", "/worktrees/a", " Acme/Forge ", "2026-08-11T00:00:00.000Z", "2026-08-11T00:00:00.000Z");
     insert.run("project-b", "company-b", "Project B", "/repositories/b", "/worktrees/b", "acme/forge", "2026-08-11T00:00:00.000Z", "2026-08-11T00:00:00.000Z");
     legacy.close();

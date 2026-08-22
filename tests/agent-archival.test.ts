@@ -51,7 +51,7 @@ async function fixture(): Promise<Fixture> {
     agent: (name, role) => projects.createAgent("admin-1", { name, role, profileId: profile.id }),
     project: (name, roleDefaults) => {
       const id = `project-${(projectCount += 1)}`;
-      database.authQuery((db) => db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'acme/forge', 'main', 'main', 'pnpm install', 'pnpm test', '[\"Tests / unit\"]', ?, 'draft', NULL, '2026-08-21T00:00:00.000Z', '2026-08-21T00:00:00.000Z')")
+      database.authQuery((db) => db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'acme/forge', 'main', 'main', 'pnpm install', 'pnpm test', '[\"Tests / unit\"]', ?, 'draft', '2026-08-21T00:00:00.000Z', '2026-08-21T00:00:00.000Z')")
         .run(id, company.id, name, join(root, "repositories", id), join(root, "worktrees", id), JSON.stringify(roleDefaults)));
       return id;
     },

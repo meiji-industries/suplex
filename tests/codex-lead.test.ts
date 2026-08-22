@@ -8,7 +8,6 @@ import { expect, test } from "vitest";
 import { ApplicationFailure } from "@temporalio/activity";
 
 import { ArtifactStore } from "../src/artifacts.js";
-import { CapacityManager } from "../src/capacity.js";
 import { AgentFailure, AgentService, LeadOutputSchema, parseLeadOutput, parseMergeConflictPlan, resolveAgentCommand, runCodexProcess, type LeadProcessRunner, type SessionStore } from "../src/codex-lead.js";
 import { CodexLeadOutputJsonSchema } from "../src/codex-lead-contracts.js";
 import { DeveloperService } from "../src/codex-developer.js";
@@ -242,34 +241,6 @@ test("Lead planning reuses a failed execution on activity retry", async () => {
   }
 });
 
-test("a capacity request pins model, reasoning, and service priority through later profile edits", async () => {
-  const value = await fixture("pinned-model");
-  const wrapperRequests: Array<{ model: string; reasoningLevel: string; servicePriority: string }> = [];
-  const runner: LeadProcessRunner = async (invocation) => {
-    wrapperRequests.push(JSON.parse(await readFile(invocation.args.at(-1)!, "utf8")) as { model: string; reasoningLevel: string; servicePriority: string });
-    await invocation.onStart(4330, "2026-08-12T00:00:00.000Z");
-    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-pinned-session" }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "plan", gitPresentation, summary: "Pinned profile plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect the fixture", verification: "The focused test passes" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the focused test.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] }) } }));
-    return { exitCode: 0, stderr: "" };
-  };
-  try {
-    value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET reasoning_level = 'high', service_priority = 'priority' WHERE id = 'profile_1'").run());
-    const capacity = new CapacityManager(value.database, value.config);
-    const request = capacity.request({ logicalTurnKey: "workflow-test-issue-task_1:1:lead_planning", companyId: "company_1", taskId: "task_1", workflowId: "workflow-test-issue-task_1", projectRevisionId: "revision_1", workflowRevision: 1, operation: "lead_planning", role: "planner", profileId: "profile_1" });
-    expect(capacity.tryAcquire(request.id, 1).status).toBe("active");
-    value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET model = 'later-model', reasoning_level = 'low', service_priority = 'standard' WHERE id = 'profile_1'").run());
-
-    const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_pinned"; }, async read() { return "raw-pinned-session"; } } });
-    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1, capacityRequestId: request.id });
-
-    expect(wrapperRequests[0]).toMatchObject({ model: "pinned-model", reasoningLevel: "high", servicePriority: "priority" });
-    expect(wrapperRequests[0]?.model).not.toBe("later-model");
-    expect(value.database.authQuery((db) => db.prepare("SELECT profile_id, model, reasoning_level, service_priority, capacity_request_id FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ profile_id: "profile_1", model: "pinned-model", reasoning_level: "high", service_priority: "priority", capacity_request_id: request.id });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
 
 test("Lead output schema rejects unresolved technical questions and malformed blockers", () => {
   expect(LeadOutputSchema.safeParse({ kind: "plan", gitPresentation, summary: "x", reproduction: null, rootCauseAnalysis: null, steps: [], compatibilityAnalysis: "x", operationalAnalysis: "x", verificationStrategy: "x", unresolvedTechnicalQuestions: ["choose"] }).success).toBe(false);

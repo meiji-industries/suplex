@@ -76,10 +76,6 @@ export const { cancelDeveloperExecution } = proxyActivities<IssueActivities>({
 export const { findActiveDeveloperExecution } = proxyActivities<IssueActivities>({ startToCloseTimeout: "1 minute", retry: { maximumAttempts: 3, initialInterval: "1 second", maximumInterval: "5 seconds" } });
 
 
-export const { cancelCapacityExecution } = proxyActivities<IssueActivities>({
-  startToCloseTimeout: "1 minute",
-  retry: { maximumAttempts: 1 },
-});
 
 export const { recordPlanDecision } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
@@ -213,7 +209,3 @@ export const { reconcileMerge } = proxyActivities<IssueActivities>({
   retry: { maximumAttempts: 1 },
 });
 
-export const { requestCapacity, tryAcquireCapacity, inspectCapacity, requeueCapacity, cancelCapacity, finalizeCapacity, rateLimitCapacity, reconcileCapacityOwnership } = proxyActivities<IssueActivities>({
-  startToCloseTimeout: "1 minute",
-  retry: { maximumAttempts: 5, initialInterval: "1 second", maximumInterval: "15 seconds" },
-});

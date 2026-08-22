@@ -88,21 +88,6 @@ function fakeGithub(checks: CheckObservation[] = []): GithubReleasePort & Github
   } as GithubReleasePort & GithubAcceptancePort & { authenticated: number; pushed: number; ready: number; updated: number; createdInput: { title: string; body: string } | null };
 }
 
-test("capacity is durable, FIFO, bounded, and restart-reconcilable", async () => {
-  const value = await fixture();
-  try {
-    const capacity = new CapacityManager(value.database, { externalTurnCapacity: 1 });
-    const first = capacity.request({ companyId: "company-a", taskId: "task-a", workflowId: "workflow-a", turnKind: "lead", requestedAt: "2026-08-11T00:00:00.001Z" });
-    const second = capacity.request({ companyId: "company-a", taskId: "task-a", workflowId: "workflow-a", turnKind: "developer", requestedAt: "2026-08-11T00:00:00.002Z" });
-    expect(capacity.tryAcquire(first.id).acquired).toBe(true);
-    expect(capacity.tryAcquire(second.id).acquired).toBe(false);
-    expect(capacity.position(second.id)).toBe(1);
-    expect(capacity.release(first.id, "done")).toBe(true);
-    expect(capacity.tryAcquire(second.id).acquired).toBe(true);
-    expect(capacity.reconcile(new Set(), "worker-restart")).toBe(1);
-    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_capacity_requests WHERE id = ?").get(second.id))).toEqual({ status: "stale" });
-  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
-});
 
 test("attention is quiet for ordinary projected work", async () => {
   const value = await fixture();

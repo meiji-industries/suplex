@@ -1370,12 +1370,6 @@ export class TaskService {
     if (state.revision !== task.revision) throw new TaskFailure("Task changed before this action was accepted", [finding("stale-revision", "expectedRevision", "Refresh the issue before this action")], 409, task);
     const next = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Issue cancelled", blocker: null, capacity: null, capacityBlocker: null, activeOperation: null, stateChangedAt: this.now().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });
     this.database.projectIssueEvent({ schemaVersion: 1, runId: snapshot.runId ?? state.workflowId, eventId: next.lastEventId, state: next });
-    const now = this.now().toISOString();
-    this.database.authTransaction((db) => {
-      db.prepare(`UPDATE forge_capacity_requests
-        SET status = 'cancelled', cancelled_at = COALESCE(cancelled_at, ?), released_at = COALESCE(released_at, ?), terminal_reason = 'cancelled', skip_reason = 'workflow_not_running', updated_at = ?
-        WHERE task_id = ? AND workflow_id = ? AND status IN ('queued', 'active', 'rate_limited')`).run(now, now, now, task.id, task.workflowId);
-    });
   }
 
   async executeCommand(actorUserId: string, taskId: string, command: IssueCommand, payload: TaskCommandPayload): Promise<ForgeTask> {

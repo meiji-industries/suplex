@@ -23,7 +23,6 @@ import {
   projectIssueStateActivity,
   reconcileTargetBase,
   recordProbeStarted,
-  inspectCapacity,
 } from "./workflow/activity-proxies.js";
 import { evidencePointer, humanBlocker } from "./workflow/state-transitions.js";
 import { createIssueWorkflowContext } from "./workflow/context.js";
@@ -31,7 +30,6 @@ import { registerGovernanceHandlers } from "./workflow/register-governance.js";
 import { registerLifecycleHandlers, registerLifecycleHandlersContinuation } from "./workflow/register-lifecycle.js";
 import { registerPlanningHandlers, registerPlanningHandlersContinuation, registerPlanningHandlersReject, registerPlanningHandlersRevision } from "./workflow/register-planning.js";
 import { registerAcceptanceHandlers } from "./workflow/register-acceptance.js";
-import { registerCapacityHandlers } from "./workflow/register-capacity.js";
 import { registerCiHandlers } from "./workflow/register-ci.js";
 import { registerDeliveryReviewHandlers } from "./workflow/register-delivery-review.js";
 import { registerDevelopmentHandlers } from "./workflow/register-development.js";
@@ -372,13 +370,6 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   registerPlanningHandlersRevision(workflowContext);
   registerLifecycleHandlersContinuation(workflowContext);
   registerPlanningHandlersReject(workflowContext);
-  registerCapacityHandlers(workflowContext);
-  if (patched("forge-capacity-ownership-clear-v1") && (state.capacityBlocker as { category?: string } | null)?.category === "ownership_ambiguous" && state.capacity) {
-    const request = await inspectCapacity({ requestId: state.capacity.requestId });
-    if (["released", "cancelled", "stale", "exhausted"].includes(request.status)) {
-      state = { ...state, capacity: null, capacityBlocker: null, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue"], pendingAction: "Developer retry is available", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` };
-    }
-  }
   assertPayloadWithinLimit("Issue Workflow result", state);
   // Continue-As-New carries the last business revision into a fresh run. The
   // previous run already projected that revision, so emitting it again with a

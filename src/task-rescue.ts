@@ -36,7 +36,7 @@ export class TaskRescueService {
     const task = this.task(actorUserId, taskId);
     const local = this.database.authQuery((db) => ({
       executions: db.prepare(`SELECT id, 'developer' AS kind, status, process_pid AS pid FROM forge_developer_executions WHERE task_id = ? UNION ALL SELECT id, 'agent' AS kind, status, process_pid AS pid FROM forge_agent_executions WHERE task_id = ? ORDER BY id`).all(task.id, task.id) as Array<{ id: string; kind: "agent" | "developer"; status: string; pid: number | null }>,
-      capacityRequests: db.prepare("SELECT id, status, execution_id AS executionId FROM forge_capacity_requests WHERE task_id = ? ORDER BY requested_at DESC").all(task.id) as Array<{ id: string; status: string; executionId: string | null }>,
+      capacityRequests: [],
     }));
     let workflow: TaskDiagnostics["workflow"] = { status: "unavailable", lastWorkflowTaskFailure: null, pendingWorkflowTaskAgeSeconds: null, buildId: null, currentBuildId: null };
     try {
@@ -88,11 +88,9 @@ export class TaskRescueService {
     } else steps.push(this.record(task, "Re-dispatch workflow", "skipped", "Workflow has no stale or failed workflow task."));
     const released = this.database.authTransaction((db) => {
       const now = new Date().toISOString();
-      const capacity = db.prepare(`UPDATE forge_capacity_requests SET status = 'released', released_at = ?, terminal_reason = 'process_failed', wait_reason = NULL, updated_at = ? WHERE task_id = ? AND status = 'active' AND ((execution_kind = 'developer' AND EXISTS (SELECT 1 FROM forge_developer_executions d WHERE d.id = execution_id AND d.status IN ('completed','blocked','interrupted','cancelled','failed'))) OR (execution_kind = 'agent' AND EXISTS (SELECT 1 FROM forge_agent_executions a WHERE a.id = execution_id AND a.status IN ('completed','blocked','interrupted','cancelled','failed'))))`).run(now, now, task.id).changes;
-      const running = db.prepare(`UPDATE forge_developer_executions SET status = 'failed', finished_at = COALESCE(finished_at, ?), failure_code = 'rescue-process-missing', failure_summary = 'Builder process is no longer running.', heartbeat_at = ? WHERE task_id = ? AND status = 'running' AND process_pid IS NULL`).run(now, now, task.id).changes;
-      return capacity + running;
+      return db.prepare(`UPDATE forge_developer_executions SET status = 'failed', finished_at = COALESCE(finished_at, ?), failure_code = 'rescue-process-missing', failure_summary = 'Builder process is no longer running.', heartbeat_at = ? WHERE task_id = ? AND status = 'running' AND process_pid IS NULL`).run(now, now, task.id).changes;
     });
-    steps.push(this.record(task, "Release stale bookkeeping", released ? "completed" : "skipped", released ? `Released ${released} stale capacity or execution record${released === 1 ? "" : "s"}.` : "No terminal or pid-less bookkeeping was found."));
+    steps.push(this.record(task, "Release stale bookkeeping", released ? "completed" : "skipped", released ? `Released ${released} stale execution record${released === 1 ? "" : "s"}.` : "No pid-less execution was found."));
     task = this.task(actorUserId, taskId);
     const command = retryCommands.find((candidate) => task.allowedCommands.includes(candidate));
     if (command && (task.phase === "delivery_blocked" || task.phase === "blocked" || task.phase === "failed" || task.phase === "ci_repair_required" || task.phase === "repair_required" || task.allowedCommands.includes("retry_development"))) {

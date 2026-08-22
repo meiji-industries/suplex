@@ -49,7 +49,6 @@ function fail(database: ForgeDatabase, executionId: string): void {
   const now = new Date().toISOString();
   database.authTransaction((db) => {
     db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = COALESCE(finished_at, ?), failure_code = 'developer-process-missing', failure_summary = 'Builder process is no longer running.' WHERE id = ? AND status = 'running'").run(now, executionId);
-    db.prepare("UPDATE forge_capacity_requests SET status = 'released', released_at = ?, terminal_reason = 'process_failed', wait_reason = NULL, updated_at = ? WHERE execution_kind = 'developer' AND execution_id = ? AND status = 'active'").run(now, now, executionId);
   });
 }
 

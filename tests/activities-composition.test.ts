@@ -9,7 +9,6 @@ import { ForgeDatabase } from "../src/database.js";
 import { createActivities } from "../src/temporal/activities.js";
 import { createActivityContext } from "../src/temporal/activities/context.js";
 import { createAcceptanceActivities } from "../src/temporal/activities/acceptance.js";
-import { createCapacityActivities } from "../src/temporal/activities/capacity.js";
 import { createCiActivities } from "../src/temporal/activities/ci.js";
 import { createDeliveryReviewActivities } from "../src/temporal/activities/delivery-review.js";
 import { createDevelopmentActivities } from "../src/temporal/activities/development.js";
@@ -24,24 +23,18 @@ import { createTargetBaseActivities } from "../src/temporal/activities/target-ba
 const expectedActivityKeys = [
   "acceptDelivery",
   "authorizePlanRevision",
-  "cancelCapacity",
-  "cancelCapacityExecution",
   "cancelDeveloperExecution",
   "consolidateLeadPlan",
   "createSuccessor",
   "finalReview",
-  "finalizeCapacity",
   "findActiveDeveloperExecution",
-  "inspectCapacity",
   "planCiRepair",
   "planDeliveryRepair",
   "planMergeConflict",
   "preparePlanRevision",
   "projectIssueState",
   "publishRelease",
-  "rateLimitCapacity",
   "reconcileAcceptance",
-  "reconcileCapacityOwnership",
   "reconcileCi",
   "reconcileMerge",
   "reconcileTargetBase",
@@ -51,8 +44,6 @@ const expectedActivityKeys = [
   "recordPlanBlockerResponse",
   "recordPlanDecision",
   "recordProbeStarted",
-  "requestCapacity",
-  "requeueCapacity",
   "rerunCi",
   "resolveMergeConflict",
   "resolveMergeConflictSupervised",
@@ -64,7 +55,6 @@ const expectedActivityKeys = [
   "runDeveloperRepairSupervised",
   "runLeadPlanning",
   "runSupplementalReview",
-  "tryAcquireCapacity",
   "updateCiFromBase",
 ].sort();
 
@@ -79,7 +69,6 @@ test("activity factories compose the frozen activity key set without overlap", a
       createProjectionActivities(context),
       createPlanningActivities(context),
       createGovernanceActivities(context),
-      createCapacityActivities(context),
       createDevelopmentActivities(context),
       createDeliveryReviewActivities(context),
       createReleaseActivities(context),

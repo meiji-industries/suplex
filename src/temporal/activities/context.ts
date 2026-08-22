@@ -212,14 +212,16 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   };
   const agentCategory = (error: AgentFailure): AttentionCategory => error.code === "login-expired" ? "provider_authentication" : error.code === "model-unavailable" ? "provider_ambiguity" : error.code === "rate-limited" ? "provider_connectivity_exhausted" : error.code === "malformed-output" || error.code === "invalid-output" ? "agent_contradiction" : "agent_exhausted";
   const invokeAgent = async <T>(input: { companyId: string }, operation: () => Promise<T>): Promise<T> => {
-    let heartbeat: NodeJS.Timeout | undefined;
+    let heartbeat: (() => void) | undefined;
+    let interval: NodeJS.Timeout | undefined;
     try {
       const activityContext = Context.current();
-      heartbeat = setInterval(() => activityContext.heartbeat(), 5_000);
-      heartbeat.unref();
+      heartbeat = () => activityContext.heartbeat();
+      interval = setInterval(heartbeat, 5_000);
+      interval.unref();
     } catch { /* direct unit calls do not have an Activity context */ }
     try {
-      return await operation();
+      return await capacity.run(operation, "codex", heartbeat);
     } catch (error) {
       try {
         if (Context.current().cancellationSignal.aborted) throw new CancelledFailure("CANCELLED");
@@ -238,13 +240,10 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       if (retryableFailure) throw retryableFailure;
       throw error;
     } finally {
-      if (heartbeat) clearInterval(heartbeat);
+      clearInterval(interval);
     }
   };
-  const bindCapacityExecution = async <T>(capacityRequestId: string | undefined, owner: { executionKind: "agent" | "developer"; executionId: string; sessionRef?: string | null; worktreePath?: string | null }, result: T): Promise<T> => {
-    if (capacityRequestId) capacity.bindExecution(capacityRequestId, owner);
-    return result;
-  };
+  const bindCapacityExecution = async <T>(_capacityRequestId: string | undefined, _owner: { executionKind: "agent" | "developer"; executionId: string; sessionRef?: string | null; worktreePath?: string | null }, result: T): Promise<T> => result;
   const recoverFinalizedDeveloperResult = async <T>(_input: { taskId: string; companyId: string; workflowId: string; planRevision: number } & DeveloperSupervisorActivityIdentity): Promise<{ result: T } | undefined> => undefined;
   const runSupervised = async <T extends { developerExecutionId: string; evidenceArtifactId: string | null; deliveryArtifactId?: string; verificationArtifact?: { id: string } }>(
     input: { taskId: string; companyId: string; workflowId: string; planRevision: number; capacityRequestId?: string } & DeveloperSupervisorActivityIdentity,

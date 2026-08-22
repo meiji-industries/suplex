@@ -9,7 +9,6 @@ import { expect, test } from "vitest";
 import { AuthService, type WebAuthnAdapter } from "../src/auth.js";
 import { ArtifactStore } from "../src/artifacts.js";
 import { createApp } from "../src/app.js";
-import { CapacityManager } from "../src/capacity.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import type { GithubAdapter } from "../src/github.js";
@@ -89,9 +88,5 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
     expect(release.statusCode).toBe(200); expect(release.headers["cache-control"]).toBe("private, no-store"); expect(release.json()).toMatchObject({ id: "release-api-creation", status: "draft", reused: true, pullRequestNumber: 17, bodyPreview: "## Summary\n\nAPI creation task" });
     const releaseBody = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/release/artifacts/${body.id}`, headers: { cookie, origin } });
     expect(releaseBody.statusCode).toBe(200); expect(releaseBody.body).toBe("## Summary\n\nAPI creation task");
-    const queued = new CapacityManager(database, config).request({ companyId: company.id, taskId: task.id, workflowId: task.workflowId, turnKind: "lead" });
-    const taskResponse = await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } });
-    expect(taskResponse.json()).toMatchObject({ issueKey: "APIC-1", capacity: { profileId: profile.id, agentName: "Planner", status: "queued", position: 1, requestedAt: queued.requestedAt, retryAt: null } });
-    expect(JSON.stringify(taskResponse.json().capacity)).not.toMatch(/requestId|laneKey|execution|session|wrapper|process|worktree|command|artifact/i);
   } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }
 });

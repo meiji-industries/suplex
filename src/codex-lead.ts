@@ -4,6 +4,7 @@ import { chmod, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promise
 import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
+import type Database from "better-sqlite3";
 import { z } from "zod";
 
 import type { ForgeConfig } from "./config.js";
@@ -15,7 +16,6 @@ import { DecisionBlockerSchema, LeadOutputSchema, LeadPlanningActivityInputSchem
 import { CodexLeadOutputJsonSchema } from "./lead-contracts.js";
 import type { SessionStore } from "./session-store.js";
 import { ForgeDatabase } from "./database.js";
-import { CapacityManager } from "./capacity.js";
 import { redact } from "./logging.js";
 import { cleanupAgentWrapper } from "./agent-wrapper.js";
 import { classifyPlanMateriality, materialitySummary } from "./plan-governance.js";
@@ -491,26 +491,14 @@ export class AgentService {
     return DeliveryRepairPlanResultSchema.parse({ planId, leadExecutionId: executionId, planArtifactId: planArtifact.id, planSha256: planArtifact.sha256, evidenceArtifactId: evidenceArtifact.id, leadSessionRef: input.leadSessionRef, summary, findings: openFindings });
   }
 
-  private bindCapacityInTransaction(db: import("better-sqlite3").Database, input: { capacityRequestId?: string | undefined }, executionId: string, sessionRef?: string, worktreePath?: string): void {
-    if (!input.capacityRequestId) return;
-    const request = new CapacityManager(this.database, this.config).bindExecutionInTransaction(db, input.capacityRequestId, { executionKind: "agent", executionId, ...(sessionRef ? { sessionRef } : {}), ...(worktreePath ? { worktreePath } : {}) });
-    db.prepare("UPDATE forge_agent_executions SET capacity_request_id = ?, profile_id = ?, provider = ?, model = ?, reasoning_level = ?, service_priority = ?, wrapper_id = COALESCE(wrapper_id, ?), wrapper_path = COALESCE(wrapper_path, ?) WHERE id = ?").run(request.id, request.profileId, request.provider, request.model, request.reasoningLevel, request.servicePriority, `wrapper_${request.id}`, join(this.config.runtimeRoot, "agent-executions", executionId), executionId);
-  }
+  private bindCapacityInTransaction(_db: Database.Database, _input: { capacityRequestId?: string | undefined }, _executionId: string, _sessionRef?: string, _worktreePath?: string): void {}
 
-  private executionProfile(input: { capacityRequestId?: string | undefined }, profileId: string | undefined): ProfileSettings | undefined {
-    if (input.capacityRequestId) return this.database.authQuery((db) => db.prepare("SELECT profile_id AS id, profile_id AS name, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority, requested_capacity AS capacity FROM forge_capacity_requests WHERE id = ?").get(input.capacityRequestId) as ProfileSettings | undefined);
+  private executionProfile(_input: { capacityRequestId?: string | undefined }, profileId: string | undefined): ProfileSettings | undefined {
     if (!profileId) return undefined;
     return this.database.authQuery((db) => db.prepare("SELECT id, name, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority, capacity FROM forge_profiles WHERE id = ?").get(profileId) as ProfileSettings | undefined);
   }
 
-  private activeCapacityExecution(input: { capacityRequestId?: string | undefined; taskId: string; companyId: string; workflowId: string }, role: "planner" | "reviewer" | "integrator"): { id: string; sessionRef: string | null } | undefined {
-    if (!input.capacityRequestId) return undefined;
-    return this.database.authQuery((db) => db.prepare(`SELECT id, session_ref AS sessionRef
-      FROM forge_agent_executions
-      WHERE capacity_request_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND role = ?
-        AND status IN ('starting', 'running')
-      ORDER BY started_at DESC LIMIT 1`).get(input.capacityRequestId, input.taskId, input.companyId, input.workflowId, role) as { id: string; sessionRef: string | null } | undefined);
-  }
+  private activeCapacityExecution(_input: { capacityRequestId?: string | undefined; taskId: string; companyId: string; workflowId: string }, _role: "planner" | "reviewer" | "integrator"): { id: string; sessionRef: string | null } | undefined { return undefined; }
 
   private async cleanupTerminalWrapper(executionId: string): Promise<void> {
     const terminal = this.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_agent_executions WHERE id = ? AND status NOT IN ('starting', 'running', 'cancelling')").get(executionId));

@@ -8,7 +8,6 @@ import { createActivityContext } from "./context.js";
 import { createProjectionActivities } from "./projection.js";
 import { createPlanningActivities } from "./planning.js";
 import { createGovernanceActivities } from "./governance.js";
-import { createCapacityActivities } from "./capacity.js";
 import { createDevelopmentActivities } from "./development.js";
 import { createDeliveryReviewActivities } from "./delivery-review.js";
 import { createReleaseActivities } from "./release.js";
@@ -24,7 +23,6 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     ...createProjectionActivities(ctx),
     ...createPlanningActivities(ctx),
     ...createGovernanceActivities(ctx),
-    ...createCapacityActivities(ctx),
     ...createDevelopmentActivities(ctx),
     ...createDeliveryReviewActivities(ctx),
     ...createReleaseActivities(ctx),
@@ -33,7 +31,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     ...createFinalReviewActivities(ctx),
     ...createAcceptanceActivities(ctx),
     ...createMergeConflictActivities(ctx),
-  };
+  } as unknown as ProbeActivities & IssueActivities & DeliveryBlockerActivities;
 }
 
 export * from "./context.js";

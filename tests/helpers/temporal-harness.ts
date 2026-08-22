@@ -19,7 +19,6 @@ import { activityPayloadInterceptors } from "../../src/temporal/payload-boundary
 import { ensureTemporalFoundation } from "../../src/temporal/service.js";
 import { buildProductionWorkflowBundle, temporalDataConverter } from "../../src/temporal/workflow-bundle.js";
 import type { DeliveryReviewServiceInput, DeveloperRepairActivityInput } from "../../src/temporal/issue-contracts.js";
-import { createImmediateCapacityActivities } from "../immediate-capacity-activities.js";
 
 async function availablePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -168,33 +167,8 @@ export function createTemporalHarness(): TemporalHarness {
       runRepair: async (input: DeveloperRepairActivityInput) => ({ outcome: "completed" as const, repairAttemptId: "delivery_repair_attempt_integration", cycle: input.cycle, reviewId: input.reviewId, subject: { planRevision: input.planRevision, targetBaseSha: input.targetBaseSha, subjectCommit: input.subjectCommit, subjectTree: input.subjectTree, developerExecutionId: input.developerExecutionId, deliveryArtifactId: "artifact_delivery", developerEvidenceArtifactId: "artifact_developer_evidence", leadSessionRef: input.leadSessionRef, developerSessionRef: input.developerSessionRef }, developerExecutionId: "developer_repair_integration", developerSessionRef: "session_developer_integration", worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", resultCommit: "d".repeat(40), resultTree: "e".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_repaired_delivery", evidenceArtifactId: "artifact_repaired_evidence", summary: "Developer repair" }),
     };
     const baseActivities = createActivities(database, config, { agent: integrationAgent, developer: integrationDeveloper });
-    const ciCapacity = createImmediateCapacityActivities();
     const integrationActivities = {
       ...baseActivities,
-      async requestCapacity(input: Parameters<typeof baseActivities.requestCapacity>[0]) {
-        return input.taskId.startsWith("ci-") ? ciCapacity.activities.requestCapacity(input) : baseActivities.requestCapacity(input);
-      },
-      async tryAcquireCapacity(input: Parameters<typeof baseActivities.tryAcquireCapacity>[0]) {
-        return ciCapacity.owns(input.requestId) ? ciCapacity.activities.tryAcquireCapacity(input) : baseActivities.tryAcquireCapacity(input);
-      },
-      async inspectCapacity(input: Parameters<typeof baseActivities.inspectCapacity>[0]) {
-        return ciCapacity.owns(input.requestId) ? ciCapacity.activities.inspectCapacity(input) : baseActivities.inspectCapacity(input);
-      },
-      async requeueCapacity(input: Parameters<typeof baseActivities.requeueCapacity>[0]) {
-        return ciCapacity.owns(input.requestId) ? ciCapacity.activities.requeueCapacity(input) : baseActivities.requeueCapacity(input);
-      },
-      async cancelCapacity(input: Parameters<typeof baseActivities.cancelCapacity>[0]) {
-        return ciCapacity.owns(input.requestId) ? ciCapacity.activities.cancelCapacity(input) : baseActivities.cancelCapacity(input);
-      },
-      async finalizeCapacity(input: Parameters<typeof baseActivities.finalizeCapacity>[0]) {
-        return ciCapacity.owns(input.requestId) ? ciCapacity.activities.finalizeCapacity(input) : baseActivities.finalizeCapacity(input);
-      },
-      async rateLimitCapacity(input: Parameters<typeof baseActivities.rateLimitCapacity>[0]) {
-        return ciCapacity.owns(input.requestId) ? ciCapacity.activities.rateLimitCapacity(input) : baseActivities.rateLimitCapacity(input);
-      },
-      async cancelCapacityExecution(input: Parameters<typeof baseActivities.cancelCapacityExecution>[0]) {
-        return ciCapacity.owns(input.requestId) ? ciCapacity.activities.cancelCapacityExecution(input) : baseActivities.cancelCapacityExecution(input);
-      },
       async projectIssueState(event: Parameters<typeof baseActivities.projectIssueState>[0]) {
         return event.state.issueId.startsWith("ci-") && event.state.issueId !== "ci-provider-failure" ? event.state : baseActivities.projectIssueState(event);
       },

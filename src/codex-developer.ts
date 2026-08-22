@@ -12,7 +12,6 @@ import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { AgentFailure } from "./agent-failure.js";
 import { resolveAgentProvider } from "./agent-providers/index.js";
 import type { AgentProvider, LeadProcessRunner, SessionStore } from "./agent-providers/provider.js";
-import { CapacityManager } from "./capacity.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import type { GithubReleasePort } from "./github-release.js";
@@ -236,14 +235,9 @@ export class DeveloperService {
     this.github = options.github;
   }
 
-  private bindCapacityInTransaction(db: Database.Database, input: { capacityRequestId?: string | undefined }, executionId: string, sessionRef?: string, worktreePath?: string): void {
-    if (!input.capacityRequestId) return;
-    const request = new CapacityManager(this.database, this.config).bindExecutionInTransaction(db, input.capacityRequestId, { executionKind: "developer", executionId, ...(sessionRef ? { sessionRef } : {}), ...(worktreePath ? { worktreePath } : {}) });
-    db.prepare("UPDATE forge_developer_executions SET capacity_request_id = ?, profile_id = ?, provider = ?, model = ?, reasoning_level = ?, service_priority = ? WHERE id = ?").run(request.id, request.profileId, request.provider, request.model, request.reasoningLevel, request.servicePriority, executionId);
-  }
+  private bindCapacityInTransaction(_db: Database.Database, _input: { capacityRequestId?: string | undefined }, _executionId: string, _sessionRef?: string, _worktreePath?: string): void {}
 
-  private executionProfile(input: { capacityRequestId?: string | undefined }, profileId?: string): DeveloperProfile | undefined {
-    if (input.capacityRequestId) return this.database.authQuery((db) => db.prepare("SELECT profile_id AS id, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_capacity_requests WHERE id = ?").get(input.capacityRequestId) as DeveloperProfile | undefined);
+  private executionProfile(_input: { capacityRequestId?: string | undefined }, profileId?: string): DeveloperProfile | undefined {
     if (!profileId) return undefined;
     return this.database.authQuery((db) => db.prepare("SELECT id, model, provider, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId) as DeveloperProfile | undefined);
   }

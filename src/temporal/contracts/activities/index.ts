@@ -14,7 +14,6 @@ import type { TargetBaseActivities } from "./target-base.js";
 export interface IssueActivities extends ProjectionActivities, PlanningActivities, GovernanceActivities, CapacityActivities, DevelopmentActivities, DeliveryReviewActivities, ReleaseActivities, TargetBaseActivities, CiActivities, FinalReviewActivities, AcceptanceActivities, MergeConflictActivities {}
 
 export * from "./acceptance.js";
-export * from "./capacity.js";
 export * from "./ci.js";
 export * from "./delivery-review.js";
 export * from "./development.js";

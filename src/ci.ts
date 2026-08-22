@@ -514,7 +514,7 @@ export class CiService {
     } catch (error) {
       if (evidenceArtifact) {
         this.database.authTransaction((db) => db.prepare("DELETE FROM forge_artifacts WHERE id = ? AND company_id = ?").run(evidenceArtifact!.id, evidenceArtifact!.companyId));
-        await this.artifacts?.remove(evidenceArtifact);
+        await this.artifacts?.removeArtifact(evidenceArtifact);
       }
       throw error;
     }

@@ -6,7 +6,7 @@ import { EvidenceManifestSchema } from "./developer-contracts.js";
 type ArtifactRow = { storagePath: string; sha256: string };
 
 function readJson(artifacts: ArtifactStore, companyId: string, artifact: ArtifactRow): unknown | null {
-  try { return JSON.parse(artifacts.readSync({ companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 }).toString("utf8")) as unknown; } catch { return null; }
+  try { return JSON.parse(artifacts.getArtifactSync({ companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 }).toString("utf8")) as unknown; } catch { return null; }
 }
 
 export function developerVerificationProjection(database: ForgeDatabase, artifacts: ArtifactStore, companyId: string, manifestArtifactId: string | null): { verificationCommands: Array<{ stepNumber: number; commands: string[] }>; verificationResults: string[] } {

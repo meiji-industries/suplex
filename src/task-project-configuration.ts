@@ -61,7 +61,7 @@ export function readTaskProjectConfiguration(
   if (task.project_configuration_artifact_id) {
     const artifact = db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-project-configuration'").get(task.project_configuration_artifact_id, input.companyId) as { storage_path: string; sha256: string } | undefined;
     if (!artifact) throw new Error("Task project configuration is unavailable");
-    return parseTaskProjectConfiguration(artifacts.readSync({ companyId: input.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 }).toString("utf8"));
+    return parseTaskProjectConfiguration(artifacts.getArtifactSync({ companyId: input.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 }).toString("utf8"));
   }
   // Compatibility only. Backfill associates this task with an artifact before
   // the revision store is retired.

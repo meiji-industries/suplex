@@ -30,4 +30,5 @@ export const releaseObservationStateFields = {
   githubPullRequestReviewDecision: z.string().max(128).nullable().optional(),
   githubPullRequestAutoMergeEnabled: z.boolean().nullable().optional(),
   githubPullRequestObservationKey: z.string().max(512).nullable().optional(),
+  githubPullRequestMergeable: z.string().max(128).nullable().optional(),
 };

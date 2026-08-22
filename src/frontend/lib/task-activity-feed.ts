@@ -44,6 +44,7 @@ export type ActivityFeedRow = {
 
 export function activityRole(entry: ActivityEntry): ActivityRole {
   if (entry.eventType === "system_action") return "forge";
+  if (entry.eventType.startsWith("github_pr_")) return "forge";
   if (entry.actor && entry.actor.kind !== "agent") return "you";
   if (entry.eventType.includes("planning") || entry.eventType.includes("plan")) return "planner";
   if (entry.eventType.includes("review") || entry.eventType === "phase_repair_required") return "reviewer";
@@ -76,6 +77,13 @@ function commandSentence(command: string): string {
 
 export function activitySentence(entry: ActivityEntry, role: ActivityRole): string {
   const subject = activityRoleLabel(role);
+  const pullRequest = typeof entry.metadata.pullRequestNumber === "number" ? `#${entry.metadata.pullRequestNumber}` : "this pull request";
+  const login = typeof entry.metadata.githubLogin === "string" && entry.metadata.githubLogin ? ` by ${entry.metadata.githubLogin}` : "";
+  if (entry.eventType === "github_pr_ready") return `PR ${pullRequest} was marked ready on GitHub${login}`;
+  if (entry.eventType === "github_pr_merged") return `PR ${pullRequest} was merged on GitHub${login}`;
+  if (entry.eventType === "github_pr_closed") return `PR ${pullRequest} was closed on GitHub${login}`;
+  if (entry.eventType === "github_pr_draft") return `PR ${pullRequest} was converted to draft on GitHub${login}`;
+  if (entry.eventType === "github_pr_auto_merge_enabled") return `Auto-merge enabled on ${pullRequest}`;
   if (entry.eventType === "task_created") return `${subject} created this task`;
   if (entry.eventType === "system_action") return "Forge resynced the task";
   if (entry.eventType === "member_action") return commandSentence(String(entry.metadata.command ?? entry.metadata.action ?? ""));

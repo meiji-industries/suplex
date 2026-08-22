@@ -137,7 +137,7 @@ test("explains the member publication decision", () => {
     onContinueWork: async () => undefined,
   }) }));
 
-  expect(html).toContain("Ready to publish");
+  expect(html).toContain("The work is ready.");
   expect(html).toContain("The work is ready. Publish makes the pull request available for review. Request Changes sends it back to the Developer.");
   expect(html).toContain(">Publish<");
   expect(html).toContain(">Request Changes<");

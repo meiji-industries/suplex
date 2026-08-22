@@ -80,7 +80,7 @@ function useLiveActivity(taskId: string): ActivityFeed | null {
   return feed;
 }
 
-export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRows = [], onViewChanges }: {
+export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRows = [], githubPullRequest, onViewChanges }: {
   taskId?: string;
   timeline: TaskActivityEntry[];
   release?: { pullRequestUrl?: string | null; pullRequestNumber?: number | null } | null | undefined;
@@ -93,6 +93,7 @@ export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRow
   developerAttempts?: unknown;
   revisionContent?: unknown;
   optimisticRows?: ActivityFeedRow[];
+  githubPullRequest?: { exists: boolean; number: number | null; state: "open" | "closed" | "merged" | null; isDraft: boolean | null; autoMergeEnabled: boolean | null; observedAt: string | null } | undefined;
   children?: unknown;
   onViewChanges?: (() => void) | undefined;
 }) {
@@ -108,8 +109,11 @@ export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRow
       const command = commandOutput(event);
       return { id: `live-${event.at}-${event.kind}-${index}`, at: event.at, role: feed?.execution?.role ?? "integrator", text: liveText(event, feed?.execution?.role ?? "integrator"), live: event.kind === "status" || event.kind === "thinking", ...(command ? { command } : {}) };
     });
-    return compactActivityRows([...durable, ...live, ...optimisticRows]);
-  }, [ci, feed, optimisticRows, release, timeline]);
+    const githubRow = githubPullRequest?.exists && githubPullRequest.number !== null && githubPullRequest.observedAt
+      ? [{ id: `github-${githubPullRequest.observedAt}`, at: githubPullRequest.observedAt, role: "forge" as const, text: activitySentence({ eventType: githubPullRequest.state === "merged" ? "github_pr_merged" : githubPullRequest.state === "closed" ? "github_pr_closed" : githubPullRequest.isDraft ? "github_pr_draft" : githubPullRequest.autoMergeEnabled ? "github_pr_auto_merge_enabled" : "github_pr_ready", metadata: { pullRequestNumber: githubPullRequest.number } }, "forge") }]
+      : [];
+    return compactActivityRows([...durable, ...githubRow, ...live, ...optimisticRows]);
+  }, [ci, feed, githubPullRequest, optimisticRows, release, timeline]);
   return <section data-task-activity-feed className="space-y-1" aria-label="Activity">
     <div data-task-activity className="divide-y">
       {rows.map((row) => <ActivityRow key={row.id} row={row} {...(onViewChanges ? { onViewChanges } : {})} />)}

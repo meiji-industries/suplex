@@ -16,3 +16,12 @@ test("compacts live heartbeats, duplicate activity, and command labels", () => {
   ]);
   expect(activitySentence({ eventType: "member_action", metadata: { command: "retry_development" }, actor: { id: "user" } }, activityRole({ eventType: "member_action", metadata: { command: "retry_development" }, actor: { id: "user" } }))).toBe("You retried development");
 });
+
+test("renders GitHub-adopted pull request changes as durable feed rows", () => {
+  const entry = (eventType: string, metadata: Record<string, string | number | boolean> = { pullRequestNumber: 42 }) => ({ eventType, metadata });
+  expect(activitySentence(entry("github_pr_ready"), activityRole(entry("github_pr_ready")))).toBe("PR #42 was marked ready on GitHub");
+  expect(activitySentence(entry("github_pr_merged", { pullRequestNumber: 42, githubLogin: "octocat" }), activityRole(entry("github_pr_merged", { pullRequestNumber: 42, githubLogin: "octocat" })))).toBe("PR #42 was merged on GitHub by octocat");
+  expect(activitySentence(entry("github_pr_closed"), activityRole(entry("github_pr_closed")))).toBe("PR #42 was closed on GitHub");
+  expect(activitySentence(entry("github_pr_draft"), activityRole(entry("github_pr_draft")))).toBe("PR #42 was converted to draft on GitHub");
+  expect(activitySentence(entry("github_pr_auto_merge_enabled"), activityRole(entry("github_pr_auto_merge_enabled")))).toBe("Auto-merge enabled on #42");
+});

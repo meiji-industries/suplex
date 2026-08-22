@@ -1,18 +1,10 @@
 import { allHandlersFinished, CancellationScope, condition, continueAsNew, defineQuery, isCancellation, patched, setHandler, sleep, workflowInfo } from "@temporalio/workflow";
-
 import { ProbeWorkflowInputSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, normalizeSafeSummary, type IssueBlocker, type IssueBlockerAction, type IssueCommand, type IssueWorkflowInput, type IssueWorkflowState, type LeadPlanningResult, type ReconcileTargetBaseActivityResult, type TargetBaseCheckpoint } from "./issue-contracts.js";
 import { assertContinuationStateWithinLimit, assertPayloadWithinLimit, WORKFLOW_HISTORY_EVENT_LIMIT } from "./policy.js";
 import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "./target-base.js";
 import { reconcile, type PullRequestTarget } from "../pull-request-reconciler.js";
-import {
-  planMergeConflict,
-  projectIssueStateActivity,
-  reconcileTargetBase,
-  recordProbeStarted,
-  observeGithubPullRequest,
-  applyGithubPullRequestAction,
-} from "./workflow/activity-proxies.js";
+import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, recordProbeStarted, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
 import { syncGithubPullRequestSignal } from "./issue-updates.js";
 import { evidencePointer, humanBlocker } from "./workflow/state-transitions.js";
 import { createIssueWorkflowContext } from "./workflow/context.js";
@@ -31,21 +23,10 @@ import { applyLeadResult, applyLegacyLeadResult, autoChainedCommand, autoRetryDe
 
 export * from "./issue-updates.js";
 export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
-async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> {
-  return projectIssueStateActivity(IssueProjectionEventSchema.parse({
-    schemaVersion: 1,
-    runId: workflowInfo().runId,
-    eventId: state.lastEventId,
-    state,
-  }));
-}
-
+async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: workflowInfo().runId, eventId: state.lastEventId, state })); }
 const MAX_RECONCILIATION_ATTEMPTS = 20;
 
-function sleepUntil(retryAt: string | null | undefined): Promise<void> {
-  if (!retryAt) return sleep("1 second");
-  return sleep(Math.max(1, Date.parse(retryAt) - Date.now()));
-}
+function sleepUntil(retryAt: string | null | undefined): Promise<void> { return retryAt ? sleep(Math.max(1, Date.parse(retryAt) - Date.now())) : sleep("1 second"); }
 
 export const probeStateQuery = defineQuery<ProbeWorkflowState>("probeState");
 
@@ -247,7 +228,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(syncGithubPullRequestSignal, () => { githubSyncRequested = true; });
   const syncGithubPullRequest = async (): Promise<void> => {
     if (!state.releaseRepository || !state.branchName) return;
-    const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }), number = state.pullRequestNumber, wasDraft = state.githubPullRequestDraft, common = { githubObservedAt: new Date().toISOString(), githubPullRequestExists: observed.exists, githubPullRequestState: observed.state, githubPullRequestDraft: observed.isDraft, githubPullRequestChecks: observed.checks, githubPullRequestReviewDecision: observed.reviewDecision, githubPullRequestAutoMergeEnabled: observed.autoMergeEnabled, ...(observed.number ? { pullRequestNumber: observed.number } : {}), ...(observed.url ? { pullRequestUrl: observed.url } : {}), ...(observed.headSha ? { expectedHeadSha: observed.headSha } : {}), ...(observed.baseSha ? { targetBaseSha: observed.baseSha } : {}) };
+    const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }), number = state.pullRequestNumber, wasDraft = state.githubPullRequestDraft, common = { githubObservedAt: new Date().toISOString(), githubPullRequestExists: observed.exists, githubPullRequestState: observed.state, githubPullRequestDraft: observed.isDraft, githubPullRequestChecks: observed.checks, githubPullRequestMergeable: observed.mergeable, githubPullRequestReviewDecision: observed.reviewDecision, githubPullRequestAutoMergeEnabled: observed.autoMergeEnabled, ...(observed.number ? { pullRequestNumber: observed.number } : {}), ...(observed.url ? { pullRequestUrl: observed.url } : {}), ...(observed.headSha ? { expectedHeadSha: observed.headSha } : {}), ...(observed.baseSha ? { targetBaseSha: observed.baseSha } : {}) };
     if (patched("forge-pr-reconciler-v1")) {
       const target: PullRequestTarget = validatedInput.deliveryTarget === "merged" ? "merged" : validatedInput.deliveryTarget === "pull_request_ready" ? "ready" : "draft";
       const checks = observed.checks.failing > 0 ? "failed" : observed.checks.pending > 0 ? "pending" : observed.checks.total > 0 && observed.checks.successful === observed.checks.total ? "success" : "none";

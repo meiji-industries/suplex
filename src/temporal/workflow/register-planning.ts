@@ -126,7 +126,7 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
           owner: "human",
           allowedCommands: capacityFailure ? ["start_planning", "cancel_issue"] : ctx.reviseContinueEnabled ? ["start_planning", "continue_work", "cancel_issue"] : ["start_planning", "cancel_issue"],
           pendingAction: capacityFailure ? `${summary} Retry planning.` : summary,
-          blocker: failure.category ? humanBlocker(failure.category, summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : null,
+          blocker: failure.category ? humanBlocker(failure.category, summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, "attention-evidence")) : null,
           stateChangedAt: new Date().toISOString(),
           lastEventId: `${ctx.state.workflowId}:${failureRevision}`,
         });

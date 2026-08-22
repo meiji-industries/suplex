@@ -24,6 +24,7 @@ import {
   newInvitationToken,
   newSessionToken,
 } from "./auth-identifiers.js";
+import { jsonRequired } from "./task-utils.js";
 
 export type UserRole = "admin" | "member";
 export type UserStatus = "pending" | "active" | "revoked";
@@ -250,7 +251,7 @@ function safeJson(value: unknown): string {
 
 function safeMetadata(value: string): Record<string, string> {
   try {
-    const parsed = JSON.parse(value) as unknown;
+    const parsed = jsonRequired(value) as unknown;
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
     return Object.fromEntries(Object.entries(parsed).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
   } catch {
@@ -904,7 +905,7 @@ export class AuthService {
 
   private parseTransports(value: string): AuthenticatorTransportFuture[] | undefined {
     try {
-      const parsed = JSON.parse(value) as unknown;
+      const parsed = jsonRequired(value) as unknown;
       if (!Array.isArray(parsed)) {
         return undefined;
       }

@@ -10,6 +10,7 @@ import { AuthFailure, AuthService } from "./auth.js";
 import type { ForgeConfig } from "./config.js";
 import { GithubFailure, createGithubAdapter, type GithubAdapter } from "./github.js";
 import { ForgeDatabase } from "./database.js";
+import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -227,7 +228,7 @@ export const AcceptedProjectRevisionSchema = z.object({
 export type AcceptedProjectRevision = z.infer<typeof AcceptedProjectRevisionSchema>;
 
 export function parseAcceptedProjectRevision(raw: string): AcceptedProjectRevision {
-  try { return AcceptedProjectRevisionSchema.parse(JSON.parse(raw)); }
+  try { return AcceptedProjectRevisionSchema.parse(jsonRequired(raw)); }
   catch { throw new ProjectFailure("Pinned project revision is unavailable", [], 409); }
 }
 function identifier(prefix: string): string {
@@ -252,7 +253,7 @@ async function containsSymlink(root: string, candidate: string): Promise<boolean
 
 function asJson<T>(value: string, fallback: T): T {
   try {
-    return JSON.parse(value) as T;
+    return jsonRequired(value) as T;
   } catch {
     return fallback;
   }
@@ -367,7 +368,7 @@ export async function inferRepositoryCommands(repositoryPath: string): Promise<{
   const packageText = await readableFile(join(repositoryPath, "package.json"));
   let packageJson: { packageManager?: string; scripts?: Record<string, string> } | undefined;
   try {
-    packageJson = packageText ? JSON.parse(packageText) as typeof packageJson : undefined;
+    packageJson = packageText ? jsonRequired(packageText) as typeof packageJson : undefined;
   } catch {}
 
   let packageManager: "pnpm" | "npm" | "yarn" | "bun" | undefined;

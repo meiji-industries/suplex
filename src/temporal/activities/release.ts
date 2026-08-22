@@ -2,6 +2,7 @@ import type { ReleaseActivities, PublishReleaseActivityInput } from "../contract
 import { z } from "zod";
 import type { ActivityContext } from "./context.js";
 import { loadTaskConfiguration } from "../../task-project-configuration.js";
+import { jsonRequired } from "../../task-utils.js";
 
 const LegacyReleaseDeliverySchema = z.object({
   summary: z.string().optional(),
@@ -57,7 +58,7 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
         try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "The task project configuration is incomplete"); }
         identity.repository = pinned.repository;
         let delivery: ReturnType<typeof releaseDeliveryProjection>;
-        try { delivery = releaseDeliveryProjection(JSON.parse(artifacts.getArtifactSync({ companyId: input.companyId, storagePath: context.deliveryStoragePath, sha256: context.deliverySha }).toString("utf8"))); }
+        try { delivery = releaseDeliveryProjection(jsonRequired(artifacts.getArtifactSync({ companyId: input.companyId, storagePath: context.deliveryStoragePath, sha256: context.deliverySha }).toString("utf8"))); }
         catch { throw new GithubReleaseFailure("pinned-configuration-incomplete", "Completed delivery artifact is unavailable"); }
         const result = await release.publish({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, ...(input.releaseId ? { releaseId: input.releaseId } : {}), coordinates: { projectRevisionId: pinned.artifactId, repositoryPath: pinned.repositoryPath, worktreePath: context.worktreePath, repository: pinned.repository, owner: pinned.repository.split("/")[0]!, headBranch: context.branchName, baseBranch: pinned.baseBranch, expectedBaseSha: context.targetBaseSha }, reviewedRevision: { reviewId: context.reviewId, developerExecutionId: context.developerExecutionId, commitSha: context.subjectCommit, treeSha: context.subjectTree }, taskTitle: context.title, delivery });
         if (input.pullRequestMode !== undefined && input.pullRequestMode !== "draft") await release.markReadyForReview({ taskId: input.taskId, companyId: input.companyId, workflowId: input.workflowId, releaseId: result.releaseId, repository: result.repository, pullRequestNumber: result.pullRequest.number });

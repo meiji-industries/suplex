@@ -9,6 +9,7 @@ import type { ForgeDatabase } from "./database.js";
 import type { GitPresentation } from "./git-presentation.js";
 import { redact } from "./logging.js";
 import type { ReleaseFailureCode } from "./release-failures.js";
+import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 const shaPattern = /^[a-f0-9]{40,64}$/i;
@@ -186,7 +187,7 @@ function normalizeGithubPull(value: unknown): GithubPullRequest {
 
 function restError(value: string): { status: number; message: string; reset?: number } | undefined {
   try {
-    const parsed = RestErrorSchema.parse(JSON.parse(value));
+    const parsed = RestErrorSchema.parse(jsonRequired(value));
     return { status: Number(parsed.status), message: parsed.message };
   } catch {
     return undefined;
@@ -194,7 +195,7 @@ function restError(value: string): { status: number; message: string; reset?: nu
 }
 
 function parseJson(value: string): unknown {
-  try { return JSON.parse(value) as unknown; } catch { throw providerFailure("invalid-provider-response", "GitHub returned invalid JSON"); }
+  try { return jsonRequired(value) as unknown; } catch { throw providerFailure("invalid-provider-response", "GitHub returned invalid JSON"); }
 }
 
 function classifyCommandFailure(error: unknown, operation: string): GithubReleaseFailure {

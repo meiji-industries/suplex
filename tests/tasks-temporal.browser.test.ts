@@ -23,6 +23,7 @@ import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js"
 import { TaskService } from "../src/tasks.js";
 import { createActivities } from "../src/temporal/activities.js";
 import { ensureTemporalFoundation } from "../src/temporal/service.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 function fakeWebAuthn(): WebAuthnAdapter {
   return { async generateRegistrationOptions(input) { return { rp: { name: "Forge", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: "temporal-browser", pubKeyCredParams: [{ type: "public-key", alg: -7 }], attestation: "none" }; }, async verifyRegistrationResponse(input) { return { verified: true, credential: { id: input.response.id, publicKey: Uint8Array.from([1, 2, 3]), counter: 0 } }; }, async generateAuthenticationOptions(input) { return { challenge: "temporal-browser-auth", rpId: input.rpId, allowCredentials: input.allowCredentials.map((credential) => ({ type: "public-key" as const, ...credential })), userVerification: "required" }; }, async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; } };
@@ -154,7 +155,7 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
       await pane.getByRole("heading", { name: "Durable browser task", exact: true }).waitFor();
       const persisted = apiDatabase!.authQuery((db) => db.prepare("SELECT id, workflow_id, role_agents_json, supplemental_review FROM forge_tasks WHERE title = 'Durable browser task'").get() as { id: string; workflow_id: string; role_agents_json: string; supplemental_review: number });
       workflowId = persisted.workflow_id;
-      expect(JSON.parse(persisted.role_agents_json)).toMatchObject({ planner: planner.id, builder: builder.id });
+      expect(jsonRequired(persisted.role_agents_json)).toMatchObject({ planner: planner.id, builder: builder.id });
       expect(persisted.supplemental_review).toBe(0);
       expect(apiDatabase!.authQuery((db) => db.prepare("SELECT state FROM forge_task_creation_intents WHERE task_id = ?").get(persisted.id))).toEqual({ state: "started" });
       expect(apiDatabase!.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE id = ?").get(persisted.id))).toEqual({ count: 1 });

@@ -12,6 +12,7 @@ import {
   type PlanMaterialCategory,
   type PlanSubject,
 } from "./plan-governance.js";
+import { jsonRequired } from "./task-utils.js";
 
 const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 
@@ -162,7 +163,7 @@ for (const variant of leadOutputVariants) {
 }
 const leadOutputProperties = Object.fromEntries([...leadOutputPropertyEntries.entries()].map(([name, schema]) => {
   if (name === "kind") return [name, { type: "string", enum: ["plan", "decision_blocker"] }];
-  const schemaObject = JSON.parse(JSON.stringify(schema)) as Record<string, unknown>;
+  const schemaObject = jsonRequired(JSON.stringify(schema)) as Record<string, unknown>;
   if (name === "developerContext") {
     const contextSchema = schemaObject as { properties?: Record<string, unknown> };
     if (contextSchema.properties) contextSchema.properties.artifactStepNumbers = {

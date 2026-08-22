@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { defaultProcessController, type ProcessController, type ProcessInspection } from "./process-manager.js";
 import { DeveloperSupervisorHeartbeatSchema, DeveloperSupervisorInvocationSchema, DeveloperSupervisorRequestSchema, DeveloperSupervisorResponseSchema, DeveloperSupervisorSnapshotSchema, sha256, withSupervisorResultHash, type DeveloperSupervisorIdentity, type DeveloperSupervisorInvocation, type DeveloperSupervisorRequest, type DeveloperSupervisorResponse, type DeveloperSupervisorResult } from "./developer-supervisor-protocol.js";
 import { redact } from "./logging.js";
+import { jsonRequired } from "./task-utils.js";
 
 const maxEventsBytes = 8 * 1024 * 1024;
 const executionIdPattern = /^developer_[a-f0-9]{24}$/;
@@ -201,7 +202,7 @@ function socketRequest(socketPath: string, request: DeveloperSupervisorRequest):
     // cancellation. Half-closing here causes Node's default allowHalfOpen=false
     // server socket to close before a delayed TERM/KILL response can be sent.
     socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));
-    socket.on("data", (chunk) => { data += chunk.toString("utf8"); if (data.includes("\n")) { clearTimeout(timeout); socket.destroy(); try { resolvePromise(DeveloperSupervisorResponseSchema.parse(JSON.parse(data.trim()))); } catch (error) { reject(error); } } });
+    socket.on("data", (chunk) => { data += chunk.toString("utf8"); if (data.includes("\n")) { clearTimeout(timeout); socket.destroy(); try { resolvePromise(DeveloperSupervisorResponseSchema.parse(jsonRequired(data.trim()))); } catch (error) { reject(error); } } });
     socket.on("error", (error) => { clearTimeout(timeout); reject(error); });
     socket.on("close", () => { clearTimeout(timeout); if (!data) reject(new Error("Developer supervisor closed the control socket without a response")); });
   });
@@ -239,7 +240,7 @@ async function startSocket(state: SupervisorState): Promise<ReturnType<typeof cr
       if (!data.includes("\n")) return;
       const line = data.slice(0, data.indexOf("\n"));
       let request: DeveloperSupervisorRequest;
-      try { request = DeveloperSupervisorRequestSchema.parse(JSON.parse(line)); } catch { socket.end(`${JSON.stringify({ version: 1, status: "termination_failed", reasonCode: "developer-supervisor-request-invalid", summary: "Forge rejected the malformed Developer supervisor request." })}\n`); return; }
+      try { request = DeveloperSupervisorRequestSchema.parse(jsonRequired(line)); } catch { socket.end(`${JSON.stringify({ version: 1, status: "termination_failed", reasonCode: "developer-supervisor-request-invalid", summary: "Forge rejected the malformed Developer supervisor request." })}\n`); return; }
       const operation = handleSocketRequest(state, request).then((response) => {
         if (response) socket.end(`${JSON.stringify(response)}\n`);
         else socket.destroy();
@@ -293,7 +294,7 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
   const invocationPath = join(root, "invocation.json");
   let invocation: DeveloperSupervisorInvocation;
   try {
-    invocation = DeveloperSupervisorInvocationSchema.parse(JSON.parse(await readFile(invocationPath, "utf8")));
+    invocation = DeveloperSupervisorInvocationSchema.parse(jsonRequired(await readFile(invocationPath, "utf8")));
   } catch (error) {
     const failedAt = new Date().toISOString();
     await atomicWriteJson(join(root, "supervisor.json"), DeveloperSupervisorSnapshotSchema.parse({ version: 1, executionId, status: "failed", supervisor, child: null, heartbeatAt: failedAt }));

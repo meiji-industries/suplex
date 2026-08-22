@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type Database from "better-sqlite3";
 import type { ArtifactStore } from "./artifacts.js";
+import { jsonRequired } from "./task-utils.js";
 
 const RoleAssignmentsSchema = z.object({
   planner: z.string().min(1).optional(),
@@ -36,7 +37,7 @@ export type LoadedTaskProjectConfiguration = TaskProjectConfiguration & {
 
 export function parseTaskProjectConfiguration(value: string | unknown): TaskProjectConfiguration {
   try {
-    return TaskProjectConfigurationSchema.parse(typeof value === "string" ? JSON.parse(value) : value);
+    return TaskProjectConfigurationSchema.parse(typeof value === "string" ? jsonRequired(value) : value);
   } catch {
     throw new Error("Task project configuration is unavailable");
   }

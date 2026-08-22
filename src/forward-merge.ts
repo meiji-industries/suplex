@@ -9,6 +9,7 @@ import type { ForgeDatabase } from "./database.js";
 import type { GithubReleasePort } from "./github-release.js";
 import { redact } from "./logging.js";
 import { z } from "zod";
+import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 const shaPattern = /^[a-f0-9]{40,64}$/i;
@@ -272,7 +273,7 @@ export class ForwardMergeService {
     if (stored.status === "conflict") {
       const mergeHead = await this.gitOptional(["rev-parse", "MERGE_HEAD"], input.worktreePath);
       const conflicts = (await this.gitOptional(["diff", "--name-only", "--diff-filter=U", "-z"], input.worktreePath) ?? "").split("\0").filter(Boolean);
-      const expected = JSON.parse(stored.conflictFilesJson) as unknown;
+      const expected = jsonRequired(stored.conflictFilesJson) as unknown;
       if (currentHead.toLowerCase() !== stored.priorHead.toLowerCase() || mergeHead?.toLowerCase() !== observedBaseSha.toLowerCase() || JSON.stringify(conflicts) !== JSON.stringify(expected)) throw new ForwardMergeFailure("merge-state-ownership-mismatch");
       return { status: "conflict", priorHead: stored.priorHead, priorTree: stored.priorTree, targetBaseSha: observedBaseSha, mergeCommit: null, tree: null, conflictFiles: conflicts, ...(stored.conflictArtifactId && stored.conflictArtifactSha256 ? { conflictArtifact: { id: stored.conflictArtifactId, sha256: stored.conflictArtifactSha256, kind: "forward-merge-conflict" as const } } : {}), forwardMergeId: stored.id };
     }

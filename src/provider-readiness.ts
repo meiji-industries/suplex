@@ -3,6 +3,7 @@ import { spawn } from "node:child_process";
 
 import type { HealthCheck } from "./health.js";
 import { GhAuthStatusSchema } from "./schemas.js";
+import { jsonRequired } from "./task-utils.js";
 
 export { CodexReadinessProbe, MINIMUM_CODEX_VERSION, isSupportedCodexVersion } from "./agent-providers/codex-readiness.js";
 
@@ -69,7 +70,7 @@ export function checkGithubAuthentication(command: string, runner: CommandRunner
     let authenticated = false;
     try {
       const result = await runner(command, ["auth", "status", "--json", "hosts"], { timeout: 3_000, maxBuffer: 16 * 1024 });
-      const parsed = GhAuthStatusSchema.safeParse(JSON.parse(result.stdout));
+      const parsed = GhAuthStatusSchema.safeParse(jsonRequired(result.stdout));
       if (!parsed.success) {
         failure = "auth-format";
       } else {

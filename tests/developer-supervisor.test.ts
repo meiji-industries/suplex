@@ -7,6 +7,7 @@ import { expect, test } from "vitest";
 
 import { DeveloperSupervisorInvocationSchema, DeveloperSupervisorResultSchema } from "../src/developer-supervisor-protocol.js";
 import { developerSupervisorSocketPath, developerSupervisorSpawnOptions, observeOwnedProcessExit } from "../src/developer-supervisor.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 test("supervisor spawn is detached and has no worker-owned stdio pipes", () => {
   expect(developerSupervisorSpawnOptions()).toMatchObject({ detached: true, stdio: "ignore" });
@@ -35,7 +36,7 @@ test("supervisor feeds the durable prompt file to the child stdin", async () => 
     const resultPath = join(executionRoot, "result.json");
     for (let attempt = 0; attempt < 400; attempt += 1) {
       try {
-        DeveloperSupervisorResultSchema.parse(JSON.parse(await readFile(resultPath, "utf8")));
+        DeveloperSupervisorResultSchema.parse(jsonRequired(await readFile(resultPath, "utf8")));
         break;
       } catch { await new Promise((resolve) => setTimeout(resolve, 25)); }
     }
@@ -68,7 +69,7 @@ test("INV-06 real supervisor writes one bounded, hashed result envelope", async 
     const resultPath = join(executionRoot, "result.json");
     let result: ReturnType<typeof DeveloperSupervisorResultSchema.parse> | undefined;
     for (let attempt = 0; attempt < 100 && !result; attempt += 1) {
-      try { result = DeveloperSupervisorResultSchema.parse(JSON.parse(await readFile(resultPath, "utf8"))); } catch { await new Promise((resolve) => setTimeout(resolve, 50)); }
+      try { result = DeveloperSupervisorResultSchema.parse(jsonRequired(await readFile(resultPath, "utf8"))); } catch { await new Promise((resolve) => setTimeout(resolve, 50)); }
     }
     let snapshot = "";
     try { snapshot = await readFile(join(executionRoot, "supervisor.json"), "utf8"); } catch { /* no snapshot */ }
@@ -76,7 +77,7 @@ test("INV-06 real supervisor writes one bounded, hashed result envelope", async 
     expect(result?.exitCode).toBe(0);
     expect(result?.outputPath).toBe("events.jsonl");
     expect(result?.child.argv).toEqual([expect.stringMatching(/^sha256:[a-f0-9]{64}$/)]);
-    const events = (await readFile(join(executionRoot, "events.jsonl"), "utf8")).trim().split(/\r?\n/).map((line) => JSON.parse(line) as { sequence: number; line: string });
+    const events = (await readFile(join(executionRoot, "events.jsonl"), "utf8")).trim().split(/\r?\n/).map((line) => jsonRequired(line) as { sequence: number; line: string });
     expect(events).toHaveLength(40);
     expect(events.map((event) => event.sequence)).toEqual([...events].sort((left, right) => left.sequence - right.sequence).map((event) => event.sequence));
     expect(events.map((event) => event.line)).toContain("out-0");
@@ -107,7 +108,7 @@ test("supervisor failure before child spawn writes a failed snapshot instead of 
     child.on("exit", (code) => { exitCode = code; });
     let snapshot: { status?: string } = {};
     for (let attempt = 0; attempt < 200 && snapshot.status !== "failed"; attempt += 1) {
-      try { snapshot = JSON.parse(await readFile(join(executionRoot, "supervisor.json"), "utf8")) as { status?: string }; } catch { /* not yet written */ }
+      try { snapshot = jsonRequired(await readFile(join(executionRoot, "supervisor.json"), "utf8")) as { status?: string }; } catch { /* not yet written */ }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
     expect(snapshot.status).toBe("failed");
@@ -158,7 +159,7 @@ test("a failing heartbeat write does not kill the supervisor or orphan the child
     expect(wedged).toBe(true);
     let result: ReturnType<typeof DeveloperSupervisorResultSchema.parse> | undefined;
     for (let attempt = 0; attempt < 300 && !result; attempt += 1) {
-      try { result = DeveloperSupervisorResultSchema.parse(JSON.parse(await readFile(join(executionRoot, "result.json"), "utf8"))); } catch { await new Promise((resolve) => setTimeout(resolve, 50)); }
+      try { result = DeveloperSupervisorResultSchema.parse(jsonRequired(await readFile(join(executionRoot, "result.json"), "utf8"))); } catch { await new Promise((resolve) => setTimeout(resolve, 50)); }
     }
     expect(result?.exitCode, `${stderr} (exit=${exited})`).toBe(0);
   } finally { await rm(root, { recursive: true, force: true, maxRetries: 3 }); }

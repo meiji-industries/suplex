@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { createGithubAdapter } from "../src/github.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 test("GitHub mutation observation normalizes branch and pull-request pages", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-gh-observation-"));
@@ -16,7 +17,7 @@ test("GitHub mutation observation normalizes branch and pull-request pages", asy
     expect(observation.branches).toEqual([{ name: "a", sha: "1" }, { name: "z", sha: "2" }]);
     expect(observation.pullRequests[0]).toMatchObject({ number: 2, headRef: "work/issue/t", baseRef: "main" });
     expect(observation.sha256).toMatch(/^[a-f0-9]{64}$/);
-    expect((await readFile(argumentsPath, "utf8")).trim().split("\n").map((line) => JSON.parse(line))).toEqual(expect.arrayContaining([
+    expect((await readFile(argumentsPath, "utf8")).trim().split("\n").map((line) => jsonRequired(line))).toEqual(expect.arrayContaining([
       ["api", "--paginate", "--slurp", "--jq", "map({ref, object: {sha: .object.sha}})", "-H", "Accept: application/vnd.github+json", "repos/acme/forge/git/refs/heads?per_page=100"],
       ["api", "--paginate", "--slurp", "--jq", "map({number, state, draft, head: {ref: .head.ref, sha: .head.sha}, base: {ref: .base.ref}, updated_at})", "-H", "Accept: application/vnd.github+json", "repos/acme/forge/pulls?state=open&per_page=100"],
     ]));

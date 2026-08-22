@@ -11,6 +11,7 @@ import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import type { GithubReleasePort } from "./github-release.js";
 import { reconcileRestoredDeveloperExecutions, type RestoredDeveloperRecoveryReport } from "./developer-recovery.js";
+import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 const backupVersion = 1;
@@ -214,7 +215,7 @@ export class BackupService {
       }
       await execFileAsync("tar", ["-xzf", archive, "-C", staging, "--no-same-owner"], { timeout: 60_000, maxBuffer: 64 * 1024 });
       const root = join(staging, backupRoot);
-      manifest = JSON.parse(await readFile(join(root, "manifest.json"), "utf8")) as BackupManifest;
+      manifest = jsonRequired(await readFile(join(root, "manifest.json"), "utf8")) as BackupManifest;
       if (manifest.version !== backupVersion) errors.push("unsupported backup version");
       const manifestEntries = Array.isArray(manifest.entries) ? manifest.entries : [];
       const actualEntries = (await filesUnder(root)).filter((entry) => entry.path !== "manifest.json");
@@ -239,7 +240,7 @@ export class BackupService {
         } catch { errors.push(`missing entry: ${entry.path}`); }
       }
       const configPath = join(root, "config", "config.json");
-      const configValue = JSON.parse(await readFile(configPath, "utf8")) as { version?: number; config?: Record<string, unknown>; requiresReauthentication?: boolean };
+      const configValue = jsonRequired(await readFile(configPath, "utf8")) as { version?: number; config?: Record<string, unknown>; requiresReauthentication?: boolean };
       if (configValue.version !== backupVersion || !configValue.requiresReauthentication) errors.push("required configuration is missing");
       for (const required of manifest.requiredConfiguration ?? []) if (configValue.config?.[required] === undefined) errors.push(`missing configuration: ${required}`);
       const databaseRelativePath = manifest.database?.path ?? "app/forge.sqlite";
@@ -332,7 +333,7 @@ function component(entries: BackupManifestEntry[], prefix: string): { path: stri
 
 export async function checkBackupHealth(config: ForgeConfig): Promise<import("./health.js").HealthCheck> {
   try {
-    const value = JSON.parse(await readFile(join(config.dataRoot, "backup-status.json"), "utf8")) as { valid?: boolean; verifiedAt?: string; errors?: string[] };
+    const value = jsonRequired(await readFile(join(config.dataRoot, "backup-status.json"), "utf8")) as { valid?: boolean; verifiedAt?: string; errors?: string[] };
     const verifiedAt = typeof value.verifiedAt === "string" ? value.verifiedAt : "";
     const valid = value.valid === true && Boolean(verifiedAt) && !Number.isNaN(Date.parse(verifiedAt));
     return { id: "backup", label: "Backup verification", status: valid ? "healthy" : "unhealthy", summary: valid ? "The latest recorded backup verification passed" : "No verified backup is recorded", details: { verifiedAt: verifiedAt || "never", ageMs: valid ? Math.max(0, Date.now() - Date.parse(verifiedAt)) : -1, errors: value.errors?.join(", ") ?? "" } };

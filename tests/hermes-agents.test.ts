@@ -9,6 +9,7 @@ import { AuthService } from "../src/auth.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { HermesAgentFailure, HermesAgentService } from "../src/hermes-agents.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 let root: string;
 let database: ForgeDatabase;
@@ -199,7 +200,7 @@ test("concurrent exchanges consume one pairing code exactly once", async () => {
           rejectReady(error);
           return reject(error);
         }
-        resolve(JSON.parse(output) as { outcome: string; statusCode?: number; code?: string; message?: string });
+        resolve(jsonRequired(output) as { outcome: string; statusCode?: number; code?: string; message?: string });
       });
     });
     contender.stdout.on("data", (chunk: Buffer) => { stdout += chunk; if (stdout.includes("ready\n")) ready(); });

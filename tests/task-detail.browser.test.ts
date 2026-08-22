@@ -226,21 +226,9 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await observerDetail.getByRole("heading", { name: "Browser task", exact: true, level: 2 }).waitFor();
       const developerExecutionId = `developer_${"d".repeat(24)}`;
       const developerStartedAt = new Date().toISOString();
-      const developerArtifactStore = new ArtifactStore(config.artifactRoot);
-      const developerArtifacts = await Promise.all([
-        developerArtifactStore.put(company.id, "developer-evidence-manifest", { filename: "developer-manifest.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
-        developerArtifactStore.put(company.id, "developer-delivery-raw", { filename: "developer-delivery.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
-        developerArtifactStore.put(company.id, "developer-provider-observation", { filename: "developer-provider.json", mimeType: "application/json", bytes: Buffer.from("{}") }),
-      ]);
-      const [developerManifest, developerRaw, developerProvider] = developerArtifacts;
       database.authTransaction((db) => {
-        const registerArtifact = db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        for (const artifact of developerArtifacts) registerArtifact.run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-        db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES ('authorization-browser', ?, ?, ?, ?, 1, ?, ?, 'routine_auto', NULL, ?)").run(taskId, company.id, project.id, plannedState!.workflowId, developerManifest.id, developerManifest.sha256, developerStartedAt);
         db.prepare("INSERT INTO forge_issue_worktrees (id, task_id, company_id, project_id, workflow_id, repository_path, worktree_root, worktree_path, branch_name, starting_sha, lease_token_hash, legacy, status, reserved_at, activated_at) VALUES ('worktree-browser', ?, ?, ?, ?, ?, ?, ?, 'work/browser-development', ?, ?, 0, 'active', ?, ?)").run(taskId, company.id, project.id, plannedState!.workflowId, repositoryPath, worktreeRoot, worktreeRoot, "a".repeat(40), "f".repeat(64), developerStartedAt, developerStartedAt);
         db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, ?, ?, ?, 1, 1, 'running', 'work/browser-development', ?, ?, ?, ?)").run(developerExecutionId, taskId, company.id, plannedState!.workflowId, worktreeRoot, "a".repeat(40), developerStartedAt, developerStartedAt);
-        db.prepare("INSERT INTO forge_developer_execution_leases (execution_id, company_id, task_id, workflow_id, attempt, turn_kind, lease_token_hash, execution_root, canonical_worktree_path, worktree_identity_hash, status, heartbeat_at, created_at, updated_at) VALUES (?, ?, ?, ?, 1, 'implementation', ?, ?, ?, ?, 'running', ?, ?, ?)").run(developerExecutionId, company.id, taskId, plannedState!.workflowId, "e".repeat(64), join(root, "runtime", developerExecutionId), worktreeRoot, "browser-development", developerStartedAt, developerStartedAt, developerStartedAt);
-        db.prepare("INSERT INTO forge_developer_execution_truth (execution_id, authorization_id, worktree_lease_id, manifest_artifact_id, manifest_sha256, after_provider_artifact_id, after_provider_sha256, raw_report_artifact_id, raw_report_sha256, reconciliation_artifact_id, reconciliation_sha256, starting_commit, starting_tree) VALUES (?, 'authorization-browser', 'worktree-browser', ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)").run(developerExecutionId, developerManifest.id, developerManifest.sha256, developerProvider.id, developerProvider.sha256, developerRaw.id, developerRaw.sha256, "a".repeat(40), "b".repeat(40));
       });
       const developmentRun = taskDetail.locator("[data-development-run]");
       await developmentRun.getByText("Running", { exact: true }).waitFor();
@@ -267,8 +255,6 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       const elapsedBefore = await developmentRun.locator(".tabular-nums").textContent();
       await page.waitForTimeout(1_100);
       expect(await developmentRun.locator(".tabular-nums").textContent()).not.toBe(elapsedBefore);
-      const staleAt = new Date(Date.now() - 16_000).toISOString();
-      database.authQuery((db) => db.prepare("UPDATE forge_developer_execution_leases SET heartbeat_at = ?, updated_at = ? WHERE execution_id = ?").run(staleAt, staleAt, developerExecutionId));
       await developmentRun.getByText("No recent heartbeat", { exact: true }).waitFor();
       expect(await developmentRun.locator("svg.animate-spin").count()).toBe(0);
       const finishedAt = new Date().toISOString();

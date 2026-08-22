@@ -55,6 +55,7 @@ import { CapacityFailure, CapacityManager } from "../../capacity.js";
 import { CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema } from "../../capacity-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "../../worktrees.js";
 import { startIssueWorkflow } from "../service.js";
+import { jsonRequired } from "../../task-utils.js";
 
 export interface ActivityOptions {
   agent?: Omit<Partial<Pick<AgentService, "runLeadPlanning" | "runSupplementalReview" | "consolidateLeadPlan" | "reviewDelivery" | "planDeliveryRepair" | "planMergeConflict" | "planCiRepair">>, "reviewDelivery"> & { reviewDelivery?: (input: DeliveryReviewServiceInput) => Promise<unknown> };
@@ -117,7 +118,7 @@ const DeveloperDeliverySchema = z.object({ steps: z.array(z.object({ filesChange
 
 function pinnedProjectRevision(raw: string): AcceptedProjectRevision {
   try { return parseAcceptedProjectRevision(raw); }
-  catch { return LegacyPinnedProjectRevisionSchema.parse(JSON.parse(raw)) as AcceptedProjectRevision; }
+  catch { return LegacyPinnedProjectRevisionSchema.parse(jsonRequired(raw)) as AcceptedProjectRevision; }
 }
 
 function normalizeReviewResult(raw: unknown, rawInput: unknown): DeliveryReviewActivityResult {

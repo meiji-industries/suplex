@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { promisify } from "node:util";
+import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -72,7 +73,7 @@ export function createGithubAdapter(command = process.env.FORGE_GH_COMMAND ?? "g
     async getRepository(input) {
       const result = await runGh(command, ["repo", "view", input.nameWithOwner, "--json", "nameWithOwner,url"], input.cwd);
       try {
-        const parsed = JSON.parse(result.stdout) as { nameWithOwner?: unknown; url?: unknown };
+        const parsed = jsonRequired(result.stdout) as { nameWithOwner?: unknown; url?: unknown };
         if (typeof parsed.nameWithOwner !== "string" || typeof parsed.url !== "string" || normalizeRepository(parsed.nameWithOwner) !== normalizeRepository(input.nameWithOwner)) {
           throw new GithubFailure("repository");
         }
@@ -86,7 +87,7 @@ export function createGithubAdapter(command = process.env.FORGE_GH_COMMAND ?? "g
       const path = `repos/${input.nameWithOwner}/commits/${encodeURIComponent(input.ref)}/check-runs?per_page=100`;
       const result = await runGh(command, ["api", "-H", "Accept: application/vnd.github+json", path], input.cwd);
       try {
-        const parsed = JSON.parse(result.stdout) as { check_runs?: Array<{ name?: unknown; status?: unknown; conclusion?: unknown }> };
+        const parsed = jsonRequired(result.stdout) as { check_runs?: Array<{ name?: unknown; status?: unknown; conclusion?: unknown }> };
         const checks = (parsed.check_runs ?? []).flatMap((check) => typeof check.name === "string" && typeof check.status === "string"
           ? [{ name: check.name, status: check.status, ...(typeof check.conclusion === "string" ? { conclusion: check.conclusion } : {}) }]
           : []);
@@ -101,11 +102,11 @@ export function createGithubAdapter(command = process.env.FORGE_GH_COMMAND ?? "g
         runGh(command, ["api", "--paginate", "--slurp", "--jq", "map({number, state, draft, head: {ref: .head.ref, sha: .head.sha}, base: {ref: .base.ref}, updated_at})", "-H", "Accept: application/vnd.github+json", `repos/${input.nameWithOwner}/pulls?state=open&per_page=100`], input.cwd),
       ]);
       try {
-        const branches = flattenPages(JSON.parse(branchesResult.stdout)).flatMap((entry) => {
+        const branches = flattenPages(jsonRequired(branchesResult.stdout)).flatMap((entry) => {
           const record = entry as { ref?: unknown; object?: { sha?: unknown } };
           return typeof record.ref === "string" && typeof record.object?.sha === "string" ? [{ name: record.ref.replace(/^refs\/heads\//, ""), sha: record.object.sha }] : [];
         }).sort((left, right) => left.name.localeCompare(right.name));
-        const pullRequests = flattenPages(JSON.parse(pullsResult.stdout)).flatMap((entry) => {
+        const pullRequests = flattenPages(jsonRequired(pullsResult.stdout)).flatMap((entry) => {
           const record = entry as { number?: unknown; state?: unknown; draft?: unknown; head?: { ref?: unknown; sha?: unknown }; base?: { ref?: unknown }; updated_at?: unknown };
           return typeof record.number === "number" && typeof record.state === "string" && typeof record.draft === "boolean" && typeof record.head?.ref === "string" && typeof record.head?.sha === "string" && typeof record.base?.ref === "string" && typeof record.updated_at === "string"
             ? [{ number: record.number, state: record.state, draft: record.draft, headRef: record.head.ref, headSha: record.head.sha, baseRef: record.base.ref, updatedAt: record.updated_at }]

@@ -12,6 +12,7 @@ import { normalizeProtoJsonValue } from "../scripts/capture-workflow-history.js"
 import { assertContinuationStateWithinLimit, assertEncodedPayloadBoundary, assertHistoryEventCountWithinLimit, assertPayloadWithinLimit, encodedPayloadSize, PAYLOAD_POLICY, PayloadPolicyViolation, WORKFLOW_HISTORY_EVENT_LIMIT } from "../src/temporal/policy.js";
 import { buildProductionWorkflowBundle, productionWorkflowBundleOptions, temporalDataConverter } from "../src/temporal/workflow-bundle.js";
 import { auditProductionWorkflowBundle, readReplayHistory, readReplayManifest, replayIssueHistory, replayManifest, workflowBundleSha256 } from "../src/temporal/replay.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 const manifestPath = join(process.cwd(), ".scratch/forge-mvp/replay/manifest.json");
 const deliveryReviewFixtureNames = [
@@ -53,7 +54,7 @@ function decodedPayloads(history: { events: unknown[] }): unknown[] {
     if (!value || typeof value !== "object") return;
     const record = value as Record<string, unknown>;
     if (typeof record.data === "string" && record.metadata && typeof record.metadata === "object") {
-      try { const decoded = JSON.parse(Buffer.from(record.data, "base64").toString("utf8")); payloads.push(decoded); visit(decoded); } catch { /* Non-JSON Temporal payloads are not state checkpoints. */ }
+      try { const decoded = jsonRequired(Buffer.from(record.data, "base64").toString("utf8")); payloads.push(decoded); visit(decoded); } catch { /* Non-JSON Temporal payloads are not state checkpoints. */ }
     }
     Object.values(record).forEach(visit);
   };
@@ -166,7 +167,7 @@ test("exact delivery review fixtures retain correction, blocker, repair, and sup
 });
 
 test("the five recovery fixtures contain the intended durable Temporal events", async () => {
-  const read = async (scenario: string) => JSON.parse(await readFile(join(process.cwd(), ".scratch/forge-mvp/replay", `issue-workflow-${scenario}.json`), "utf8")) as { events: Array<Record<string, unknown>> };
+  const read = async (scenario: string) => jsonRequired(await readFile(join(process.cwd(), ".scratch/forge-mvp/replay", `issue-workflow-${scenario}.json`), "utf8")) as { events: Array<Record<string, unknown>> };
   const decoded = (value: unknown, found: unknown[] = []): unknown[] => {
     if (value && typeof value === "object" && !Array.isArray(value) && typeof (value as { data?: unknown }).data === "string" && (value as { metadata?: unknown }).metadata && typeof (value as { metadata?: unknown }).metadata === "object") {
       const payload = value as { data: string; metadata: Record<string, string> };
@@ -296,7 +297,7 @@ test("fixture sanitization rejects forbidden non-payload history text", async ()
   const directory = await mkdtemp(join(tmpdir(), "forge-replay-sanitize-"));
   const filename = join(directory, "history.json");
   try {
-    const history = JSON.parse(await readFile(join(process.cwd(), ".scratch/forge-mvp/replay/issue-workflow-backlog-planning.json"), "utf8")) as { unsafe?: string };
+    const history = jsonRequired(await readFile(join(process.cwd(), ".scratch/forge-mvp/replay/issue-workflow-backlog-planning.json"), "utf8")) as { unsafe?: string };
     history.unsafe = "/Users/private/operator/secret.txt";
     await writeFile(filename, JSON.stringify(history));
     await expect(readReplayHistory(filename)).rejects.toThrow(/forbidden history text/);

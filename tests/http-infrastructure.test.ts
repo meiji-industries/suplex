@@ -5,6 +5,7 @@ import { createTestConfig } from "../src/config.js";
 import { createFastifyLogger } from "../src/logging.js";
 import type { HostHealthDependencies } from "../src/health.js";
 import { ProjectFailure } from "../src/projects.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 const health: HostHealthDependencies = {
   temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy" as const, summary: "Ready", details: {} }),
@@ -32,7 +33,7 @@ test("Fastify request logs are correlated and omit credential-shaped request dat
   expect(output).not.toContain("query-secret");
   expect(output).not.toContain("cookie-secret");
   expect(output).not.toContain("header-secret");
-  const records = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+  const records = lines.map((line) => jsonRequired(line) as Record<string, unknown>);
   expect(records.some((record) => typeof record.reqId === "string" && record.msg === "incoming request")).toBe(true);
   expect(records.some((record) => record.msg === "request completed" && typeof record.responseTime === "number")).toBe(true);
 });

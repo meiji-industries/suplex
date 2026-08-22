@@ -2,6 +2,7 @@ import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { resolveAgentProfiles } from "./projects.js";
 import { startIssueWorkflow } from "./temporal/service.js";
+import { jsonRequired } from "./task-utils.js";
 
 interface SuccessorIntentRow {
   id: string;
@@ -35,9 +36,9 @@ export async function reconcileSuccessorIntents(database: ForgeDatabase, config:
         projectRevisionId: intent.project_revision_id,
         briefArtifactId: task.briefArtifactId,
         briefSha256: task.briefSha256,
-        imageArtifactIds: JSON.parse(task.imageIdsJson) as string[],
+        imageArtifactIds: jsonRequired(task.imageIdsJson) as string[],
         requestHash: task.requestHash ?? undefined,
-        roleProfiles: database.authQuery((db) => resolveAgentProfiles(db, JSON.parse(task.roleAgentsJson) as { planner?: string; builder?: string; reviewer?: string })),
+        roleProfiles: database.authQuery((db) => resolveAgentProfiles(db, jsonRequired(task.roleAgentsJson) as { planner?: string; builder?: string; reviewer?: string })),
         supplementalReview: task.supplementalReview === 1,
         repairCycleLimit: config.deliveryRepairCycleLimit,
       });

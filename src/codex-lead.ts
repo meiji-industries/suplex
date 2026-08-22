@@ -25,6 +25,7 @@ import { parseAcceptedProjectRevision } from "./projects.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { defaultProcessController, type ProcessController, type ProcessInspection } from "./process-manager.js";
+import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 const LEAD_OUTPUT_IDLE_TIMEOUT_MS = 5 * 60_000;
@@ -78,7 +79,7 @@ export function parseLeadOutput(lines: string[], provider: AgentProvider = resol
   const normalized = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
   let parsed: unknown;
   try {
-    parsed = JSON.parse(normalized);
+    parsed = jsonRequired(normalized);
   } catch {
     throw new AgentFailure("malformed-output", "Codex returned malformed Lead JSON");
   }
@@ -127,7 +128,7 @@ function parseLeadReviewResponse(lines: string[], provider: AgentProvider): z.in
   const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-review-response", "Codex did not return a Lead supplemental-review response");
   let parsed: unknown;
-  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-review-response", "Codex returned malformed Lead supplemental-review response JSON"); }
+  try { parsed = jsonRequired(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-review-response", "Codex returned malformed Lead supplemental-review response JSON"); }
   const result = LeadReviewResponseSchema.safeParse(parsed);
   if (!result.success) throw new AgentFailure("invalid-review-response", "Codex returned a Lead supplemental-review response outside the required schema");
   return result.data;
@@ -137,7 +138,7 @@ function parseSupplementalReview(lines: string[], provider: AgentProvider): Supp
   const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-output", "Supplemental review did not return an opinion");
   let parsed: unknown;
-  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-output", "Supplemental review returned malformed JSON"); }
+  try { parsed = jsonRequired(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-output", "Supplemental review returned malformed JSON"); }
   const result = SupplementalReviewSchema.safeParse(parsed);
   if (!result.success) throw new AgentFailure("invalid-output-schema", "Supplemental review did not satisfy the required schema");
   return result.data;
@@ -147,7 +148,7 @@ function parseDeliveryReview(lines: string[], provider: AgentProvider): Delivery
   const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-review-output", "Codex Lead did not return a delivery review");
   let parsed: unknown;
-  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-review-output", "Codex Lead returned malformed delivery review JSON"); }
+  try { parsed = jsonRequired(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-review-output", "Codex Lead returned malformed delivery review JSON"); }
   const result = DeliveryReviewSchema.safeParse(parsed);
   if (!result.success) {
     const issues = result.error.issues.slice(0, 10).map((issue) => `${issue.path.join(".") || "review"}: ${issue.message}`).join("; ").slice(0, 1_000);
@@ -160,7 +161,7 @@ function parseDeliveryRepairPlan(lines: string[], provider: AgentProvider): z.in
   const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-repair-plan-output", "Codex Lead did not return a delivery repair plan");
   let parsed: unknown;
-  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-repair-plan-output", "Codex Lead returned malformed delivery repair plan JSON"); }
+  try { parsed = jsonRequired(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-repair-plan-output", "Codex Lead returned malformed delivery repair plan JSON"); }
   const result = DeliveryRepairLeadOutputSchema.safeParse(parsed);
   if (!result.success) throw new AgentFailure("invalid-repair-plan-output", "Codex Lead returned a delivery repair plan outside the required schema");
   return result.data;
@@ -170,7 +171,7 @@ export function parseMergeConflictPlan(lines: string[], provider: Pick<AgentProv
   const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-merge-conflict-plan", "Codex Lead did not return a merge-conflict plan");
   let parsed: unknown;
-  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-merge-conflict-plan", "Codex Lead returned malformed merge-conflict plan JSON"); }
+  try { parsed = jsonRequired(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-merge-conflict-plan", "Codex Lead returned malformed merge-conflict plan JSON"); }
   const result = MergeConflictPlanSchema.safeParse(parsed);
   if (result.success) return result.data;
   const blockerInput = parsed && typeof parsed === "object" && !Array.isArray(parsed)
@@ -204,7 +205,7 @@ function parseCiRepairPlan(lines: string[], provider: AgentProvider): import("./
   const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-ci-repair-plan", "Codex Lead did not return a CI repair plan");
   let parsed: unknown;
-  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-ci-repair-plan", "Codex Lead returned malformed CI repair plan JSON"); }
+  try { parsed = jsonRequired(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-ci-repair-plan", "Codex Lead returned malformed CI repair plan JSON"); }
   const result = CiRepairPlanSchema.safeParse(parsed);
   if (!result.success) throw new AgentFailure("invalid-ci-repair-plan", "Codex Lead returned a CI repair plan outside the required schema");
   return result.data;
@@ -314,7 +315,7 @@ async function processStartIdentity(pid: number, fallback: string): Promise<stri
 
 function pinnedRepositoryPath(normalizedJson: string): string {
   try {
-    const parsed = JSON.parse(normalizedJson) as { repositoryPath?: unknown };
+    const parsed = jsonRequired(normalizedJson) as { repositoryPath?: unknown };
     if (typeof parsed.repositoryPath === "string" && parsed.repositoryPath.length > 0) return parsed.repositoryPath;
   } catch {
     // Keep revision failures redacted at the activity boundary.
@@ -576,7 +577,7 @@ export class AgentService {
       projectId: input.projectId,
       taskBrief: { artifactId: input.briefArtifactId, sha256: row.brief_sha256 },
       taskImages: images.map((image) => ({ artifactId: image.id, sha256: image.sha256, mimeType: "image/*", filename: image.filename })),
-      projectRevision: { id: input.projectRevisionId, identity: row.normalized_json, baseSha: JSON.parse(row.normalized_json).baseSha ?? "", targetSha: JSON.parse(row.normalized_json).targetSha ?? "" },
+      projectRevision: { id: input.projectRevisionId, identity: row.normalized_json, baseSha: jsonRequired(row.normalized_json).baseSha ?? "", targetSha: jsonRequired(row.normalized_json).targetSha ?? "" },
       profiles: { lead: leadProfile, reviewer: input.roleProfiles.reviewer ? profileSettings.find((profile) => profile.id === input.roleProfiles.reviewer) ?? null : null },
       repositoryEvidence: { artifactId: repositoryEvidenceArtifact.id, sha256: repositoryEvidenceArtifact.sha256 },
     };
@@ -596,7 +597,7 @@ export class AgentService {
       if (active) {
         if (active.status !== "failed") {
           try {
-            const storedStatus = JSON.parse(await readFile(this.runtimePath(active.status_relative_path), "utf8")) as { state?: string };
+            const storedStatus = jsonRequired(await readFile(this.runtimePath(active.status_relative_path), "utf8")) as { state?: string };
             if (storedStatus.state === "completed") return this.attachPlanningResult(input, active, runtime.signal);
           } catch (error) {
             if (error instanceof AgentFailure) throw error;
@@ -651,7 +652,7 @@ export class AgentService {
     await writeFile(schemaPath, JSON.stringify(CodexLeadOutputJsonSchema), { encoding: "utf8", mode: 0o600 });
     await chmod(schemaPath, 0o600);
     const executionRepositoryEvidenceArtifact = await this.artifacts.putArtifact(input.companyId, "agent-evidence", { filename: `${executionId}-repository.json`, mimeType: "application/json", bytes: Buffer.from(repositoryEvidence, "utf8") });
-    const revisionIdentity = JSON.parse(row.normalized_json) as Record<string, unknown>;
+    const revisionIdentity = jsonRequired(row.normalized_json) as Record<string, unknown>;
     const inputManifestArtifact = await this.artifacts.putArtifact(input.companyId, "lead-input-manifest", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ companyId: input.companyId, taskId: input.taskId, projectId: input.projectId, workflowId: input.workflowId, briefArtifactId: input.briefArtifactId, briefSha256: row.brief_sha256, imageArtifacts: input.imageArtifactIds.map((id) => { const image = images.find((candidate) => candidate.id === id); return image ? { artifactId: id, sha256: image.sha256, mimeType: image.mime_type, filename: image.filename } : { artifactId: id }; }), projectRevisionId: input.projectRevisionId, normalizedRevisionSha256: createHash("sha256").update(row.normalized_json).digest("hex"), repositoryEvidenceArtifactId: executionRepositoryEvidenceArtifact.id, repositoryEvidenceSha256: executionRepositoryEvidenceArtifact.sha256, repository: { repository: revisionIdentity.repository, baseBranch: revisionIdentity.baseBranch, targetBranch: revisionIdentity.targetBranch, baseSha: revisionIdentity.baseSha, targetSha: revisionIdentity.targetSha }, leadProfile: { id: leadProfile.id, provider: leadProfile.provider, model: leadProfile.model, reasoningLevel: leadProfile.reasoningLevel, servicePriority: leadProfile.servicePriority }, ...(sessionRef ? { leadSessionRef: sessionRef } : {}), ...(input.resume ? { instructionArtifactId: input.resume.instructionArtifactId, instructionSha256: input.resume.instructionSha256, resumeReason: input.resume.reason } : {}) }, null, 2), "utf8") });
     this.database.authTransaction((db) => {
       db.prepare("UPDATE forge_agent_executions SET session_ref = ? WHERE id = ?").run(sessionRef ?? null, executionId);
@@ -777,7 +778,7 @@ export class AgentService {
     const conflictRow = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_forward_merges f ON f.conflict_artifact_id = a.id AND f.id = ? AND f.task_id = ? AND f.company_id = ? AND f.project_revision_id = ? WHERE a.id = ? AND a.company_id = ? AND a.kind = 'forward-merge-conflict'").get(input.forwardMergeId, input.taskId, input.companyId, input.projectRevisionId, input.conflictArtifact.id, input.companyId) as { storagePath: string; sha256: string } | undefined);
     if (!conflictRow) throw new AgentFailure("scoped-input-missing", "Forward-merge conflict evidence is unavailable");
     try {
-      conflict = ForwardMergeConflictArtifactSchema.parse(JSON.parse((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: conflictRow.storagePath, sha256: conflictRow.sha256 })).toString("utf8")));
+      conflict = ForwardMergeConflictArtifactSchema.parse(jsonRequired((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: conflictRow.storagePath, sha256: conflictRow.sha256 })).toString("utf8")));
     } catch {
       throw new AgentFailure("scoped-input-corrupt", "Forward-merge conflict evidence failed integrity validation");
     }
@@ -792,7 +793,7 @@ export class AgentService {
     const planId = `merge_plan_${createHash("sha256").update(`${input.workflowId}:${input.priorHead}:${input.targetBaseSha}`).digest("hex").slice(0, 32)}`;
     const existingPlan = this.database.authQuery((db) => db.prepare("SELECT r.plan_artifact_id AS planArtifactId, r.plan_evidence_artifact_id AS evidenceArtifactId, r.lead_execution_id AS leadExecutionId, r.lead_session_ref AS leadSessionRef, p.storage_path AS planStoragePath, p.sha256 AS planSha256 FROM forge_merge_conflict_resolutions r JOIN forge_artifacts p ON p.id = r.plan_artifact_id WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ? AND r.status = 'planned'").get(planId, input.taskId, input.companyId, input.workflowId) as { planArtifactId: string; evidenceArtifactId: string; leadExecutionId: string; leadSessionRef: string; planStoragePath: string; planSha256: string } | undefined);
     if (existingPlan) {
-      const output = MergeConflictPlanSchema.parse(JSON.parse((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: existingPlan.planStoragePath, sha256: existingPlan.planSha256 })).toString("utf8")));
+      const output = MergeConflictPlanSchema.parse(jsonRequired((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: existingPlan.planStoragePath, sha256: existingPlan.planSha256 })).toString("utf8")));
       return { planId, planArtifactId: existingPlan.planArtifactId, evidenceArtifactId: existingPlan.evidenceArtifactId, leadExecutionId: existingPlan.leadExecutionId, leadSessionRef: existingPlan.leadSessionRef, summary: output.summary };
     }
     const worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
@@ -898,7 +899,7 @@ export class AgentService {
     if (!revision) throw new AgentFailure("scoped-input-missing", "Accepted project revision is unavailable");
     let revisionConfig: { requiredChecks?: unknown; verificationCommand?: unknown };
     try {
-      revisionConfig = JSON.parse(revision.normalized_json) as { requiredChecks?: unknown; verificationCommand?: unknown };
+      revisionConfig = jsonRequired(revision.normalized_json) as { requiredChecks?: unknown; verificationCommand?: unknown };
     } catch {
       throw new AgentFailure("invalid-project-revision", "The accepted project revision is malformed");
     }
@@ -915,7 +916,7 @@ export class AgentService {
     const outputLines: string[] = [];
     // Actions check-run summaries are empty; the failing job log tail recorded with the CI evidence is the real signal.
     const evidenceRow = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(input.evidenceArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined);
-    const failedLogs = evidenceRow ? await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: evidenceRow.storagePath, sha256: evidenceRow.sha256 }).then((bytes) => (JSON.parse(bytes.toString("utf8")) as { failedCheckLogs?: Array<{ name: string; runId: string; log: string }> }).failedCheckLogs ?? []).catch(() => []) : [];
+    const failedLogs = evidenceRow ? await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: evidenceRow.storagePath, sha256: evidenceRow.sha256 }).then((bytes) => (jsonRequired(bytes.toString("utf8")) as { failedCheckLogs?: Array<{ name: string; runId: string; log: string }> }).failedCheckLogs ?? []).catch(() => []) : [];
     const prompt = this.ciRepairPrompt(context.title, { ...input, requiredChecks, localVerification }, failedChecks, failedLogs);
     let plan: import("./temporal/issue-contracts.js").CiRepairPlan | undefined;
     let failure: AgentFailure | undefined;
@@ -1079,7 +1080,7 @@ export class AgentService {
     const reviewRole: "planner" | "reviewer" = isFinalReview && input.roleProfiles.reviewer ? "reviewer" : "planner";
     const visualEvidenceMissing = !isFinalReview && input.visualEvidence === "required" && (() => {
       try {
-        const report = JSON.parse(delivery) as { visualEvidence?: { captured?: unknown; paths?: unknown } };
+        const report = jsonRequired(delivery) as { visualEvidence?: { captured?: unknown; paths?: unknown } };
         return report.visualEvidence?.captured !== true || !Array.isArray(report.visualEvidence.paths) || report.visualEvidence.paths.length === 0;
       } catch { return true; }
     })();
@@ -1470,7 +1471,7 @@ export class AgentService {
 
   private async recordLeadChildStart(executionId: string, line: string): Promise<void> {
     let event: { type?: string; childPid?: number; childProcessGroup?: number; childStartIdentity?: string; child?: { pid?: number; processGroup?: number; startIdentity?: string } };
-    try { event = JSON.parse(line) as typeof event; } catch { return; }
+    try { event = jsonRequired(line) as typeof event; } catch { return; }
     const childPid = event.child?.pid ?? event.childPid;
     const childProcessGroup = event.child?.processGroup ?? event.childProcessGroup;
     const childStartIdentity = event.child?.startIdentity ?? event.childStartIdentity;
@@ -1504,7 +1505,7 @@ export class AgentService {
   private async completedTurnResult(result: LeadProcessResult, wrapper: PreparedAgentTurnWrapper): Promise<LeadProcessResult> {
     if (result.exitCode === 0) return result;
     try {
-      const status = JSON.parse(await readFile(wrapper.statusPath, "utf8")) as { state?: unknown; exitCode?: unknown };
+      const status = jsonRequired(await readFile(wrapper.statusPath, "utf8")) as { state?: unknown; exitCode?: unknown };
       if (status.state === "completed" && status.exitCode === 0) return { ...result, exitCode: 0 };
     } catch { /* The observed process result remains authoritative when no terminal wrapper status exists. */ }
     return result;
@@ -1557,7 +1558,7 @@ export class AgentService {
     if (!persisted) return undefined;
     if (!/^session_[A-Za-z0-9._:-]{1,128}$/.test(persisted.sessionRef)) throw new AgentFailure("internal_persistence", "The completed Lead session reference is invalid", { nonRetryable: true });
     await this.sessionStore.read(persisted.sessionRef);
-    const output = PersistedLeadOutputSchema.parse(JSON.parse((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: persisted.outputStoragePath, sha256: persisted.outputSha256 })).toString("utf8")));
+    const output = PersistedLeadOutputSchema.parse(jsonRequired((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: persisted.outputStoragePath, sha256: persisted.outputSha256 })).toString("utf8")));
     await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: persisted.evidenceStoragePath, sha256: persisted.evidenceSha256 });
     const manifest = this.database.authQuery((db) => db.prepare("SELECT id, sha256, storage_path FROM forge_artifacts WHERE company_id = ? AND kind = 'lead-input-manifest' AND filename = ?").get(input.companyId, `${persisted.executionId}.json`) as { id: string; sha256: string; storage_path: string } | undefined);
     if (!manifest) throw new AgentFailure("internal_persistence", "The completed Lead input manifest is unavailable", { nonRetryable: true });
@@ -1584,7 +1585,7 @@ export class AgentService {
     const deadline = Date.now() + 20 * 60_000;
     while (Date.now() < deadline) {
       try {
-        const status = JSON.parse(await readFile(statusPath, "utf8")) as { state?: string; code?: string; error?: string };
+        const status = jsonRequired(await readFile(statusPath, "utf8")) as { state?: string; code?: string; error?: string };
         if (status.state === "completed") {
           const persisted = await this.completedPlanningResult(input);
           if (persisted) return persisted;

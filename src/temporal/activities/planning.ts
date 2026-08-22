@@ -2,6 +2,7 @@ import type { PlanningActivities } from "../contracts/activities/planning.js";
 import type { RevisedExecutionCoordinates } from "../contracts/primitives.js";
 import type { ActivityContext } from "./context.js";
 import { readTaskProjectConfiguration } from "../../task-project-configuration.js";
+import { jsonRequired } from "../../task-utils.js";
 
 export function createPlanningActivities(ctx: ActivityContext): PlanningActivities {
   const { database, config, options, createHash, randomBytes, ApplicationFailure, CancelledFailure, Context, z, projectionStateHash, ArtifactStore, redact, AgentFailure, AgentService, DeveloperService, cancelDeveloperExecution, reconcileDeveloperExecutions, cancelAgentExecution, reconcileAgentExecutions, runDeveloperTurn, AcceptanceFailure, AcceptanceService, CiFailure, CiProviderFailure, CiService, createGithubCiProvider, createGithubReleasePort, GithubReleaseFailure, ReleaseService, ForwardMergeFailure, ForwardMergeService, parseAcceptedProjectRevision, runPinnedVerification, createGitCommandGuard, ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, ArtifactReferenceSchema, CreateSuccessorActivityInputSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeliveryOperationBlockCodeSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PreparePlanRevisionActivityInputSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, RevisedExecutionCoordinatesSchema, SafeSummarySchema, createInitialIssueWorkflowState, normalizeSafeSummary, PlanGovernanceConflict, PlanGovernanceRepository, StructuredLogger, activityLogContext, CapacityFailure, CapacityManager, CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema, WorktreeFailure, WorktreeManager, startIssueWorkflow, logger, defaultAgent, githubRelease, defaultDeveloper, artifacts, release, ci, acceptance, legacyForwardMerge, capacity, activityWorktrees, activityWorktreesByBranch, worktrees, agent, developer, attentionFailure, agentCategory, invokeAgent, bindCapacityExecution, recoverFinalizedDeveloperResult, runSupervised, latestWorktree, cancellationSignal, agentRuntime, pinnedProjectRevision, normalizeReviewResult, normalizeRepairResult, durableArtifactReference, verifiedArtifactBytes, artifactReference, registerArtifact, reconcileBlocker, asNonRetryableCapacityFailure, asNonRetryableApplicationFailure, asRetryableAgentFailure, DeveloperDeliverySchema } = ctx;
@@ -91,7 +92,7 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
       if (storedReason && (storedReason.companyId !== input.companyId || storedReason.kind !== "continuation-reason" || storedReason.sha256 !== reasonHash)) throw new AgentFailure("successor-identity-conflict", "Continuation identity conflicts with an existing artifact", { nonRetryable: true });
       const reasonArtifact = storedReason ? undefined : await artifacts.putWithId(input.companyId, reasonArtifactId, "continuation-reason", { filename: `${input.intentId}.md`, mimeType: "text/markdown", bytes: Buffer.from(reason, "utf8") });
       const now = new Date().toISOString();
-      const roleAgents = JSON.parse(current.roleAgentsJson) as Record<string, string>;
+      const roleAgents = jsonRequired(current.roleAgentsJson) as Record<string, string>;
       const roleProfiles = database.authQuery((db) => {
         const result: Record<string, string> = {};
         for (const role of ["planner", "builder", "reviewer"] as const) {
@@ -102,7 +103,7 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
         }
         return result;
       });
-      const imageIds = JSON.parse(current.imageIdsJson) as string[];
+      const imageIds = jsonRequired(current.imageIdsJson) as string[];
       const artifactIds = [current.briefArtifactId, ...imageIds, reasonArtifactId];
       const placeholders = artifactIds.map(() => "?").join(",");
       const artifactManifest = database.authQuery((db) => db.prepare(`SELECT id, kind, filename, mime_type AS mimeType, byte_size AS byteSize, sha256, storage_path AS storagePath FROM forge_artifacts WHERE company_id = ? AND id IN (${placeholders})`).all(input.companyId, ...artifactIds) as Array<{ id: string; kind: string; filename: string; mimeType: string; byteSize: number; sha256: string; storagePath: string }>);

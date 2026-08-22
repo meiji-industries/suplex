@@ -3,6 +3,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import { redact, StructuredLogger } from "../logging.js";
 import { ExecutionReceiptSchema, type ExecutionReceipt } from "../developer-contracts.js";
+import { jsonRequired } from "../task-utils.js";
 
 const MAX_SUMMARY = 4_000;
 
@@ -108,7 +109,7 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
   for (const line of lines) {
     let event: Record<string, unknown>;
     try {
-      const parsed = JSON.parse(line) as unknown;
+      const parsed = jsonRequired(line) as unknown;
       if (!parsed || typeof parsed !== "object") throw new Error("not an object");
       event = parsed as Record<string, unknown>;
     } catch {
@@ -159,7 +160,7 @@ export function parseCodexJsonl(lines: Iterable<string>, options: CodexJsonlPars
     }
     if (type === "item.completed" && itemType === "agent_message" && typeof item.text === "string") {
       push({ kind: "agent_update", stepNumber: null, sourceItemId, summary: item.text, exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `agent-update:${sourceItemId ?? createHash("sha256").update(item.text).digest("hex")}` });
-      try { finalReport = JSON.parse(item.text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { /* The schema validator reports a missing/invalid report later. */ }
+      try { finalReport = jsonRequired(item.text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { /* The schema validator reports a missing/invalid report later. */ }
       continue;
     }
     if (type === "item.completed" && itemType === "reasoning" && typeof item.text === "string") {

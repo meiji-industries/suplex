@@ -7,6 +7,7 @@ import { expect, test } from "vitest";
 import { acquireDevLock, forgeEnvironment, inspectDevStatus, readDevControlRequest, requestDevControl, resolveDevPorts, superviseDevStack } from "../scripts/dev.js";
 import { isForgeDevelopmentCommand, parseProcessList } from "../scripts/down.js";
 import type { OwnedProcess, ProcessController, ProcessInspection } from "../src/process-manager.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 test("development uses the configured repository root instead of the checkout", () => {
   expect(forgeEnvironment({ temporal: 7233, temporalUi: 8233 })).not.toHaveProperty("FORGE_REPOSITORY_ROOT");
@@ -121,7 +122,7 @@ test("only a positively dead supervisor lock is reclaimed", async () => {
 
     const lock = await acquireDevLock(runtimeRoot, processController);
     expect(lock).toBeDefined();
-    expect(JSON.parse(await readFile(join(runtimeRoot, "dev.lock", "owner.json"), "utf8"))).toMatchObject({ pid: process.pid });
+    expect(jsonRequired(await readFile(join(runtimeRoot, "dev.lock", "owner.json"), "utf8"))).toMatchObject({ pid: process.pid });
     await lock!.release();
   });
 });
@@ -207,7 +208,7 @@ test("concurrent restarts coalesce, preserve Temporal, and fail closed", async (
       });
       const readPids = async (): Promise<number[] | undefined> => {
         try {
-          const registry = JSON.parse(await readFile(join(runtimeRoot, "owned-processes.json"), "utf8")) as { processes: Array<{ pid: number }> };
+          const registry = jsonRequired(await readFile(join(runtimeRoot, "owned-processes.json"), "utf8")) as { processes: Array<{ pid: number }> };
           return registry.processes.map((process) => process.pid).sort((left, right) => left - right);
         } catch {
           return undefined;

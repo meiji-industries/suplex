@@ -15,6 +15,7 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { asNonRetryableApplicationFailure, createActivities } from "../src/temporal/activities.js";
 import { DeliveryOperationBlockCodeSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeveloperRepairActivityResultSchema } from "../src/temporal/issue-contracts.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 const gitPresentation = {
   branchSlug: "improve-fixture-planning",
@@ -167,11 +168,11 @@ test("Lead planning resumes the same opaque session after malformed JSON and sto
     await invocation.onStart(4321, "2026-08-11T00:00:00.000Z");
     calls.push(invocation.args);
     if (calls.length === 1) {
-      const request = JSON.parse(await readFile(invocation.args.at(-1)!, "utf8")) as { promptPath: string };
+      const request = jsonRequired(await readFile(invocation.args.at(-1)!, "utf8")) as { promptPath: string };
       planningPrompt = await readFile(request.promptPath, "utf8");
     }
     if (calls.length >= 2) {
-      const request = JSON.parse(await readFile(invocation.args.at(-1)!, "utf8")) as { resumeSessionRef?: string; model?: string };
+      const request = jsonRequired(await readFile(invocation.args.at(-1)!, "utf8")) as { resumeSessionRef?: string; model?: string };
       resumedSessionRef = request.resumeSessionRef;
       resumedModel = request.model;
     }
@@ -823,7 +824,7 @@ test("Developer report claims cannot override a failed pinned verifier", async (
   const runner: LeadProcessRunner = async (invocation) => {
     await invocation.onStart(4750, "2026-08-11T00:00:00.000Z");
     const packagePath = join(invocation.cwd, "package.json");
-    const packageJson = JSON.parse(await readFile(packagePath, "utf8")) as { scripts: { test: string } };
+    const packageJson = jsonRequired(await readFile(packagePath, "utf8")) as { scripts: { test: string } };
     packageJson.scripts.test = "node -e 'process.exit(1)'";
     await writeFile(packagePath, JSON.stringify(packageJson));
     await writeFile(join(invocation.cwd, "VERIFIER.md"), "claimed passing delivery\n");
@@ -845,7 +846,7 @@ test("Developer report claims cannot override a failed pinned verifier", async (
     const result = await service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, authorization, developerTurnExecutionId: "developer_verifier_fail" });
     expect(result).toMatchObject({ outcome: "blocked", failureCode: "required-local-tests-failed" });
     const reconciliationRow = value.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(result.reconciliationArtifactId) as { storagePath: string; sha256: string });
-    const reconciliation = DeveloperReconciliationArtifactSchema.parse(JSON.parse((await artifactStore.read({ companyId: "company_1", ...reconciliationRow })).toString("utf8")));
+    const reconciliation = DeveloperReconciliationArtifactSchema.parse(jsonRequired((await artifactStore.read({ companyId: "company_1", ...reconciliationRow })).toString("utf8")));
     expect(reconciliation).toMatchObject({ outcome: "blocked", failureCode: "required-local-tests-failed", independentVerification: { outcome: "failed" } });
   } finally {
     value.database.close();
@@ -913,7 +914,7 @@ test("authorized Developer retry resumes a dirty preserved worktree", async () =
     const recovered = await service.run({ ...input, developerTurnExecutionId: "developer_retry_2", developerAttempt: 2, supersedesExecutionId: "developer_retry_1", reuseWorktree: true });
     expect(recovered).toMatchObject({ outcome: "completed", dirtyState: "clean", developerSessionRef: "session_authorized_retry" });
     const reconciliationRow = value.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(recovered.reconciliationArtifactId) as { storagePath: string; sha256: string });
-    const reconciliation = DeveloperReconciliationArtifactSchema.parse(JSON.parse((await artifactStore.read({ companyId: "company_1", ...reconciliationRow })).toString("utf8")));
+    const reconciliation = DeveloperReconciliationArtifactSchema.parse(jsonRequired((await artifactStore.read({ companyId: "company_1", ...reconciliationRow })).toString("utf8")));
     expect(reconciliation).toMatchObject({ outcome: "completed", independentVerification: { outcome: "passed" } });
     expect(calls).toBe(2);
     expect(prompts[0]).toContain("--dangerously-bypass-approvals-and-sandbox");
@@ -1027,10 +1028,10 @@ test("Lead reviews the exact Developer delivery and the same Developer session p
   let reviewCalls = 0;
   const reviewRunner: LeadProcessRunner = async (invocation) => {
     await invocation.onStart(4701, "2026-08-11T00:00:00.000Z");
-    const request = JSON.parse(await readFile(invocation.args.at(-1)!, "utf8")) as { promptPath: string; outputSchemaPath: string; statusPath: string };
+    const request = jsonRequired(await readFile(invocation.args.at(-1)!, "utf8")) as { promptPath: string; outputSchemaPath: string; statusPath: string };
     if (reviewCalls === 0) {
       reviewRequestPrompt = await readFile(request.promptPath, "utf8");
-      reviewOutputSchema = JSON.parse(await readFile(request.outputSchemaPath, "utf8"));
+      reviewOutputSchema = jsonRequired(await readFile(request.outputSchemaPath, "utf8"));
     }
     await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-lead" }));
     reviewCalls += 1;
@@ -1268,7 +1269,7 @@ test("Developer resolves a guarded merge conflict in the existing session and pr
     const parents = (await execFileAsync("git", ["rev-list", "--parents", "-n", "1", "HEAD"], { cwd: worktreePath })).stdout.trim().split(/\s+/);
     expect(parents).toEqual([result.resultCommit, priorHead, targetBaseSha]);
     const deliveryRow = value.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ?").get(result.deliveryArtifactId) as { storage_path: string; sha256: string });
-    const delivery = JSON.parse((await artifactStore.read({ companyId: "company_1", storagePath: deliveryRow.storage_path, sha256: deliveryRow.sha256 })).toString("utf8")) as Record<string, unknown>;
+    const delivery = jsonRequired((await artifactStore.read({ companyId: "company_1", storagePath: deliveryRow.storage_path, sha256: deliveryRow.sha256 })).toString("utf8")) as Record<string, unknown>;
     expect(delivery).toMatchObject({
       version: 1,
       checkId: "merge-developer-1",
@@ -1392,7 +1393,7 @@ test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Codex 
     let changed = false;
     for (let index = lines.length - 1; index >= 0; index -= 1) {
       try {
-        const event = JSON.parse(lines[index]!) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
+        const event = jsonRequired(lines[index]!) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
         if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
           lines[index] = JSON.stringify({ ...event, item: { ...event.item, text: "not valid Lead JSON" } });
           changed = true;

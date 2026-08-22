@@ -1,4 +1,5 @@
 import { redact } from "./logging.js";
+import { jsonRequired } from "./task-utils.js";
 
 const MAX_COMMAND_LENGTH = 80;
 
@@ -7,7 +8,7 @@ type CodexEvent = { type?: unknown; item?: { type?: unknown; command?: unknown; 
 /** Maps the public portion of a Codex JSONL event to a concise live status. */
 export function developerLiveStatus(line: string): string | undefined {
   let event: CodexEvent;
-  try { event = JSON.parse(line) as CodexEvent; } catch { return undefined; }
+  try { event = jsonRequired(line) as CodexEvent; } catch { return undefined; }
   const type = typeof event.type === "string" ? event.type : "";
   const itemType = typeof event.item?.type === "string" ? event.item.type : "";
   if (type === "item.started" && itemType === "command_execution") {

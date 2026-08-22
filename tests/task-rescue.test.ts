@@ -11,6 +11,7 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { TaskRescueService } from "../src/task-rescue.js";
 import { buildInitialIssueWorkflowState, IssueWorkflowStateSchema } from "../src/temporal/issue-contracts.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 function state(revision: number) {
   return IssueWorkflowStateSchema.parse({
@@ -43,7 +44,7 @@ test("rescue resyncs the live workflow projection before retrying its allowed co
     const tasks = {
       getTask: vi.fn().mockImplementation(() => {
         const projected = database.authQuery((db) => db.prepare("SELECT revision, allowed_commands_json FROM forge_issue_projections WHERE task_id = 'task-rescue'").get() as { revision: number; allowed_commands_json: string } | undefined);
-        return projected ? { ...stale, revision: projected.revision, allowedCommands: JSON.parse(projected.allowed_commands_json) } : stale;
+        return projected ? { ...stale, revision: projected.revision, allowedCommands: jsonRequired(projected.allowed_commands_json) } : stale;
       }),
       executeCommand: vi.fn().mockResolvedValue(undefined),
     };

@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 
 import { buildDraftPullRequestProjection, createGithubReleasePort, GithubReleaseFailure, type GithubCommandSpec, type GithubCommandResult } from "../src/github-release.js";
 import { isRetryableReleaseFailure } from "../src/release-failures.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 const baseSha = "a".repeat(40);
 const headSha = "b".repeat(40);
@@ -46,10 +47,10 @@ test("uses supported gh api commands and strictly parses branch and paginated pu
     { stdout: "", stderr: "" },
     { stdout: "", stderr: "" },
     { stdout: JSON.stringify({ commit: { sha: baseSha } }), stderr: "" },
-    { stdout: JSON.stringify([[JSON.parse(pull())]]), stderr: "" },
-    { stdout: JSON.stringify([[JSON.parse(pull({ state: "closed", draft: false, merged_at: "2026-08-11T00:00:00.000Z" }))]]), stderr: "" },
+    { stdout: JSON.stringify([[jsonRequired(pull())]]), stderr: "" },
+    { stdout: JSON.stringify([[jsonRequired(pull({ state: "closed", draft: false, merged_at: "2026-08-11T00:00:00.000Z" }))]]), stderr: "" },
     { stdout: pull({ title: "Improve releases", body: "Useful description" }), stderr: "" },
-    { stdout: JSON.stringify(JSON.parse(pull({ number: 8, html_url: "https://github.com/acme/forge/pull/8" }))), stderr: "" },
+    { stdout: JSON.stringify(jsonRequired(pull({ number: 8, html_url: "https://github.com/acme/forge/pull/8" }))), stderr: "" },
   ]);
   const github = createGithubReleasePort({ ghCommand: "gh", gitCommand: "git", runner: value.runner });
 

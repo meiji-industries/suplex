@@ -8,6 +8,7 @@ import type { ForgeDatabase } from "./database.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { redact } from "./logging.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
+import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -237,7 +238,7 @@ export function evaluateExactHead(input: CiEvaluationInput): CiEvaluationResult 
 function parseJsonDocuments(stdout: string): unknown[] {
   const trimmed = stdout.trim();
   if (!trimmed) throw new CiProviderFailure("invalid_response", null, "Provider returned an empty response");
-  try { return [JSON.parse(trimmed) as unknown]; } catch { /* headers may precede JSON */ }
+  try { return [jsonRequired(trimmed) as unknown]; } catch { /* headers may precede JSON */ }
   const documents: unknown[] = [];
   for (let start = 0; start < trimmed.length; start += 1) {
     if (trimmed[start] !== "{" && trimmed[start] !== "[") continue;
@@ -257,7 +258,7 @@ function parseJsonDocuments(stdout: string): unknown[] {
       else if (character === "}" || character === "]") {
         depth -= 1;
         if (depth === 0) {
-          try { documents.push(JSON.parse(trimmed.slice(start, end + 1)) as unknown); start = end; } catch { /* keep looking after provider headers */ }
+          try { documents.push(jsonRequired(trimmed.slice(start, end + 1)) as unknown); start = end; } catch { /* keep looking after provider headers */ }
           break;
         }
       }

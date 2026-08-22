@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 
 import { redact, StructuredLogger } from "../src/logging.js";
+import { json } from "../src/task-utils.js";
 
 test("redacts credential-shaped keys and values before serialization", () => {
   const result = redact({
@@ -38,7 +39,7 @@ test("emits Pino JSON with correlation fields and redacted values", () => {
     authorization: "Bearer secret-token",
   });
 
-  const record = JSON.parse(lines[0] ?? "{}");
+  const record = json<Record<string, unknown>>(lines[0] ?? "{}", {});
   expect(record.message).toBe("provider failed");
   expect(record.workflowId).toBe("workflow-1");
   expect(record.runId).toBe("run-1");

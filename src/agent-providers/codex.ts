@@ -16,6 +16,7 @@ import { CodexTurnSupervisor, sanitizeCodexLine } from "./codex-turn-supervisor.
 import { prepareCodexTurnWrapper } from "./codex-turn-wrapper.js";
 import { catalogSupportsCodexTurn } from "./codex-turn.js";
 import type { AgentProfileSettings, AgentProvider, AgentTranscript, AgentTranscriptOptions, AgentTurnRequest, AgentTurnWrapperRequest, LeadInvocation, LeadProcessResult, PreparedAgentTurnWrapper } from "./provider.js";
+import { jsonRequired } from "../task-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -178,7 +179,7 @@ export const runCodexProcess = defaultProcessRunner;
 
 function eventValue(line: string): { type: string | undefined; threadId: string | undefined; sessionRef: string | undefined; itemText: string | undefined } {
   try {
-    const event = JSON.parse(line) as Record<string, unknown>;
+    const event = jsonRequired(line) as Record<string, unknown>;
     const item = event.item as Record<string, unknown> | undefined;
     return {
       type: typeof event.type === "string" ? event.type : undefined,
@@ -194,7 +195,7 @@ function eventValue(line: string): { type: string | undefined; threadId: string 
 function agentMessages(lines: string[]): string[] {
   return lines.flatMap((line) => {
     try {
-      const event = JSON.parse(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
+      const event = jsonRequired(line) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
       return event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string" ? [event.item.text] : [];
     } catch {
       return [];
@@ -216,7 +217,7 @@ function futureResetTimestamp(value: unknown, now = Date.now()): string | undefi
 function rateLimitTiming(outputLines: string[]): { retryAt?: string; retryAfterMs?: number } {
   for (const line of outputLines) {
     try {
-      const parsed = JSON.parse(line) as unknown;
+      const parsed = jsonRequired(line) as unknown;
       if (!parsed || typeof parsed !== "object") continue;
       const record = parsed as Record<string, unknown>;
       const nested = record.error && typeof record.error === "object" ? record.error as Record<string, unknown> : record;
@@ -294,7 +295,7 @@ export const codexProvider: AgentProvider = {
   async assertTurnCompatibility(command: string, settings: AgentProfileSettings): Promise<void> {
     try {
       const result = await execFileAsync(command, ["debug", "models", "--bundled"], { timeout: 8_000, maxBuffer: 2 * 1024 * 1024 });
-      if (!catalogSupportsCodexTurn(JSON.parse(result.stdout), settings)) {
+      if (!catalogSupportsCodexTurn(jsonRequired(result.stdout), settings)) {
         throw new AgentFailure("scope_configuration", "The configured Codex model, reasoning level, or service tier is unavailable", { nonRetryable: true });
       }
     } catch (error) {

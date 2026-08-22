@@ -12,6 +12,7 @@ import { authSchema, type AuthSchema } from "./auth-schema.js";
 import { canonicalJson } from "./canonical-json.js";
 import { IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueProjectionEvent, type IssueWorkflowState } from "./temporal/issue-contracts.js";
 import { StructuredLogger } from "./logging.js";
+import { jsonRequired } from "./task-utils.js";
 
 const projectionLogger = new StructuredLogger();
 
@@ -436,7 +437,7 @@ export class ForgeDatabase {
     const snapshot = database.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = ?").get(parsed.issueId, parsed.revision) as { state_json: string } | undefined;
     if (snapshot) {
       let stored: unknown;
-      try { stored = JSON.parse(snapshot.state_json); } catch {
+      try { stored = jsonRequired(snapshot.state_json); } catch {
         projectionLogger.warn("Replacing unreadable workflow projection snapshot");
         stored = null;
       }
@@ -469,7 +470,7 @@ export class ForgeDatabase {
     const snapshot = database.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = 0").get(parsed.issueId) as { state_json: string } | undefined;
     if (!snapshot) return;
     let stored: unknown;
-    try { stored = JSON.parse(snapshot.state_json); } catch { return; }
+    try { stored = jsonRequired(snapshot.state_json); } catch { return; }
     if (!stored || typeof stored !== "object") return;
     const legacy = stored as Record<string, unknown>;
     const canonical = IssueWorkflowStateSchema.safeParse(legacy);

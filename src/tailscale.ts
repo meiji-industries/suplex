@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 
 import type { ForgeConfig } from "./config.js";
 import { TailscaleServeStatusSchema, TailscaleStatusSchema } from "./schemas.js";
+import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -13,7 +14,7 @@ export async function discoverTailscaleHostname(command = "tailscale"): Promise<
 }
 
 export function parseTailscaleHostname(raw: string): string {
-  const status = TailscaleStatusSchema.parse(JSON.parse(raw));
+  const status = TailscaleStatusSchema.parse(jsonRequired(raw));
   const hostname = status.Self?.DNSName?.replace(/\.$/, "");
   if (!hostname || !hostname.endsWith(".ts.net")) {
     throw new Error("Tailscale did not report a MagicDNS hostname");
@@ -53,7 +54,7 @@ export async function isTailscaleServeConfigured(config: ForgeConfig, command = 
 }
 
 export function parseTailscaleServeStatus(raw: string): ReturnType<typeof TailscaleServeStatusSchema.parse> {
-  return TailscaleServeStatusSchema.parse(JSON.parse(raw));
+  return TailscaleServeStatusSchema.parse(jsonRequired(raw));
 }
 
 export async function disableTailscaleServe(port: number, command = "tailscale"): Promise<void> {

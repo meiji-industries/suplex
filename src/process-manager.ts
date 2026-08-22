@@ -5,6 +5,7 @@ import { dirname } from "node:path";
 import { promisify } from "node:util";
 
 import { ProcessRegistrySchema, TailscaleServeStatusSchema } from "./schemas.js";
+import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -146,7 +147,7 @@ export const defaultProcessController: ProcessController = {
   },
   async isServeConfigured(serve) {
     const result = await execFileAsync("tailscale", ["serve", "status", "--json"], { maxBuffer: 64 * 1024 });
-    const status = TailscaleServeStatusSchema.parse(JSON.parse(result.stdout));
+    const status = TailscaleServeStatusSchema.parse(jsonRequired(result.stdout));
     const route = Object.keys(status.Web ?? {}).find((key) => key.endsWith(`:${serve.port}`));
     const proxy = route ? status.Web?.[route]?.Handlers?.["/"]?.Proxy : undefined;
     return proxy === serve.backend;
@@ -261,7 +262,7 @@ export async function writeProcessRegistry(filename: string, registry: ProcessRe
 
 export async function readProcessRegistry(filename: string): Promise<ProcessRegistry> {
   const content = await readFile(filename, "utf8");
-  const parsed = ProcessRegistrySchema.safeParse(JSON.parse(content));
+  const parsed = ProcessRegistrySchema.safeParse(jsonRequired(content));
   if (!parsed.success) {
     throw new Error(`Forge process registry is invalid: ${parsed.error.issues[0]?.message ?? "unknown error"}`);
   }

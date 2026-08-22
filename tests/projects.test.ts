@@ -9,6 +9,7 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { ProjectService, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 interface Fixture {
   root: string;
@@ -204,7 +205,7 @@ test.skip("keeps an active project active while saving configuration history", a
     const revisions = value.database.authQuery((db) => db.prepare("SELECT revision, identity, normalized_json FROM forge_project_revisions WHERE project_id = ? ORDER BY revision").all(draft.id) as Array<{ revision: number; identity: string; normalized_json: string }>);
     expect(revisions).toHaveLength(2);
     expect(revisions[0]?.normalized_json).not.toContain("token");
-    expect(JSON.parse(revisions[0]?.normalized_json ?? "{}")).toMatchObject({ baseSha: "a".repeat(40), targetSha: "b".repeat(40) });
+    expect(jsonRequired(revisions[0]?.normalized_json ?? "{}")).toMatchObject({ baseSha: "a".repeat(40), targetSha: "b".repeat(40) });
   } finally {
     await close(value);
   }

@@ -28,7 +28,7 @@ import { parseCodexJsonl } from "./agent-providers/codex-jsonl.js";
 import { normalizeTaskActivityJsonl, type TaskActivityEvent } from "./task-activity.js";
 import type { HermesPrincipal } from "./hermes-agents.js";
 import type { HermesSafeTaskProjection } from "./http/contracts/hermes.js";
-import { creationRequestHash, duplicateTitle, finding, id, json, normalizeText, parseImageIds, parseMetadata, parseRoleAgents, publicDeveloperSummary, shaAbbrev, type TaskFinding } from "./task-utils.js";
+import { creationRequestHash, duplicateTitle, finding, id, json, normalizeText, parseImageIds, parseMetadata, parseRoleAgents, publicDeveloperSummary, shaAbbrev, type TaskFinding, jsonRequired } from "./task-utils.js";
 
 export { creationRequestHash, type TaskFinding } from "./task-utils.js";
 
@@ -1075,7 +1075,7 @@ export class TaskService {
       if (!company || company.status !== "active") throw new TaskFailure("Task creation failed", [finding("company-inactive", "companyId", "Task creation requires an active company")], 409);
       const proj = this.database.authQuery((db) => db.prepare("SELECT * FROM forge_projects WHERE id = ? AND company_id = ?").get(input.projectId, companyId) as { id: string; company_id: string; name: string; repository_path: string; worktree_root: string; repository_identity: string | null; base_branch: string; target_branch: string; setup_command: string; verification_command: string; required_checks_json: string; role_defaults_json: string; created_at: string; updated_at: string } | undefined);
       if (!proj) throw new TaskFailure("Not found", [], 404);
-      project = { id: proj.id, companyId: proj.company_id, name: proj.name, repositoryPath: proj.repository_path, worktreeRoot: proj.worktree_root, repository: proj.repository_identity ?? undefined, baseBranch: proj.base_branch, targetBranch: proj.target_branch, setupCommand: proj.setup_command, verificationCommand: proj.verification_command, requiredChecks: JSON.parse(proj.required_checks_json) as string[], roleDefaults: JSON.parse(proj.role_defaults_json) as RoleAssignments, createdAt: proj.created_at, updatedAt: proj.updated_at };
+      project = { id: proj.id, companyId: proj.company_id, name: proj.name, repositoryPath: proj.repository_path, worktreeRoot: proj.worktree_root, repository: proj.repository_identity ?? undefined, baseBranch: proj.base_branch, targetBranch: proj.target_branch, setupCommand: proj.setup_command, verificationCommand: proj.verification_command, requiredChecks: jsonRequired(proj.required_checks_json) as string[], roleDefaults: jsonRequired(proj.role_defaults_json) as RoleAssignments, createdAt: proj.created_at, updatedAt: proj.updated_at };
     }
 
     const validation = this.validateTaskInput(input);
@@ -1289,7 +1289,7 @@ export class TaskService {
         const autoApprovePlan = input.autoApprovePlan === true && authority.kind === "user";
         const deliveryTarget = input.deliveryTarget ?? legacyDeliveryTarget(input.pullRequestMode ?? "draft");
         const pullRequestMode = deliveryTarget === "pull_request_ready" ? "ready" : deliveryTarget === "merged" ? "auto_merge" : "draft";
-        await this.startCreationWorkflow(intent.id, intent.lease_token, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), JSON.parse(task.role_agents_json) as RoleAssignments, task.supplemental_review === 1, autoApprovePlan, authority.kind === "user" && autoApprovePlan ? authority.userId : undefined, pullRequestMode, authority.kind === "user" && deliveryTarget === "merged" ? authority.userId : undefined, deliveryTarget, input.runProjectTests !== false, input.visualEvidence ?? "off", task.request_hash, task.workflow_id);
+        await this.startCreationWorkflow(intent.id, intent.lease_token, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), jsonRequired(task.role_agents_json) as RoleAssignments, task.supplemental_review === 1, autoApprovePlan, authority.kind === "user" && autoApprovePlan ? authority.userId : undefined, pullRequestMode, authority.kind === "user" && deliveryTarget === "merged" ? authority.userId : undefined, deliveryTarget, input.runProjectTests !== false, input.visualEvidence ?? "off", task.request_hash, task.workflow_id);
         const updated = this.getTaskByIdInternal(task.id);
         return { task: updated, created: false };
       }
@@ -1377,7 +1377,7 @@ export class TaskService {
       ORDER BY revision DESC LIMIT 1`).get(task.id, task.workflowId) as { state_json: string; runId: string | null } | undefined);
     if (!snapshot) throw new TaskFailure("Issue cancellation could not be reconciled", [finding("workflow-not-running", "workflow", "The workflow ended before Forge recorded a cancellable state")], 409, task);
     let stored: unknown;
-    try { stored = JSON.parse(snapshot.state_json); } catch {
+    try { stored = jsonRequired(snapshot.state_json); } catch {
       throw new TaskFailure("Issue cancellation could not be reconciled", [finding("projection-invalid", "workflow", "The last workflow state cannot be read")], 409, task);
     }
     const state = IssueWorkflowStateSchema.parse(stored);
@@ -1615,7 +1615,7 @@ export class TaskService {
     let lastOutputAt: string | null = null;
     const statusPath = resolve(spoolPath, "..", "status.json");
     try {
-      const value = JSON.parse(readFileSync(statusPath, "utf8")) as { updatedAt?: unknown };
+      const value = jsonRequired(readFileSync(statusPath, "utf8")) as { updatedAt?: unknown };
       if (typeof value.updatedAt === "string" && !Number.isNaN(Date.parse(value.updatedAt))) lastOutputAt = value.updatedAt;
     } catch { /* A missing or partial wrapper status does not hide live events. */ }
     const progress: AgentProgressExecution = { id: execution.id, status, startedAt: execution.startedAt, finishedAt: execution.finishedAt, lastHeartbeatAt: execution.lastHeartbeatAt, lastOutputAt, currentStep: null };
@@ -1772,7 +1772,7 @@ export class TaskService {
     const snapshots = this.database.authQuery((db) => db.prepare("SELECT company_id, workflow_id, revision, state_json FROM forge_workflow_snapshots WHERE task_id = ? ORDER BY revision DESC").all(row.id) as Array<{ company_id: string; workflow_id: string; revision: number; state_json: string }>);
     for (const snapshot of snapshots) {
       let raw: unknown;
-      try { raw = JSON.parse(snapshot.state_json); } catch { continue; }
+      try { raw = jsonRequired(snapshot.state_json); } catch { continue; }
       const record = raw !== null && typeof raw === "object" ? raw as Record<string, unknown> : {};
       const parsed = IssueWorkflowStateSchema.safeParse({
         ...record,
@@ -1889,7 +1889,7 @@ export class TaskService {
     const plans = planRows.flatMap((planRow): PlanArtifactView[] => {
       try {
         const subject = PlanSubjectSchema.parse({ companyId: row.company_id, issueId: row.id, workflowId: row.workflow_id, originalPlanRevision: planRow.originalPlanRevision, outputId: planRow.id, outputRevision: planRow.outputRevision, finalVersion: planRow.finalVersion, artifactId: planRow.artifactId, artifactSha256: planRow.artifactSha256, leadSessionRef: planRow.leadSessionRef, leadExecutionId: planRow.leadExecutionId, evidenceManifestArtifactId: planRow.evidenceManifestArtifactId, evidenceManifestSha256: undefined });
-        const content = PersistedLeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: planRow.storagePath, sha256: planRow.storedSha256 }).toString("utf8")));
+        const content = PersistedLeadOutputSchema.parse(jsonRequired(this.artifacts.readSync({ companyId: row.company_id, storagePath: planRow.storagePath, sha256: planRow.storedSha256 }).toString("utf8")));
         return [{ subject, summary: planRow.summary, content, createdAt: planRow.createdAt, status: subject.outputId === finalSubject?.outputId ? "current" : "superseded" }];
       } catch {
         return [];
@@ -1910,7 +1910,7 @@ export class TaskService {
     const row = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'materiality-evidence'").get(subject.artifactId, companyId) as { storagePath: string; sha256: string } | undefined);
     if (!row) return { categories: subject.categories, evidenceArtifactId: subject.artifactId, evidenceArtifactSha256: subject.artifactSha256 ?? "", evidence: [] };
     try {
-      const artifact = MaterialityEvidenceArtifactSchema.parse(JSON.parse(this.artifacts.readSync({ companyId, storagePath: row.storagePath, sha256: row.sha256 }).toString("utf8")));
+      const artifact = MaterialityEvidenceArtifactSchema.parse(jsonRequired(this.artifacts.readSync({ companyId, storagePath: row.storagePath, sha256: row.sha256 }).toString("utf8")));
       const evidence: MaterialityView["evidence"] = artifact.evidence.map((entry) => ({ category: entry.category, source: "lead" as const, refs: entry.evidenceRefs, rationale: entry.rationale }));
       const leadCategories = new Set(artifact.evidence.map((entry) => entry.category));
       for (const category of deterministicMaterialCategories(artifact.affectedPaths)) {
@@ -1931,8 +1931,8 @@ export class TaskService {
     if (!row) return undefined;
     const profile = this.database.authQuery((db) => db.prepare("SELECT id, name FROM forge_profiles WHERE id = ?").get(row.profileId) as { id: string; name: string } | undefined);
     try {
-      const opinion = SupplementalReviewSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.opinionStoragePath, sha256: row.opinionSha256 }).toString("utf8")));
-      const responseRaw = row.responseArtifactId && row.responseStoragePath && row.responseSha256 ? JSON.parse(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.responseStoragePath, sha256: row.responseSha256 }).toString("utf8")) as { reviewResponse?: unknown; summary?: unknown } : undefined;
+      const opinion = SupplementalReviewSchema.parse(jsonRequired(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.opinionStoragePath, sha256: row.opinionSha256 }).toString("utf8")));
+      const responseRaw = row.responseArtifactId && row.responseStoragePath && row.responseSha256 ? jsonRequired(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.responseStoragePath, sha256: row.responseSha256 }).toString("utf8")) as { reviewResponse?: unknown; summary?: unknown } : undefined;
       const plannerResponse = typeof responseRaw?.reviewResponse === "string" ? responseRaw.reviewResponse : typeof responseRaw?.summary === "string" ? responseRaw.summary : undefined;
       return { reviewId: row.reviewId, reviewerProfile: { id: profile?.id ?? row.profileId, name: profile?.name ?? "Reviewer" }, verdict: opinion.verdict, summary: opinion.summary, concerns: opinion.concerns, artifactId: row.artifactId, ...(plannerResponse ? { plannerResponse } : {}), createdAt: row.createdAt };
     } catch {
@@ -2156,7 +2156,7 @@ export class TaskService {
     const artifact = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'developer-delivery'").get(artifactId, companyId) as { storagePath: string; sha256: string } | undefined);
     if (!artifact) return null;
     try {
-      const report = JSON.parse(this.artifacts.readSync({ companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 }).toString("utf8")) as { summary?: unknown };
+      const report = jsonRequired(this.artifacts.readSync({ companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 }).toString("utf8")) as { summary?: unknown };
       return typeof report.summary === "string" && report.summary.trim() ? report.summary.trim() : null;
     } catch { return null; }
   }
@@ -2209,7 +2209,7 @@ export class TaskService {
       FROM forge_issue_outputs o JOIN forge_artifacts a ON a.id = o.output_artifact_id JOIN forge_artifacts e ON e.id = o.evidence_artifact_id
       WHERE o.task_id = ? AND o.company_id = ? ORDER BY o.revision DESC LIMIT 1`).get(taskId, companyId) as LeadOutputRow | undefined);
     if (!row) return undefined;
-    const content = PersistedLeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
+    const content = PersistedLeadOutputSchema.parse(jsonRequired(this.artifacts.readSync({ companyId: row.company_id, storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
     return { kind: row.kind, summary: row.summary, sessionRef: row.session_ref, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };
   }
 

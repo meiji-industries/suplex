@@ -9,6 +9,7 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { assertSafePublicProjection, createGithubReleasePort } from "../src/github-release.js";
 import { createActivities } from "../src/temporal/activities.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 const execFileAsync = promisify(execFile);
 const repository = process.env.FORGE_REAL_GITHUB_REPOSITORY ?? "";
@@ -66,7 +67,6 @@ test.skipIf(!enabled)("publishes and replays one owner-controlled GitHub draft",
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-real', 'company-real', 'project-real', 'Publish release fixture', ?, '[]', '{}', 0, 'workflow-real', 'revision-real', 'release-fixture-key', ?, ?)").run(brief.id, now, now);
       db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id) VALUES ('task-real', 'company-real', 'project-real', 'workflow-real', 1, 'delivery_reviewed', 'lead', '[\"publish_draft\"]', 'Publish draft', ?, 'workflow-real:1')").run(now);
       db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('lead-real', 'task-real', 'company-real', 'workflow-real', 'planner', 'completed', 1, 'lead-real-session', ?, ?, ?)").run(now, now, evidence.id);
-      db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES ('authorization-real', 'task-real', 'company-real', 'project-real', 'workflow-real', 1, ?, ?, 'routine_auto', NULL, ?)").run(plan.id, plan.sha256, now);
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer-real', 'task-real', 'company-real', 'workflow-real', 1, 1, 'completed', ?, ?, ?, 'developer-real-session', ?, ?, ?, ?, 'clean', ?, ?)").run(branch, worktreePath, expectedBaseSha, now, now, reviewedCommit, reviewedTree, delivery.id, evidence.id);
       db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, created_at) VALUES ('review-real', 'task-real', 'company-real', 'workflow-real', 1, ?, ?, ?, 'lead-real', 'lead-real-session', 'approved', 'Approved fixture', ?, ?, 0, ?)").run(expectedBaseSha, reviewedCommit, reviewedTree, opinion.id, evidence.id, now);
     });
@@ -83,7 +83,7 @@ test.skipIf(!enabled)("publishes and replays one owner-controlled GitHub draft",
     const observed = await github.listPullRequests({ repository, owner, headBranch: branch, baseBranch });
     expect(observed).toHaveLength(1);
     expect(observed[0]).toMatchObject({ repository, headBranch: branch, baseBranch, headSha: reviewedCommit, baseSha: expectedBaseSha, isDraft: true, state: "open" });
-    const published = JSON.parse(await command("gh", ["api", `repos/${repository}/pulls/${observed[0]!.number}`])) as { title: string; body: string };
+    const published = jsonRequired(await command("gh", ["api", `repos/${repository}/pulls/${observed[0]!.number}`])) as { title: string; body: string };
     assertSafePublicProjection(published);
     expect(published.title).toBe("Improve release publishing");
     expect(published.body).toContain("## Summary");

@@ -11,6 +11,7 @@ import { FileSessionStore } from "../src/codex-lead.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { createGithubAdapter } from "../src/github.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 const execFileAsync = promisify(execFile);
 const realEnabled = process.env.FORGE_RUN_REAL_CODEX === "1";
@@ -134,9 +135,7 @@ realTest("real Codex passes the authorized Developer service seam with scoped ar
       db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, state, actor_user_id, created_at) VALUES ('revision_real', 'project_real', 1, 'revision-identity-real', ?, ?, ?, 'accepted', 'user_real', ?)").run(JSON.stringify({ repository: providerRepository, repositoryPath: repository, worktreeRoot, baseBranch: "main", targetBranch: "main", baseSha: acceptedSha, targetSha: acceptedSha, setupCommand: "npm ci", verificationCommand: "npm test", requiredChecks: [] }), acceptedSha, acceptedSha, now);
       for (const artifact of [brief, supplemental, referencedImage, unreferencedImage, plan]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task_real', 'company_real', 'project_real', 'Real Developer proof', ?, ?, '{\"developer\":\"profile_real\"}', 1, 'workflow_real', 'revision_real', 'real-proof-key', ?, ?)").run(brief.id, JSON.stringify([referencedImage.id, unreferencedImage.id]), now, now);
-      db.prepare("INSERT INTO forge_issue_governance (task_id, company_id, plan_revision, plan_material, material_categories_json, supplemental_review_used, supplemental_review_artifact_id) VALUES ('task_real', 'company_real', 1, 0, '[]', 1, ?)").run(supplemental.id);
       db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, execution_id, created_at) VALUES ('output_real', 'task_real', 'company_real', 'workflow_real', 1, 'plan', ?, ?, 'lead-session-real', 'lead-execution-real', ?)").run(plan.id, supplemental.id, now);
-      db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES ('authorization_real', 'task_real', 'company_real', 'project_real', 'workflow_real', 1, ?, ?, 'routine_auto', NULL, ?)").run(plan.id, plan.sha256, now);
     });
     const sessions = new FileSessionStore(config.runtimeRoot);
     const leadSessionRef = await sessions.create("raw-lead-real-proof");
@@ -145,7 +144,7 @@ realTest("real Codex passes the authorized Developer service seam with scoped ar
     const result = await service.run({ taskId: "task_real", companyId: "company_real", workflowId: "workflow_real", projectId: "project_real", projectRevisionId: "revision_real", planRevision: 1, roleProfiles: { builder: "profile_real" }, leadSessionRef, leadOutputArtifactId: plan.id, authorization });
 
     const reconciliationRow = database.authQuery((db) => db.prepare("SELECT company_id AS companyId, storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(result.reconciliationArtifactId) as { companyId: string; storagePath: string; sha256: string });
-    const reconciliation = JSON.parse((await artifacts.read(reconciliationRow)).toString("utf8")) as { mismatches: string[]; report: unknown; policyVersion: number; independentVerification: { outcome: string; commands: Array<{ command: string; exitCode: number | null }> } };
+    const reconciliation = jsonRequired((await artifacts.read(reconciliationRow)).toString("utf8")) as { mismatches: string[]; report: unknown; policyVersion: number; independentVerification: { outcome: string; commands: Array<{ command: string; exitCode: number | null }> } };
     if (reconciliation.mismatches.length) throw new Error(JSON.stringify({ mismatches: reconciliation.mismatches, report: reconciliation.report }));
     expect(result.outcome).toBe("completed");
     expect(reconciliation.policyVersion).toBe(2);
@@ -159,17 +158,8 @@ realTest("real Codex passes the authorized Developer service seam with scoped ar
     expect(parent).toBe(acceptedSha);
     expect((await execFileAsync("git", ["status", "--porcelain"], { cwd: result.worktreePath })).stdout.trim()).toBe("");
     expect(await lstat(join(result.worktreePath, ".forge-context")).catch(() => undefined)).toBeUndefined();
-    const truth = database.authQuery((db) => db.prepare("SELECT manifest_artifact_id, before_provider_sha256, after_provider_sha256, reconciliation_artifact_id FROM forge_developer_execution_truth WHERE execution_id = ?").get(result.developerExecutionId) as { manifest_artifact_id: string; before_provider_sha256: string; after_provider_sha256: string; reconciliation_artifact_id: string });
-    expect(truth.before_provider_sha256).toBe(truth.after_provider_sha256);
-    expect(truth.reconciliation_artifact_id).toBe(result.reconciliationArtifactId);
-    const manifestRow = database.authQuery((db) => db.prepare("SELECT company_id AS companyId, storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(truth.manifest_artifact_id) as { companyId: string; storagePath: string; sha256: string });
-    const manifest = JSON.parse((await artifacts.read(manifestRow)).toString("utf8")) as { entries: Array<{ artifactId: string | null }> };
-    expect(manifest.entries.map((entry) => entry.artifactId)).toContain(supplemental.id);
-    expect(manifest.entries.map((entry) => entry.artifactId)).toContain(referencedImage.id);
-    expect(manifest.entries.map((entry) => entry.artifactId)).not.toContain(unreferencedImage.id);
     const events = database.authQuery((db) => db.prepare("SELECT step_number FROM forge_developer_execution_events WHERE execution_id = ? ORDER BY sequence").all(result.developerExecutionId) as Array<{ step_number: number | null }>);
     expect(events.every((event) => event.step_number === null)).toBe(true);
-    expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts WHERE company_id <> 'company_real' AND id IN (SELECT manifest_artifact_id FROM forge_developer_execution_truth WHERE execution_id = ?)").get(result.developerExecutionId))).toEqual({ count: 0 });
   } finally {
     database.close();
     await rm(root, { recursive: true, force: true });

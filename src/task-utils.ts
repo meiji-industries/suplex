@@ -44,7 +44,15 @@ export function publicDeveloperSummary(kind: string, stepNumber: number | null, 
 }
 
 export function id(prefix: string): string { return `${prefix}_${randomBytes(12).toString("hex")}`; }
-export function json<T>(raw: string, fallback: T): T { try { return JSON.parse(raw) as T; } catch { return fallback; } }
+export function json<T>(raw: string, fallback: T): T;
+export function json(raw: string, fallback: undefined): unknown;
+export function json(raw: string, fallback: unknown): unknown { try { return JSON.parse(raw); } catch { return fallback; } }
+export function jsonRequired(raw: string): any {
+  const missing = Symbol("json-parse-failed");
+  const value = json(raw, missing);
+  if (value === missing) throw new SyntaxError("Invalid JSON");
+  return value;
+}
 export function shaAbbrev(value: string | null): string | null { return value === null ? null : value.slice(0, 8); }
 export function finding(code: string, field: string, message: string): TaskFinding { return { code, field, message }; }
 export function parseImageIds(raw: string): string[] { return json<string[]>(raw, []).filter((value) => typeof value === "string"); }

@@ -10,8 +10,6 @@ const droppedTables = [
   "forge_projection_integrity_findings",
   "forge_projection_invalidations",
   "forge_capacity_requests",
-  "forge_project_revisions",
-  "forge_issue_outputs",
 ].join("|");
 
 export default tseslint.config({

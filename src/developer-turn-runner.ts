@@ -7,6 +7,7 @@ import type { ForgeConfig } from "./config.js";
 import type { ProcessController } from "./process-manager.js";
 import { requestDeveloperSupervisor, spawnDeveloperSupervisor } from "./developer-supervisor.js";
 import { DeveloperSupervisorInvocationSchema, DeveloperSupervisorSnapshotSchema, validateSupervisorResult, type DeveloperSupervisorInvocation } from "./developer-supervisor-protocol.js";
+import { jsonRequired } from "./task-utils.js";
 
 export type DeveloperTurnKind = "implementation" | "repair" | "merge_conflict_resolution";
 
@@ -52,7 +53,7 @@ export function deriveDeveloperExecutionId(workflowId: string, planRevision: num
 async function lines(root: string): Promise<string[]> {
   const events = await readFile(join(root, "events.jsonl"), "utf8").catch(() => "");
   return events.split(/\r?\n/).flatMap((line) => {
-    try { const event = JSON.parse(line) as { stream?: string; line?: string }; return event.stream === "stdout" && typeof event.line === "string" ? [event.line] : []; } catch { return []; }
+    try { const event = jsonRequired(line) as { stream?: string; line?: string }; return event.stream === "stdout" && typeof event.line === "string" ? [event.line] : []; } catch { return []; }
   });
 }
 
@@ -69,18 +70,18 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
   if (!prompt || prompt === "-") throw new Error("Builder prompt is missing");
   await writeFile(join(root, "prompt.txt"), prompt, { flag: "a", mode: 0o600 });
   await writeFile(join(root, "events.jsonl"), "", { flag: "a", mode: 0o600 });
-  const snapshot = await readFile(join(root, "supervisor.json"), "utf8").then((value) => DeveloperSupervisorSnapshotSchema.parse(JSON.parse(value))).catch(() => undefined);
+  const snapshot = await readFile(join(root, "supervisor.json"), "utf8").then((value) => DeveloperSupervisorSnapshotSchema.parse(jsonRequired(value))).catch(() => undefined);
   if (!snapshot) (input.spawnSupervisor ?? spawnDeveloperSupervisor)(root);
   await input.onMilestone?.(snapshot ? "reconnecting" : "active");
   let startedPid: number | undefined;
   for (;;) {
-    const result = await readFile(join(root, "result.json"), "utf8").then((value) => validateSupervisorResult(JSON.parse(value))).catch(() => undefined);
+    const result = await readFile(join(root, "result.json"), "utf8").then((value) => validateSupervisorResult(jsonRequired(value))).catch(() => undefined);
     if (result) {
       const output = await lines(root);
       await input.onMilestone?.("result_pending_claim");
       return { executionId: input.executionId, resultHash: result.resultHash, exitCode: result.exitCode, exitSignal: result.exitSignal, lines: output, outputTruncated: result.outputTruncated, terminal: "result", lastHeartbeatAt: result.finishedAt };
     }
-    const current = await readFile(join(root, "supervisor.json"), "utf8").then((value) => DeveloperSupervisorSnapshotSchema.parse(JSON.parse(value))).catch(() => undefined);
+    const current = await readFile(join(root, "supervisor.json"), "utf8").then((value) => DeveloperSupervisorSnapshotSchema.parse(jsonRequired(value))).catch(() => undefined);
     const child = current?.child;
     if (child && child.pid !== startedPid) {
       startedPid = child.pid;
@@ -92,4 +93,3 @@ export async function runDeveloperTurn(input: DeveloperTurnRunInput): Promise<De
     await sleep(500);
   }
 }
-

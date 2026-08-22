@@ -1,6 +1,7 @@
 import { AuthService } from "./auth.js";
 import type { ForgeDatabase } from "./database.js";
 import { type IssueCommand } from "./temporal/issue-contracts.js";
+import { jsonRequired } from "./task-utils.js";
 
 export interface AttentionAction {
   command: IssueCommand;
@@ -44,7 +45,7 @@ const NOTE_COMMANDS = new Set<IssueCommand>(["approve_plan", "reject_plan", "req
 
 function actions(raw: string, expectedRevision: number): AttentionAction[] {
   try {
-    const commands = JSON.parse(raw);
+    const commands = jsonRequired(raw);
     if (!Array.isArray(commands) || !commands.every((command): command is IssueCommand => typeof command === "string")) return [];
     return commands.map((command) => ({ command, label: command.replaceAll("_", " "), expectedRevision, requiresNote: NOTE_COMMANDS.has(command), destructive: command === "cancel_issue" }));
   } catch {

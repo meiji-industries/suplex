@@ -22,6 +22,7 @@ import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
+import { jsonRequired } from "./task-utils.js";
 
 
 const execFileAsync = promisify(execFile);
@@ -140,14 +141,14 @@ export interface DeveloperServiceOptions {
 }
 
 function safeJsonLine(line: string): string {
-  try { return JSON.stringify(redact(JSON.parse(line))) ?? JSON.stringify({ type: "empty" }); } catch { return JSON.stringify({ type: "text", text: redact(line) }); }
+  try { return JSON.stringify(redact(jsonRequired(line))) ?? JSON.stringify({ type: "empty" }); } catch { return JSON.stringify({ type: "text", text: redact(line) }); }
 }
 
 function parseDeliveryReport(lines: string[], provider: AgentProvider): DeveloperDeliveryReport {
   const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-delivery-report", "Codex Developer did not return a delivery report");
   let parsed: unknown;
-  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-delivery-report", "Codex Developer returned malformed delivery JSON"); }
+  try { parsed = jsonRequired(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-delivery-report", "Codex Developer returned malformed delivery JSON"); }
   const report = DeveloperDeliveryReportSchema.safeParse(parsed);
   if (!report.success) throw new AgentFailure("invalid-delivery-report", "Codex Developer returned a delivery report outside the required schema");
   return report.data;
@@ -157,7 +158,7 @@ function parseRepairReport(lines: string[], provider: AgentProvider): z.infer<ty
   const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-repair-report", "Codex Developer did not return a repair report");
   let parsed: unknown;
-  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-repair-report", "Codex Developer returned malformed repair JSON"); }
+  try { parsed = jsonRequired(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-repair-report", "Codex Developer returned malformed repair JSON"); }
   const result = DeveloperRepairReportSchema.safeParse(parsed);
   if (!result.success) throw new AgentFailure("invalid-repair-report", "Codex Developer returned a repair report outside the required schema");
   return result.data;
@@ -167,7 +168,7 @@ function parseMergeConflictResolutionReport(lines: string[], provider: AgentProv
   const text = provider.agentMessages(lines).at(-1);
   if (!text) throw new AgentFailure("missing-merge-resolution-report", "Codex Developer did not return a merge-conflict resolution report");
   let parsed: unknown;
-  try { parsed = JSON.parse(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-merge-resolution-report", "Codex Developer returned malformed merge-conflict resolution JSON"); }
+  try { parsed = jsonRequired(text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "")); } catch { throw new AgentFailure("malformed-merge-resolution-report", "Codex Developer returned malformed merge-conflict resolution JSON"); }
   const result = DeveloperMergeConflictResolutionReportSchema.safeParse(parsed);
   if (!result.success) throw new AgentFailure("invalid-merge-resolution-report", "Codex Developer returned a merge-conflict resolution outside the required schema");
   return result.data;
@@ -253,7 +254,7 @@ export class DeveloperService {
       this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.planStoragePath, sha256: context.planSha256 }).then((bytes) => bytes.toString("utf8")),
       this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.evidenceStoragePath, sha256: context.evidenceSha256 }).then((bytes) => bytes.toString("utf8")),
     ]);
-    const plan = JSON.parse(planText) as { kind?: unknown; steps?: Array<{ number: number; instruction: string; verification: string }> };
+    const plan = jsonRequired(planText) as { kind?: unknown; steps?: Array<{ number: number; instruction: string; verification: string }> };
     if (plan.kind !== "plan" || !Array.isArray(plan.steps) || !plan.steps.length) throw new AgentFailure("plan-unavailable", "A final Lead plan is required before development");
     const profile = this.executionProfile(input, input.roleProfiles.builder);
     if (!profile || profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
@@ -386,7 +387,7 @@ export class DeveloperService {
     const conflictRow = this.database.authQuery((db) => db.prepare("SELECT a.storage_path, a.sha256 FROM forge_artifacts a JOIN forge_forward_merges f ON f.conflict_artifact_id = a.id AND f.id = ? AND f.task_id = ? AND f.company_id = ? WHERE a.id = ? AND a.company_id = ? AND a.kind = 'forward-merge-conflict'").get(input.forwardMergeId, input.taskId, input.companyId, input.conflictArtifact.id, input.companyId) as { storage_path: string; sha256: string } | undefined);
     if (!conflictRow) throw new AgentFailure("merge-resolution-evidence-missing", "Forward-merge conflict evidence is unavailable");
     try {
-      conflict = ForwardMergeConflictArtifactSchema.parse(JSON.parse((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: conflictRow.storage_path, sha256: conflictRow.sha256 })).toString("utf8")));
+      conflict = ForwardMergeConflictArtifactSchema.parse(jsonRequired((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: conflictRow.storage_path, sha256: conflictRow.sha256 })).toString("utf8")));
     } catch {
       throw new AgentFailure("merge-resolution-evidence-corrupt", "Forward-merge conflict evidence failed integrity validation");
     }

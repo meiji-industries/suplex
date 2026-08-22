@@ -1,5 +1,6 @@
 import { redact } from "../logging.js";
 import { defaultProcessController, processIdentityMatches, type OwnedProcess, type ProcessController, type ProcessInspection } from "../process-manager.js";
+import { jsonRequired } from "../task-utils.js";
 
 const MAX_EVENT_TEXT = 32_000;
 const MAX_LINE = 128_000;
@@ -69,7 +70,7 @@ export function sanitizeCodexEvent(value: unknown): Record<string, unknown> {
 
 export function sanitizeCodexLine(line: string): string {
   try {
-    return JSON.stringify(sanitizeCodexEvent(JSON.parse(line))).slice(0, MAX_LINE);
+    return JSON.stringify(sanitizeCodexEvent(jsonRequired(line))).slice(0, MAX_LINE);
   } catch {
     return JSON.stringify({ type: "text", text: safeText(line) }).slice(0, MAX_LINE);
   }

@@ -22,6 +22,7 @@ import { ProjectService, type LocalRepositoryAdapter } from "../src/projects.js"
 import type { GithubAdapter } from "../src/github.js";
 import { TaskService } from "../src/tasks.js";
 import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -274,7 +275,7 @@ test("authenticated Ticket 07 production proof is present and complete", async (
     await rm(root, { recursive: true, force: true });
   }
 
-  const proof = JSON.parse(await readFile(process.env.FORGE_TICKET_07_REAL_PROOF!, "utf8")) as Partial<Ticket07Proof>;
+  const proof = jsonRequired(await readFile(process.env.FORGE_TICKET_07_REAL_PROOF!, "utf8")) as Partial<Ticket07Proof>;
   expect(proof.status).toBe("passed");
   expect(proof.repository).toBe(process.env.FORGE_TICKET_07_REAL_REPOSITORY);
   expect(proof.forgeCommitSha).toMatch(/^[a-f0-9]{40,64}$/i);

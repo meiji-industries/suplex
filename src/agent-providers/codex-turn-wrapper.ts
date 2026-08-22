@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import { FileSessionStore } from "../session-store.js";
 import { buildCodexTurnArgs, type CodexTurnSettings } from "./codex-turn.js";
 import { sanitizeCodexLine } from "./codex-turn-supervisor.js";
+import { jsonRequired } from "../task-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -74,7 +75,7 @@ async function childIdentity(pid: number): Promise<{ processGroup: number; start
 
 function safeError(value: string): string {
   try {
-    const parsed = JSON.parse(sanitizeCodexLine(value)) as { text?: unknown; error?: { message?: unknown } };
+    const parsed = jsonRequired(sanitizeCodexLine(value)) as { text?: unknown; error?: { message?: unknown } };
     return typeof parsed.text === "string" ? parsed.text.slice(0, 2_000) : typeof parsed.error?.message === "string" ? parsed.error.message.slice(0, 2_000) : "Codex wrapper failed";
   } catch {
     return sanitizeCodexLine(value).slice(0, 2_000) || "Codex wrapper failed";
@@ -101,7 +102,7 @@ async function runWrapper(requestPath: string): Promise<void> {
   // The detached wrapper owns the spool; a restarted worker may close this
   // optional observation pipe while the Codex child is still running.
   process.stdout.on("error", () => undefined);
-  const request = JSON.parse(await readFile(requestPath, "utf8")) as CodexTurnWrapperRequest;
+  const request = jsonRequired(await readFile(requestPath, "utf8")) as CodexTurnWrapperRequest;
   await mkdir(dirname(request.spoolPath), { recursive: true, mode: 0o700 });
   const startedAt = new Date().toISOString();
   let status: WrapperStatus = { state: "starting", startedAt, updatedAt: startedAt, eventOffset: 0 };
@@ -119,12 +120,12 @@ async function runWrapper(requestPath: string): Promise<void> {
     const base = line.startsWith("{\"type\":\"forge.wrapper_started\"") ? line : sanitizeCodexLine(line);
     let sanitized = base;
     try {
-      const parsed = JSON.parse(base) as Record<string, unknown>;
+      const parsed = jsonRequired(base) as Record<string, unknown>;
       if (typeof parsed.type === "string" && !parsed.type.startsWith("forge.")) sanitized = JSON.stringify({ ...parsed, observedAt: new Date().toISOString() });
     } catch { /* The sanitized fallback remains safe evidence. */ }
     let sessionRef: string | undefined;
     let event: { thread_id?: unknown; threadId?: unknown } | undefined;
-    try { event = JSON.parse(line) as { thread_id?: unknown; threadId?: unknown }; } catch { /* Not every Codex line is JSON. */ }
+    try { event = jsonRequired(line) as { thread_id?: unknown; threadId?: unknown }; } catch { /* Not every Codex line is JSON. */ }
     const rawThreadId = typeof event?.thread_id === "string" ? event.thread_id : typeof event?.threadId === "string" ? event.threadId : undefined;
     if (rawThreadId) {
       sessionRef = request.sessionRef ?? await sessionStore.reserve();

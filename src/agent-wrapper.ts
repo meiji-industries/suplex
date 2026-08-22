@@ -5,6 +5,7 @@ import { basename, delimiter, relative, resolve, sep, join } from "node:path";
 import { z } from "zod";
 
 import { promisify } from "node:util";
+import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -134,7 +135,7 @@ export async function createAgentWrapperManifest(input: Omit<AgentWrapperManifes
 export async function readAgentWrapperManifest(manifestPath: string): Promise<{ manifest: AgentWrapperManifest; paths: AgentWrapperDirectory }> {
   const absoluteManifestPath = resolve(manifestPath);
   if (basename(absoluteManifestPath) !== "manifest.json" || basename(resolve(absoluteManifestPath, "..", "..")) !== "agent-executions") throw new Error("Agent wrapper manifest path is outside the private runtime root");
-  const raw = AgentWrapperManifestSchema.parse(JSON.parse(await readFile(manifestPath, "utf8")));
+  const raw = AgentWrapperManifestSchema.parse(jsonRequired(await readFile(manifestPath, "utf8")));
   const paths = pathsForManifest(raw);
   assertUnder(join(resolve(raw.runtimeRoot), "agent-executions"), absoluteManifestPath);
   if (absoluteManifestPath !== resolve(paths.manifestPath)) throw new Error("Agent wrapper manifest path does not match its execution directory");
@@ -145,8 +146,8 @@ export async function inspectAgentWrapper(manifestPath: string): Promise<Wrapper
   const { manifest, paths } = await readAgentWrapperManifest(manifestPath);
   let state: AgentWrapperState | undefined;
   let result: AgentWrapperResult | undefined;
-  try { state = AgentWrapperStateSchema.parse(JSON.parse(await readFile(paths.statePath, "utf8"))); } catch { /* wrapper may not have started */ }
-  try { result = AgentWrapperResultSchema.parse(JSON.parse(await readFile(paths.resultPath, "utf8"))); } catch { /* terminal result is written last */ }
+  try { state = AgentWrapperStateSchema.parse(jsonRequired(await readFile(paths.statePath, "utf8"))); } catch { /* wrapper may not have started */ }
+  try { result = AgentWrapperResultSchema.parse(jsonRequired(await readFile(paths.resultPath, "utf8"))); } catch { /* terminal result is written last */ }
   return { directory: paths, manifest, ...(state ? { state } : {}), ...(result ? { result } : {}), live: Boolean(state && ["starting", "running"].includes(state.status) && !result) };
 }
 

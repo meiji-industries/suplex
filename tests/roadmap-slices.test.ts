@@ -17,6 +17,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { ForwardMergeService } from "../src/forward-merge.js";
 import { GithubReleaseFailure, ReleaseService, type GithubAcceptancePort, type GithubPullRequest, type GithubReleasePort } from "../src/github-release.js";
 import { ArtifactStore } from "../src/artifacts.js";
+import { jsonRequired } from "../src/task-utils.js";
 
 const exec = promisify(execFile);
 const now = "2026-08-11T00:00:00.000Z";
@@ -183,7 +184,7 @@ test("backup archive verifies hashes and restores only into a separate clean loc
     const wrongVersion = join(value.root, "wrong-version.tar.gz");
     await rewriteArchive(archive, wrongVersion, async (root) => {
       const manifestPath = join(root, "manifest.json");
-      const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { version: number };
+      const manifest = jsonRequired(await readFile(manifestPath, "utf8")) as { version: number };
       manifest.version = 999;
       await writeFile(manifestPath, JSON.stringify(manifest));
     });

@@ -1,4 +1,5 @@
 import { redact } from "./logging.js";
+import { jsonRequired } from "./task-utils.js";
 
 export type TaskActivityKind = "thinking" | "command" | "output" | "message" | "status";
 export interface TaskActivityEvent { at: string; kind: TaskActivityKind; text: string; exitCode?: number }
@@ -19,11 +20,11 @@ export function normalizeTaskActivityJsonl(lines: Iterable<string>, fallbackAt =
   const events: TaskActivityEvent[] = [];
   for (const raw of lines) {
     let envelope: Record<string, unknown>;
-    try { envelope = JSON.parse(raw) as Record<string, unknown>; } catch { continue; }
+    try { envelope = jsonRequired(raw) as Record<string, unknown>; } catch { continue; }
     const at = timestamp(envelope.at ?? envelope.observedAt, fallbackAt);
     let event = envelope;
     if (typeof envelope.line === "string") {
-      try { event = JSON.parse(envelope.line) as Record<string, unknown>; } catch { continue; }
+      try { event = jsonRequired(envelope.line) as Record<string, unknown>; } catch { continue; }
     }
     const item = event.item && typeof event.item === "object" ? event.item as Record<string, unknown> : event;
     const type = typeof event.type === "string" ? event.type : "";

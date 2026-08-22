@@ -2,6 +2,7 @@ import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { resolveAgentProfiles } from "./projects.js";
 import { IssueWorkflowStartFailure, startIssueWorkflow } from "./temporal/service.js";
+import { jsonRequired } from "./task-utils.js";
 
 interface CreationIntentRow {
   id: string;
@@ -37,9 +38,9 @@ export async function reconcileTaskCreationIntents(database: ForgeDatabase, conf
         projectRevisionId: intent.project_revision_id,
         briefArtifactId: intent.brief_artifact_id,
         briefSha256: intent.brief_sha256,
-        imageArtifactIds: JSON.parse(intent.image_artifact_ids_json) as string[],
+        imageArtifactIds: jsonRequired(intent.image_artifact_ids_json) as string[],
         requestHash: intent.request_hash,
-        roleProfiles: database.authQuery((db) => resolveAgentProfiles(db, JSON.parse(intent.role_agents_json) as { planner?: string; builder?: string; reviewer?: string })),
+        roleProfiles: database.authQuery((db) => resolveAgentProfiles(db, jsonRequired(intent.role_agents_json) as { planner?: string; builder?: string; reviewer?: string })),
         supplementalReview: intent.supplemental_review === 1,
         repairCycleLimit: config.deliveryRepairCycleLimit,
       });

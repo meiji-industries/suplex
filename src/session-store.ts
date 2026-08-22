@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { AgentFailure } from "./agent-failure.js";
+import { jsonRequired } from "./task-utils.js";
 
 export interface SessionStore {
   create(rawSessionId: string): Promise<string>;
@@ -29,7 +30,7 @@ export class FileSessionStore implements SessionStore {
     if (!rawSessionId || rawSessionId.length > 256) throw new AgentFailure("session_identity_conflict", "Lead session identity is invalid");
     const filename = join(this.root, "sessions", `${sessionRef}.json`);
     let current: { sessionId?: unknown };
-    try { current = JSON.parse(await readFile(filename, "utf8")) as { sessionId?: unknown }; } catch (error) {
+    try { current = jsonRequired(await readFile(filename, "utf8")) as { sessionId?: unknown }; } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new AgentFailure("invalid-session-reference", "Lead session reference is not reserved");
       throw error;
     }
@@ -48,7 +49,7 @@ export class FileSessionStore implements SessionStore {
 
   async read(sessionRef: string): Promise<string> {
     this.validate(sessionRef);
-    const parsed = JSON.parse(await readFile(join(this.root, "sessions", `${sessionRef}.json`), "utf8")) as { sessionId?: unknown };
+    const parsed = jsonRequired(await readFile(join(this.root, "sessions", `${sessionRef}.json`), "utf8")) as { sessionId?: unknown };
     if (typeof parsed.sessionId !== "string" || !parsed.sessionId) throw new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
     return parsed.sessionId;
   }

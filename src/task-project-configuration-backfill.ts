@@ -4,6 +4,7 @@ import { ArtifactStore } from "./artifacts.js";
 import type { ForgeConfig } from "./config.js";
 import type { ForgeDatabase } from "./database.js";
 import { TaskProjectConfigurationSchema } from "./task-project-configuration.js";
+import { jsonRequired } from "./task-utils.js";
 
 type BackfillRow = {
   taskId: string;
@@ -38,13 +39,13 @@ export async function backfillTaskProjectConfigurations(database: ForgeDatabase,
   let materialized = 0;
   let recoveredFromProject = 0;
   for (const row of rows) {
-    const source = row.normalizedJson ? JSON.parse(row.normalizedJson) as Record<string, unknown> : {
+    const source = row.normalizedJson ? jsonRequired(row.normalizedJson) as Record<string, unknown> : {
       repositoryPath: row.repositoryPath, worktreeRoot: row.worktreeRoot, repository: row.repository,
       baseBranch: row.baseBranch, targetBranch: row.targetBranch, setupCommand: row.setupCommand,
-      verificationCommand: row.verificationCommand, requiredChecks: JSON.parse(row.requiredChecksJson),
+      verificationCommand: row.verificationCommand, requiredChecks: jsonRequired(row.requiredChecksJson),
     };
     if (!row.normalizedJson) recoveredFromProject += 1;
-    const roleAgents = JSON.parse(row.roleAgentsJson) as Record<string, string>;
+    const roleAgents = jsonRequired(row.roleAgentsJson) as Record<string, string>;
     const configuration = TaskProjectConfigurationSchema.parse({
       ...source,
       projectId: row.projectId,

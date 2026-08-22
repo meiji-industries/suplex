@@ -3,6 +3,8 @@ import { constants, closeSync, fstatSync, lstatSync, openSync, readFileSync } fr
 import { link, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
+import type { ForgeDatabase } from "./database.js";
+
 import { CompanyIdSchema } from "./schemas.js";
 import { z } from "zod";
 
@@ -167,7 +169,17 @@ function directoryIdentitySync(path: string): FileIdentity {
 }
 
 export class ArtifactStore {
-  constructor(private readonly root: string, private readonly options: ArtifactStoreOptions = {}) {}
+  private readonly database: ForgeDatabase | undefined;
+  private readonly options: ArtifactStoreOptions;
+
+  constructor(private readonly root: string, databaseOrOptions?: ForgeDatabase | ArtifactStoreOptions, options: ArtifactStoreOptions = {}) {
+    if (databaseOrOptions && "authTransaction" in databaseOrOptions) {
+      this.database = databaseOrOptions;
+      this.options = options;
+    } else {
+      this.options = databaseOrOptions ?? options;
+    }
+  }
 
   private async maybeFault(point: ArtifactFaultPoint, companyId: string, storagePath: string, stagingPath?: string): Promise<void> {
     await this.options.fault?.(point, { companyId, storagePath, ...(stagingPath ? { stagingPath } : {}) });
@@ -272,6 +284,20 @@ export class ArtifactStore {
   async put(companyId: string, kind: StoredArtifact["kind"], input: ArtifactInput): Promise<StoredArtifact> {
     const planned = this.plan(companyId, `put_${randomUUID().replaceAll("-", "")}`, kind, input);
     return this.write(planned, input.bytes);
+  }
+  async putArtifact(companyId: string, taskId: string, kind: string, bytes: Buffer | object, filename?: string): Promise<string> {
+    if (!this.database) throw new ArtifactFailure("database-unavailable", "Artifact registration requires a database");
+    const input = Buffer.isBuffer(bytes)
+      ? { bytes, filename: filename ?? `${kind}.bin`, mimeType: "application/octet-stream" }
+      : { bytes: Buffer.from(JSON.stringify(bytes), "utf8"), filename: filename ?? `${kind}.json`, mimeType: "application/json" };
+    const artifact = await this.put(companyId, kind as ArtifactKind, input);
+    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, taskId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt));
+    return artifact.id;
+  }
+
+  getArtifact(id: string): StoredArtifact | undefined {
+    if (!this.database) throw new ArtifactFailure("database-unavailable", "Artifact lookup requires a database");
+    return this.database.authQuery((db) => db.prepare("SELECT id, company_id AS companyId, kind, filename, mime_type AS mimeType, byte_size AS byteSize, sha256, storage_path AS storagePath, created_at AS createdAt FROM forge_artifacts WHERE id = ?").get(id) as StoredArtifact | undefined);
   }
 
   async putWithId(companyId: string, id: string, kind: StoredArtifact["kind"], input: ArtifactInput): Promise<StoredArtifact> {

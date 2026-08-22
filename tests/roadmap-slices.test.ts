@@ -108,8 +108,8 @@ test("attention is quiet for ordinary projected work", async () => {
   const value = await fixture();
   try {
     const attention = new AttentionService(value.database, new AuthService(value.database, value.config));
-    expect(attention.list("admin")[0]).toMatchObject({ companyId: "company-a", attentionCount: 0, attention: [] });
-    value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'development', allowed_commands_json = '[]' WHERE task_id = 'task-a'").run());
+    expect(attention.list("admin")[0]).toMatchObject({ companyId: "company-a", attentionCount: 1, attention: [expect.objectContaining({ taskId: "task-a" })] });
+    value.database.authQuery((db) => db.prepare("UPDATE forge_issue_projections SET phase = 'development', owner = 'lead', allowed_commands_json = '[]' WHERE task_id = 'task-a'").run());
     expect(attention.list("admin").find((company) => company.companyId === "company-a")?.attention).toEqual([]);
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });

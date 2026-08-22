@@ -44,6 +44,9 @@ export const IssueWorkflowInputSchema = z.object({
   autoApprovePlan: z.boolean().optional(),
   autoApprovePlanActorUserId: durableId.optional(),
   pullRequestMode: z.enum(["draft", "ready", "auto_merge"]).optional(),
+  deliveryTarget: z.enum(["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"]).optional(),
+  runProjectTests: z.boolean().optional(),
+  visualEvidence: z.enum(["off", "capture", "required"]).optional(),
   autoMergeActorUserId: durableId.optional(),
 }).merge(IssueWorkflowInputWithContinuationSchema);
 

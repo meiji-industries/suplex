@@ -1175,7 +1175,7 @@ export class TaskService {
         }
       });
       await this.maybeFault("after_task_committed", { intentId: reserved.intent.id, taskId });
-      await this.startCreationWorkflow(reserved.intent.id, reserved.intent.lease_token, taskId, companyId, input.projectId, project.activeRevisionId, briefArtifact, imageArtifacts, roleAgents, input.supplementalReview === true, autoApprovePlan, autoApprovePlanActorUserId, pullRequestMode, autoMergeActorUserId, requestHash, workflowId);
+      await this.startCreationWorkflow(reserved.intent.id, reserved.intent.lease_token, taskId, companyId, input.projectId, project.activeRevisionId, briefArtifact, imageArtifacts, roleAgents, input.supplementalReview === true, autoApprovePlan, autoApprovePlanActorUserId, pullRequestMode, autoMergeActorUserId, deliveryTarget, runProjectTests, visualEvidence, requestHash, workflowId);
       const task = this.getTaskByIdInternal(taskId);
       await this.maybeFault("before_response", { intentId: reserved.intent.id, taskId });
       return { task, created: true };
@@ -1294,8 +1294,9 @@ export class TaskService {
           return db.prepare(`SELECT id, sha256 FROM forge_artifacts WHERE company_id = ? AND id IN (${placeholders}) ORDER BY rowid`).all(intent.company_id, ...imageIds) as Array<{ id: string; sha256: string }>;
         });
         const autoApprovePlan = input.autoApprovePlan === true && authority.kind === "user";
-        const pullRequestMode = input.pullRequestMode ?? "draft";
-        await this.startCreationWorkflow(intent.id, intent.lease_token, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), JSON.parse(task.role_agents_json) as RoleAssignments, task.supplemental_review === 1, autoApprovePlan, authority.kind === "user" && autoApprovePlan ? authority.userId : undefined, pullRequestMode, authority.kind === "user" && pullRequestMode === "auto_merge" ? authority.userId : undefined, task.request_hash, task.workflow_id);
+        const deliveryTarget = input.deliveryTarget ?? legacyDeliveryTarget(input.pullRequestMode ?? "draft");
+        const pullRequestMode = deliveryTarget === "pull_request_ready" ? "ready" : deliveryTarget === "merged" ? "auto_merge" : "draft";
+        await this.startCreationWorkflow(intent.id, intent.lease_token, task.id, task.company_id, task.project_id, task.project_revision_id, { id: task.brief_artifact_id, sha256: task.brief_sha256 } as StoredArtifact, images.map((image) => ({ id: image.id, sha256: image.sha256 } as StoredArtifact)), JSON.parse(task.role_agents_json) as RoleAssignments, task.supplemental_review === 1, autoApprovePlan, authority.kind === "user" && autoApprovePlan ? authority.userId : undefined, pullRequestMode, authority.kind === "user" && deliveryTarget === "merged" ? authority.userId : undefined, deliveryTarget, input.runProjectTests !== false, input.visualEvidence ?? "off", task.request_hash, task.workflow_id);
         const updated = this.getTaskByIdInternal(task.id);
         return { task: updated, created: false };
       }
@@ -1318,12 +1319,12 @@ export class TaskService {
     return this.createTaskInternal(authority, intent.company_id, input);
   }
 
-  private async startCreationWorkflow(intentId: string, leaseToken: string | null, taskId: string, companyId: string, projectId: string, projectRevisionId: string, briefArtifact: Pick<StoredArtifact, "id" | "sha256">, imageArtifacts: Array<Pick<StoredArtifact, "id" | "sha256">>, roleAgents: RoleAssignments, supplementalReview: boolean, autoApprovePlan: boolean, autoApprovePlanActorUserId: string | undefined, pullRequestMode: "draft" | "ready" | "auto_merge", autoMergeActorUserId: string | undefined, requestHash: string, workflowId: string): Promise<void> {
+  private async startCreationWorkflow(intentId: string, leaseToken: string | null, taskId: string, companyId: string, projectId: string, projectRevisionId: string, briefArtifact: Pick<StoredArtifact, "id" | "sha256">, imageArtifacts: Array<Pick<StoredArtifact, "id" | "sha256">>, roleAgents: RoleAssignments, supplementalReview: boolean, autoApprovePlan: boolean, autoApprovePlanActorUserId: string | undefined, pullRequestMode: "draft" | "ready" | "auto_merge", autoMergeActorUserId: string | undefined, deliveryTarget: DeliveryTarget, runProjectTests: boolean, visualEvidence: VisualEvidence, requestHash: string, workflowId: string): Promise<void> {
     let accepted = false;
     try {
       await this.maybeFault("before_workflow_start", { intentId, taskId });
       const roleProfiles = this.database.authQuery((db) => resolveAgentProfiles(db, roleAgents));
-      await this.workflow.start({ companyId, projectId, issueId: taskId, projectRevisionId, briefArtifactId: briefArtifact.id, briefSha256: briefArtifact.sha256, imageArtifactIds: imageArtifacts.map((artifact) => artifact.id), requestHash, roleProfiles, supplementalReview, autoApprovePlan, ...(autoApprovePlanActorUserId ? { autoApprovePlanActorUserId } : {}), pullRequestMode, ...(autoMergeActorUserId ? { autoMergeActorUserId } : {}), repairCycleLimit: this.config.deliveryRepairCycleLimit, workflowId });
+      await this.workflow.start({ companyId, projectId, issueId: taskId, projectRevisionId, briefArtifactId: briefArtifact.id, briefSha256: briefArtifact.sha256, imageArtifactIds: imageArtifacts.map((artifact) => artifact.id), requestHash, roleProfiles, supplementalReview, autoApprovePlan, ...(autoApprovePlanActorUserId ? { autoApprovePlanActorUserId } : {}), pullRequestMode, ...(autoMergeActorUserId ? { autoMergeActorUserId } : {}), deliveryTarget, runProjectTests, visualEvidence, repairCycleLimit: this.config.deliveryRepairCycleLimit, workflowId });
       accepted = true;
       await this.maybeFault("after_workflow_accepted", { intentId, taskId });
       await this.waitForProjection(taskId, 0);

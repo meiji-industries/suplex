@@ -70,7 +70,11 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
         ? stateTransitions.reviewBlockedState(ctx.state, exactResult)
         : stateTransitions.repairRequiredState(ctx.state, exactResult, ctx.repairCycleLimit);
     }
-    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, allowedCommands: ctx.addRevisionCommand(ctx.state.allowedCommands) });
+    if (ctx.state.phase === "delivery_reviewed" && ctx.input.deliveryTarget === "local_worktree") {
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Done — kept in worktree", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    } else {
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, allowedCommands: ctx.addRevisionCommand(ctx.state.allowedCommands) });
+    }
     if (ctx.shouldContinueAsNew(ctx.state.revision)) ctx.continuationRequested = true;
     await ctx.project();
     void command;

@@ -68,7 +68,7 @@ export async function reconcileRestoredDeveloperExecutions(database: ForgeDataba
 }
 
 export async function cancelDeveloperExecution(database: ForgeDatabase, executionId: string, processController: DeveloperProcessController = controller): Promise<DeveloperCancellationResult> {
-  const execution = database.authQuery((db) => db.prepare("SELECT process_pid AS processPid, process_group_id AS processGroupId FROM forge_developer_executions WHERE id = ? AND status = 'running'").get(executionId) as { processPid: number | null; processGroupId: number | null } | undefined;
+  const execution = database.authQuery((db) => db.prepare("SELECT process_pid AS processPid, process_group_id AS processGroupId FROM forge_developer_executions WHERE id = ? AND status = 'running'").get(executionId) as { processPid: number | null; processGroupId: number | null } | undefined);
   if (!execution?.processPid || !await processController.inspect(execution.processPid)) {
     fail(database, executionId);
     return { status: "interrupted", executionId, reasonCode: "developer-process-missing", summary: "Builder process is no longer running." };

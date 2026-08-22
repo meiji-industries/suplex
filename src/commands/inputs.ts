@@ -9,8 +9,6 @@ export const StartPlanningInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   actorUserId: durableId,
   commandId: durableId.optional().default("legacy-command"),
-  planAuthorizationId: durableId.optional(),
-  planArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   reconcileOnly: z.literal(true).optional(),
 });
 
@@ -44,8 +42,6 @@ export const PlanCommandInputSchema = z.object({
   expectedWorkflowRevision: z.number().int().nonnegative().optional(),
   answerStagingRef: durableId.optional(),
   answerSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  planAuthorizationId: durableId.optional(),
-  planArtifactSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
 });
 
 const RevisionCommandBaseSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000), worktreeDisposition: z.enum(["reuse", "new"]).optional(), exactBaseSha: exactSha.optional() }).strict();

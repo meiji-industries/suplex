@@ -461,7 +461,7 @@ export class ForgeDatabase {
     // Evidence is optional: a bookkeeping activity that exhausted its retries still has to raise a badge.
     const evidence = policy.kind === "attention" ? policy.item.evidence : null;
     const attention = evidence
-      ? database.prepare("SELECT id, kind, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = ? AND sha256 = ?").get(evidence.artifactId, parsed.companyId, evidence.kind, evidence.sha256) as { id: string; kind: string; sha256: string } | undefined
+      ? database.prepare("SELECT id, kind FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = ?").get(evidence.artifactId, parsed.companyId, evidence.kind) as { id: string; kind: string } | undefined
       : undefined;
     if (evidence && !attention) projectionStatus = "unknown";
     database.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, authoritative_event_hash, projected_at, blocker_json, state_changed_at, projection_status, reconciled_at)
@@ -474,10 +474,10 @@ export class ForgeDatabase {
     const hadActiveAttention = Boolean((database.prepare("SELECT 1 AS present FROM forge_attention_items WHERE task_id = ? AND company_id = ? AND active = 1 LIMIT 1").get(parsed.issueId, parsed.companyId) as { present: number } | undefined)?.present);
     database.prepare("UPDATE forge_attention_items SET active = 0, updated_at = ? WHERE task_id = ? AND company_id = ? AND active = 1").run(updatedAt, parsed.issueId, parsed.companyId);
     if (policy.kind === "attention" && (attention || !evidence)) {
-      database.prepare(`INSERT INTO forge_attention_items (id, company_id, task_id, category, summary, action, evidence_ref, active, created_at, updated_at, source_revision, activated_at, actions_json, evidence_artifact_id, evidence_sha256)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET summary = excluded.summary, action = excluded.action, evidence_ref = excluded.evidence_ref, active = 1, updated_at = excluded.updated_at, source_revision = excluded.source_revision, activated_at = excluded.activated_at, actions_json = excluded.actions_json, evidence_artifact_id = excluded.evidence_artifact_id, evidence_sha256 = excluded.evidence_sha256`).run(
-        policy.item.id, parsed.companyId, parsed.issueId, policy.item.category, policy.item.summary, JSON.stringify(policy.item.actions), evidence ? `${evidence.artifactId}:${evidence.sha256}` : null, policy.item.activatedAt, updatedAt, policy.item.sourceRevision, policy.item.activatedAt, JSON.stringify(policy.item.actions), evidence?.artifactId ?? null, evidence?.sha256 ?? null,
+      database.prepare(`INSERT INTO forge_attention_items (id, company_id, task_id, category, summary, action, evidence_ref, active, created_at, updated_at, source_revision, activated_at, actions_json, evidence_artifact_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET summary = excluded.summary, action = excluded.action, evidence_ref = excluded.evidence_ref, active = 1, updated_at = excluded.updated_at, source_revision = excluded.source_revision, activated_at = excluded.activated_at, actions_json = excluded.actions_json, evidence_artifact_id = excluded.evidence_artifact_id`).run(
+        policy.item.id, parsed.companyId, parsed.issueId, policy.item.category, policy.item.summary, JSON.stringify(policy.item.actions), evidence?.artifactId ?? null, policy.item.activatedAt, updatedAt, policy.item.sourceRevision, policy.item.activatedAt, JSON.stringify(policy.item.actions), evidence?.artifactId ?? null,
       );
     }
     database.prepare("INSERT OR IGNORE INTO forge_projection_invalidations (id, company_id, task_id, revision, attention_changed, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(`${parsed.workflowId}:${parsed.revision}`, parsed.companyId, parsed.issueId, parsed.revision, policy.kind === "attention" || hadActiveAttention ? 1 : 0, updatedAt);

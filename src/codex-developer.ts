@@ -453,11 +453,7 @@ export class DeveloperService {
         const completed = DeveloperReconciliationArtifactSchema.parse(await readArtifactJson(row.reconciliationArtifactId, row.reconciliationSha256, "developer-reconciliation"));
         const persistedManifest = EvidenceManifestSchema.parse(await readArtifactJson(row.manifestArtifactId, row.manifestSha256, "developer-evidence-manifest"));
         const artifact = this.database.authQuery((db) => db.prepare("SELECT filename FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'developer-reconciliation' AND sha256 = ?").get(row.reconciliationArtifactId, input.companyId, row.reconciliationSha256) as { filename: string } | undefined);
-        const authorized = completed.authorization;
-        const manifestAuthorization = completed.manifest.authorizedPlan;
         const valid = completed.policyVersion === 2 && completed.outcome === "completed" && completed.executionId === input.developerExecutionId && completed.companyId === input.companyId
-          && authorized.authorizationId === row.authorizationId && authorized.taskId === input.taskId && authorized.companyId === input.companyId && authorized.workflowId === input.workflowId
-          && JSON.stringify(manifestAuthorization) === JSON.stringify(authorized) && JSON.stringify(persistedManifest.authorizedPlan) === JSON.stringify(authorized)
           && completed.manifest.projectRevision.projectRevisionId === persistedManifest.projectRevision.projectRevisionId
           && completed.git.head === row.finalCommit && completed.git.tree === row.finalTree && completed.git.head === row.resultCommit && completed.git.tree === row.resultTree
           && row.deliveryArtifactId === row.reconciliationArtifactId && row.failureCode === null && artifact?.filename === `${input.developerExecutionId}-recovery.json`;
@@ -467,55 +463,7 @@ export class DeveloperService {
         return null;
       }
     }
-    if (row.status !== "blocked" || row.failureCode !== "delivery-reconciliation-failed" || !row.rawReportArtifactId || !row.rawReportSha256) return null;
-    let stored: z.infer<typeof DeveloperReconciliationArtifactSchema>;
-    let authorization: z.infer<typeof AuthorizedPlanSubjectSchema>;
-    let manifest: EvidenceManifest;
-    let rawReport: unknown;
-    try {
-      stored = DeveloperReconciliationArtifactSchema.parse(await readArtifactJson(row.reconciliationArtifactId, row.reconciliationSha256, "developer-reconciliation"));
-      if (!isLegacyReceiptOnlyRecovery(stored)) return null;
-      if (!stored.observations?.startingSha) return null;
-      const authorizationRow = this.database.authQuery((db) => db.prepare("SELECT id AS authorizationId, task_id AS taskId, company_id AS companyId, project_id AS projectId, workflow_id AS workflowId, plan_revision AS planRevision, plan_artifact_id AS planArtifactId, plan_sha256 AS planSha256, authorization_kind AS authorizationKind, approval_decision_id AS approvalDecisionId, authorized_at AS authorizedAt FROM forge_plan_authorizations WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(row.authorizationId, input.taskId, input.companyId, input.workflowId) as Record<string, unknown> | undefined);
-      authorization = AuthorizedPlanSubjectSchema.parse(authorizationRow);
-      manifest = EvidenceManifestSchema.parse(await readArtifactJson(row.manifestArtifactId, row.manifestSha256, "developer-evidence-manifest"));
-      rawReport = await readArtifactJson(row.rawReportArtifactId, row.rawReportSha256, "developer-delivery-raw");
-      if (JSON.stringify(authorization) !== JSON.stringify(manifest.authorizedPlan) || stored.authorization.authorizationId !== authorization.authorizationId || stored.manifest.projectRevision.projectRevisionId !== manifest.projectRevision.projectRevisionId) return null;
-    } catch (error) { this.logRecoveryFault(input, "eligibility-read", error); return null; }
-    let ownedRow: (Record<string, unknown> & { legacy: number }) | undefined;
-    try {
-      ownedRow = this.database.authQuery((db) => db.prepare("SELECT id AS leaseId, lease_token_hash AS leaseTokenHash, task_id AS taskId, company_id AS companyId, project_id AS projectId, workflow_id AS workflowId, repository_path AS repositoryRoot, worktree_root AS worktreeRoot, worktree_path AS worktreePath, branch_name AS branchName, starting_sha AS startingSha, legacy, status FROM forge_issue_worktrees WHERE id = ? AND task_id = ? AND company_id = ? AND project_id = ? AND workflow_id = ?").get(row.worktreeLeaseId, input.taskId, input.companyId, authorization!.projectId, input.workflowId) as (Record<string, unknown> & { legacy: number }) | undefined);
-    } catch (error) {
-      this.logRecoveryFault(input, "worktree-query", error);
-      return null;
-    }
-    if (!ownedRow || ownedRow.status === "released" || row.worktreePath !== ownedRow.worktreePath || row.branchName !== ownedRow.branchName || row.targetBaseSha.toLowerCase() !== String(ownedRow.startingSha).toLowerCase() || row.startingCommit.toLowerCase() !== String(ownedRow.startingSha).toLowerCase()) return null;
-    let owned;
-    try {
-      owned = OwnedWorktreeSchema.parse({ ...ownedRow, legacy: ownedRow.legacy === 1 });
-      const repositoryPath = await scopedRepository(this.config.repositoryRoot, owned.repositoryRoot);
-      await scopedRepository(this.config.worktreeRoot, owned.worktreePath);
-      const inspection = await this.worktrees.inspectOwned(owned, repositoryPath);
-      if (!inspection.repositoryRegistered || !inspection.pathExists || inspection.pathIsSymlink || inspection.branch !== owned.branchName || inspection.head === null) return null;
-    } catch (error) { this.logRecoveryFault(input, "worktree-inspection", error); return null; }
-    try {
-      const git = await collectDeveloperGitObservation(owned.worktreePath, owned.startingSha);
-      const reconciliation = reconcileDeveloperDelivery({ executionId: input.developerExecutionId, companyId: input.companyId, report: rawReport, independentVerification: null, git, startingSha: owned.startingSha, neutralBranch: owned.branchName, providerBeforeSha256: stored!.provider.beforeSha256, providerAfterSha256: stored!.provider.afterSha256, processExitCode: stored!.observations.processExitCode, developerSessionId: stored!.observations.developerSessionId, leadSessionId: stored!.observations.leadSessionId, authorization: authorization!, manifest: manifest!, requiredChecks: [], existingResult: true });
-      if (reconciliation.outcome !== "completed") return null;
-      const artifact = await this.artifacts.putIdempotent(input.companyId, "developer-reconciliation", `${input.developerExecutionId}:reconciliation:v3:recovery:${reconciliation.sha256}`, { filename: `${input.developerExecutionId}-recovery.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(reconciliation), "utf8") });
-      this.database.authTransaction((db) => {
-        registerArtifact(db, artifact);
-        const execution = db.prepare("UPDATE forge_developer_executions SET status = 'completed', current_step = NULL, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, failure_code = NULL, failure_summary = NULL WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND status = 'blocked' AND failure_code = 'delivery-reconciliation-failed' AND NOT EXISTS (SELECT 1 FROM forge_developer_executions successor WHERE successor.supersedes_execution_id = forge_developer_executions.id)").run(git.head, git.tree, git.status ? "dirty" : "clean", artifact.id, input.developerExecutionId, input.taskId, input.companyId, input.workflowId);
-        if (execution.changes !== 1) throw new StaleRecovery("developer recovery execution CAS conflict");
-        releaseDeveloperExecutionLease(db, input.developerExecutionId);
-        const truth = db.prepare("UPDATE forge_developer_execution_truth SET reconciliation_artifact_id = ?, reconciliation_sha256 = ?, final_commit = ?, final_tree = ? WHERE execution_id = ? AND reconciliation_artifact_id = ? AND reconciliation_sha256 = ?").run(artifact.id, artifact.sha256, git.head, git.tree, input.developerExecutionId, row.reconciliationArtifactId, row.reconciliationSha256);
-        if (truth.changes !== 1) throw new StaleRecovery("developer recovery truth CAS conflict");
-      });
-      return this.storedAuthorizedResult(input.developerExecutionId) ?? null;
-    } catch (error) {
-      if (!(error instanceof StaleRecovery)) this.logRecoveryFault(input, "reconcile", error);
-      return null;
-    }
+    return null;
   }
 
   private logRecoveryFault(input: { taskId: string; companyId: string; workflowId: string; developerExecutionId: string }, phase: string, error: unknown): void {

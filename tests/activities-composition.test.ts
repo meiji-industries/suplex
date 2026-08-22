@@ -26,7 +26,6 @@ import { createTargetBaseActivities } from "../src/temporal/activities/target-ba
 
 const expectedActivityKeys = [
   "acceptDelivery",
-  "authorizeFinalPlan",
   "authorizePlanRevision",
   "cancelCapacity",
   "cancelCapacityExecution",

@@ -130,7 +130,6 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
       projectedDatabase.authQuery((db) => db.prepare("INSERT OR IGNORE INTO forge_plan_decisions (id, task_id, company_id, workflow_id, plan_revision, decision, actor_user_id, note_artifact_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run("decision-happy", issueId, companyId, workflowId, input.planRevision, input.decision, input.actorUserId, decisionNoteArtifactId, "2026-08-20T00:00:00.000Z"));
       return { decisionId: "decision-happy", subjectHash: sha256 };
     }),
-    authorizeFinalPlan: counted("authorizeFinalPlan", async () => ({ authorizationId: "authorization-happy", planRevision: planSubject.outputRevision, planArtifactId: planSubject.artifactId, planArtifactSha256: sha256, authorizationKind: "human_approval" as const, approvalDecisionId: "decision-happy", authorizedAt: "2026-08-20T00:00:00.000Z" })),
     runDeveloperExecutionSupervised: counted("runDeveloperExecutionSupervised", async () => ({
       status: "completed" as const,
       resultHash: sha256,

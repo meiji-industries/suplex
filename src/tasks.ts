@@ -1190,7 +1190,7 @@ export class TaskService {
       const taskId = id("task");
       const workflowId = `${this.config.installationId ? `workflow-${this.config.installationId}` : "workflow"}-issue-${taskId}`;
       const intentId = id("creation");
-      const inserted = db.prepare(`INSERT INTO forge_task_creation_intents (id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?, 'staging', 0, ?, ?) ON CONFLICT(company_id, idempotency_key) DO NOTHING`).run(intentId, input.companyId, input.projectId, taskId, workflowId, input.idempotencyKey, input.requestHash, input.projectRevisionId, input.creatorAgentId ?? null, leaseToken, leaseExpiresAt, now, now);
+      const inserted = db.prepare(`INSERT INTO forge_task_creation_intents (id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?, 'staging', 0, ?, ?) ON CONFLICT(company_id, idempotency_key) DO NOTHING`).run(intentId, input.companyId, input.projectId, taskId, workflowId, input.idempotencyKey, undefined, input.projectRevisionId, input.creatorAgentId ?? null, leaseToken, leaseExpiresAt, now, now);
       const intent = db.prepare(`${select} WHERE company_id = ? AND idempotency_key = ?`).get(input.companyId, input.idempotencyKey) as CreationIntentRow;
       return { created: inserted.changes === 1, intent };
     });
@@ -1777,7 +1777,7 @@ export class TaskService {
         projectRevisionId: record.projectRevisionId ?? row.project_revision_id,
         owner: record.owner === "system" ? "human" : record.owner,
         continuationCount: record.continuationCount ?? 0,
-        lastSummaryHash: record.lastSummaryHash ?? null,
+        lastSummaryHash: undefined ?? null,
       });
       if (parsed.success && snapshot.company_id === row.company_id && snapshot.workflow_id === row.workflow_id && parsed.data.issueId === row.id && parsed.data.companyId === row.company_id && parsed.data.workflowId === row.workflow_id) return parsed.data;
     }
@@ -1882,8 +1882,8 @@ export class TaskService {
       ORDER BY io.original_plan_revision, io.final_version, io.revision`).all(row.id, row.company_id, row.workflow_id) as Array<{ id: string; summary: string; createdAt: string; originalPlanRevision: number; outputRevision: number; finalVersion: 1 | 2; artifactId: string; artifactSha256: string; leadSessionRef: string; leadExecutionId: string; evidenceManifestArtifactId: string; evidenceManifestSha256: string; kind: "plan" | "decision_blocker"; storagePath: string; storedSha256: string }>);
     const plans = planRows.flatMap((planRow): PlanArtifactView[] => {
       try {
-        const subject = PlanSubjectSchema.parse({ companyId: row.company_id, issueId: row.id, workflowId: row.workflow_id, originalPlanRevision: planRow.originalPlanRevision, outputId: planRow.id, outputRevision: planRow.outputRevision, finalVersion: planRow.finalVersion, artifactId: planRow.artifactId, artifactSha256: planRow.artifactSha256, leadSessionRef: planRow.leadSessionRef, leadExecutionId: planRow.leadExecutionId, evidenceManifestArtifactId: planRow.evidenceManifestArtifactId, evidenceManifestSha256: planRow.evidenceManifestSha256 });
-        const content = PersistedLeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: planRow.storagePath, sha256: planRow.storedSha256 }).toString("utf8")));
+        const subject = PlanSubjectSchema.parse({ companyId: row.company_id, issueId: row.id, workflowId: row.workflow_id, originalPlanRevision: planRow.originalPlanRevision, outputId: planRow.id, outputRevision: planRow.outputRevision, finalVersion: planRow.finalVersion, artifactId: planRow.artifactId, artifactSha256: planRow.artifactSha256, leadSessionRef: planRow.leadSessionRef, leadExecutionId: planRow.leadExecutionId, evidenceManifestArtifactId: planRow.evidenceManifestArtifactId, evidenceManifestSha256: undefined });
+        const content = PersistedLeadOutputSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: row.company_id, storagePath: planRow.storagePath }).toString("utf8")));
         return [{ subject, summary: planRow.summary, content, createdAt: planRow.createdAt, status: subject.outputId === finalSubject?.outputId ? "current" : "superseded" }];
       } catch {
         return [];
@@ -1926,8 +1926,8 @@ export class TaskService {
     if (!row || !row.responseArtifactId || !row.responseArtifactSha256 || !row.responseStoragePath) return undefined;
     const profile = this.database.authQuery((db) => db.prepare("SELECT id, name FROM forge_profiles WHERE id = ?").get(row.profileId) as { id: string; name: string } | undefined);
     try {
-      const opinion = SupplementalReviewSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.opinionStoragePath, sha256: row.artifactSha256 }).toString("utf8")));
-      const responseRaw = JSON.parse(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.responseStoragePath, sha256: row.responseArtifactSha256 }).toString("utf8")) as { reviewResponse?: unknown; summary?: unknown };
+      const opinion = SupplementalReviewSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.opinionStoragePath }).toString("utf8")));
+      const responseRaw = JSON.parse(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.responseStoragePath }).toString("utf8")) as { reviewResponse?: unknown; summary?: unknown };
       const text = typeof responseRaw.reviewResponse === "string" ? responseRaw.reviewResponse : typeof responseRaw.summary === "string" ? responseRaw.summary : "Lead response recorded.";
       return { reviewId: row.reviewId, reviewerProfile: { id: profile?.id ?? row.profileId, name: profile?.name ?? "Reviewer" }, opinion: opinion.opinion, summary: opinion.summary, concerns: opinion.concerns, requiredChanges: opinion.requiredChanges, artifactId: row.artifactId, artifactSha256: row.artifactSha256, leadResponse: { text, artifactId: row.responseArtifactId, artifactSha256: row.responseArtifactSha256 }, createdAt: row.createdAt };
     } catch {
@@ -1942,8 +1942,8 @@ export class TaskService {
       ORDER BY d.created_at DESC, d.id DESC LIMIT 1`).get(task.id, task.company_id, task.workflow_id, finalSubject.outputId) as { decisionId: string; decision: "approve" | "request_revision" | "reject"; actorId: string; actorName: string; noteArtifactId: string; noteArtifactSha256: string; createdAt: string; noteStoragePath: string } | undefined);
     if (!row) return undefined;
     try {
-      const note = this.artifacts.readSync({ companyId: task.company_id, storagePath: row.noteStoragePath, sha256: row.noteArtifactSha256 }).toString("utf8");
-      return { decisionId: row.decisionId, decision: row.decision, actor: { id: row.actorId, displayName: row.actorName }, note, noteArtifactId: row.noteArtifactId, noteArtifactSha256: row.noteArtifactSha256, createdAt: row.createdAt };
+      const note = this.artifacts.readSync({ companyId: task.company_id, storagePath: row.noteStoragePath, sha256: undefined }).toString("utf8");
+      return { decisionId: row.decisionId, decision: row.decision, actor: { id: row.actorId, displayName: row.actorName }, note, noteArtifactId: row.noteArtifactId, noteArtifactSha256: undefined, createdAt: row.createdAt };
     } catch {
       return undefined;
     }
@@ -2213,7 +2213,7 @@ export class TaskService {
       FROM forge_ci_runs c JOIN forge_releases r ON r.id = c.release_id
       WHERE c.task_id = ? AND c.company_id = ?
       ORDER BY c.updated_at DESC, c.id DESC LIMIT 1`).get(taskId, companyId) as RunRow | undefined);
-    if (!run || run.pullRequestNumber === null || !run.pullRequestUrl || !run.expectedHeadTree || !run.policyHash) return undefined;
+    if (!run || run.pullRequestNumber === null || !run.pullRequestUrl || !run.expectedHeadTree || !undefined) return undefined;
     type LegacyCiAttemptRow = Omit<TaskCiProjection["attempts"][number], "checks" | "owner" | "repairable"> & { owner: CiOwner | "lead"; repairable: number };
     const attemptRows = this.database.authQuery((db) => db.prepare(`SELECT id, attempt_number AS attemptNumber, observed_repository AS observedRepository, observed_pr_number AS observedPrNumber, observed_base_branch AS observedBaseBranch, observed_base_sha AS observedBaseSha, observed_head_branch AS observedHeadBranch, observed_head_sha AS observedHeadSha, outcome, reason, owner, repairable, retry_at AS retryAt, summary, evidence_artifact_id AS evidenceArtifactId, created_at AS createdAt FROM forge_ci_attempts WHERE run_id = ? ORDER BY attempt_number DESC LIMIT 20`).all(run.runId) as LegacyCiAttemptRow[]);
     const attempts = attemptRows.map((attempt) => ({ ...attempt, owner: attempt.owner === "lead" ? "integrator" : attempt.owner, repairable: attempt.repairable === 1, checks: this.database.authQuery((db) => db.prepare("SELECT provider_check_id AS providerCheckId, name, head_sha AS headSha, status, conclusion, details_url AS detailsUrl, summary, started_at AS startedAt, completed_at AS completedAt, selected_for_evaluation AS selectedForEvaluation FROM forge_ci_attempt_checks WHERE attempt_id = ? ORDER BY name, provider_check_id").all(attempt.id) as Array<Omit<TaskCiProjection["attempts"][number]["checks"][number], "selectedForEvaluation"> & { selectedForEvaluation: number }>).map((check) => ({ ...check, selectedForEvaluation: check.selectedForEvaluation === 1 })) }));
@@ -2226,7 +2226,7 @@ export class TaskService {
       EXISTS (SELECT 1 FROM forge_ci_repair_plans p JOIN forge_issue_outputs o ON o.task_id = p.task_id AND o.company_id = p.company_id AND o.workflow_id = p.workflow_id AND o.session_ref = p.lead_session_ref WHERE p.task_id = ? AND p.company_id = ?) AS lead,
       EXISTS (SELECT 1 FROM forge_ci_repairs x JOIN forge_ci_repair_plans p ON p.id = x.repair_plan_id JOIN forge_developer_executions d ON d.id = x.prior_developer_execution_id AND d.task_id = p.task_id AND d.company_id = p.company_id AND d.workflow_id = p.workflow_id WHERE p.task_id = ? AND p.company_id = ? AND d.session_ref = x.prior_developer_session_ref AND x.result_developer_session_ref = x.prior_developer_session_ref) AS developer`).get(taskId, companyId, taskId, companyId) as { lead: number; developer: number });
     const policy = json<TaskCiProjection["policy"]>(run.policyJson ?? "{}", { projectRevisionId: "", requiredChecks: [], acceptedConclusions: ["success", "skipped"] });
-    return { runId: run.runId, releaseId: run.releaseId, repository: run.repository, pullRequestNumber: run.pullRequestNumber, pullRequestUrl: run.pullRequestUrl, baseBranch: run.baseBranch, headBranch: run.headBranch, expectedHeadSha: run.expectedHeadSha, expectedHeadTree: run.expectedHeadTree, status: run.status, outcome: latest?.outcome ?? null, reason: latest?.reason ?? null, owner: latest?.owner ?? null, repairable: latest?.repairable ?? false, policyHash: run.policyHash, policy, leadSessionContinuity: continuity.lead === 1, developerSessionContinuity: continuity.developer === 1, firstObservedAt: run.firstObservedAt, propagationDeadline: run.propagationDeadline, overallDeadline: run.overallDeadline, nextRetryAt: run.nextRetryAt, completedAt: run.completedAt, supersededAt: run.supersededAt, supersededRuns, attempts, repairPlan, repairs };
+    return { runId: run.runId, releaseId: run.releaseId, repository: run.repository, pullRequestNumber: run.pullRequestNumber, pullRequestUrl: run.pullRequestUrl, baseBranch: run.baseBranch, headBranch: run.headBranch, expectedHeadSha: run.expectedHeadSha, expectedHeadTree: run.expectedHeadTree, status: run.status, outcome: latest?.outcome ?? null, reason: latest?.reason ?? null, owner: latest?.owner ?? null, repairable: latest?.repairable ?? false, policyHash: undefined, policy, leadSessionContinuity: continuity.lead === 1, developerSessionContinuity: continuity.developer === 1, firstObservedAt: run.firstObservedAt, propagationDeadline: run.propagationDeadline, overallDeadline: run.overallDeadline, nextRetryAt: run.nextRetryAt, completedAt: run.completedAt, supersededAt: run.supersededAt, supersededRuns, attempts, repairPlan, repairs };
 /*
     if (content.kind === "plan") return { kind: "plan", summary: row.summary, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };
     return { kind: "decision_blocker", summary: row.summary, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };

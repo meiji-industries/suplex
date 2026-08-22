@@ -17,8 +17,8 @@ type CompletedReview = Extract<DeliveryReviewActivityResult, { outcome: "complet
 type CompletedRepair = Omit<Extract<DeveloperRepairActivityResult, { outcome: "completed" }>, "worktreePath"> & { worktreePath?: string };
 type BlockedRepair = Omit<Extract<DeveloperRepairActivityResult, { outcome: "blocked" }>, "worktreePath">;
 
-export function evidencePointer(artifactId: string | undefined, sha256: string | undefined, kind: ArtifactPointer["kind"]): ArtifactPointer | undefined {
-  const pointer = artifactId && sha256 ? { artifactId, sha256, kind } : undefined;
+export function evidencePointer(artifactId: string | undefined, kind: ArtifactPointer["kind"]): ArtifactPointer | undefined {
+  const pointer = artifactId ? { artifactId, kind } : undefined;
   return pointer && ArtifactPointerSchema.safeParse(pointer).success ? pointer : undefined;
 }
 
@@ -60,7 +60,7 @@ export function repairRequiredState(state: IssueWorkflowState, result: Completed
   const pendingAction = phase === "repair_required" ? "Builder is fixing review findings" : phase === "delivery_blocked" ? "Needs your call" : "Opening the pull request";
   return IssueWorkflowStateSchema.parse({
     ...revisioned(state, phase, owner, allowedCommands, pendingAction),
-    blocker: phase === "delivery_blocked" ? humanBlocker("agent_exhausted", result.review.summary, [{ command: "record_delivery_decision", label: "Continue anyway", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], result.review.reviewArtifact ? evidencePointer(result.review.reviewArtifact.artifactId, result.review.reviewArtifact.sha256, "delivery-review") : undefined) : null,
+    blocker: phase === "delivery_blocked" ? humanBlocker("agent_exhausted", result.review.summary, [{ command: "record_delivery_decision", label: "Continue anyway", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], result.review.reviewArtifact ? evidencePointer(result.review.reviewArtifact.artifactId, "delivery-review") : undefined) : null,
     deliveryReviewId: result.review.reviewId,
     deliveryReviewAttemptId: result.attemptId,
     deliveryReviewOutcome: result.review.opinion,

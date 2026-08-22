@@ -26,25 +26,6 @@ export interface PlanBlockerResponseActivityInput {
   idempotencyKey: string;
 }
 
-export interface AuthorizeFinalPlanActivityInput {
-  taskId: string;
-  companyId: string;
-  projectId: string;
-  workflowId: string;
-  planRevision: number;
-  planArtifactId: string;
-  authorizationKind: "routine_auto" | "human_approval";
-  approvalDecisionId?: string | null;
-}
-
-export interface AuthorizeFinalPlanActivityResult {
-  authorizationId: string;
-  planRevision: number;
-  planArtifactId: string;
-  authorizationKind: "routine_auto" | "human_approval";
-  approvalDecisionId: string | null;
-  authorizedAt: string;
-}
 
 export interface DecisionBlockerResolutionActivityInput {
   taskId: string;
@@ -62,6 +43,5 @@ export interface DecisionBlockerResolutionActivityResult {
 export interface GovernanceActivities {
   recordDecisionBlockerResolution(input: DecisionBlockerResolutionActivityInput): Promise<DecisionBlockerResolutionActivityResult>;
   recordPlanDecision(input: PlanDecisionActivityInput): Promise<{ decisionId: string; duplicate?: boolean; noteArtifactId?: string }>;
-  authorizeFinalPlan(input: AuthorizeFinalPlanActivityInput): Promise<AuthorizeFinalPlanActivityResult>;
   recordPlanBlockerResponse(input: PlanBlockerResponseActivityInput): Promise<{ responseId: string; duplicate?: boolean; answerArtifactId?: string }>;
 }

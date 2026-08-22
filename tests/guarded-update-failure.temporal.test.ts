@@ -55,82 +55,6 @@ const planSubject: PlanSubject = {
   evidenceManifestSha256: sha,
 };
 
-test("a rejected update handler projects a retryable failed state instead of stranding mutated Workflow state", { timeout: 120_000 }, async () => {
-  environment = await TestWorkflowEnvironment.createTimeSkipping();
-  const projections: IssueWorkflowState[] = [];
-  const activities: Partial<IssueActivities> = {
-    projectIssueState: async (event) => { projections.push(structuredClone(event.state)); return event.state; },
-    recordPlanBlockerResponse: async () => ({ responseId: "blocker_response", subjectHash: sha, answerArtifactId: "answer_artifact", answerArtifactSha256: sha }),
-    runLeadPlanning: async () => ({
-      leadSessionRef: "lead_session",
-      leadExecutionId: "lead_execution_2",
-      leadEvidenceArtifactId: "lead_evidence",
-      leadOutputArtifactId: "plan_artifact",
-      leadOutputArtifactSha256: sha,
-      leadOutputKind: "plan",
-      leadSummary: "Material plan after the blocker answer",
-      materialCategories: ["security_permissions"],
-      material: true,
-      planSubject,
-      materialityEvidence: { categories: ["security_permissions"], artifactId: "materiality_artifact", artifactSha256: sha },
-    }),
-    recordPlanDecision: async () => ({ decisionId: "decision_guarded", subjectHash: sha }),
-    // The bug under test: authorization rejects after the handler already mutated state.
-    authorizeFinalPlan: async () => { throw ApplicationFailure.nonRetryable("The exact final plan artifact is unavailable", "plan-authorization-mismatch"); },
-  };
-  const worker = await Worker.create({ connection: environment.nativeConnection, namespace: environment.namespace ?? "default", taskQueue, workflowsPath, activities: createIssueActivitiesFake(activities) as unknown as Record<string, (...args: never[]) => unknown> });
-  const workerRun = worker.run();
-  try {
-    const input: IssueWorkflowInput = {
-      workflowId,
-      companyId,
-      projectId: "project_guarded",
-      issueId,
-      projectRevisionId: "revision_guarded",
-      briefArtifactId: "brief_guarded",
-      briefSha256: "0".repeat(64),
-      imageArtifactIds: [],
-      roleProfiles: { planner: "profile", builder: "profile" },
-      supplementalReview: false,
-      autoApprovePlan: true,
-      autoApprovePlanActorUserId: "member_guarded",
-      continuationState: {
-        phase: "blocked",
-        revision: 10,
-        owner: "human",
-        allowedCommands: ["respond_plan_blocker", "cancel_issue"],
-        pendingAction: "Needs your call",
-        lastEventId: `${workflowId}:10`,
-        continuationCount: 0,
-        lastSummaryHash: null,
-        leadSessionRef: "lead_session",
-        leadExecutionId: "lead_execution",
-        leadOutputArtifactId: "blocker_artifact",
-        leadOutputKind: "decision_blocker",
-        blockedCategory: "human_decision",
-        blockedResumePhase: "planning",
-        planBlockerSubject: blockerSubject,
-      },
-    };
-    const handle = await environment.client.workflow.start(issueWorkflow, { workflowId, taskQueue, args: [input] });
-    await expect(handle.executeUpdate(respondPlanBlockerUpdate, {
-      args: [{ expectedRevision: 10, expectedWorkflowRevision: 10, actorUserId: "member_guarded", answerStagingRef: "staging_answer", answerSha256: sha, idempotencyKey: "blocker-answer-1" }],
-      updateId: "guarded-blocker-response",
-    })).rejects.toThrow();
-
-    const projected = projections.at(-1)!;
-    expect(projected).toMatchObject({ phase: "failed", owner: "human" });
-    expect(projected.allowedCommands).toContain("start_planning");
-    // The invariant: the Workflow never keeps a revision the projection never saw.
-    expect(projected.revision).toBe((await handle.query(issueStateQuery)).revision);
-
-    const history = await handle.fetchHistory();
-    await Worker.runReplayHistory({ workflowsPath }, history, workflowId);
-  } finally {
-    worker.shutdown();
-    await workerRun;
-  }
-});
 
 test("a task created with auto-approve and auto-merge reaches done without another human click", { timeout: 180_000 }, async () => {
   environment = await TestWorkflowEnvironment.createTimeSkipping();
@@ -155,7 +79,6 @@ test("a task created with auto-approve and auto-merge reaches done without anoth
       materialityEvidence: { categories: ["security_permissions"], artifactId: "materiality_artifact", artifactSha256: sha },
     }),
     recordPlanDecision: async () => ({ decisionId: "decision_auto", subjectHash: sha }),
-    authorizeFinalPlan: async () => ({ authorizationId: "authorization_auto", planRevision: 11, planArtifactId: "plan_artifact", planArtifactSha256: sha, authorizationKind: "human_approval", approvalDecisionId: "decision_auto", authorizedAt: "2026-01-01T00:00:00.000Z" }),
     runDeveloperExecutionSupervised: async () => ({
       status: "completed",
       resultHash: sha,

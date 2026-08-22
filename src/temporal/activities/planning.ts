@@ -1,6 +1,7 @@
 import type { PlanningActivities } from "../contracts/activities/planning.js";
 import type { RevisedExecutionCoordinates } from "../contracts/primitives.js";
 import type { ActivityContext } from "./context.js";
+import { readTaskProjectConfiguration } from "../../task-project-configuration.js";
 
 export function createPlanningActivities(ctx: ActivityContext): PlanningActivities {
   const { database, config, options, createHash, randomBytes, ApplicationFailure, CancelledFailure, Context, z, projectionStateHash, ArtifactStore, redact, AgentFailure, AgentService, DeveloperService, cancelDeveloperExecution, reconcileDeveloperExecutions, cancelAgentExecution, reconcileAgentExecutions, runDeveloperTurn, AcceptanceFailure, AcceptanceService, CiFailure, CiProviderFailure, CiService, createGithubCiProvider, createGithubReleasePort, GithubReleaseFailure, ReleaseService, ForwardMergeFailure, ForwardMergeService, parseAcceptedProjectRevision, runPinnedVerification, createGitCommandGuard, ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, ArtifactReferenceSchema, CreateSuccessorActivityInputSchema, DeliveryDecisionActivityInputSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeliveryOperationBlockCodeSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, DurableArtifactReferenceSchema, IssueProjectionEventSchema, IssueWorkflowStateSchema, PreparePlanRevisionActivityInputSchema, PublishReleaseActivityResultSchema, ReconcileTargetBaseActivityInputSchema, RevisedExecutionCoordinatesSchema, SafeSummarySchema, createInitialIssueWorkflowState, normalizeSafeSummary, PlanGovernanceConflict, PlanGovernanceRepository, StructuredLogger, activityLogContext, CapacityFailure, CapacityManager, CapacityAdmissionResultSchema, CapacityRequestInputSchema, CapacityRequestSnapshotSchema, WorktreeFailure, WorktreeManager, startIssueWorkflow, logger, defaultAgent, githubRelease, defaultDeveloper, artifacts, release, ci, acceptance, legacyForwardMerge, capacity, activityWorktrees, activityWorktreesByBranch, worktrees, agent, developer, putAttentionEvidence, attentionFailure, agentCategory, invokeAgent, bindCapacityExecution, recoverFinalizedDeveloperResult, runSupervised, latestWorktree, cancellationSignal, agentRuntime, pinnedProjectRevision, normalizeReviewResult, normalizeRepairResult, durableArtifactReference, verifiedArtifactBytes, artifactReference, registerArtifact, reconcileBlocker, asNonRetryableCapacityFailure, asNonRetryableApplicationFailure, asRetryableAgentFailure, DeveloperDeliverySchema } = ctx;
@@ -10,9 +11,10 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
       const input = PreparePlanRevisionActivityInputSchema.parse(rawInput);
       const actor = database.authQuery((db) => db.prepare("SELECT id, role, status FROM forge_users WHERE id = ?").get(input.actorUserId) as { id: string; role: string; status: string } | undefined);
       const scoped = actor?.status === "active" && database.authQuery((db) => actor.role === "admin"
-        ? db.prepare("SELECT t.id, r.normalized_json AS normalizedJson FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_id = ? AND t.project_revision_id = ?").get(input.taskId, input.companyId, input.workflowId, input.projectId, input.projectRevisionId)
-        : db.prepare("SELECT t.id, r.normalized_json AS normalizedJson FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' JOIN forge_memberships m ON m.company_id = t.company_id AND m.user_id = ? AND m.status = 'active' WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_id = ? AND t.project_revision_id = ?").get(input.actorUserId, input.taskId, input.companyId, input.workflowId, input.projectId, input.projectRevisionId)) as { id: string; normalizedJson: string } | undefined;
+        ? db.prepare("SELECT t.id FROM forge_tasks t WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_id = ?").get(input.taskId, input.companyId, input.workflowId, input.projectId)
+        : db.prepare("SELECT t.id FROM forge_tasks t JOIN forge_memberships m ON m.company_id = t.company_id AND m.user_id = ? AND m.status = 'active' WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_id = ?").get(input.actorUserId, input.taskId, input.companyId, input.workflowId, input.projectId)) as { id: string } | undefined;
       if (!scoped) throw new AgentFailure("revision-scope-unavailable", "Plan revision is unavailable for this issue", { nonRetryable: true });
+      const normalizedJson = JSON.stringify(database.authQuery((db) => readTaskProjectConfiguration(db, artifacts, input)));
       const requestId = `revision_${createHash("sha256").update(`${input.workflowId}:${input.requestRevision}`).digest("hex").slice(0, 32)}`;
       const reason = (redact(input.reason.trim()) as string).trim();
       const reasonHash = createHash("sha256").update(reason).digest("hex");
@@ -37,13 +39,13 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
         if (!execution || !["cancelled", "interrupted", "blocked", "completed"].includes(execution.status) || !execution.headSha || !execution.treeSha) { status = "blocked"; blockerCode = "missing-preserved-execution"; }
         else {
           try {
-            const pinned = pinnedProjectRevision(scoped.normalizedJson);
+            const pinned = pinnedProjectRevision(normalizedJson);
             const inspected = await worktrees.inspectForPlanRevision({ repositoryPath: pinned.repositoryPath, worktreeRoot: pinned.worktreeRoot, worktreePath: execution.worktreePath, branchName: execution.branchName, baseSha: execution.baseSha, resultCommit: execution.headSha, resultTree: execution.treeSha });
             coordinates = { disposition: "reuse", revisionRequestId: requestId, developerExecutionId: execution.id, branchName: inspected.branchName, baseSha: inspected.baseSha, headSha: inspected.headSha, treeSha: inspected.treeSha, dirtyState: inspected.dirtyState };
           } catch (error) { status = "blocked"; blockerCode = error instanceof WorktreeFailure ? error.code : "worktree-inspection-failed"; }
         }
       } else {
-        try { const pinned = pinnedProjectRevision(scoped.normalizedJson); await worktrees.validateExactBase({ repositoryPath: pinned.repositoryPath, candidateSha: input.exactBaseSha!, acceptedTargetSha: pinned.targetSha }); coordinates = { disposition: "new", revisionRequestId: requestId, exactBaseSha: input.exactBaseSha! }; }
+        try { const pinned = pinnedProjectRevision(normalizedJson); await worktrees.validateExactBase({ repositoryPath: pinned.repositoryPath, candidateSha: input.exactBaseSha!, acceptedTargetSha: pinned.targetSha }); coordinates = { disposition: "new", revisionRequestId: requestId, exactBaseSha: input.exactBaseSha! }; }
         catch (error) { status = "blocked"; blockerCode = error instanceof WorktreeFailure ? error.code : "invalid-base-commit"; }
       }
       try {

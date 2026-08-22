@@ -190,7 +190,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
       ]);
       if (token !== requestToken.current) return;
       setProjects(projectResult.projects); setTasks(taskResult.tasks); setAgents(agentResult.agents);
-      setProjectId((current) => projectResult.projects.some((project) => project.id === current && project.status === "active") ? current : projectResult.projects.find((project) => project.status === "active")?.id ?? "");
+      setProjectId((current) => projectResult.projects.some((project) => project.id === current) ? current : projectResult.projects[0]?.id ?? "");
       const detailPrefix = mode === "board" ? "/board/" : "/tasks/";
       const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
       const nextSelected = routeTaskId ? taskResult.tasks.find((task) => task.id === routeTaskId) : selectedRef.current ? taskResult.tasks.find((task) => task.id === selectedRef.current!.id) : undefined;
@@ -237,7 +237,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const boardTasks = boardProjectId === "all" ? visibleTasks : visibleTasks.filter((task) => task.projectId === boardProjectId);
   const taskBoard = Object.fromEntries(taskPhases.map((phase) => [phase, boardTasks.filter((task) => task.phase === phase)])) as Record<(typeof taskPhases)[number], ApiTask[]>;
   const selected = scopeLoaded ? selectedState : undefined;
-  const availableProjects = visibleProjects.filter((project) => project.companyId === companyId && project.status === "active");
+  const availableProjects = visibleProjects.filter((project) => project.companyId === companyId);
   const newTaskProject = availableProjects.find((project) => project.id === projectId);
   const newTaskRoleAgents = {
     planner: roleAgentOverrides.planner ?? newTaskProject?.roleDefaults.planner,

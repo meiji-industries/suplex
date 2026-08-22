@@ -13,8 +13,9 @@ import { ForgeDatabase } from "./database.js";
 
 const execFileAsync = promisify(execFile);
 
-export type ProjectStatus = "draft" | "active" | "paused" | "needs-reactivation" | "archived";
 export type ProjectRole = "planner" | "builder" | "reviewer" | "integrator";
+/** @deprecated Compatibility shape only; project API responses do not expose lifecycle state. */
+export type ProjectStatus = "draft" | "active" | "paused" | "needs-reactivation" | "archived";
 export type RoleAssignments = Partial<Record<ProjectRole, string | undefined>>;
 export type ReasoningLevel = "low" | "medium" | "high" | "xhigh";
 export type ServicePriority = "standard" | "priority" | "fast";
@@ -117,13 +118,13 @@ export interface Project {
   verificationCommand: string;
   requiredChecks: string[];
   roleDefaults: RoleAssignments;
-  status: ProjectStatus;
+  /** @deprecated Compatibility for retained in-process callers; not serialized by the project API. */
+  status?: ProjectStatus;
   activeRevisionId?: string;
   configurationRevision: number;
   configurationIdentity?: string;
   baseSha?: string | undefined;
   targetSha?: string | undefined;
-
   createdAt: string;
   updatedAt: string;
 }
@@ -155,6 +156,7 @@ interface ProjectServiceOptions {
   localRepository?: LocalRepositoryAdapter;
   repositoryProvisioner?: RepositoryProvisioner;
   now?: () => Date;
+  validateProjectConfiguration?: boolean;
 }
 
 interface ProjectRow {
@@ -170,16 +172,8 @@ interface ProjectRow {
   verification_command: string;
   required_checks_json: string;
   role_defaults_json: string;
-  status: ProjectStatus;
-  active_revision_id: string | null;
   created_at: string;
   updated_at: string;
-  configuration_revision?: number;
-  configuration_identity?: string;
-  base_sha?: string | null;
-  target_sha?: string | null;
-  active_revision_state?: "draft" | "accepted" | null;
-
 }
 
 interface ProfileRow {
@@ -217,7 +211,7 @@ interface ModelRow {
   updated_at: string;
 }
 
-const projectRevisionColumns = `p.*, COALESCE((SELECT MAX(revision) FROM forge_project_revisions r WHERE r.project_id = p.id AND r.state = 'accepted'), 0) AS configuration_revision, (SELECT identity FROM forge_project_revisions r WHERE r.id = p.active_revision_id AND r.state = 'accepted') AS configuration_identity, (SELECT r.base_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS base_sha, (SELECT r.target_sha FROM forge_project_revisions r WHERE r.id = p.active_revision_id) AS target_sha`;
+const projectColumns = "p.*";
 
 const namePattern = /^[\p{L}\p{N}](?:[\p{L}\p{N} ._'-]{0,78}[\p{L}\p{N}])?$/u;
 const repositoryPattern = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})\/[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})$/;
@@ -346,12 +340,8 @@ function publicProject(row: ProjectRow): Project {
     verificationCommand: row.verification_command,
     requiredChecks: asJson<string[]>(row.required_checks_json, []),
     roleDefaults: asJson<RoleAssignments>(row.role_defaults_json, {}),
-    status: row.status,
-    ...(row.active_revision_id ? { activeRevisionId: row.active_revision_id } : {}),
-    configurationRevision: row.configuration_revision ?? 0,
-    ...(row.configuration_identity ? { configurationIdentity: row.configuration_identity } : {}),
-    ...(row.base_sha ? { baseSha: row.base_sha } : {}),
-    ...(row.target_sha ? { targetSha: row.target_sha } : {}),
+    status: "active",
+    configurationRevision: 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -580,6 +570,7 @@ export class ProjectService {
   private readonly github: GithubAdapter;
   private readonly localRepository: LocalRepositoryAdapter | undefined;
   private readonly repositoryProvisioner: RepositoryProvisioner;
+  private readonly validateProjectConfiguration: boolean;
 
   constructor(
     private readonly database: ForgeDatabase,
@@ -591,6 +582,7 @@ export class ProjectService {
     this.github = options.github ?? createGithubAdapter();
     this.localRepository = options.localRepository;
     this.repositoryProvisioner = options.repositoryProvisioner ?? defaultRepositoryProvisioner();
+    this.validateProjectConfiguration = options.validateProjectConfiguration ?? true;
   }
 
   private validateProfileInput(input: ProfileInput): Required<ProfileInput> {
@@ -869,6 +861,38 @@ export class ProjectService {
     return this.mutateProject(actorUserId, existing.companyId, input, true, projectId);
   }
 
+  /** @deprecated Projects are saved live. This compatibility method is not routed. */
+  async activateProject(actorUserId: string, projectId: string): Promise<Project> {
+    const project = this.getProject(actorUserId, projectId);
+    const findings: ProjectFinding[] = [];
+    const agents = this.database.authQuery((db) => db.prepare("SELECT id, role FROM forge_agents WHERE kind = 'internal'").all() as Array<{ id: string; role: ProjectRole }>);
+    const roles = new Map(agents.map((agent) => [agent.id, agent.role]));
+    for (const role of ["planner", "builder", "reviewer", "integrator"] as const) {
+      const agentId = project.roleDefaults[role];
+      if (!agentId && role === "builder") findings.push(finding("missing-default", `roleDefaults.${role}`, "A builder agent default is required"));
+      else if (agentId && roles.get(agentId) !== role) findings.push(finding("agent-ineligible", `roleDefaults.${role}`, "Role defaults must reference an agent with the matching role"));
+    }
+    if (!project.repository || !repositoryPattern.test(project.repository) || project.requiredChecks.some((check) => !checkPattern.test(check))) findings.push(finding("project-invalid", "configuration", "Project configuration is invalid"));
+    let inspection: LocalRepositoryInspection | undefined;
+    if (!findings.length) try { inspection = await (this.localRepository ?? await defaultLocalRepositoryAdapter()).inspect({ repositoryPath: project.repositoryPath, baseBranch: project.baseBranch, targetBranch: project.targetBranch }); }
+    catch { findings.push(finding("repository-unavailable", "repositoryPath", "Git could not inspect the configured repository")); }
+    if (inspection && (inspection.canonicalPath !== project.repositoryPath || !inspection.clean || !inspection.baseSha || !inspection.targetSha || inspection.remoteRepository !== project.repository)) findings.push(finding("repository-unavailable", "repositoryPath", "Repository could not be verified"));
+    if (!findings.length) try { await this.github.checkAuthentication(); const remote = await this.github.getRepository({ cwd: project.repositoryPath, nameWithOwner: project.repository! }); if (remote.nameWithOwner.toLowerCase() !== project.repository!.toLowerCase()) findings.push(finding("provider-mismatch", "repository", "GitHub repository identity could not be verified")); }
+    catch { findings.push(finding("github-repository-unavailable", "repository", "GitHub repository identity could not be verified")); }
+    if (findings.length) throw new ProjectFailure("Project activation failed", findings, 422);
+    const snapshot = { repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot, repository: project.repository!, baseBranch: project.baseBranch, targetBranch: project.targetBranch, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand, requiredChecks: project.requiredChecks, baseSha: inspection!.baseSha, targetSha: inspection!.targetSha };
+    const identity = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
+    const revision = this.database.authTransaction((db) => {
+      const prior = db.prepare("SELECT id, revision FROM forge_project_revisions WHERE project_id = ? AND identity = ? AND state = 'accepted'").get(project.id, identity) as { id: string; revision: number } | undefined;
+      const revisionId = prior?.id ?? identifier("project-revision");
+      const revision = prior?.revision ?? Number((db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM forge_project_revisions WHERE project_id = ?").get(project.id) as { revision: number }).revision) + 1;
+      if (!prior) db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, state, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?)").run(revisionId, project.id, revision, identity, JSON.stringify(snapshot), snapshot.baseSha, snapshot.targetSha, actorUserId, this.now().toISOString());
+      db.prepare("UPDATE forge_projects SET status = 'active', active_revision_id = ?, updated_at = ? WHERE id = ?").run(revisionId, this.now().toISOString(), project.id);
+      return { revisionId, revision };
+    });
+    return { ...this.getProject(actorUserId, projectId), status: "active", activeRevisionId: revision.revisionId, configurationRevision: revision.revision, configurationIdentity: identity, baseSha: snapshot.baseSha, targetSha: snapshot.targetSha };
+  }
+
   /** Resolve the runtime values that a newly-created task owns thereafter. */
   async captureTaskConfiguration(project: Project): Promise<{ baseSha: string; targetSha: string }> {
     try {
@@ -885,8 +909,8 @@ export class ProjectService {
     const row = this.database.authQuery((db) => {
       const user = this.user(actorUserId);
       const result = user.role === "admin"
-        ? db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p WHERE p.id = ?`).get(projectId)
-        : db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE p.id = ? AND m.user_id = ?`).get(projectId, actorUserId);
+        ? db.prepare(`SELECT ${projectColumns} FROM forge_projects p WHERE p.id = ?`).get(projectId)
+        : db.prepare(`SELECT ${projectColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE p.id = ? AND m.user_id = ?`).get(projectId, actorUserId);
       return result as ProjectRow | undefined;
     });
     if (!row) throw new ProjectFailure("Not found", [], 404);
@@ -909,45 +933,13 @@ export class ProjectService {
     }
     throw new ProjectFailure("Not found", [], 404);
   }
-  async activateProject(actorUserId: string, projectId: string): Promise<Project> {
-    const project = this.getProject(actorUserId, projectId);
-    const company = this.auth.requireCompanyAccess(actorUserId, project.companyId);
-    if (company.status !== "active") throw new ProjectFailure("Project activation failed", [finding("company-inactive", "companyId", "Project activation requires an active company")], 409);
-    if (project.status === "archived") throw new ProjectFailure("Project activation failed", [finding("project-archived", "status", "Archived projects cannot be activated")], 409);
-    const findings: ProjectFinding[] = [];
-    const agents = this.database.authQuery((db) => db.prepare("SELECT id, role FROM forge_agents WHERE kind = 'internal'").all() as Array<{ id: string; role: ProjectRole }>);
-    const roles = new Map(agents.map((agent) => [agent.id, agent.role]));
-    for (const role of ["planner", "builder", "reviewer", "integrator"] as const) { const id = project.roleDefaults[role]; if (!id && role === "builder") findings.push(finding("missing-default", `roleDefaults.${role}`, "A builder agent default is required")); else if (id && roles.get(id) !== role) findings.push(finding("agent-ineligible", `roleDefaults.${role}`, "Role defaults must reference an agent with the matching role")); }
-    if (project.requiredChecks.length === 0 || project.requiredChecks.some((check) => !checkPattern.test(check))) findings.push(finding("invalid-check", "requiredChecks", "At least one safe required check is required"));
-    let inspection: LocalRepositoryInspection | undefined;
-    if (!findings.length) try { inspection = await (this.localRepository ?? await defaultLocalRepositoryAdapter()).inspect({ repositoryPath: project.repositoryPath, baseBranch: project.baseBranch, targetBranch: project.targetBranch }); } catch { findings.push(finding("repository-unavailable", "repositoryPath", "Git could not inspect the configured repository")); }
-    if (inspection) {
-      if (inspection.canonicalPath !== project.repositoryPath) findings.push(finding("repository-path-mismatch", "repositoryPath", "Repository path is not canonical"));
-      if (!inspection.clean) findings.push(finding("repository-dirty", "repositoryPath", "Repository must be clean before activation"));
-      if (!inspection.baseSha) findings.push(finding("base-ref-missing", "baseBranch", "Base branch does not resolve to a canonical commit"));
-      if (!inspection.targetSha) findings.push(finding("target-ref-missing", "targetBranch", "Target branch does not resolve to a canonical commit"));
-      if (inspection.remoteRepository !== project.repository) findings.push(finding("repository-mismatch", "repository", "Local origin does not match configured repository identity"));
-    }
-    if (!findings.length) try {
-      await this.github.checkAuthentication(); const remote = await this.github.getRepository({ cwd: project.repositoryPath, nameWithOwner: project.repository! });
-      if (remote.nameWithOwner.toLowerCase() !== project.repository!.toLowerCase()) findings.push(finding("provider-mismatch", "repository", "GitHub repository identity does not match configuration"));
-      const url = new URL(remote.url); if (url.hostname.toLowerCase() !== "github.com") findings.push(finding("provider-host", "repository", "Repository URL must be hosted on GitHub"));
-      if (url.pathname.replace(/\.git$/, "").toLowerCase() !== `/${project.repository!}`.toLowerCase()) findings.push(finding("provider-path", "repository", "Repository URL path does not match configured identity"));
-    } catch (error) { findings.push(finding(error instanceof GithubFailure && error.code === "authentication" ? "github-auth-unavailable" : "github-repository-unavailable", "repository", "GitHub repository identity could not be verified")); }
-    if (findings.length) throw new ProjectFailure("Project activation failed", findings, 422);
-    const normalized = { name: project.name, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot, repository: project.repository!, baseBranch: project.baseBranch, targetBranch: project.targetBranch, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand, requiredChecks: project.requiredChecks, roleDefaults: project.roleDefaults, baseSha: inspection!.baseSha, targetSha: inspection!.targetSha };
-    const identity = createHash("sha256").update(JSON.stringify(normalized)).digest("hex");
-    this.database.authTransaction((db) => { const now = this.now().toISOString(); const prior = db.prepare("SELECT id, revision FROM forge_project_revisions WHERE project_id = ? AND identity = ? AND state = 'accepted'").get(project.id, identity) as { id: string; revision: number } | undefined; const id = prior?.id ?? identifier("project-revision"); const revision = prior?.revision ?? Number((db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM forge_project_revisions WHERE project_id = ?").get(project.id) as { revision: number }).revision) + 1; if (!prior) db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, state, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?)").run(id, project.id, revision, identity, JSON.stringify(normalized), normalized.baseSha, normalized.targetSha, actorUserId, now); db.prepare("UPDATE forge_projects SET status = 'active', active_revision_id = ?, updated_at = ? WHERE id = ?").run(id, now, project.id); this.auth.recordAuditEventInTransaction(db, actorUserId, "project_activated", undefined, project.companyId, { projectId: project.id, revision: String(revision), identity }); });
-    return this.getProject(actorUserId, project.id);
-  }
-
   listProjects(actorUserId: string, companyId?: string): Project[] {
     const rows = this.database.authQuery((db) => {
       const user = this.user(actorUserId);
       if (companyId) this.auth.requireCompanyAccess(actorUserId, companyId);
       const query = user.role === "admin"
-        ? companyId ? db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p WHERE p.company_id = ? ORDER BY p.name`) : db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p ORDER BY p.name`)
-        : companyId ? db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? AND p.company_id = ? ORDER BY p.name`) : db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? ORDER BY p.name`);
+        ? companyId ? db.prepare(`SELECT ${projectColumns} FROM forge_projects p WHERE p.company_id = ? ORDER BY p.name`) : db.prepare(`SELECT ${projectColumns} FROM forge_projects p ORDER BY p.name`)
+        : companyId ? db.prepare(`SELECT ${projectColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? AND p.company_id = ? ORDER BY p.name`) : db.prepare(`SELECT ${projectColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? ORDER BY p.name`);
       const result = companyId ? user.role === "admin" ? query.all(companyId) : query.all(actorUserId, companyId) : user.role === "admin" ? query.all() : query.all(actorUserId);
       return result as ProjectRow[];
     });
@@ -981,7 +973,7 @@ export class ProjectService {
       if (updating && !agentId && role === "builder") findings.push(finding("missing-default", `roleDefaults.${role}`, "A builder agent default is required"));
       else if (agentId && agentRoles.get(agentId) !== role) findings.push(finding("agent-ineligible", `roleDefaults.${role}`, "Role defaults must reference an agent with the matching role"));
     }
-    if (false && findings.length === 0) {
+    if (this.validateProjectConfiguration && findings.length === 0) {
       try {
         const inspection = await (this.localRepository ?? await defaultLocalRepositoryAdapter()).inspect({ repositoryPath: normalized.repositoryPath, baseBranch: normalized.baseBranch, targetBranch: normalized.targetBranch });
         if (inspection.canonicalPath !== normalized.repositoryPath) findings.push(finding("repository-path-mismatch", "repositoryPath", "Repository path is not canonical"));
@@ -993,7 +985,7 @@ export class ProjectService {
         else findings.push(finding("repository-unavailable", "repositoryPath", "Git could not inspect the configured repository"));
       }
     }
-    if (false && findings.length === 0) {
+    if (this.validateProjectConfiguration && findings.length === 0) {
       try {
         await this.github.checkAuthentication();
         const remote = await this.github.getRepository({ cwd: normalized.repositoryPath, nameWithOwner: normalized.repository });
@@ -1012,16 +1004,8 @@ export class ProjectService {
         const existing = this.rowForProject(db, id);
         if (!existing || existing.company_id !== companyId) throw new ProjectFailure("Not found", [], 404);
         db.prepare("UPDATE forge_projects SET name = ?, repository_path = ?, worktree_root = ?, repository_identity = ?, base_branch = ?, target_branch = ?, setup_command = ?, verification_command = ?, required_checks_json = ?, role_defaults_json = ?, updated_at = ? WHERE id = ?").run(normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, id);
-        if (existing.status === "active" && existing.base_sha && existing.target_sha) {
-          const snapshot = { ...normalized, baseSha: existing.base_sha, targetSha: existing.target_sha };
-          const identity = createHash("sha256").update(JSON.stringify(snapshot)).digest("hex");
-          const prior = db.prepare("SELECT id FROM forge_project_revisions WHERE project_id = ? AND identity = ?").get(id, identity) as { id: string } | undefined;
-          const revisionId = prior?.id ?? identifier("project-revision");
-          if (!prior) { const revision = Number((db.prepare("SELECT COALESCE(MAX(revision), 0) AS revision FROM forge_project_revisions WHERE project_id = ?").get(id) as { revision: number }).revision) + 1; db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, state, actor_user_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'accepted', ?, ?)").run(revisionId, id, revision, identity, JSON.stringify(snapshot), snapshot.baseSha, snapshot.targetSha, actorUserId, now); }
-          db.prepare("UPDATE forge_projects SET active_revision_id = ? WHERE id = ?").run(revisionId, id);
-        }
       } else {
-        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', NULL, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, now);
+        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.targetBranch, normalized.setupCommand, normalized.verificationCommand, JSON.stringify(normalized.requiredChecks), JSON.stringify(normalized.roleDefaults), now, now);
       }
       this.auth.recordAuditEventInTransaction(db, actorUserId, updating ? "project_updated" : "project_created", undefined, companyId, { projectId: id });
       return { id };
@@ -1038,7 +1022,7 @@ export class ProjectService {
   }
 
   private rowForProject(db: import("better-sqlite3").Database, projectId: string): ProjectRow | undefined {
-    return db.prepare(`SELECT ${projectRevisionColumns} FROM forge_projects p WHERE p.id = ?`).get(projectId) as ProjectRow | undefined;
+    return db.prepare(`SELECT ${projectColumns} FROM forge_projects p WHERE p.id = ?`).get(projectId) as ProjectRow | undefined;
   }
 
   private user(userId: string): AuthUser {

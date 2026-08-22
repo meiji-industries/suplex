@@ -2,6 +2,7 @@
 
 For visible sub-agent pane delegation and its verification rules, read
 `docs/agents/subagents-in-herdr-panes.md`.
+For the local Herdr workflow and helper scripts, read `HERDR.md`.
 
 ## Product UI
 

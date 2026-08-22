@@ -111,7 +111,8 @@ export interface DeveloperExecutionResult {
   dirtyState: "clean" | "dirty";
   deliveryArtifactId: string;
   evidenceArtifactId: string;
-  attentionEvidenceArtifactId?: string;
+  /** Legacy workflow-field shim. Activity schemas discard this retired value. */
+  attentionEvidenceArtifactId?: never;
   deliverySummary: string;
   outcome: "completed" | "blocked";
   failureCode?: string | null;

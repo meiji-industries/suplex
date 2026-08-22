@@ -17,7 +17,7 @@ import { TaskProjectConfigurationSchema } from "./task-project-configuration.js"
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
 import { acceptIssueDevelopment, acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, resyncIssueProjection, reviseIssuePlan, startIssueWorkflow } from "./temporal/service.js";
 import { issueCommands } from "./commands/registry.js";
-import { createInitialIssueWorkflowState, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "./temporal/issue-contracts.js";
+import { createInitialIssueWorkflowState, IssueCommandSchema, IssueWorkflowStateSchema, type ContinueWorkCommand, type DeliveryOperationBlockCode, type DeliveryWorkflowBlockCode, type IssueCommand, type IssuePhase, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type SendPlannerNoteInput, type StartPlanningInput } from "./temporal/issue-contracts.js";
 import { WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { taskCommandDescriptors, type TaskCommandDescriptor } from "./task-commands.js";
 import { TERMINAL_PHASES } from "./issue-phases.js";
@@ -67,7 +67,7 @@ function workflowCancellationFailureIsTransient(error: unknown): boolean {
   return false;
 }
 
-function derivedAllowedCommands(phase: TaskPhase, projectedCommands: IssueCommand[], planRevision: number | null | undefined, hasPlanArtifact: boolean): IssueCommand[] {
+function derivedAllowedCommands(phase: TaskPhase, projectedCommands: IssueCommand[], planRevision: number | null | undefined, hasPlanArtifact: boolean, hasSuccessor = false): IssueCommand[] {
   const failedCommand: IssueCommand | undefined = phase === "failed"
     ? (planRevision !== null && planRevision !== undefined && planRevision >= 1) || hasPlanArtifact
       ? "retry_development"
@@ -76,9 +76,8 @@ function derivedAllowedCommands(phase: TaskPhase, projectedCommands: IssueComman
   const commands = failedCommand && !projectedCommands.includes(failedCommand)
     ? [...projectedCommands, failedCommand]
     : projectedCommands;
-  return !TERMINAL_PHASES.has(phase) && !commands.includes("cancel_issue")
-    ? [...commands, "cancel_issue"]
-    : commands;
+  const cancellable = !TERMINAL_PHASES.has(phase) && !hasSuccessor && !commands.includes("cancel_issue") ? [...commands, "cancel_issue" as const] : commands;
+  return !TERMINAL_PHASES.has(phase) && !hasSuccessor && !cancellable.includes("send_planner_note") ? [...cancellable, "send_planner_note"] : cancellable;
 }
 
 
@@ -659,7 +658,7 @@ export interface TaskDeveloperDiff {
 
 export interface IssueWorkflowPort {
   start(input: Omit<IssueWorkflowInput, "workflowId"> & { workflowId?: string }): Promise<{ workflowId: string; runId: string; existing?: boolean }>;
-  execute(command: IssueCommand, workflowId: string, input: StartPlanningInput | PlanCommandInput): Promise<IssueWorkflowState>;
+  execute(command: IssueCommand, workflowId: string, input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput): Promise<IssueWorkflowState>;
   revisePlan(workflowId: string, input: PlanRevisionCommand): Promise<IssueWorkflowState>;
   continueWork(workflowId: string, input: ContinueWorkCommand): Promise<IssueWorkflowState>;
   resolveDecisionBlocker(workflowId: string, input: ResolveDecisionBlockerInput): Promise<IssueWorkflowState>;
@@ -1388,7 +1387,7 @@ export class TaskService {
 
   async executeCommand(actorUserId: string, taskId: string, command: IssueCommand, payload: TaskCommandPayload): Promise<ForgeTask> {
     const task = this.getTask(actorUserId, taskId);
-    const allowedCommands = derivedAllowedCommands(task.phase, task.allowedCommands, task.planRevision, task.planHistory.some((plan) => plan.kind === "plan"));
+    const allowedCommands = derivedAllowedCommands(task.phase, task.allowedCommands, task.planRevision, task.planHistory.some((plan) => plan.kind === "plan"), Boolean(task.successorTaskId));
     const descriptor = issueCommands[command];
     if (descriptor.family === "bespoke") throw new TaskFailure("This command requires its dedicated action", [finding("workflow-unavailable", "workflow", "The durable issue workflow is unavailable")], 503, task);
     const expectedRevision = payload.expectedRevision;
@@ -1408,7 +1407,9 @@ export class TaskService {
       ...(command === "respond_plan_blocker" ? { expectedWorkflowRevision: expectedRevision } : {}),
     };
     if (command === "approve_plan" || command === "request_plan_revision" || command === "respond_plan_blocker") return this.exactDecisionCommand(actorUserId, taskId, planInput, command);
-    const input: StartPlanningInput | PlanCommandInput = descriptor.family === "start"
+    const input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput = command === "send_planner_note"
+      ? { expectedRevision, actorUserId, commandId: payload.commandId ?? randomUUID(), note: payload.note ?? "" }
+      : descriptor.family === "start"
       ? { expectedRevision, actorUserId, commandId: payload.commandId ?? randomUUID(), ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
       : planInput;
     try {
@@ -1417,7 +1418,7 @@ export class TaskService {
         : (command === "start_development" || command === "retry_development") && this.workflow.acceptDevelopment
           ? await this.workflow.acceptDevelopment(task.workflowId, input as StartPlanningInput, command)
           : await this.workflow.execute(command, task.workflowId, input);
-      if (command !== "cancel_issue" && state.revision <= expectedRevision) {
+      if (command !== "cancel_issue" && command !== "send_planner_note" && state.revision <= expectedRevision) {
         throw new Error("Stale workflow revision");
       }
       this.recordTaskCommand(task, actorUserId, command, state.revision, payload.automatic === true);
@@ -2024,7 +2025,7 @@ export class TaskService {
     const commandActivity: TaskActivityEntry[] = memberRows.filter((entry) => entry.action === "task_command" && entry.user_id).map((entry) => {
       const metadata = parseMetadata(entry.metadata_json);
       return { id: entry.id, revision: Number(metadata.revision), eventType: "member_action", metadata, createdAt: entry.created_at, kind: "member" as const, actor: { id: entry.user_id!, displayName: entry.user_name!, username: entry.user_username!, avatarSeed: entry.user_avatar_seed || entry.user_username! } };
-    }).filter((entry) => Number.isInteger(entry.revision));
+    }).filter((entry) => Number.isInteger(entry.revision) && entry.metadata.command !== "send_planner_note");
     const rescueActivity: TaskActivityEntry[] = memberRows.filter((entry) => entry.action === "task_rescue").map((entry) => {
       const metadata = parseMetadata(entry.metadata_json);
       return { id: entry.id, revision: Number(metadata.revision), eventType: "system_action", metadata, createdAt: entry.created_at, kind: "member" as const, actor: { id: "forge", displayName: "Forge", username: "forge", avatarSeed: "forge" } };
@@ -2038,7 +2039,18 @@ export class TaskService {
       if (commandKeys.has(`${entry.actor_user_id}:${revision}:${command}`)) return [];
       return [{ id: `plan-decision-${entry.id}`, revision, eventType: "member_action", metadata: { command, actionLabel: issueCommands[command].label }, createdAt: entry.created_at, kind: "member", actor: { id: entry.actor_user_id, displayName: entry.display_name, username: entry.username, avatarSeed: entry.avatar_seed || entry.username } }];
     });
-    const activity: TaskActivityEntry[] = [...timeline.map((entry): TaskActivityEntry => ({ ...entry, kind: "workflow", ...(entry.eventType === "task_created" && creatorActor ? { actor: creatorActor } : {}) })), ...commandActivity, ...rescueActivity, ...decisionActivity]
+    const plannerNoteActivity = this.database.authQuery((db) => db.prepare(`SELECT n.id, n.revision, n.note, n.created_at, n.actor, u.display_name, u.username, u.avatar_seed,
+        e.id AS execution_id, e.output_revision, e.output_summary, e.finished_at
+      FROM forge_planner_notes n
+      JOIN forge_users u ON u.id = n.actor
+      LEFT JOIN forge_agent_executions e ON e.id = (SELECT next.id FROM forge_agent_executions next
+        WHERE next.task_id = n.task_id AND next.company_id = n.company_id AND next.role = 'planner' AND next.output_kind = 'plan' AND next.status = 'completed' AND next.started_at >= n.created_at
+        ORDER BY next.started_at, next.id LIMIT 1)
+      WHERE n.task_id = ? AND n.company_id = ? ORDER BY n.created_at, n.id`).all(row.id, row.company_id) as Array<{ id: string; revision: number; note: string; created_at: string; actor: string; display_name: string; username: string; avatar_seed: string; execution_id: string | null; output_revision: number | null; output_summary: string | null; finished_at: string | null }>).flatMap((entry): TaskActivityEntry[] => [
+        { id: entry.id, revision: entry.revision, eventType: "planner_note", metadata: { note: entry.note }, createdAt: entry.created_at, kind: "member", actor: { id: entry.actor, displayName: entry.display_name, username: entry.username, avatarSeed: entry.avatar_seed || entry.username } },
+        ...(entry.execution_id && entry.finished_at ? [{ id: `planner-note-revised-${entry.execution_id}`, revision: entry.output_revision ?? entry.revision + 1, eventType: "planner_note_revised", metadata: { summary: entry.output_summary ?? "Plan updated" }, createdAt: entry.finished_at, kind: "workflow" as const }] : []),
+      ]);
+    const activity: TaskActivityEntry[] = [...timeline.map((entry): TaskActivityEntry => ({ ...entry, kind: "workflow", ...(entry.eventType === "task_created" && creatorActor ? { actor: creatorActor } : {}) })), ...commandActivity, ...rescueActivity, ...decisionActivity, ...plannerNoteActivity]
       .sort((left, right) => left.revision - right.revision || (left.kind === right.kind ? left.createdAt.localeCompare(right.createdAt) || left.id.localeCompare(right.id) : left.kind === "member" ? -1 : 1));
     // ponytail: display agent resolved via current task assignment; add agent_id columns to execution tables if history fidelity ever matters
     const agentInvocations = this.database.authQuery((db) => db.prepare(`SELECT e.id, e.role, e.status, e.attempt, e.session_ref, e.started_at, e.finished_at, e.failure_code, e.failure_summary, e.evidence_artifact_id,
@@ -2086,7 +2098,7 @@ export class TaskService {
     const planHistory = this.database.authQuery((db) => db.prepare("SELECT output_revision AS revision, output_kind AS kind, output_summary AS summary, id AS executionId, output_artifact_id AS outputArtifactId, evidence_artifact_id AS evidenceArtifactId, finished_at AS createdAt FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND output_artifact_id IS NOT NULL ORDER BY output_revision, finished_at, id").all(row.id, row.company_id) as TaskPlanHistoryEntry[]);
     const rawAllowedCommands = json<unknown[]>(row.allowed_commands_json, []);
     const projectedCommands = IssueCommandSchema.array().safeParse(rawAllowedCommands).success ? IssueCommandSchema.array().parse(rawAllowedCommands) : [];
-    const allowedCommands = derivedAllowedCommands(row.phase, projectedCommands, workflowState.planRevision, planHistory.some((plan) => plan.kind === "plan"));
+    const allowedCommands = derivedAllowedCommands(row.phase, projectedCommands, workflowState.planRevision, planHistory.some((plan) => plan.kind === "plan"), Boolean(workflowState.successorTaskId));
     const recoveryStatus = developerExecution?.leaseStatus === "result_ready" ? "result_pending_claim" : snapshotState?.success ? snapshotState.data.developerRecoveryStatus : undefined;
     const nextRecoveryCommand = recoveryStatus ? (["retry_development", "cancel_development", "cancel_issue"] as const).find((command) => allowedCommands.includes(command)) : undefined;
     const developerRecovery = recoveryStatus && snapshotState?.success ? {

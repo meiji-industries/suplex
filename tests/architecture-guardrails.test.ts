@@ -75,6 +75,7 @@ test("issue command registry stays complete across descriptors, updates, routes,
         "revise-plan",
         "start-development",
         "start-planning",
+        "tell-planner",
         "verify-developer-ownership",
       ]
     `);

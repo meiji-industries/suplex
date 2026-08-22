@@ -15,6 +15,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { ApplicationFrame } from "../components/app/application-frame.js";
 import { getWorkerHealthFailure, useSystemHealth } from "../components/app/system-health.js";
 import { TaskActivity } from "../components/app/task-history.js";
+import { TellPlannerForm } from "../components/app/tell-planner-form.js";
 import DeveloperDiff, { useAppThemeType } from "../components/app/developer-diff.js";
 import { TaskLeadPlan } from "../components/app/task-lead-plan.js";
 import { invocationActorLabel, workflowOwnerLabel } from "../components/app/task-invocations.js";
@@ -30,8 +31,9 @@ import { DeveloperEvidence, type DeveloperExecutionEventView } from "../componen
 import { adminDate, type ApiAgent, type ApiCi, type ApiProject, type ApiTask } from "../lib/view-shared.js";
 import { readJson, withCompany } from "../lib/api.js";
 import type { IssueCommandSlug } from "../../commands/registry.js";
-import { BLOCKED_PHASES, phaseLabel } from "../../issue-phases.js";
+import { BLOCKED_PHASES, TERMINAL_PHASES, phaseLabel } from "../../issue-phases.js";
 import { releaseFailureCopy } from "../../release-failures.js";
+import type { ActivityFeedRow } from "../lib/task-activity-feed.js";
 import { Check, Copy, Ellipsis, ExternalLink, GitPullRequest, LoaderCircle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
@@ -559,12 +561,11 @@ function InlineTaskEditor({ field, value, onSave }: { field: "title" | "descript
 
 export function TaskDetailsPage({ task, project, companyId: _companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onMerge, onDuplicate, onUpdateDetails, onRefresh, onRescue }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onMerge: () => Promise<void>; onDuplicate: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport> }): ReactElement {
   const approveCommand = task.commands.find((command) => command.name === "approve_plan");
-  const revisionCommand = task.commands.find((command) => command.name === "request_plan_revision");
+  const tellPlannerCommand = task.commands.find((command) => command.name === "send_planner_note");
   const blockerCommand = task.commands.find((command) => command.name === "respond_plan_blocker");
   const visibleLeadPlan = task.leadOutput && (task.leadOutput.content.kind !== "decision_blocker" || !task.governance.blocker) ? task.leadOutput : undefined;
   const exactApproveCommand = approveCommand ? { endpoint: approveCommand.endpoint, expectedRevision: approveCommand.expectedRevision } : undefined;
-  const exactRevisionCommand = revisionCommand ? { endpoint: revisionCommand.endpoint, expectedRevision: revisionCommand.expectedRevision } : undefined;
-  const decisionControls = task.phase === "approval" && (exactApproveCommand || exactRevisionCommand) ? <PlanDecisionForm key={task.revision} {...(exactApproveCommand ? { approveCommand: exactApproveCommand } : {})} {...(exactRevisionCommand ? { revisionCommand: exactRevisionCommand } : {})} busy={busy} onSubmit={(payload) => onPlanAction(payload.command.endpoint as TaskPlanAction, payload.note, { idempotencyKey: payload.idempotencyKey })} error={error} /> : null;
+  const decisionControls = task.phase === "approval" && exactApproveCommand ? <PlanDecisionForm key={task.revision} approveCommand={exactApproveCommand} busy={busy} onSubmit={(payload) => onPlanAction(payload.command.endpoint as TaskPlanAction, payload.note, { idempotencyKey: payload.idempotencyKey })} error={error} /> : null;
   const [developerEventState, setDeveloperEventState] = useState<DeveloperEventState>({ executionId: null, events: [], terminalSteps: {} });
   const [developerLiveness, setDeveloperLiveness] = useState<(DevelopmentState & { lastHeartbeatAt: string | null }) | undefined>();
   const [developmentNow, setDevelopmentNow] = useState(Date.now());
@@ -610,8 +611,17 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   const leadPlan = leadPlanProps ? <TaskLeadPlan {...leadPlanProps} /> : undefined;
   const currentPlan = decisionControls && leadPlan ? leadPlan : undefined;
   const activityCount = task.activity.length;
+  const [optimisticPlannerNotes, setOptimisticPlannerNotes] = useState<ActivityFeedRow[]>([]);
+  useEffect(() => { setOptimisticPlannerNotes([]); }, [task.id]);
+  const plannerFeedbackEnded = TERMINAL_PHASES.has(task.phase) || Boolean(task.successorTaskId);
+  const plannerFeedbackDisabledReason = plannerFeedbackEnded ? "Planner feedback is unavailable after this task has ended." : !tellPlannerCommand ? "Planner feedback is unavailable while the task refreshes." : undefined;
   const activityContent = <>
-    <TaskActivity taskId={task.id} timeline={task.activity} release={task.release} ci={task.ci} onViewChanges={openDiff} />
+    <TaskActivity taskId={task.id} timeline={task.activity} release={task.release} ci={task.ci} optimisticRows={optimisticPlannerNotes} onViewChanges={openDiff} />
+    <TellPlannerForm disabled={busy || !tellPlannerCommand} disabledReason={plannerFeedbackDisabledReason} onSubmit={async (note, commandId) => {
+      setOptimisticPlannerNotes((rows) => [...rows, { id: `optimistic-planner-note-${commandId}`, at: new Date().toISOString(), role: "you", text: `You told the Planner: ${note}`, revision: task.revision }]);
+      await onPlanAction("tell-planner", note, { commandId });
+      setOptimisticPlannerNotes([]);
+    }} />
   </>;
   const developerExecution = task.developerExecution;
   const hasChanges = developerExecution !== undefined;

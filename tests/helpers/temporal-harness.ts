@@ -72,6 +72,9 @@ export type TemporalHarness = {
   readonly ciCalls: Map<string, number>;
   readonly ciPlanInputs: Array<{ leadSessionRef: string; ciAttemptId: string }>;
   readonly ciRepairInputs: Array<{ priorDeveloperSessionRef: string; ciAttemptId: string }>;
+  readonly plannerInputs: Array<{ taskId: string; leadSessionRef?: string; operatorNotes?: string[] }>;
+  readonly developerInputs: Array<{ taskId: string; executionId?: string; supersedesExecutionId?: string; reuseWorktree?: boolean; operatorNote?: string }>;
+  readonly cancelledDeveloperIds: string[];
 };
 
 export function createTemporalHarness(): TemporalHarness {
@@ -92,6 +95,9 @@ export function createTemporalHarness(): TemporalHarness {
   const ciCalls = new Map<string, number>();
   const ciPlanInputs: Array<{ leadSessionRef: string; ciAttemptId: string }> = [];
   const ciRepairInputs: Array<{ priorDeveloperSessionRef: string; ciAttemptId: string }> = [];
+  const plannerInputs: Array<{ taskId: string; leadSessionRef?: string; operatorNotes?: string[] }> = [];
+  const developerInputs: Array<{ taskId: string; executionId?: string; supersedesExecutionId?: string; reuseWorktree?: boolean; operatorNote?: string }> = [];
+  const cancelledDeveloperIds: string[] = [];
   const artifacts = {} as TemporalHarnessArtifacts;
 
   async function stop(): Promise<void> {
@@ -159,7 +165,8 @@ export function createTemporalHarness(): TemporalHarness {
       },
     };
     const integrationDeveloper = {
-      run: async (input: { executionId?: string }) => {
+      run: async (input: { taskId: string; executionId?: string | undefined; supersedesExecutionId?: string | undefined; reuseWorktree?: boolean | undefined; operatorNote?: string | undefined }) => {
+        developerInputs.push({ taskId: input.taskId, ...(input.executionId ? { executionId: input.executionId } : {}), ...(input.supersedesExecutionId ? { supersedesExecutionId: input.supersedesExecutionId } : {}), ...(input.reuseWorktree !== undefined ? { reuseWorktree: input.reuseWorktree } : {}), ...(input.operatorNote ? { operatorNote: input.operatorNote } : {}) });
         if (state.holdDeveloper) await state.developerGate;
         if (state.developerFailure) throw new AgentFailure("process-exited", "The agent invocation did not complete.");
         return { developerExecutionId: input.executionId ?? "developer_integration", developerSessionRef: "session_developer_integration", worktreePath: join(root, "worktrees", "issue-restart"), branchName: "forge/issue/issue-restart", targetBaseSha: "a".repeat(40), currentStep: 1, resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_developer_evidence", deliverySummary: "Developer delivery", outcome: "completed" as const };
@@ -185,12 +192,20 @@ export function createTemporalHarness(): TemporalHarness {
           state.deadBuilderOnce = false;
           return { status: "interrupted" as const, developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-child-missing", summary: "The recorded Builder PID is no longer running." };
         }
-        const { worktreePath: _worktreePath, ...result } = await integrationDeveloper.run({ executionId: input.developerTurnExecutionId });
+        const { worktreePath: _worktreePath, ...result } = await integrationDeveloper.run({ taskId: input.taskId, executionId: input.developerTurnExecutionId, supersedesExecutionId: input.supersedesExecutionId, reuseWorktree: input.reuseWorktree, operatorNote: input.operatorNote });
         void _worktreePath;
         return { status: "completed" as const, result, resultHash: "a".repeat(64) };
       },
       async runLeadPlanning(input: Parameters<typeof baseActivities.runLeadPlanning>[0]) {
+        plannerInputs.push({ taskId: input.taskId, ...(input.leadSessionRef ? { leadSessionRef: input.leadSessionRef } : {}), ...(input.operatorNotes ? { operatorNotes: input.operatorNotes } : {}) });
         return input.taskId.startsWith("ci-") ? integrationAgent.runLeadPlanning() : baseActivities.runLeadPlanning(input);
+      },
+      async cancelDeveloperExecution(input: Parameters<typeof baseActivities.cancelDeveloperExecution>[0]) {
+        if (input.taskId === "ci-tell-development") {
+          cancelledDeveloperIds.push(input.executionId);
+          return { status: "cancelled_confirmed" as const, executionId: input.executionId, summary: "Builder stopped and the worktree was preserved." };
+        }
+        return baseActivities.cancelDeveloperExecution(input);
       },
       async reconcileCi(input: Parameters<typeof baseActivities.reconcileCi>[0]) {
         if (!input.taskId.startsWith("ci-")) return baseActivities.reconcileCi(input);
@@ -259,6 +274,9 @@ export function createTemporalHarness(): TemporalHarness {
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-start-failure', 'issue-company', 'issue-project', 'Developer start failure', 'issue-brief', '[]', ?, 0, ?, 'issue-revision', 'issue-start-failure-key', ?, ?)").run(JSON.stringify(issueRoleProfiles), `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-start-failure`, new Date().toISOString(), new Date().toISOString());
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-developer-failure', 'issue-company', 'issue-project', 'Developer activity failure', 'issue-brief', '[]', ?, 0, ?, 'issue-revision', 'issue-developer-failure-key', ?, ?)").run(JSON.stringify(issueRoleProfiles), `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-developer-failure`, new Date().toISOString(), new Date().toISOString());
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-failed-retry', 'issue-company', 'issue-project', 'Failed retry issue', 'issue-brief', '[]', ?, 0, ?, 'issue-revision', 'issue-failed-retry-key', ?, ?)").run(JSON.stringify(issueRoleProfiles), `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-failed-retry`, new Date().toISOString(), new Date().toISOString());
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-tell-approval', 'issue-company', 'issue-project', 'Tell Planner approval', 'issue-brief', '[]', ?, 0, ?, 'issue-revision', 'issue-tell-approval-key', ?, ?)").run(JSON.stringify(issueRoleProfiles), `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-tell-approval`, new Date().toISOString(), new Date().toISOString());
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('issue-tell-development', 'issue-company', 'issue-project', 'Tell Planner development', 'issue-brief', '[]', ?, 0, ?, 'issue-revision', 'issue-tell-development-key', ?, ?)").run(JSON.stringify(issueRoleProfiles), `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-tell-development`, new Date().toISOString(), new Date().toISOString());
+      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('ci-tell-development', 'issue-company', 'issue-project', 'Tell Planner active development', 'issue-brief', '[]', ?, 0, ?, 'issue-revision', 'ci-tell-development-key', ?, ?)").run(JSON.stringify(issueRoleProfiles), `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-ci-tell-development`, new Date().toISOString(), new Date().toISOString());
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('ci-provider-failure', 'issue-company', 'issue-project', 'CI provider failure issue', 'issue-brief', '[]', ?, 0, ?, 'issue-revision', 'ci-provider-failure-key', ?, ?)").run(JSON.stringify(issueRoleProfiles), `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-ci-provider-failure`, new Date().toISOString(), new Date().toISOString());
     });
     artifacts.ciProviderEvidence = await new ArtifactStore(config.artifactRoot).put("issue-company", "ci-evidence", { filename: "ci-provider-failure.json", mimeType: "application/json", bytes: Buffer.from('{"code":"provider_failure","summary":"The CI provider did not return an authoritative result."}', "utf8") });
@@ -306,6 +324,6 @@ export function createTemporalHarness(): TemporalHarness {
     get config() { if (!config) throw new Error("Temporal harness is not started"); return config; },
     get database() { if (!database) throw new Error("Temporal harness is not started"); return database; },
     get workerConnection() { if (!workerConnection) throw new Error("Temporal harness is not started"); return workerConnection; },
-    state, artifacts, issueRoleProfiles, ciCalls, ciPlanInputs, ciRepairInputs,
+    state, artifacts, issueRoleProfiles, ciCalls, ciPlanInputs, ciRepairInputs, plannerInputs, developerInputs, cancelledDeveloperIds,
   };
 }

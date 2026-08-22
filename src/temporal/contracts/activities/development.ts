@@ -92,6 +92,7 @@ export interface DeveloperExecutionActivityInput {
   approvalDecisionId?: string;
   supersedesExecutionId?: string | undefined;
   reuseWorktree?: boolean | undefined;
+  operatorNote?: string | undefined;
   /** Task-scoped controls are optional to retain pre-control workflow histories. */
   runProjectTests?: boolean | undefined;
   visualEvidence?: "off" | "capture" | "required" | undefined;

@@ -19,6 +19,7 @@ import { releaseStateFields, releaseStateFields2 } from "./release.js";
 import { repairStateFields } from "./repair.js";
 import { successorStateFields, successorStateFields2 } from "./successor.js";
 import { targetBaseStateFields } from "./target-base.js";
+import { plannerNoteStateFields } from "./planner-note.js";
 
 const orderedStateFields = {
   ...identityStateFields,
@@ -41,6 +42,7 @@ const orderedStateFields = {
   ...successorStateFields,
   ...releaseStateFields2,
   ...successorStateFields2,
+  ...plannerNoteStateFields,
 };
 
 export const IssueWorkflowStateSchema = z.preprocess((raw) => {
@@ -102,6 +104,7 @@ export const IssueContinuationStateSchema = z.object({
   ...successorStateFields,
   ...releaseStateFields2,
   ...successorStateFields2,
+  ...plannerNoteStateFields,
 });
 
 export {
@@ -110,4 +113,5 @@ export {
   forwardMergeStateFields, governanceStateFields, identityStateFields, lifecycleStateFields, mergeStateFields,
   mergeStateFields2, planningStateFields, releaseStateFields, releaseStateFields2,
   repairStateFields, successorStateFields, successorStateFields2, targetBaseStateFields,
+  plannerNoteStateFields,
 };

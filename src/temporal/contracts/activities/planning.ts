@@ -75,6 +75,16 @@ export const CreateSuccessorActivityInputSchema = z.object({
 export type CreateSuccessorActivityInput = z.infer<typeof CreateSuccessorActivityInputSchema>;
 export const CreateSuccessorActivityResultSchema = SuccessorReferenceSchema;
 export type CreateSuccessorActivityResult = z.infer<typeof CreateSuccessorActivityResultSchema>;
+export const RecordPlannerNoteActivityInputSchema = z.object({
+  taskId: durableId,
+  companyId: durableId,
+  workflowId: durableId,
+  revision: z.number().int().nonnegative(),
+  actorUserId: durableId,
+  note: z.string().trim().min(1),
+  commandId: durableId,
+}).strict();
+export type RecordPlannerNoteActivityInput = z.infer<typeof RecordPlannerNoteActivityInputSchema>;
 
 export interface PlanningActivities {
   runLeadPlanning(input: LeadPlanningActivityInput): Promise<LeadPlanningResult>;
@@ -83,4 +93,5 @@ export interface PlanningActivities {
   createSuccessor(input: CreateSuccessorActivityInput): Promise<CreateSuccessorActivityResult>;
   runSupplementalReview(input: SupplementalReviewActivityInput): Promise<SupplementalReviewResult>;
   consolidateLeadPlan(input: ConsolidateLeadPlanActivityInput): Promise<LeadPlanningResult>;
+  recordPlannerNote(input: RecordPlannerNoteActivityInput): Promise<{ noteId: string; createdAt: string }>;
 }

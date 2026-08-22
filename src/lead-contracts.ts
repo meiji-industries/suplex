@@ -225,6 +225,7 @@ export const LeadPlanningActivityInputSchema = z.object({
   leadSessionRef: durableId.optional(),
   revisionNoteArtifactId: durableId.optional(),
   memberResponseArtifactId: durableId.optional(),
+  operatorNotes: z.array(z.string().trim().min(1).max(8_000)).max(32).optional(),
 }).strict();
 
 export type LeadPlanningActivityInput = z.infer<typeof LeadPlanningActivityInputSchema>;

@@ -185,7 +185,7 @@ test("non-terminal projections always expose cancellation", async () => {
     const blocked = IssueWorkflowStateSchema.parse({ ...initial, phase: "merge_conflict_reviewing", revision: 1, owner: "human", allowedCommands: [], pendingAction: "Review merge conflict", lastEventId: `${initial.workflowId}:1` });
     projectState(value.database, blocked);
 
-    expect(value.tasks.getTask(value.adminId, created.task.id)).toMatchObject({ allowedCommands: ["cancel_issue"], commands: [expect.objectContaining({ name: "cancel_issue", expectedRevision: 1 })] });
+    expect(value.tasks.getTask(value.adminId, created.task.id)).toMatchObject({ allowedCommands: ["cancel_issue", "send_planner_note"], commands: [expect.objectContaining({ name: "cancel_issue", expectedRevision: 1 }), expect.objectContaining({ name: "send_planner_note", expectedRevision: 1 })] });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
@@ -328,7 +328,7 @@ test("creates one durable backlog task, verifies immutable images, and starts pl
     expect(duplicate.task.id).toBe(first.task.id);
     await expect(value.tasks.executeCommand(value.adminId, first.task.id, "start_planning", { expectedRevision: 9 })).rejects.toMatchObject({ statusCode: 409, findings: [expect.objectContaining({ code: "stale-revision" })] });
     const planning = await value.tasks.executeCommand(value.adminId, first.task.id, "start_planning", { expectedRevision: 0 });
-    expect(planning).toMatchObject({ phase: "planning", revision: 1, owner: "lead", pendingAction: "Lead planning", allowedCommands: ["cancel_issue"] });
+    expect(planning).toMatchObject({ phase: "planning", revision: 1, owner: "lead", pendingAction: "Lead planning", allowedCommands: ["cancel_issue", "send_planner_note"] });
     expect(planning.timeline.map((entry) => entry.eventType)).toEqual(["task_created", "planning_started"]);
     expect(planning.activity).toEqual([
       expect.objectContaining({ kind: "workflow", eventType: "task_created", actor: { id: "admin-1", displayName: "Admin", username: "user_v1_admin-1", avatarSeed: "user_v1_admin-1" } }),

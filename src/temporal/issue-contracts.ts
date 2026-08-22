@@ -6,8 +6,8 @@ export type { LeadPlanningActivityInput, LeadPlanningResult } from "../lead-cont
 import { durableId } from "../commands/inputs.js";
 
 // moved to src/commands/inputs.ts — re-exported for compatibility
-export { ContinueWorkCommandSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, StartPlanningInputSchema } from "../commands/inputs.js";
-export type { ContinueWorkCommand, PlanCommandInput, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, StartPlanningInput } from "../commands/inputs.js";
+export { ContinueWorkCommandSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, SendPlannerNoteInputSchema, StartPlanningInputSchema } from "../commands/inputs.js";
+export type { ContinueWorkCommand, PlanCommandInput, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, SendPlannerNoteInput, StartPlanningInput } from "../commands/inputs.js";
 
 export * from "./contracts/primitives.js";
 export { IssueContinuationStateSchema, IssueWorkflowStateSchema } from "./contracts/state/index.js";

@@ -1,11 +1,12 @@
 import { defineUpdate } from "@temporalio/workflow";
 
 import { ISSUE_COMMAND_NAMES, issueCommands, type IssueCommand } from "../commands/registry.js";
-import type { ContinueWorkCommand, PlanCommandInput, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, StartPlanningInput } from "../commands/inputs.js";
+import type { ContinueWorkCommand, PlanCommandInput, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, SendPlannerNoteInput, StartPlanningInput } from "../commands/inputs.js";
 import type { IssueWorkflowState } from "./issue-contracts.js";
 
 type CommandInput<K extends IssueCommand> = {
   start_planning: StartPlanningInput;
+  send_planner_note: SendPlannerNoteInput;
   request_supplemental_review: PlanCommandInput;
   approve_plan: PlanCommandInput;
   request_plan_revision: PlanCommandInput;
@@ -74,3 +75,4 @@ export const continueWorkUpdate = issueUpdates.continue_work;
 export const retryCapacityUpdate = issueUpdates.retry_capacity;
 export const requestPlanRevisionUpdate = issueUpdates.request_plan_revision;
 export const respondPlanBlockerUpdate = issueUpdates.respond_plan_blocker;
+export const tellPlannerUpdate = issueUpdates.send_planner_note;

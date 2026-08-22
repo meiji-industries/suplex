@@ -44,6 +44,7 @@ const expectedActivityKeys = [
   "recordDeliveryDecision",
   "recordPlanBlockerResponse",
   "recordPlanDecision",
+  "recordPlannerNote",
   "recordProbeStarted",
   "rerunCi",
   "resolveMergeConflict",

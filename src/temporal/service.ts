@@ -8,7 +8,7 @@ import { issueCommands, type IssueCommand } from "../commands/registry.js";
 import { issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow } from "./workflows.js";
 import { issueUpdates } from "./issue-updates.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import { ContinueWorkCommandSchema, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, StartPlanningInputSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type StartPlanningInput } from "./issue-contracts.js";
+import { ContinueWorkCommandSchema, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, SendPlannerNoteInputSchema, StartPlanningInputSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type SendPlannerNoteInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
 import { clientPayloadInterceptor } from "./payload-boundary-interceptors.js";
 import { temporalDataConverter } from "./workflow-bundle.js";
@@ -229,18 +229,18 @@ export async function startIssueWorkflow(config: ForgeConfig, input: Omit<IssueW
   }
 }
 
-export function issueCommandId(workflowId: string, command: IssueCommand, input: StartPlanningInput | PlanCommandInput): string {
+export function issueCommandId(workflowId: string, command: IssueCommand, input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput): string {
   const descriptor = issueCommands[command];
   if (descriptor.family === "bespoke" || descriptor.durableCommandKind === null) throw new Error(`Command ${command} requires its dedicated client function`);
   return durableCommand(workflowId, descriptor.durableCommandKind, input).commandId;
 }
 
-export async function executeIssueCommand(config: ForgeConfig, workflowId: string, command: IssueCommand, input: StartPlanningInput | PlanCommandInput): Promise<IssueWorkflowState> {
+export async function executeIssueCommand(config: ForgeConfig, workflowId: string, command: IssueCommand, input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput): Promise<IssueWorkflowState> {
   const descriptor = issueCommands[command];
   if (descriptor.family === "bespoke") throw new Error(`Command ${command} requires its dedicated client function`);
   const identifiers = runtimeIdentifiers(config.installationId);
   if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
-  const schema = descriptor.family === "start" ? StartPlanningInputSchema : PlanCommandInputSchema;
+  const schema = command === "send_planner_note" ? SendPlannerNoteInputSchema : descriptor.family === "start" ? StartPlanningInputSchema : PlanCommandInputSchema;
   const durable = descriptor.durableCommandKind === null ? input : durableCommand(workflowId, descriptor.durableCommandKind, input);
   const validatedInput = schema.parse(durable);
   assertPayloadWithinLimit(descriptor.payloadLabel, validatedInput);

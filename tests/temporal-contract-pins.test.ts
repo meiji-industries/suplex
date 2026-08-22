@@ -12,7 +12,7 @@ const FROZEN_UPDATE_NAMES = [
   "requestDeliveryChanges", "requestPlanRevision", "requestSupplementalReview",
   "resolveDecisionBlocker", "resolveMergeConflict", "respondPlanBlocker", "resyncProjection", "retryCapacity", "retryDevelopment",
   "retryForwardMergeVerification", "retryTargetBaseReconciliation", "reviewDelivery", "revisePlan",
-  "startDevelopment", "startPlanning", "verifyDeveloperOwnership",
+  "startDevelopment", "startPlanning", "tellPlanner", "verifyDeveloperOwnership",
 ];
 
 test("issue workflow update names are frozen", () => {

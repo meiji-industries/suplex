@@ -67,7 +67,7 @@ function useLiveActivity(taskId: string): ActivityFeed | null {
   return feed;
 }
 
-export function TaskActivity({ taskId = "", timeline, release, ci, onViewChanges }: {
+export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRows = [], onViewChanges }: {
   taskId?: string;
   timeline: TaskActivityEntry[];
   release?: { pullRequestUrl?: string | null; pullRequestNumber?: number | null } | null | undefined;
@@ -79,6 +79,7 @@ export function TaskActivity({ taskId = "", timeline, release, ci, onViewChanges
   repository?: string | undefined;
   developerAttempts?: unknown;
   revisionContent?: unknown;
+  optimisticRows?: ActivityFeedRow[];
   children?: unknown;
   onViewChanges?: (() => void) | undefined;
 }) {
@@ -90,8 +91,8 @@ export function TaskActivity({ taskId = "", timeline, release, ci, onViewChanges
       return { id: entry.id, at: entry.createdAt, role, text: activitySentence(entry, role), revision: entry.revision, ...(isAutomaticActivity(entry, role) ? { automatic: true } : {}), ...(link ? { link } : {}) };
     });
     const live = (feed?.events ?? []).map((event, index): FeedRow => ({ id: `live-${event.at}-${event.kind}-${index}`, at: event.at, role: feed?.execution?.role ?? "integrator", text: liveText(event, feed?.execution?.role ?? "integrator"), live: event.kind === "status" || event.kind === "thinking" }));
-    return compactActivityRows([...durable, ...live]);
-  }, [ci, feed, release, timeline]);
+    return compactActivityRows([...durable, ...live, ...optimisticRows]);
+  }, [ci, feed, optimisticRows, release, timeline]);
   return <section data-task-activity-feed className="space-y-1" aria-label="Activity">
     <div data-task-activity className="divide-y">
       {rows.map((row) => <div className="flex min-w-0 items-center gap-2 py-2 text-xs" key={row.id} data-task-activity-kind={row.role} {...(row.revision === undefined ? {} : { "data-task-activity-revision": row.revision })}>

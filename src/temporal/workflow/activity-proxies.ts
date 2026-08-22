@@ -87,6 +87,11 @@ export const { recordPlanDecision } = proxyActivities<IssueActivities>({
   retry: BOOKKEEPING_RETRY_POLICY,
 });
 
+export const { recordPlannerNote } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "1 minute",
+  retry: BOOKKEEPING_RETRY_POLICY,
+});
+
 
 export const { authorizePlanRevision } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",

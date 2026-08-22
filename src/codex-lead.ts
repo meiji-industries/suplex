@@ -659,7 +659,7 @@ export class AgentService {
     try {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const prompt = attempt === 0
-          ? `${revisionNoteText ? this.revisionPrompt(revisionNoteText) : memberResponseText ? this.revisionPrompt(`Human blocker answer:\n${memberResponseText}`) : `${this.initialPrompt(row.title, brief, row.normalized_json, profileSettings, repositoryEvidence, revisionContext)}\n\nPlan only work that can be completed and verified inside an isolated git worktree. Do not add steps for deployment, rollout, physical device checks or production verification — mention them in a 'Follow-up outside Forge' note instead.`}${resumeInstruction ? `\n\nMember instruction for this ${input.resume?.reason ?? "revision"}:\n${resumeInstruction}` : ""}`
+          ? `${input.operatorNotes?.length ? this.revisionPrompt(input.operatorNotes.map((note) => `The operator asked: ${note}`).join("\n")) : revisionNoteText ? this.revisionPrompt(revisionNoteText) : memberResponseText ? this.revisionPrompt(`Human blocker answer:\n${memberResponseText}`) : `${this.initialPrompt(row.title, brief, row.normalized_json, profileSettings, repositoryEvidence, revisionContext)}\n\nPlan only work that can be completed and verified inside an isolated git worktree. Do not add steps for deployment, rollout, physical device checks or production verification — mention them in a 'Follow-up outside Forge' note instead.`}${resumeInstruction ? `\n\nMember instruction for this ${input.resume?.reason ?? "revision"}:\n${resumeInstruction}` : ""}`
           : this.correctionPrompt();
         const imagePaths = images.map((image) => resolve(this.config.artifactRoot, image.storage_path));
         const wrapper = await this.prepareTurnWrapper(executionId, { model: leadProfile.model, reasoningLevel: leadProfile.reasoningLevel as "low" | "medium" | "high" | "xhigh", servicePriority: leadProfile.servicePriority as "standard" | "priority" | "fast" }, repositoryPath, schemaPath, prompt, { ...(rawSessionId && sessionRef ? { resumeSessionRef: sessionRef } : {}), ...(sessionRef ? { sessionRef } : {}), ...(!rawSessionId && imagePaths.length ? { imagePaths } : {}) });
@@ -1524,7 +1524,7 @@ export class AgentService {
   }
 
   private revisionPrompt(note: string): string {
-    return `Continue the existing primary Lead session and reconsider the complete plan in response to this member request. Work read-only, preserve the issue scope, and return exactly one corrected JSON object matching the required plan or decision_blocker schema. Do not include markdown fences or commentary.\n\nMember revision request:\n${note}`;
+    return `Continue the existing primary Planner session and revise the complete plan. Work read-only and preserve the issue scope.\n\nOperator note\nThe operator note below is authoritative over the prior plan. Revise the plan to honour it by adding, removing, or undoing steps as needed; keep everything else, and explain in the summary what changed.\n${note}\n\nReturn exactly one corrected JSON object matching the required plan or decision_blocker schema. Do not include markdown fences or commentary.`;
   }
 
   private async persistEvidence(companyId: string, executionId: string, lines: string[]): Promise<StoredArtifact> {

@@ -12,6 +12,13 @@ export const StartPlanningInputSchema = z.object({
   reconcileOnly: z.literal(true).optional(),
 });
 
+export const SendPlannerNoteInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  actorUserId: durableId,
+  note: z.string().trim().min(1),
+  commandId: durableId,
+}).strict();
+
 export const ResolveDecisionBlockerInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   actorUserId: durableId,
@@ -57,6 +64,7 @@ export const PlanRevisionCommandSchema = RevisionCommandBaseSchema.transform(({ 
 export const ContinueWorkCommandSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1) }).strict();
 
 export type StartPlanningInput = z.input<typeof StartPlanningInputSchema>;
+export type SendPlannerNoteInput = z.infer<typeof SendPlannerNoteInputSchema>;
 export type RecordProgressInput = z.input<typeof RecordProgressInputSchema>;
 export type PlanCommandInput = z.input<typeof PlanCommandInputSchema>;
 // Preserve the historical input shape for workflow handlers and replay typing; parsing above

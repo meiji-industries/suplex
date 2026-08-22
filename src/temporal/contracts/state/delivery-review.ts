@@ -14,7 +14,6 @@ export const deliveryReviewStateFields = {
   deliveryBlockingFindings: z.array(DeliveryFindingSchema).max(64).optional(),
   deliveryRepairPlan: z.string().max(12_000).nullable().optional(),
   deliveryRepairPlanArtifactId: durableId.nullable().optional(),
-  deliveryRepairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
   deliveryRepairAuthority: RepairAuthoritySchema.nullable().optional(),
   repairCycle: z.number().int().nonnegative().optional(),
 };

@@ -62,7 +62,7 @@ export const TargetBaseBlockerCodeSchema = z.enum([
 export type TargetBaseBlockerCode = z.infer<typeof TargetBaseBlockerCodeSchema>;
 
 export const TargetBaseArtifactKindSchema = z.enum(["developer-delivery", "forward-merge-conflict", "forward-merge-verification", "forward-merge-delivery"]);
-export const ArtifactReferenceSchema = z.object({ id: durableId, sha256: z.string().regex(/^[a-f0-9]{64}$/), kind: TargetBaseArtifactKindSchema }).strict();
+export const ArtifactReferenceSchema = z.object({ id: durableId, kind: TargetBaseArtifactKindSchema }).strict();
 export type ArtifactReference = z.infer<typeof ArtifactReferenceSchema>;
 
 export const ReconcileTargetBaseActivityInputSchema = z.object({
@@ -174,7 +174,6 @@ export const DurableArtifactReferenceSchema = z.object({
   artifactId: durableId,
   companyId: durableId,
   kind: DurableArtifactKindSchema,
-  sha256: z.string().regex(/^[a-f0-9]{64}$/),
   byteSize: z.number().int().positive().max(8 * 1024 * 1024),
   mimeType: z.string().min(1).max(120),
 });
@@ -299,7 +298,7 @@ export const AttentionCategorySchema = z.enum(["member_authorization", "member_d
 export type AttentionCategory = z.infer<typeof AttentionCategorySchema>;
 export const IssueBlockerActionSchema = z.object({ command: IssueCommandSchema, label: z.string().min(1).max(120), requiresNote: z.boolean(), destructive: z.boolean() });
 export type IssueBlockerAction = z.infer<typeof IssueBlockerActionSchema>;
-export const ArtifactPointerSchema = z.object({ artifactId: durableId, sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(), kind: z.enum(["attention-evidence", "lead-plan", "decision-blocker", "delivery-review", "developer-delivery", "developer-repair", "ci-evidence", "merge-conflict-plan", "merge-conflict-resolution"]) });
+export const ArtifactPointerSchema = z.object({ artifactId: durableId, kind: z.enum(["attention-evidence", "lead-plan", "decision-blocker", "delivery-review", "developer-delivery", "developer-repair", "ci-evidence", "merge-conflict-plan", "merge-conflict-resolution"]) });
 export type ArtifactPointer = z.infer<typeof ArtifactPointerSchema>;
 export const IssueBlockerRetrySchema = z.object({ attempt: z.number().int().nonnegative(), retryAt: z.string().datetime().nullable(), exhausted: z.boolean() });
 export const IssueBlockerSchema = z.object({ category: AttentionCategorySchema, summary: SafeSummarySchema, unblockOwner: z.enum(["human", "lead", "developer", "system"]), actions: z.array(IssueBlockerActionSchema).min(1).max(3), evidence: ArtifactPointerSchema, createdAt: z.string().datetime(), retry: IssueBlockerRetrySchema.nullable() });

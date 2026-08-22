@@ -12,7 +12,6 @@ export const ciStateFields = {
   ciRepairable: z.boolean().optional(),
   ciAttemptId: durableId.nullable().optional(),
   ciEvidenceArtifactId: durableId.nullable().optional(),
-  ciPolicyHash: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional(),
   ciPropagationDeadline: z.string().datetime().nullable().optional(),
   ciOverallDeadline: z.string().datetime().nullable().optional(),
   ciRepairPlanId: durableId.nullable().optional(),

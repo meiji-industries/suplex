@@ -1,4 +1,3 @@
-import { z } from "zod";
 import { durableId } from "../primitives.js";
 
 export const identityStateFields = {
@@ -7,5 +6,4 @@ export const identityStateFields = {
   projectId: durableId,
   issueId: durableId,
   projectRevisionId: durableId,
-  requestHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 };

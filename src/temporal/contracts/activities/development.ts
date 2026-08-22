@@ -30,7 +30,6 @@ export const DeveloperRepairActivityInputSchema = z.object({
   blockingFindings: z.array(DeliveryFindingSchema).max(64),
   repairPlan: z.string().min(1).max(12_000).optional(),
   repairPlanArtifactId: durableId.optional(),
-  repairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
   capacityRequestId: durableId.optional(),
 });
 
@@ -108,11 +107,6 @@ export interface DeveloperExecutionResult {
   resultTree: string | null;
   dirtyState: "clean" | "dirty";
   deliveryArtifactId: string;
-  deliveryArtifactSha256?: string;
-  evidenceArtifactId: string;
-  evidenceArtifactSha256?: string;
-  attentionEvidenceArtifactId?: string;
-  attentionEvidenceSha256?: string;
   deliverySummary: string;
   outcome: "completed" | "blocked";
   failureCode?: string | null;
@@ -131,7 +125,7 @@ export interface DeveloperSupervisorActivityIdentity {
 }
 
 export type DeveloperTurnActivityOutcome<T> =
-  | { status: "completed"; result: T; resultHash: string }
+  | { status: "completed"; result: T }
   | { status: "interrupted"; developerExecutionId: string; reasonCode: string; summary: string; lastHeartbeatAt: string | null }
   | { status: "failed"; developerExecutionId: string; reasonCode: string; summary: string; evidenceArtifactId: string | null };
 
@@ -141,7 +135,7 @@ export type SupervisedDeveloperRepairActivityInput = WorkflowDeveloperRepairActi
 export type DeveloperCancellationResult =
   | { status: "cancelled" }
   | { status: "cancelled_confirmed"; executionId: string; exitCode: number | null; exitSignal: string | null; evidenceArtifactId: string | null }
-  | { status: "completed_before_cancellation"; executionId: string; result: unknown; resultHash: string }
+  | { status: "completed_before_cancellation"; executionId: string; result: unknown }
   | { status: "interrupted"; executionId: string; reasonCode: string; summary: string }
   | { status: "termination_failed"; executionId: string; reasonCode: string; summary: string; evidenceArtifactId: string | null };
 
@@ -175,7 +169,6 @@ export interface DeveloperRepairActivityInput {
   blockingFindings: DeliveryFinding[];
   repairPlan?: string;
   repairPlanArtifactId?: string;
-  repairPlanSha256?: string;
   capacityRequestId?: string;
 }
 

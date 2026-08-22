@@ -10,5 +10,4 @@ export const finalReviewStateFields = {
   finalReviewFailureCode: z.literal("final_review_unavailable").nullable().optional(),
   finalReviewFindings: z.array(DeliveryFindingSchema).max(64).optional(),
   finalReviewRepairPlanArtifactId: durableId.nullable().optional(),
-  finalReviewRepairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
 };

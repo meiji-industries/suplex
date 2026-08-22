@@ -36,14 +36,12 @@ export interface FinalReviewActivityResult {
   leadSessionRef: string;
   opinionArtifactId: string;
   evidenceArtifactId: string;
-  evidenceArtifactSha256?: string;
   reviewArtifact: DurableArtifactReference;
   outcome: "approved" | "blocking";
   summary: string;
   findings: DeliveryFinding[];
   repairPlan: string | null;
   repairPlanArtifactId: string | null;
-  repairPlanSha256: string | null;
 }
 
 export interface FinalReviewActivities {

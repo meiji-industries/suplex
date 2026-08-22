@@ -14,6 +14,7 @@ import { activityPayloadInterceptors } from "./temporal/payload-boundary-interce
 import { buildProductionWorkflowBundle, temporalDataConverter, workflowBundleBuildId } from "./temporal/workflow-bundle.js";
 import { reconcileAgentExecutions } from "./agent-recovery.js";
 import { CapacityManager } from "./capacity.js";
+import { backfillTaskProjectConfigurations } from "./task-project-configuration-backfill.js";
 
 export function workerHasLivePollers(status: Pick<WorkerStatus, "runState" | "workflowPollerState" | "activityPollerState">): boolean {
   return status.runState === "RUNNING"
@@ -72,6 +73,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   logger.info("Worker startup: opening database");
   const database = new ForgeDatabase(config.databasePath);
   logger.info("Worker startup: database ready");
+  await runStartupSweep(logger, "task project configuration backfill", () => backfillTaskProjectConfigurations(database, config));
   const identifiers = runtimeIdentifiers(config.installationId);
   const workerId = `${identifiers.workerPrefix}-${process.pid}`;
   let connection: NativeConnection | undefined;

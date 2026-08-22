@@ -347,7 +347,7 @@ test("rejects duplicate repository identity across companies and preserves exact
       github,
     });
     const reactivated = await sameBranches.activateProject(value.adminId, first.id);
-    expect(reactivated.configurationRevision).toBeGreaterThan(firstActive.configurationRevision);
+    expect(reactivated.configurationRevision).toBeGreaterThan(firstActive.configurationRevision ?? 0);
     expect(reactivated.baseSha).toBe(updatedSha);
   } finally {
     await close(value);

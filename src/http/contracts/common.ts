@@ -35,7 +35,7 @@ export const HealthSnapshotResponseSchema = z.object({
   generatedAt: z.string(),
   reachableAddress: z.string(),
   ready: z.boolean(),
-  checks: z.array(z.object({ id: z.string(), label: z.string(), status: z.enum(["healthy", "unhealthy"]), summary: z.string(), details: z.record(z.string(), z.unknown()) })),
+  checks: z.array(z.object({ id: z.string(), label: z.string(), status: z.enum(["healthy", "warning", "unhealthy"]), summary: z.string(), details: z.record(z.string(), z.unknown()) })),
 });
 
 export const AuthUserResponseSchema = z.object({ id: z.string(), displayName: z.string(), username: z.string(), avatarSeed: z.string(), role: z.enum(["admin", "member"]), status: z.enum(["pending", "active", "revoked"]), companyIds: z.array(z.string()) });

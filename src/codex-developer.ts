@@ -240,10 +240,11 @@ export class DeveloperService {
 
   async run(rawInput: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<DeveloperExecutionResult> {
     const input = rawInput;
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256, io.id AS outputId, io.original_plan_revision AS originalPlanRevision, io.revision AS outputRevision, io.final_version AS finalVersion, io.output_artifact_id AS artifactId, io.artifact_sha256 AS artifactSha256, io.session_ref AS leadSessionRef, io.execution_id AS leadExecutionId, io.evidence_manifest_artifact_id AS evidenceManifestArtifactId, io.evidence_manifest_sha256 AS evidenceManifestSha256
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256, e.id AS outputId, e.original_plan_revision AS originalPlanRevision, e.output_revision AS outputRevision, e.final_version AS finalVersion, e.output_artifact_id AS artifactId, pa.sha256 AS artifactSha256, e.session_ref AS leadSessionRef, e.id AS leadExecutionId, e.evidence_manifest_artifact_id AS evidenceManifestArtifactId, em.sha256 AS evidenceManifestSha256
       FROM forge_tasks t
-      JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_issue_outputs io ON io.output_artifact_id = ? AND io.task_id = t.id AND io.workflow_id = t.workflow_id
-      JOIN forge_artifacts pa ON pa.id = io.output_artifact_id JOIN forge_artifacts ea ON ea.id = io.evidence_artifact_id
+      JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_agent_executions e ON e.output_artifact_id = ? AND e.task_id = t.id AND e.workflow_id = t.workflow_id
+      JOIN forge_artifacts pa ON pa.id = e.output_artifact_id JOIN forge_artifacts ea ON ea.id = e.evidence_artifact_id
+      LEFT JOIN forge_artifacts em ON em.id = e.evidence_manifest_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId) as DeveloperContext & { outputId?: string; originalPlanRevision?: number; outputRevision?: number; finalVersion?: number; artifactId?: string; artifactSha256?: string; leadSessionRef?: string; leadExecutionId?: string; evidenceManifestArtifactId?: string; evidenceManifestSha256?: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Authorized Lead delivery evidence is unavailable");
     const projectRevision = ProjectRevisionSchema.safeParse(this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input)));

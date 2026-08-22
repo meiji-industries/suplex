@@ -21,7 +21,6 @@ import { cleanupAgentWrapper } from "./agent-wrapper.js";
 import { classifyPlanMateriality, materialitySummary } from "./plan-governance.js";
 import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./temporal/issue-contracts.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
-import { parseAcceptedProjectRevision } from "./projects.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { defaultProcessController, type ProcessController, type ProcessInspection } from "./process-manager.js";
@@ -766,11 +765,10 @@ export class AgentService {
     const executionRole = input.executionRole ?? "planner";
     const profile = this.executionProfile(input, undefined);
     if (profile && profile.provider !== this.provider.id) throw new AgentFailure("profile-unavailable", "Lead profile is unavailable for merge-conflict planning");
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256
       FROM forge_tasks t
-      JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id AND b.id = ?
-      JOIN forge_issue_outputs io ON io.task_id = t.id AND io.company_id = t.company_id AND io.workflow_id = t.workflow_id AND io.output_artifact_id = ? AND io.revision = ?
+      JOIN forge_agent_executions io ON io.task_id = t.id AND io.company_id = t.company_id AND io.workflow_id = t.workflow_id AND io.output_artifact_id = ? AND io.output_revision = ?
       JOIN forge_artifacts pa ON pa.id = io.output_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?`).get(input.briefArtifactId, input.leadOutputArtifactId, input.planRevision, input.taskId, input.companyId, input.projectId, input.projectRevisionId) as { title: string; normalizedJson: string; briefStoragePath: string; briefSha256: string; planStoragePath: string; planSha256: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Merge-conflict planning evidence is unavailable");
@@ -785,7 +783,7 @@ export class AgentService {
     if (conflict.priorHead.toLowerCase() !== input.priorHead.toLowerCase() || conflict.observedBaseSha.toLowerCase() !== input.targetBaseSha.toLowerCase() || conflict.conflictFiles.length !== input.conflictFileCount) throw new AgentFailure("merge-conflict-identity-mismatch", "Forward-merge conflict evidence does not match the recorded merge");
     let pinnedCommands: { setupCommand: string; verificationCommand: string };
     try {
-      const revision = parseAcceptedProjectRevision(context.normalizedJson);
+    const revision = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input);
       pinnedCommands = { setupCommand: revision.setupCommand, verificationCommand: revision.verificationCommand };
     } catch {
       throw new AgentFailure("scoped-input-missing", "The accepted project revision has no valid pinned verification commands");
@@ -888,24 +886,22 @@ export class AgentService {
       JOIN forge_ci_attempts a ON a.id = ? AND a.run_id = c.id AND a.observed_head_sha = c.expected_head_sha
       WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_id = ? AND t.project_revision_id = ?
         AND c.expected_head_sha = ?
-        AND EXISTS (SELECT 1 FROM forge_issue_outputs original WHERE original.task_id = t.id AND original.company_id = t.company_id AND original.workflow_id = t.workflow_id AND original.session_ref = ?)`)
+        AND EXISTS (SELECT 1 FROM forge_agent_executions original WHERE original.task_id = t.id AND original.company_id = t.company_id AND original.workflow_id = t.workflow_id AND original.output_artifact_id IS NOT NULL AND original.session_ref = ?)`)
       .get(input.ciRunId, input.ciAttemptId, input.taskId, input.companyId, input.workflowId, input.projectId, input.projectRevisionId, input.failedHeadSha, input.leadSessionRef) as { title: string; roleProfiles: string; outcome: string; observedHeadSha: string; evidenceArtifactId: string | null } | undefined);
     if (!context || context.outcome !== "failed" || context.evidenceArtifactId !== input.evidenceArtifactId) throw new AgentFailure("ci-repair-attempt-mismatch", "CI repair planning input does not identify the exact failed attempt");
     const failedChecks = this.database.authQuery((db) => db.prepare("SELECT name, conclusion, summary FROM forge_ci_attempt_checks WHERE attempt_id = ? AND selected_for_evaluation = 1 AND conclusion = 'failure' ORDER BY name").all(input.ciAttemptId) as Array<{ name: string; conclusion: string; summary: string | null }>);
     if (!failedChecks.length) throw new AgentFailure("ci-repair-not-authorized", "Only exact-head failed checks can enter CI repair planning");
     const existingPlan = this.database.authQuery((db) => db.prepare("SELECT id, plan_artifact_id AS planArtifactId, evidence_artifact_id AS evidenceArtifactId, lead_execution_id AS leadExecutionId, lead_session_ref AS leadSessionRef, summary FROM forge_ci_repair_plans WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND ci_run_id = ? AND ci_attempt_id = ? AND status = 'planned' ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.ciRunId, input.ciAttemptId) as { id: string; planArtifactId: string; evidenceArtifactId: string; leadExecutionId: string; leadSessionRef: string; summary: string } | undefined);
     if (existingPlan) return { planId: existingPlan.id, planArtifactId: existingPlan.planArtifactId, evidenceArtifactId: existingPlan.evidenceArtifactId, leadExecutionId: existingPlan.leadExecutionId, leadSessionRef: existingPlan.leadSessionRef, summary: existingPlan.summary };
-    const revision = this.database.authQuery((db) => db.prepare("SELECT normalized_json FROM forge_project_revisions WHERE id = ? AND project_id = ? AND state = 'accepted'").get(input.projectRevisionId, input.projectId) as { normalized_json: string } | undefined);
-    if (!revision) throw new AgentFailure("scoped-input-missing", "Accepted project revision is unavailable");
-    let revisionConfig: { requiredChecks?: unknown; verificationCommand?: unknown };
+    let revisionConfig: { requiredChecks?: unknown; verificationCommand?: unknown; repositoryPath: string };
     try {
-      revisionConfig = jsonRequired(revision.normalized_json) as { requiredChecks?: unknown; verificationCommand?: unknown };
+      revisionConfig = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input);
     } catch {
       throw new AgentFailure("invalid-project-revision", "The accepted project revision is malformed");
     }
     const requiredChecks = input.requiredChecks.length ? input.requiredChecks : Array.isArray(revisionConfig.requiredChecks) ? revisionConfig.requiredChecks.filter((check): check is string => typeof check === "string") : [];
     const localVerification = input.localVerification.length ? input.localVerification : typeof revisionConfig.verificationCommand === "string" ? [revisionConfig.verificationCommand] : [];
-    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(revision.normalized_json)));
+    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(revisionConfig.repositoryPath));
     const rawSessionId = await this.sessionStore.read(input.leadSessionRef);
     if (!rawSessionId) throw new AgentFailure("invalid-session-reference", "Lead session reference is invalid");
     const profile = await this.resolveTurnProfile(input.roleProfiles?.[executionRole] ?? input.roleProfiles?.planner, input.leadSessionRef, "Integrator", executionRole);
@@ -957,7 +953,7 @@ export class AgentService {
     const leadSessionRef = subject.leadSessionRef;
     const isFinalReview = input.reviewKind === "final";
     if (isFinalReview && (!input.releaseId || !input.ciRunId || !input.deliveryReviewId)) throw new AgentFailure("scoped-input-missing", "Final review requires the exact release, delivery review, and CI run");
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson,
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title,
       b.storage_path AS briefStoragePath, b.sha256 AS briefSha256,
       pa.storage_path AS planStoragePath, pa.sha256 AS planSha256,
       da.storage_path AS deliveryStoragePath, da.sha256 AS deliverySha256,
@@ -967,18 +963,17 @@ export class AgentService {
       delivery_de.result_commit AS developerResultCommit, delivery_de.result_tree AS developerResultTree,
       fm.prior_head AS forwardMergePriorHead, fm.current_base_sha AS forwardMergeTargetBaseSha
       FROM forge_tasks t
-      JOIN forge_project_revisions r ON r.id = t.project_revision_id
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id
       JOIN forge_developer_executions delivery_de ON delivery_de.id = (SELECT latest.id FROM forge_developer_executions latest
         WHERE latest.task_id = t.id AND latest.company_id = t.company_id
           AND latest.delivery_artifact_id IS NOT NULL AND latest.evidence_artifact_id IS NOT NULL
         ORDER BY latest.finished_at DESC, latest.started_at DESC, latest.id DESC LIMIT 1)
       JOIN forge_artifacts pa ON pa.id = COALESCE(
-        (SELECT requested.output_artifact_id FROM forge_issue_outputs requested
+        (SELECT requested.output_artifact_id FROM forge_agent_executions requested
           WHERE requested.task_id = t.id AND requested.company_id = t.company_id AND requested.output_artifact_id = ? LIMIT 1),
-        (SELECT latest.output_artifact_id FROM forge_issue_outputs latest
-          WHERE latest.task_id = t.id AND latest.company_id = t.company_id AND latest.kind = 'plan' AND latest.revision = delivery_de.plan_revision
-          ORDER BY latest.created_at DESC, latest.id DESC LIMIT 1))
+        (SELECT latest.output_artifact_id FROM forge_agent_executions latest
+          WHERE latest.task_id = t.id AND latest.company_id = t.company_id AND latest.output_kind = 'plan' AND latest.output_revision = delivery_de.plan_revision
+          ORDER BY latest.finished_at DESC, latest.id DESC LIMIT 1))
       JOIN forge_artifacts da ON da.id = delivery_de.delivery_artifact_id
       JOIN forge_artifacts ea ON ea.id = delivery_de.evidence_artifact_id
       LEFT JOIN forge_forward_merges fm ON fm.id = (SELECT latest.id FROM forge_forward_merges latest
@@ -1001,7 +996,7 @@ export class AgentService {
     let repositoryPath: string;
     let worktreePath: string;
     try {
-      repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(context.normalizedJson)));
+      repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input).repositoryPath));
       worktreePath = await taskScopedPath(this.config.worktreeRoot, input.worktreePath);
     } catch (error) {
       const failure = error instanceof AgentFailure ? error : new AgentFailure("unsafe-working-directory", "The delivery worktree is outside the configured scope");
@@ -1210,14 +1205,16 @@ export class AgentService {
   async runSupplementalReview(rawInput: SupplementalReviewActivityInput, runtime: { signal?: AbortSignal } = {}): Promise<SupplementalReviewResult> {
     const input = rawInput;
     const profile = await this.resolveTurnProfile(input.roleProfiles.reviewer, undefined, "Supplemental reviewer");
-    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256, oa.storage_path AS output_storage_path, oa.sha256 AS output_sha256, e.storage_path AS evidence_storage_path, e.sha256 AS evidence_sha256
-      FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted'
-      JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_issue_outputs io ON io.task_id = t.id AND io.output_artifact_id = ?
+    const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, b.storage_path AS brief_storage_path, b.sha256 AS brief_sha256, oa.storage_path AS output_storage_path, oa.sha256 AS output_sha256, e.storage_path AS evidence_storage_path, e.sha256 AS evidence_sha256
+      FROM forge_tasks t
+      JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_agent_executions io ON io.task_id = t.id AND io.output_artifact_id = ?
       JOIN forge_artifacts oa ON oa.id = io.output_artifact_id JOIN forge_artifacts e ON e.id = io.evidence_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId, input.briefArtifactId) as { title: string; normalized_json: string; brief_storage_path: string; brief_sha256: string; output_storage_path: string; output_sha256: string; evidence_storage_path: string; evidence_sha256: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Supplemental review evidence is unavailable");
     const reviewerProfile = profile;
-    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(context.normalized_json)));
+    const configuration = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input);
+    const normalizedJson = JSON.stringify(configuration);
+    const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(configuration.repositoryPath));
     const brief = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
     const draft = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
     const active = this.activeCapacityExecution(input, "reviewer");
@@ -1244,7 +1241,7 @@ export class AgentService {
     const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
     const stopCancellationTracking = this.trackCancellation(executionId, runtime.signal);
     try {
-      const wrapper = await this.prepareTurnWrapper(executionId, reviewerProfile, repositoryPath, schemaPath, this.reviewPrompt(context.title, brief, context.normalized_json, draft, instructions), { ...(images.length ? { imagePaths: images.map((image) => resolve(this.config.artifactRoot, image.storage_path)) } : {}) });
+      const wrapper = await this.prepareTurnWrapper(executionId, reviewerProfile, repositoryPath, schemaPath, this.reviewPrompt(context.title, brief, normalizedJson, draft, instructions), { ...(images.length ? { imagePaths: images.map((image) => resolve(this.config.artifactRoot, image.storage_path)) } : {}) });
       const result = await this.processRunner({
         command: wrapper.command,
         args: wrapper.args,
@@ -1406,9 +1403,8 @@ export class AgentService {
   }
 
   private async consolidationRepositoryPath(input: ConsolidateLeadPlanActivityInput): Promise<string> {
-    const row = this.database.authQuery((db) => db.prepare("SELECT r.normalized_json FROM forge_tasks t JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ?").get(input.taskId, input.companyId, input.projectId, input.projectRevisionId) as { normalized_json: string } | undefined);
-    if (!row) throw new AgentFailure("scoped-input-missing", "Consolidation repository is unavailable");
-    return taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
+    try { return taskScopedPath(this.config.repositoryRoot, await realpath(loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input).repositoryPath)); }
+    catch { throw new AgentFailure("scoped-input-missing", "Consolidation repository is unavailable"); }
   }
 
   private async databaseHeartbeat(executionId: string, status: "running", eventOffset?: number): Promise<void> {
@@ -1537,12 +1533,11 @@ export class AgentService {
   }
 
   private async completedPlanningResult(input: LeadPlanningActivityInput): Promise<LeadPlanningResult | undefined> {
-    const persisted = this.database.authQuery((db) => db.prepare(`SELECT e.id AS executionId, e.session_ref AS sessionRef, o.output_artifact_id AS outputArtifactId, o.evidence_artifact_id AS evidenceArtifactId, o.summary,
+    const persisted = this.database.authQuery((db) => db.prepare(`SELECT e.id AS executionId, e.session_ref AS sessionRef, e.output_artifact_id AS outputArtifactId, e.evidence_artifact_id AS evidenceArtifactId, e.output_summary AS summary,
         output.storage_path AS outputStoragePath, output.sha256 AS outputSha256, evidence.storage_path AS evidenceStoragePath, evidence.sha256 AS evidenceSha256
       FROM forge_agent_executions e
-      JOIN forge_issue_outputs o ON o.execution_id = e.id AND o.task_id = e.task_id AND o.company_id = e.company_id AND o.workflow_id = e.workflow_id AND o.revision = e.workflow_revision
-      JOIN forge_artifacts output ON output.id = o.output_artifact_id AND output.company_id = e.company_id
-      JOIN forge_artifacts evidence ON evidence.id = o.evidence_artifact_id AND evidence.company_id = e.company_id
+      JOIN forge_artifacts output ON output.id = e.output_artifact_id AND output.company_id = e.company_id
+      JOIN forge_artifacts evidence ON evidence.id = e.evidence_artifact_id AND evidence.company_id = e.company_id
       WHERE e.id IS NOT NULL AND e.task_id = ? AND e.company_id = ? AND e.workflow_id = ? AND e.workflow_revision = ? AND e.turn_key = ? AND e.role = 'planner' AND e.status = 'completed'
       ORDER BY e.finished_at DESC LIMIT 1`).get(input.taskId, input.companyId, input.workflowId, input.revision, `${input.workflowId}:lead-planning:${input.revision}`) as {
         executionId: string;
@@ -1634,7 +1629,7 @@ export class AgentService {
     if (planSubject && manifest) {
       new PlanGovernanceRepository(this.database).appendPlanVersion({ subject: planSubject, kind: output.kind, evidenceArtifactId: evidence.id, ...(materialityArtifact ? { materialityEvidenceArtifactId: materialityArtifact.id } : {}), summary, ...(options.supersedesOutputId ? { supersedesOutputId: options.supersedesOutputId } : {}) });
     } else {
-      this.database.authTransaction((db) => db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(outputId, input.taskId, input.companyId, input.workflowId, executionId, input.revision, output.kind, outputArtifact.id, evidence.id, sessionRef, summary, this.now().toISOString()));
+      this.database.authTransaction((db) => db.prepare("UPDATE forge_agent_executions SET output_kind = ?, output_artifact_id = ?, output_revision = ?, output_summary = ?, evidence_artifact_id = ?, session_ref = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(output.kind, outputArtifact.id, input.revision, summary, evidence.id, sessionRef, executionId, input.taskId, input.companyId, input.workflowId));
     }
     const result: LeadPlanningResult = output.kind === "plan"
       ? { kind: "plan", leadSessionRef: sessionRef, leadExecutionId: executionId, leadEvidenceArtifactId: evidence.id, leadOutputArtifactId: outputArtifact.id, leadOutputKind: "plan", leadSummary: summary, materialCategories: categories, material: categories.length > 0, preservedWorktreeCompatibility: output.preservedWorktreeCompatibility, ...(planSubject ? { planSubject } : {}), ...(materialityEvidence ? { materialityEvidence } : {}) }

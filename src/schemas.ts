@@ -126,7 +126,7 @@ export const ProbeWorkflowStateSchema = ProbeWorkflowInputSchema.extend({
 export const HealthCheckSchema = z.object({
   id: z.enum(HEALTH_CHECK_IDS),
   label: identifier,
-  status: z.enum(["healthy", "unhealthy"]),
+  status: z.enum(["healthy", "warning", "unhealthy"]),
   summary: z.string(),
   details: z.record(z.string(), primitive),
 });

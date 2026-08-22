@@ -1,7 +1,7 @@
 import type { PlanningActivities } from "../contracts/activities/planning.js";
 import type { RevisedExecutionCoordinates } from "../contracts/primitives.js";
 import type { ActivityContext } from "./context.js";
-import { readTaskProjectConfiguration } from "../../task-project-configuration.js";
+import { loadTaskConfiguration } from "../../task-project-configuration.js";
 import { jsonRequired } from "../../task-utils.js";
 
 export function createPlanningActivities(ctx: ActivityContext): PlanningActivities {
@@ -15,7 +15,7 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
         ? db.prepare("SELECT t.id FROM forge_tasks t WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_id = ?").get(input.taskId, input.companyId, input.workflowId, input.projectId)
         : db.prepare("SELECT t.id FROM forge_tasks t JOIN forge_memberships m ON m.company_id = t.company_id AND m.user_id = ? AND m.status = 'active' WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_id = ?").get(input.actorUserId, input.taskId, input.companyId, input.workflowId, input.projectId)) as { id: string } | undefined;
       if (!scoped) throw new AgentFailure("revision-scope-unavailable", "Plan revision is unavailable for this issue", { nonRetryable: true });
-      const normalizedJson = JSON.stringify(database.authQuery((db) => readTaskProjectConfiguration(db, artifacts, input)));
+      const normalizedJson = JSON.stringify(database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)));
       const requestId = `revision_${createHash("sha256").update(`${input.workflowId}:${input.requestRevision}`).digest("hex").slice(0, 32)}`;
       const reason = (redact(input.reason.trim()) as string).trim();
       const reasonHash = createHash("sha256").update(reason).digest("hex");
@@ -87,7 +87,7 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
         return { successorTaskId: existing.successorTaskId, successorWorkflowId: existing.successorWorkflowId, predecessorTaskId: input.predecessorTaskId, projectRevisionId: existing.projectRevisionId, creationRevision: existing.acceptedRevision };
       }
       if (existing && (!sameRequest || existing.id !== input.intentId || existing.successorTaskId !== input.successorTaskId || existing.successorWorkflowId !== input.successorWorkflowId || existing.acceptedRevision !== input.acceptedRevision)) throw new AgentFailure("successor-identity-conflict", "Continuation identity conflicts with an existing request", { nonRetryable: true });
-      const current = database.authQuery((db) => db.prepare("SELECT t.title, t.brief_artifact_id AS briefArtifactId, t.image_artifact_ids_json AS imageIdsJson, t.role_agents_json AS roleAgentsJson, t.project_revision_id AS projectRevisionId, r.normalized_json AS normalizedJson, b.sha256 AS briefSha256 FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id JOIN forge_project_revisions r ON r.id = t.project_revision_id AND r.state = 'accepted' JOIN forge_artifacts b ON b.id = t.brief_artifact_id WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ?").get(input.predecessorTaskId, input.companyId, input.projectId, input.predecessorWorkflowId) as { title: string; briefArtifactId: string; imageIdsJson: string; roleAgentsJson: string; projectRevisionId: string; normalizedJson: string; briefSha256: string } | undefined);
+      const current = database.authQuery((db) => db.prepare("SELECT t.title, t.brief_artifact_id AS briefArtifactId, t.image_artifact_ids_json AS imageIdsJson, t.role_agents_json AS roleAgentsJson, t.project_configuration_artifact_id AS projectRevisionId, b.sha256 AS briefSha256 FROM forge_tasks t JOIN forge_projects p ON p.id = t.project_id JOIN forge_artifacts b ON b.id = t.brief_artifact_id WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ?").get(input.predecessorTaskId, input.companyId, input.projectId, input.predecessorWorkflowId) as { title: string; briefArtifactId: string; imageIdsJson: string; roleAgentsJson: string; projectRevisionId: string; briefSha256: string } | undefined);
       if (!current) throw new AgentFailure("successor-project-unavailable", "The currently accepted project revision is unavailable", { nonRetryable: true });
       if (storedReason && (storedReason.companyId !== input.companyId || storedReason.kind !== "continuation-reason" || storedReason.sha256 !== reasonHash)) throw new AgentFailure("successor-identity-conflict", "Continuation identity conflicts with an existing artifact", { nonRetryable: true });
       const reasonArtifact = storedReason ? undefined : await artifacts.putWithId(input.companyId, reasonArtifactId, "continuation-reason", { filename: `${input.intentId}.md`, mimeType: "text/markdown", bytes: Buffer.from(reason, "utf8") });

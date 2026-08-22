@@ -5,7 +5,7 @@ import { isOwnedHealthCheck, type HealthCheckId } from "./health-contract.js";
 export { HEALTH_CHECK_IDS, OWNED_HEALTH_CHECK_IDS, isOwnedHealthCheck } from "./health-contract.js";
 export type { HealthCheckId } from "./health-contract.js";
 
-export type HealthStatus = "healthy" | "unhealthy";
+export type HealthStatus = "healthy" | "warning" | "unhealthy";
 
 export interface HealthCheck {
   id: HealthCheckId;
@@ -59,7 +59,7 @@ export async function inspectHostHealth(config: ForgeConfig, dependencies: HostH
   return HealthSnapshotSchema.parse({
     generatedAt: new Date().toISOString(),
     reachableAddress: config.reachableAddress,
-    ready: checks.filter((check) => isOwnedHealthCheck(check.id)).every((check) => check.status === "healthy"),
+    ready: checks.filter((check) => isOwnedHealthCheck(check.id)).every((check) => check.status !== "unhealthy"),
     checks,
   });
 }

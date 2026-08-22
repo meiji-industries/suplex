@@ -83,8 +83,13 @@ export class PlanGovernanceRepository {
     this.database.authTransaction((db) => {
       const task = db.prepare("SELECT id FROM forge_tasks WHERE id = ? AND company_id = ? AND workflow_id = ?").get(subject.issueId, subject.companyId, subject.workflowId);
       if (!task) throw new PlanGovernanceConflict("The plan subject is outside the current company and issue scope");
-      db.prepare(`INSERT OR IGNORE INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at, original_plan_revision, final_version, supersedes_output_id, evidence_manifest_artifact_id, materiality_evidence_artifact_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(subject.outputId, subject.issueId, subject.companyId, subject.workflowId, subject.leadExecutionId, subject.outputRevision, input.kind, subject.artifactId, input.evidenceArtifactId, subject.leadSessionRef, input.summary, new Date().toISOString(), subject.originalPlanRevision, subject.finalVersion, input.supersedesOutputId ?? null, subject.evidenceManifestArtifactId, input.materialityEvidenceArtifactId ?? null);
+      const updated = db.prepare(`UPDATE forge_agent_executions
+        SET output_kind = ?, output_artifact_id = ?, output_revision = ?, output_summary = ?,
+            original_plan_revision = ?, final_version = ?, evidence_manifest_artifact_id = ?,
+            materiality_evidence_artifact_id = ?, evidence_artifact_id = COALESCE(evidence_artifact_id, ?),
+            session_ref = COALESCE(session_ref, ?)
+        WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?`).run(input.kind, subject.artifactId, subject.outputRevision, input.summary, subject.originalPlanRevision, subject.finalVersion, subject.evidenceManifestArtifactId, input.materialityEvidenceArtifactId ?? null, input.evidenceArtifactId, subject.leadSessionRef, subject.leadExecutionId, subject.issueId, subject.companyId, subject.workflowId);
+      if (updated.changes !== 1) throw new PlanGovernanceConflict("The Lead execution is unavailable");
     });
     return subject;
   }

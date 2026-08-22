@@ -1667,7 +1667,7 @@ export class TaskService {
     const artifact = gateArtifact ?? this.database.authQuery((db) => db.prepare(`SELECT a.id, a.kind, a.filename, a.mime_type, a.byte_size, a.storage_path, a.sha256
       FROM forge_artifacts a
       WHERE a.id = ? AND a.company_id = ? AND (
-        EXISTS (SELECT 1 FROM forge_issue_outputs o WHERE (o.output_artifact_id = a.id OR o.evidence_artifact_id = a.id) AND o.task_id = ? AND o.company_id = ?)
+        EXISTS (SELECT 1 FROM forge_agent_executions o WHERE (o.output_artifact_id = a.id OR o.evidence_artifact_id = a.id) AND o.task_id = ? AND o.company_id = ?)
         OR EXISTS (SELECT 1 FROM forge_agent_executions e WHERE e.evidence_artifact_id = a.id AND e.task_id = ? AND e.company_id = ?)
         OR EXISTS (SELECT 1 FROM forge_plan_reviews r WHERE (r.opinion_artifact_id = a.id OR r.evidence_artifact_id = a.id) AND r.task_id = ? AND r.company_id = ?)
         OR EXISTS (SELECT 1 FROM forge_plan_decisions d WHERE d.note_artifact_id = a.id AND d.task_id = ? AND d.company_id = ?)
@@ -1802,7 +1802,7 @@ export class TaskService {
     const successorByReview = new Map<string, string>();
     for (const review of reviewRows) if (review.supersedes_review_id) successorByReview.set(review.supersedes_review_id, review.id);
     const attemptByReview = new Map(attemptRows.filter((attempt) => attempt.completed_review_id).map((attempt) => [attempt.completed_review_id!, attempt]));
-    const leadSession = this.database.authQuery((db) => db.prepare("SELECT session_ref FROM forge_issue_outputs WHERE task_id = ? AND company_id = ? ORDER BY revision DESC, created_at DESC LIMIT 1").get(row.id, row.company_id) as { session_ref: string } | undefined)?.session_ref;
+    const leadSession = this.database.authQuery((db) => db.prepare("SELECT session_ref FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND output_artifact_id IS NOT NULL ORDER BY output_revision DESC, finished_at DESC LIMIT 1").get(row.id, row.company_id) as { session_ref: string } | undefined)?.session_ref;
     const reviewDtos = reviewRows.map((review): ReviewDto => {
       const attempt = attemptByReview.get(review.id);
       const developerSessionContinued = Boolean(attempt?.developer_session_ref && attempt.developer_execution_id && this.database.authQuery((db) => db.prepare("SELECT session_ref FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ?").get(attempt.developer_execution_id, row.id, row.company_id) as { session_ref: string | null } | undefined)?.session_ref === attempt.developer_session_ref);
@@ -1882,10 +1882,11 @@ export class TaskService {
     const originalSubject = state.originalPlanSubject;
     const finalSubject = state.finalPlanSubject;
     const materialitySubject = state.materialityEvidence;
-    const planRows = this.database.authQuery((db) => db.prepare(`SELECT io.id, io.summary, io.created_at AS createdAt, io.original_plan_revision AS originalPlanRevision, io.revision AS outputRevision, io.final_version AS finalVersion, io.output_artifact_id AS artifactId, io.artifact_sha256 AS artifactSha256, io.session_ref AS leadSessionRef, io.execution_id AS leadExecutionId, io.evidence_manifest_artifact_id AS evidenceManifestArtifactId, io.evidence_manifest_sha256 AS evidenceManifestSha256, io.kind, a.storage_path AS storagePath, a.sha256 AS storedSha256
-      FROM forge_issue_outputs io JOIN forge_artifacts a ON a.id = io.output_artifact_id
+    const planRows = this.database.authQuery((db) => db.prepare(`SELECT io.id, io.output_summary AS summary, io.finished_at AS createdAt, io.original_plan_revision AS originalPlanRevision, io.output_revision AS outputRevision, io.final_version AS finalVersion, io.output_artifact_id AS artifactId, a.sha256 AS artifactSha256, io.session_ref AS leadSessionRef, io.id AS leadExecutionId, io.evidence_manifest_artifact_id AS evidenceManifestArtifactId, em.sha256 AS evidenceManifestSha256, io.output_kind AS kind, a.storage_path AS storagePath, a.sha256 AS storedSha256
+      FROM forge_agent_executions io JOIN forge_artifacts a ON a.id = io.output_artifact_id
+      LEFT JOIN forge_artifacts em ON em.id = io.evidence_manifest_artifact_id
       WHERE io.task_id = ? AND io.company_id = ? AND io.workflow_id = ? 
-      ORDER BY io.original_plan_revision, io.final_version, io.revision`).all(row.id, row.company_id, row.workflow_id) as Array<{ id: string; summary: string; createdAt: string; originalPlanRevision: number; outputRevision: number; finalVersion: 1 | 2; artifactId: string; artifactSha256: string; leadSessionRef: string; leadExecutionId: string; evidenceManifestArtifactId: string; evidenceManifestSha256: string; kind: "plan" | "decision_blocker"; storagePath: string; storedSha256: string }>);
+      ORDER BY io.original_plan_revision, io.final_version, io.output_revision`).all(row.id, row.company_id, row.workflow_id) as Array<{ id: string; summary: string; createdAt: string; originalPlanRevision: number; outputRevision: number; finalVersion: 1 | 2; artifactId: string; artifactSha256: string; leadSessionRef: string; leadExecutionId: string; evidenceManifestArtifactId: string; evidenceManifestSha256: string; kind: "plan" | "decision_blocker"; storagePath: string; storedSha256: string }>);
     const plans = planRows.flatMap((planRow): PlanArtifactView[] => {
       try {
         const subject = PlanSubjectSchema.parse({ companyId: row.company_id, issueId: row.id, workflowId: row.workflow_id, originalPlanRevision: planRow.originalPlanRevision, outputId: planRow.id, outputRevision: planRow.outputRevision, finalVersion: planRow.finalVersion, artifactId: planRow.artifactId, artifactSha256: planRow.artifactSha256, leadSessionRef: planRow.leadSessionRef, leadExecutionId: planRow.leadExecutionId, evidenceManifestArtifactId: planRow.evidenceManifestArtifactId, evidenceManifestSha256: undefined });
@@ -2082,7 +2083,7 @@ export class TaskService {
     const { verificationCommands, verificationResults } = developerVerificationProjection(this.database, this.artifacts, row.company_id, null);
     const workflowSnapshot = this.database.authQuery((db) => db.prepare("SELECT state_json AS stateJson FROM forge_workflow_snapshots WHERE task_id = ? AND revision = ?").get(row.id, row.projection_revision) as { stateJson: string } | undefined);
     const snapshotState = workflowSnapshot ? IssueWorkflowStateSchema.safeParse(json<unknown>(workflowSnapshot.stateJson, null)) : undefined;
-    const planHistory = this.database.authQuery((db) => db.prepare("SELECT revision, kind, summary, execution_id AS executionId, output_artifact_id AS outputArtifactId, evidence_artifact_id AS evidenceArtifactId, created_at AS createdAt FROM forge_issue_outputs WHERE task_id = ? AND company_id = ? ORDER BY revision, created_at, id").all(row.id, row.company_id) as TaskPlanHistoryEntry[]);
+    const planHistory = this.database.authQuery((db) => db.prepare("SELECT output_revision AS revision, output_kind AS kind, output_summary AS summary, id AS executionId, output_artifact_id AS outputArtifactId, evidence_artifact_id AS evidenceArtifactId, finished_at AS createdAt FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND output_artifact_id IS NOT NULL ORDER BY output_revision, finished_at, id").all(row.id, row.company_id) as TaskPlanHistoryEntry[]);
     const rawAllowedCommands = json<unknown[]>(row.allowed_commands_json, []);
     const projectedCommands = IssueCommandSchema.array().safeParse(rawAllowedCommands).success ? IssueCommandSchema.array().parse(rawAllowedCommands) : [];
     const allowedCommands = derivedAllowedCommands(row.phase, projectedCommands, workflowState.planRevision, planHistory.some((plan) => plan.kind === "plan"));
@@ -2205,9 +2206,9 @@ export class TaskService {
   }
 
   private leadOutput(taskId: string, companyId: string): ForgeTask["leadOutput"] {
-    const row = this.database.authQuery((db) => db.prepare(`SELECT o.company_id, o.kind, o.summary, o.session_ref, o.execution_id, o.output_artifact_id, o.evidence_artifact_id, a.sha256 AS output_sha256, e.sha256 AS evidence_sha256, a.storage_path, a.sha256
-      FROM forge_issue_outputs o JOIN forge_artifacts a ON a.id = o.output_artifact_id JOIN forge_artifacts e ON e.id = o.evidence_artifact_id
-      WHERE o.task_id = ? AND o.company_id = ? ORDER BY o.revision DESC LIMIT 1`).get(taskId, companyId) as LeadOutputRow | undefined);
+    const row = this.database.authQuery((db) => db.prepare(`SELECT o.company_id, o.output_kind AS kind, o.output_summary AS summary, o.session_ref, o.id AS execution_id, o.output_artifact_id, o.evidence_artifact_id, a.sha256 AS output_sha256, e.sha256 AS evidence_sha256, a.storage_path, a.sha256
+      FROM forge_agent_executions o JOIN forge_artifacts a ON a.id = o.output_artifact_id JOIN forge_artifacts e ON e.id = o.evidence_artifact_id
+      WHERE o.task_id = ? AND o.company_id = ? AND o.output_artifact_id IS NOT NULL ORDER BY o.output_revision DESC LIMIT 1`).get(taskId, companyId) as LeadOutputRow | undefined);
     if (!row) return undefined;
     const content = PersistedLeadOutputSchema.parse(jsonRequired(this.artifacts.readSync({ companyId: row.company_id, storagePath: row.storage_path, sha256: row.sha256 }).toString("utf8")));
     return { kind: row.kind, summary: row.summary, sessionRef: row.session_ref, executionId: row.execution_id, outputArtifactId: row.output_artifact_id, evidenceArtifactId: row.evidence_artifact_id, content };
@@ -2229,7 +2230,7 @@ export class TaskService {
     const repairs = this.database.authQuery((db) => db.prepare("SELECT x.id, x.repair_plan_id AS repairPlanId, x.prior_commit AS priorCommit, x.prior_tree AS priorTree, x.new_commit AS newCommit, x.new_tree AS newTree, x.delivery_artifact_id AS deliveryArtifactId, x.evidence_artifact_id AS evidenceArtifactId, x.status, x.summary, x.created_at AS createdAt, x.completed_at AS completedAt FROM forge_ci_repairs x JOIN forge_ci_repair_plans p ON p.id = x.repair_plan_id WHERE p.task_id = ? AND p.company_id = ? ORDER BY x.created_at DESC LIMIT 20").all(taskId, companyId) as TaskCiProjection["repairs"]);
     const supersededRuns = this.database.authQuery((db) => db.prepare("SELECT c.id AS runId, c.release_id AS releaseId, c.expected_head_sha AS expectedHeadSha, c.expected_head_tree AS expectedHeadTree, c.status, c.superseded_at AS supersededAt FROM forge_ci_runs c WHERE c.task_id = ? AND c.company_id = ? AND c.superseded_at IS NOT NULL ORDER BY c.superseded_at DESC, c.id DESC LIMIT 5").all(taskId, companyId) as TaskCiProjection["supersededRuns"]);
     const continuity = this.database.authQuery((db) => db.prepare(`SELECT
-      EXISTS (SELECT 1 FROM forge_ci_repair_plans p JOIN forge_issue_outputs o ON o.task_id = p.task_id AND o.company_id = p.company_id AND o.workflow_id = p.workflow_id AND o.session_ref = p.lead_session_ref WHERE p.task_id = ? AND p.company_id = ?) AS lead,
+      EXISTS (SELECT 1 FROM forge_ci_repair_plans p JOIN forge_agent_executions o ON o.task_id = p.task_id AND o.company_id = p.company_id AND o.workflow_id = p.workflow_id AND o.session_ref = p.lead_session_ref WHERE p.task_id = ? AND p.company_id = ?) AS lead,
       EXISTS (SELECT 1 FROM forge_ci_repairs x JOIN forge_ci_repair_plans p ON p.id = x.repair_plan_id JOIN forge_developer_executions d ON d.id = x.prior_developer_execution_id AND d.task_id = p.task_id AND d.company_id = p.company_id AND d.workflow_id = p.workflow_id WHERE p.task_id = ? AND p.company_id = ? AND d.session_ref = x.prior_developer_session_ref AND x.result_developer_session_ref = x.prior_developer_session_ref) AS developer`).get(taskId, companyId, taskId, companyId) as { lead: number; developer: number });
     const policyDefaults: TaskCiProjection["policy"] = { projectRevisionId: "", requiredChecks: [], acceptedConclusions: ["success", "skipped"] };
     // A degenerate policy_json (empty/partial row) must never fail the whole task list — fill from defaults.

@@ -43,7 +43,6 @@ export function parseTaskProjectConfiguration(value: string | unknown): TaskProj
   }
 }
 
-/** Reads the immutable configuration belonging to a task. */
 /**
  * Loads the immutable configuration captured for a task.  Runtime code must
  * use this rather than consulting the mutable project row or its revisions.
@@ -64,6 +63,3 @@ export function loadTaskConfiguration(
   if (!artifact) throw new Error("Task project configuration is unavailable");
   return { ...parseTaskProjectConfiguration(artifacts.getArtifactSync({ companyId: input.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 }).toString("utf8")), artifactId: artifact.id, artifactSha256: artifact.sha256 };
 }
-
-/** @deprecated Use loadTaskConfiguration. */
-export const readTaskProjectConfiguration = loadTaskConfiguration;

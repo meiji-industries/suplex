@@ -18,14 +18,17 @@ const workerHeartbeatMaxAgeMs = 30_000;
 export async function checkDatabase(database: ForgeDatabase): Promise<HealthCheck> {
   try {
     const health = database.health();
+    const ahead = health.schemaState === "ahead" && health.walMode && health.readable && health.writable;
     const healthy = health.schemaState === "current" && health.walMode && health.readable && health.writable;
     return {
       id: "database",
       label: "SQLite database",
-      status: healthy ? "healthy" : "unhealthy",
+      status: healthy ? "healthy" : ahead ? "warning" : "unhealthy",
       summary: healthy
         ? "Schema is current and WAL is enabled"
-        : health.schemaState === "current" && !health.walMode
+        : ahead
+          ? `Database has ${health.appliedMigrations - health.expectedMigrations} migration${health.appliedMigrations - health.expectedMigrations === 1 ? "" : "s"} this build does not know about — pull/restart`
+          : health.schemaState === "current" && !health.walMode
           ? "Schema is current but WAL is disabled"
           : `Schema state is ${health.schemaState}`,
       details: {

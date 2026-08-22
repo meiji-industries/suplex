@@ -9,7 +9,8 @@ const droppedTables = [
   "forge_issue_governance",
   "forge_projection_integrity_findings",
   "forge_projection_invalidations",
-  "forge_capacity_requests",
+  "forge_project_revisions",
+  "forge_issue_outputs",
 ].join("|");
 
 export default tseslint.config({
@@ -40,6 +41,16 @@ export default tseslint.config({
         message: "Do not query a table removed by a migration.",
       },
     ],
+  },
+}, {
+  files: ["src/frontend/**/*.{ts,tsx}"],
+  rules: {
+    "no-restricted-syntax": "off",
+  },
+}, {
+  files: ["tests/**/*.{ts,tsx}"],
+  rules: {
+    "no-restricted-syntax": "off",
   },
 }, {
   files: ["src/task-utils.ts"],

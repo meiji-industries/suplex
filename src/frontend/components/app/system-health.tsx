@@ -34,7 +34,7 @@ const icons: Record<string, LucideIcon> = {
 
 export function getSystemHealthLevel(snapshot: HealthSnapshot | undefined, freshness: HealthFreshness): SystemHealthLevel {
   const rollupChecks = snapshot?.checks.filter((check) => check.id !== "backup") ?? [];
-  if (snapshot && (!snapshot.ready || rollupChecks.some((check) => isOwnedHealthCheck(check.id) && check.status !== "healthy"))) return "red";
+  if (snapshot && (!snapshot.ready || rollupChecks.some((check) => isOwnedHealthCheck(check.id) && check.status === "unhealthy"))) return "red";
   if (!snapshot || freshness === "stale" || snapshot.checks.length === 0 || rollupChecks.some((check) => check.status !== "healthy")) return "amber";
   return "green";
 }
@@ -101,7 +101,7 @@ export function SystemHealthAlert(): ReactElement | null {
 
 function CheckStatusIndicator({ check }: { check: HealthCheck }): ReactElement {
   const healthy = check.status === "healthy";
-  const degraded = !healthy && !isOwnedHealthCheck(check.id);
+  const degraded = check.status === "warning" || (!healthy && !isOwnedHealthCheck(check.id));
   return (
     <span className={healthy ? "flex items-center gap-1.5 text-xs text-emerald-700" : degraded ? "flex items-center gap-1.5 text-xs text-amber-700" : "flex items-center gap-1.5 text-xs text-rose-700"}>
       <span className={healthy ? "size-1.5 rounded-full bg-emerald-500" : degraded ? "size-1.5 rounded-full bg-amber-500" : "size-1.5 rounded-full bg-rose-500"} />

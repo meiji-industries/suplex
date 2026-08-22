@@ -41,7 +41,7 @@ export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
     if (!ctx.exactPlanAuthorityEnabled && ctx.captureInitialProjectionState) await condition(() => ctx.initialProjectionComplete);
     if (ctx.initialProjectionBarrierEnabled) await ctx.initialProjection;
     const command = PlanCommandInputSchema.parse(rawInput);
-    const unconditionalCancellation = ctx.patched(ctx.unconditionalCancelPatch);
+    const unconditionalCancellation = true;
     if ((!unconditionalCancellation && command.expectedRevision !== ctx.state.revision) || TERMINAL_PHASES.has(ctx.state.phase)) throw new Error("Issue cancellation is not available in the current phase");
     if (ctx.state.phase === "planning" && ctx.planningScope) {
       ctx.planningScope.cancel();

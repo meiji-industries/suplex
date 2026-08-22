@@ -202,6 +202,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   capacity.reconcileFromLedgers();
   const agent = options.agent;
   const developer = options.developer ?? defaultDeveloper;
+  const putAttentionEvidence = async (_input: { companyId: string }, _category: AttentionCategory, _code: string, _summary: string): Promise<{ artifactId: string }> => ({ artifactId: "" });
   const attentionFailure = async (_input: { companyId: string }, category: AttentionCategory, code: string, summary: string): Promise<never> => {
     const safeSummary = normalizeSafeSummary(redact(summary));
     throw ApplicationFailure.nonRetryable(safeSummary, code, { code, category, summary: safeSummary });
@@ -387,6 +388,7 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     worktrees,
     agent,
     developer,
+    putAttentionEvidence,
     attentionFailure,
     agentCategory,
     invokeAgent,

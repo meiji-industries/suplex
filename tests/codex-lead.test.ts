@@ -109,6 +109,18 @@ async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixtu
   const artifactStore = new ArtifactStore(config.artifactRoot);
   const brief = await artifactStore.put("company_1", "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: Buffer.from(briefText) });
   const targetSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: repositoryPath })).stdout.trim();
+  const capturedAt = new Date().toISOString();
+  const taskConfiguration = await artifactStore.put("company_1", "task-project-configuration", {
+    filename: "project-configuration-task_1.json",
+    mimeType: "application/json",
+    bytes: Buffer.from(JSON.stringify({
+      projectId: "project_1", projectName: "Project One", repositoryPath, worktreeRoot,
+      repository: "acme/forge", baseBranch: "main", targetBranch: "main", baseSha: targetSha, targetSha,
+      setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: [],
+      roleAgents: { planner: "profile_1", builder: "profile_1", reviewer: "profile_1" },
+      roleProfiles: { planner: "profile_1", builder: "profile_1", reviewer: "profile_1" }, capturedAt,
+    }), "utf8"), taskId: "task_1",
+  });
   database.authQuery((db) => {
     const now = new Date().toISOString();
     db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('user_1', 'Forge Test', 'forge-test', 'admin', 'active', ?, ?)").run(now, now);
@@ -117,7 +129,8 @@ async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixtu
     db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES ('project_1', 'company_1', 'Project One', ?, ?, 'acme/forge', 'main', 'main', 'pnpm install', 'pnpm test', '[]', '{\"lead\":\"profile_1\"}', 'active', 'revision_1', ?, ?)").run(repositoryPath, join(root, "worktrees"), now, now);
     db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, created_at) VALUES ('revision_1', 'project_1', 1, 'identity_1', ?, ?, ?, 'user_1', ?)").run(JSON.stringify({ repository: "acme/forge", repositoryPath, worktreeRoot, baseBranch: "main", targetBranch: "main", baseSha: targetSha, targetSha, setupCommand: "pnpm install", verificationCommand: "pnpm test", requiredChecks: [] }), targetSha, targetSha, now);
     db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company_1', ?, ?, ?, ?, ?, ?, ?)").run(brief.id, brief.kind, brief.filename, brief.mimeType, brief.byteSize, brief.sha256, brief.storagePath, brief.createdAt);
-    db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task_1', 'company_1', 'project_1', 'Fixture task', ?, '[]', '{\"lead\":\"profile_1\"}', 0, 'workflow-test-issue-task_1', 'revision_1', 'idempotency_1', ?, ?)").run(brief.id, now, now);
+    db.prepare("INSERT INTO forge_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company_1', 'task_1', ?, ?, ?, ?, ?, ?, ?)").run(taskConfiguration.id, taskConfiguration.kind, taskConfiguration.filename, taskConfiguration.mimeType, taskConfiguration.byteSize, taskConfiguration.sha256, taskConfiguration.storagePath, taskConfiguration.createdAt);
+    db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, project_configuration_artifact_id, project_configuration_captured_at, idempotency_key, created_at, updated_at) VALUES ('task_1', 'company_1', 'project_1', 'Fixture task', ?, '[]', '{\"lead\":\"profile_1\"}', 0, 'workflow-test-issue-task_1', 'revision_1', ?, ?, 'idempotency_1', ?, ?)").run(brief.id, taskConfiguration.id, capturedAt, now, now);
   });
   return { root, database, config, briefId: brief.id };
 }

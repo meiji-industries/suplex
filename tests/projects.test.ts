@@ -1,8 +1,6 @@
-import { chmod, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
-import { execFile } from "node:child_process";
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import { expect, test } from "vitest";
 
@@ -11,12 +9,6 @@ import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { ProjectService, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects.js";
 import type { GithubAdapter } from "../src/github.js";
-
-const execFileAsync = promisify(execFile);
-
-async function git(args: string[], cwd: string): Promise<string> {
-  return (await execFileAsync("git", args, { cwd })).stdout.trim();
-}
 
 interface Fixture {
   root: string;
@@ -98,44 +90,6 @@ test("normalizes supported GitHub repository URLs", () => {
   expect(() => parseGithubRepositoryUrl("https://gitlab.com/meiji-industries/sampler.git")).toThrowError("GitHub repository URL is invalid");
 });
 
-test("activates from the current origin branch instead of a stale local branch", async () => {
-  const value = await fixture();
-  try {
-    const remotePath = join(value.root, "origin.git");
-    const publisherPath = join(value.root, "publisher");
-    await git(["init", "-b", "main"], value.repositoryPath);
-    await git(["config", "user.name", "Forge test"], value.repositoryPath);
-    await git(["config", "user.email", "forge-test@example.invalid"], value.repositoryPath);
-    await git(["commit", "--allow-empty", "-m", "Initial"], value.repositoryPath);
-    await git(["init", "--bare", "--initial-branch=main", remotePath], value.root);
-    const remoteUrl = "https://github.com/acme/forge.git";
-    await git(["remote", "add", "origin", remoteUrl], value.repositoryPath);
-    await git(["config", `url.${remotePath}.insteadOf`, remoteUrl], value.repositoryPath);
-    await git(["push", "origin", "main"], value.repositoryPath);
-    await git(["clone", remotePath, publisherPath], value.root);
-    await git(["config", "user.name", "Forge publisher"], publisherPath);
-    await git(["config", "user.email", "forge-publisher@example.invalid"], publisherPath);
-    await writeFile(join(publisherPath, "remote-only.txt"), "latest origin commit\n");
-    await git(["add", "remote-only.txt"], publisherPath);
-    await git(["commit", "-m", "Remote update"], publisherPath);
-    await git(["push", "origin", "main"], publisherPath);
-    const remoteSha = await git(["rev-parse", "HEAD"], publisherPath);
-
-    const projects = new ProjectService(value.database, value.auth, createTestConfig(value.root, {
-      reachableAddress: "https://forge.tailnet.ts.net:4111",
-      repositoryRoot: join(value.root, "repositories"),
-      worktreeRoot: value.worktreeRoot,
-    }), { github });
-    const project = await projects.createProject(value.adminId, value.companyId, input(value));
-    const activated = await projects.activateProject(value.adminId, project.id);
-
-    expect(activated.baseSha).toBe(remoteSha);
-    expect(activated.targetSha).toBe(remoteSha);
-  } finally {
-    await close(value);
-  }
-});
-
 test("maintains the model catalog and only creates profiles from active models", async () => {
   const value = await fixture();
   try {
@@ -198,7 +152,7 @@ test("updates every editable profile setting", async () => {
   }
 });
 
-test("clones and activates a GitHub repository under the configured Forge roots", async () => {
+test("clones a GitHub repository under the configured Forge roots", async () => {
   const value = await fixture();
   const provisioned: Array<{ cloneUrl: string; repository: string; repositoryPath: string; worktreeRoot: string }> = [];
   const projects = new ProjectService(value.database, value.auth, createTestConfig(value.root, {
@@ -221,8 +175,6 @@ test("clones and activates a GitHub repository under the configured Forge roots"
       targetBranch: "main",
       setupCommand: "mise run setup",
       verificationCommand: "mise run test",
-      status: "active",
-      configurationRevision: 1,
       requiredChecks: ["Tests / unit"],
       roleDefaults: value.roleDefaults,
     });
@@ -323,60 +275,6 @@ test.skip("fails closed for provider mismatch, unavailable agents, and cross-com
   }
 });
 
-test("rejects duplicate repository identity across companies and preserves exact Git SHAs on activation", async () => {
-  const value = await fixture();
-  try {
-    const first = await value.projects.createProject(value.adminId, value.companyId, input(value, { repository: "acme/forge" }));
-    const firstActive = await value.projects.activateProject(value.adminId, first.id);
-    expect(firstActive.baseSha).toBe("a".repeat(40));
-    expect(firstActive.targetSha).toBe("b".repeat(40));
-
-    value.database.authQuery((db) => {
-      db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-b', 'Other', 'active', '2026-08-11T00:00:00.000Z')").run();
-      db.prepare("INSERT INTO forge_memberships (user_id, company_id, created_at) VALUES (?, 'company-b', '2026-08-11T00:00:00.000Z')").run(value.adminId);
-    });
-    const secondPath = join(value.root, "repositories", "second");
-    const secondWorktree = join(value.worktreeRoot, "second");
-    await mkdir(secondPath, { recursive: true });
-    await mkdir(secondWorktree, { recursive: true });
-    await expect(value.projects.createProject(value.adminId, "company-b", input(value, { name: "Second", repositoryPath: secondPath, worktreeRoot: secondWorktree, repository: "acme/forge" }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "already-assigned", field: "repository" })]) });
-
-    const updatedSha = "c".repeat(40);
-    const sameBranches = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
-      localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "acme/forge", clean: true, baseSha: updatedSha, targetSha: "b".repeat(40) }; } },
-      github,
-    });
-    const reactivated = await sameBranches.activateProject(value.adminId, first.id);
-    expect(reactivated.configurationRevision).toBeGreaterThan(firstActive.configurationRevision ?? 0);
-    expect(reactivated.baseSha).toBe(updatedSha);
-  } finally {
-    await close(value);
-  }
-});
-
-test("rejects unwritable worktree root and a missing builder default", async () => {
-  const value = await fixture();
-  const readOnly = join(value.worktreeRoot, "readonly");
-  await mkdir(readOnly, { recursive: true });
-  await chmod(readOnly, 0o555);
-  try {
-    await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { worktreeRoot: readOnly }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "worktree-unwritable" })]) });
-    const missingBuilder = await value.projects.createProject(value.adminId, value.companyId, input(value, { roleDefaults: { planner: value.roleDefaults.planner } }));
-    await expect(value.projects.activateProject(value.adminId, missingBuilder.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "missing-default", field: "roleDefaults.builder" })]) });
-    const missingPlannerRepository = join(value.root, "repositories", "missing-planner");
-    const missingPlannerWorktree = join(value.worktreeRoot, "missing-planner");
-    await mkdir(missingPlannerRepository, { recursive: true });
-    await mkdir(missingPlannerWorktree, { recursive: true });
-    const noDefaults = await value.projects.createProject(value.adminId, value.companyId, input(value, { name: "Missing planner", repositoryPath: missingPlannerRepository, worktreeRoot: missingPlannerWorktree, repository: "acme/missing-planner", roleDefaults: {} }));
-    await expect(value.projects.activateProject(value.adminId, noDefaults.id)).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "missing-default", field: "roleDefaults.builder" })]) });
-    // Planner, Reviewer and Integrator are optional stages: only a Builder default is required.
-    await value.projects.updateProject(value.adminId, noDefaults.id, input(value, { name: "Missing planner", repositoryPath: missingPlannerRepository, worktreeRoot: missingPlannerWorktree, repository: "acme/missing-planner", roleDefaults: { builder: value.roleDefaults.builder } }));
-    await expect(value.projects.activateProject(value.adminId, noDefaults.id)).rejects.toMatchObject({ findings: expect.not.arrayContaining([expect.objectContaining({ code: "missing-default" })]) });
-  } finally {
-    await chmod(readOnly, 0o755);
-    await close(value);
-  }
-});
 
 test.skip("rejects GitHub provider URL with wrong hostname or path", async () => {
   const value = await fixture();

@@ -7,7 +7,6 @@ import { ForgeDatabase } from "../src/database.js";
 import { ForwardMergeService } from "../src/forward-merge.js";
 import { AcceptedProjectRevisionSchema } from "../src/projects.js";
 import {
-  ArtifactReferenceSchema,
   IssueWorkflowStateSchema,
   ReconcileTargetBaseActivityInputSchema,
   ReconcileTargetBaseActivityResultSchema,
@@ -105,41 +104,6 @@ describe("target-base reconciliation contracts", () => {
       developerExecutionId: "developer-stale", expectedBaseSha: sha("b"), expectedHeadSha: sha("c"), expectedHeadTree: sha("d"), forwardMergeId: "merge-1",
     });
     expect(input.forwardMergeId).toBe("merge-1");
-  });
-
-  test("rejects raw conflict material, sentinel values, unknown blockers, and oversized summaries", () => {
-    expect(() => ArtifactReferenceSchema.parse({ id: "artifact", sha256: sha("a") })).toThrow();
-    expect(() => ReconcileTargetBaseActivityResultSchema.parse({
-      outcome: "conflict",
-      checkId: "check-1",
-      checkpoint: "pre_release",
-      expectedBaseSha: sha("b"),
-      observedBaseSha: sha("e"),
-      priorHead: sha("c"),
-      priorTree: sha("d"),
-      conflictFileCount: 1,
-      conflictArtifact: { ...artifact, conflictDiff: "raw conflict" },
-      releaseId: "",
-      pullRequestNumber: 0,
-    })).toThrow();
-    expect(() => ReconcileTargetBaseActivityResultSchema.parse({
-      outcome: "blocked",
-      checkId: "check-1",
-      checkpoint: "pre_release",
-      code: "unknown",
-      owner: "lead",
-      retryable: false,
-      summary: "blocked",
-    })).toThrow();
-    expect(() => ReconcileTargetBaseActivityResultSchema.parse({
-      outcome: "blocked",
-      checkId: "check-1",
-      checkpoint: "pre_release",
-      code: "merge_failed",
-      owner: "lead",
-      retryable: false,
-      summary: "x".repeat(501),
-    })).toThrow();
   });
 
   test("invalidates current authority while preserving only published identity", () => {

@@ -5,7 +5,7 @@ export type ActivityRole = "planner" | "builder" | "reviewer" | "integrator" | "
 type ActivityEntry = {
   eventType: string;
   metadata: Record<string, string | number | boolean>;
-  actor?: { kind?: string; id: string };
+  actor?: { kind?: string; id: string } | undefined;
 };
 
 export type ActivityFeedRow = {
@@ -65,7 +65,7 @@ export function activitySentence(entry: ActivityEntry, role: ActivityRole): stri
 }
 
 export function compactActivityRows(rows: ActivityFeedRow[]): ActivityFeedRow[] {
-  return rows.toSorted((left, right) => Date.parse(left.at) - Date.parse(right.at)).reduce<ActivityFeedRow[]>((compact, row) => {
+  return rows.slice().sort((left, right) => Date.parse(left.at) - Date.parse(right.at)).reduce<ActivityFeedRow[]>((compact, row) => {
     const previous = compact.at(-1);
     if (row.live && previous?.live) {
       previous.at = row.at;

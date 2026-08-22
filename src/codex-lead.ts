@@ -1304,9 +1304,7 @@ export class AgentService {
       const evidence = await this.persistEvidence(input.companyId, executionId, lines);
       const reviewArtifact = await this.artifacts.put(input.companyId, "supplemental-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
       const reviewId = `review_${randomBytes(12).toString("hex")}`;
-      const reviewSubject = input.originalPlanSubject && input.evidenceManifestArtifactId && input.evidenceManifestSha256
-        ? { originalPlan: input.originalPlanSubject, reviewerProfileId: profile.id, evidenceManifestArtifactId: input.evidenceManifestArtifactId, evidenceManifestSha256: input.evidenceManifestSha256 }
-        : undefined;
+      const reviewSubject = undefined;
       this.database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt, reviewArtifact.id, reviewArtifact.companyId, reviewArtifact.kind, reviewArtifact.filename, reviewArtifact.mimeType, reviewArtifact.byteSize, reviewArtifact.sha256, reviewArtifact.storagePath, reviewArtifact.createdAt);
         db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidence.id, executionId);
@@ -1369,9 +1367,7 @@ export class AgentService {
       }
       if (!response) throw lastFailure ?? new AgentFailure("missing-review-response", "Lead did not return a supplemental-review response");
       const output = response.result;
-      const manifest = rawInput.evidenceManifestArtifactId && rawInput.evidenceManifestSha256
-        ? { id: rawInput.evidenceManifestArtifactId, sha256: rawInput.evidenceManifestSha256 }
-        : undefined;
+      const manifest = undefined;
       const persisted = await this.persistOutput({ taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, projectId: rawInput.projectId, projectRevisionId: rawInput.projectRevisionId, briefArtifactId: rawInput.briefArtifactId, imageArtifactIds: rawInput.imageArtifactIds, roleProfiles: rawInput.roleProfiles, revision: rawInput.revision }, executionId, rawInput.leadSessionRef, lines, output, manifest, { finalVersion: 2, ...(rawInput.originalPlanSubject ? { originalPlanRevision: rawInput.originalPlanSubject.originalPlanRevision, supersedesOutputId: rawInput.originalPlanSubject.outputId } : {}) });
       const responseArtifact = await this.artifacts.put(rawInput.companyId, "lead-review-response", { filename: `${executionId}-review-response.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(response, null, 2), "utf8") });
       this.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(responseArtifact.id, responseArtifact.companyId, responseArtifact.kind, responseArtifact.filename, responseArtifact.mimeType, responseArtifact.byteSize, responseArtifact.sha256, responseArtifact.storagePath, responseArtifact.createdAt));

@@ -56,12 +56,23 @@ export interface AppDependencies {
 
 export function createAppServer(dependencies: AppDependencies): FastifyInstance {
   const app = (dependencies.logger === undefined || dependencies.logger === false
-    ? Fastify({ logger: false, ...(dependencies.https ? { https: dependencies.https } : {}) })
-    : Fastify({ loggerInstance: dependencies.logger, ...(dependencies.https ? { https: dependencies.https } : {}) })) as unknown as FastifyInstance;
+    ? Fastify({ logger: false, disableRequestLogging: true, ...(dependencies.https ? { https: dependencies.https } : {}) })
+    : Fastify({ loggerInstance: dependencies.logger, disableRequestLogging: true, ...(dependencies.https ? { https: dependencies.https } : {}) })) as unknown as FastifyInstance;
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   void app.register(cookie);
   installHttpErrorHandlers(app);
+  app.addHook("onResponse", (request, reply) => {
+    const statusCode = reply.statusCode;
+    const responseTime = reply.elapsedTime;
+    const shouldLogAtInfo = statusCode >= 400 || responseTime > 1_000 || request.method !== "GET";
+    const level = statusCode >= 500 ? "error" : statusCode >= 400 ? "warn" : shouldLogAtInfo ? "info" : "debug";
+    request.log[level]({
+      req: { method: request.method, url: request.url },
+      res: { statusCode },
+      responseTime,
+    }, "request");
+  });
 
   const configuredOrigin = new URL(dependencies.config.reachableAddress).origin;
   const developmentOrigins = new Set([`http://localhost:${dependencies.config.port}`, `http://127.0.0.1:${dependencies.config.port}`, `http://[::1]:${dependencies.config.port}`]);

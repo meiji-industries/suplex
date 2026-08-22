@@ -23,6 +23,7 @@ export function redact(value: unknown, key?: string): unknown {
 }
 
 export interface LogContext {
+  taskId?: string;
   correlationId?: string;
   workflowId?: string;
   runId?: string;
@@ -55,6 +56,9 @@ const loggerOptions = {
 
 const fastifyLoggerOptions = {
   ...loggerOptions,
+  // Keep debug access records in the JSON log. The interactive destinations
+  // and log viewer hide them unless request logging is explicitly enabled.
+  level: "debug",
   timestamp: pino.stdTimeFunctions.isoTime,
   redact: {
     ...loggerOptions.redact,
@@ -156,21 +160,23 @@ function errorDetails(record: DevLogRecord): { message?: string | undefined; sta
   return typeof field(record, "error") === "string" ? { message: field(record, "error") as string } : {};
 }
 
-/** Formats one Pino record for interactive development output. Returns null for request-start records. */
-export function formatDevLogLine(input: DevLogRecord, options: { color?: boolean; component?: string } = {}): string | null {
+function includeDebugLogs(all?: boolean): boolean {
+  return all ?? process.env.FORGE_LOG_REQUESTS === "1";
+}
+
+/** Formats one Pino record for interactive development output. */
+export function formatDevLogLine(input: DevLogRecord, options: { color?: boolean; component?: string; all?: boolean } = {}): string | null {
   const record = redact(input) as DevLogRecord;
   const message = short(field(record, "msg") ?? field(record, "message")) || "log";
   const request = field(record, "req") as DevLogRecord | undefined;
   const status = requestStatus(record);
 
-  // Fastify emits a start and completion line for each request. The completion
-  // has all of the useful information, so keeping only it makes the pane scannable.
-  if (message === "incoming request" && request) return null;
+  if (typeof field(record, "level") === "number" && (field(record, "level") as number) < 30 && !includeDebugLogs(options.all)) return null;
 
   const levelName = field(record, "level") === 50 ? "ERROR" : field(record, "level") === 40 ? "WARN" : "INFO";
   const color = options.color ?? (!process.env.NO_COLOR && Boolean(process.stdout.isTTY));
   const component = short(options.component ?? field(record, "component") ?? logComponent());
-  const requestLine = request && message === "request completed"
+  const requestLine = request && message === "request"
     ? `${short(request.method)} ${short(request.url)}${status === undefined ? "" : ` ${status}`}${typeof field(record, "responseTime") === "number" ? ` ${Math.round(field(record, "responseTime") as number)}ms` : ""}`
     : message;
   const fields: string[] = [];
@@ -212,9 +218,28 @@ function prettyDestination(): DestinationStream {
   };
 }
 
+function infoConsoleDestination(): DestinationStream {
+  return {
+    write(raw: string): void {
+      for (const line of raw.split("\n")) {
+        if (!line) continue;
+        try {
+          // task-utils imports redact from this module, so parsing locally avoids a cycle.
+          // eslint-disable-next-line no-restricted-syntax
+          const record = JSON.parse(line) as DevLogRecord;
+          if (typeof record.level === "number" && record.level < 30 && !includeDebugLogs()) continue;
+        } catch {
+          // Preserve output Pino did not produce rather than dropping it.
+        }
+        process.stdout.write(`${line}\n`);
+      }
+    },
+  };
+}
+
 function developmentDestination(component: "api" | "worker"): DestinationStream {
   const fileSink = createDevLogFileSink(component);
-  const consoleSink = usePrettyLogs() ? prettyDestination() : process.stdout;
+  const consoleSink = usePrettyLogs() ? prettyDestination() : infoConsoleDestination();
   return {
     write(raw: string): void {
       fileSink(raw);

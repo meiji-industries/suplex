@@ -18,6 +18,7 @@ export interface LogViewerOptions {
   errors?: boolean;
   since?: string;
   follow?: boolean;
+  all?: boolean;
   color?: boolean;
   output?: Pick<NodeJS.WriteStream, "write">;
   pollIntervalMs?: number;
@@ -43,6 +44,7 @@ function matchesTask(record: LogRecord, taskId: string): boolean {
 }
 
 function matches(entry: LogEntry, options: LogViewerOptions, now: number): boolean {
+  if (!options.all && process.env.FORGE_LOG_REQUESTS !== "1" && typeof entry.record.level === "number" && entry.record.level < 30) return false;
   if (options.errors && (typeof entry.record.level !== "number" || entry.record.level < 40)) return false;
   if (options.taskId && !matchesTask(entry.record, options.taskId)) return false;
   return !options.since || entry.timestamp >= now - parseSince(options.since);
@@ -66,7 +68,7 @@ async function readAllEntries(directory: string): Promise<LogEntry[]> {
 function print(entries: LogEntry[], options: LogViewerOptions): void {
   const output = options.output ?? process.stdout;
   for (const entry of entries) {
-    const line = formatDevLogLine(entry.record, { component: entry.component, ...(options.color === undefined ? {} : { color: options.color }) });
+    const line = formatDevLogLine(entry.record, { component: entry.component, ...(options.color === undefined ? {} : { color: options.color }), ...(options.all ? { all: true } : {}) });
     if (line) output.write(`${line}\n`);
   }
 }

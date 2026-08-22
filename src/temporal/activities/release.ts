@@ -1,7 +1,6 @@
 import type { ReleaseActivities, PublishReleaseActivityInput } from "../contracts/activities/release.js";
 import type { AttentionCategory } from "../contracts/primitives.js";
 import { z } from "zod";
-import { PersistedLeadOutputSchema } from "../../codex-lead-contracts.js";
 import { DeveloperDeliverySchema as CanonicalDeveloperDeliverySchema, ExecutionReceiptSchema } from "../../developer-contracts.js";
 import type { ActivityContext } from "./context.js";
 
@@ -75,7 +74,7 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
         const operation = database.authQuery((db) => db.prepare("SELECT MAX(COALESCE(attempt, 0)) AS attempt FROM forge_provider_operations WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND kind IN ('push', 'create-draft-pr', 'update-draft-pr')").get(input.taskId, input.companyId, input.workflowId) as { attempt: number | null });
         const category: AttentionCategory = failure.code === "authentication-required" ? "provider_authentication" : failure.code === "stale-reviewed-revision" || failure.code === "target-base-drift" ? "target_drift" : failure.code === "provider-rate-limited" || failure.code === "provider-unavailable" || failure.code === "invalid-provider-response" ? "provider_connectivity_exhausted" : failure.code === "pinned-configuration-incomplete" || failure.code === "public-projection-unsafe" ? "verification_unrecoverable" : "provider_ambiguity";
         const evidence = await putAttentionEvidence(input, category, failure.code, failure.summary);
-        return PublishReleaseActivityResultSchema.parse({ outcome: "blocked", releaseId: null, ...identity, pullRequestNumber: null, pullRequestUrl: null, isDraft: true, reused: false, code: failure.code, summary: failure.summary, retryAt: failure.retryAt, attempt: operation.attempt ?? 0, evidenceArtifactId: evidence.artifactId, evidenceArtifactSha256: evidence.sha256 });
+        return PublishReleaseActivityResultSchema.parse({ outcome: "blocked", releaseId: null, ...identity, pullRequestNumber: null, pullRequestUrl: null, isDraft: true, reused: false, code: failure.code, summary: failure.summary, retryAt: failure.retryAt, attempt: operation.attempt ?? 0, evidenceArtifactId: evidence.artifactId });
       }
     },
   };

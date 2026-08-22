@@ -576,6 +576,7 @@ async function defaultLocalRepositoryAdapter(): Promise<LocalRepositoryAdapter> 
 export class ProjectService {
   private readonly now: () => Date;
   private readonly github: GithubAdapter;
+  private readonly localRepository: LocalRepositoryAdapter | undefined;
   private readonly repositoryProvisioner: RepositoryProvisioner;
 
   constructor(
@@ -586,6 +587,7 @@ export class ProjectService {
   ) {
     this.now = options.now ?? (() => new Date());
     this.github = options.github ?? createGithubAdapter();
+    this.localRepository = options.localRepository;
     this.repositoryProvisioner = options.repositoryProvisioner ?? defaultRepositoryProvisioner();
   }
 
@@ -863,6 +865,17 @@ export class ProjectService {
     return this.mutateProject(actorUserId, existing.companyId, input, true, projectId);
   }
 
+  /** Resolve the runtime values that a newly-created task owns thereafter. */
+  async captureTaskConfiguration(project: Project): Promise<{ baseSha: string; targetSha: string }> {
+    try {
+      const inspection = await (this.localRepository ?? await defaultLocalRepositoryAdapter()).inspect({ repositoryPath: project.repositoryPath, baseBranch: project.baseBranch, targetBranch: project.targetBranch });
+      if (!inspection.baseSha || !inspection.targetSha) throw new Error("branch unavailable");
+      return { baseSha: inspection.baseSha, targetSha: inspection.targetSha };
+    } catch {
+      throw new ProjectFailure("Project configuration could not be captured", [finding("repository-unavailable", "projectId", "Forge could not resolve the configured branches for this new task")], 422);
+    }
+  }
+
 
   getProject(actorUserId: string, projectId: string): Project {
     const row = this.database.authQuery((db) => {
@@ -922,7 +935,7 @@ export class ProjectService {
     }
     if (findings.length === 0) {
       try {
-        const inspection = await (await defaultLocalRepositoryAdapter()).inspect({ repositoryPath: normalized.repositoryPath, baseBranch: normalized.baseBranch, targetBranch: normalized.targetBranch });
+        const inspection = await (this.localRepository ?? await defaultLocalRepositoryAdapter()).inspect({ repositoryPath: normalized.repositoryPath, baseBranch: normalized.baseBranch, targetBranch: normalized.targetBranch });
         if (inspection.canonicalPath !== normalized.repositoryPath) findings.push(finding("repository-path-mismatch", "repositoryPath", "Repository path is not canonical"));
         if (!inspection.clean) findings.push(finding("repository-dirty", "repositoryPath", "Repository must be clean before saving"));
         if (!inspection.baseSha || !inspection.targetSha) findings.push(finding("branch-unavailable", "baseBranch", "Configured branches must resolve to commits"));

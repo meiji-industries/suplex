@@ -1,0 +1,84 @@
+import { phaseLabel, type IssuePhase } from "../../issue-phases.js";
+
+export type ActivityRole = "planner" | "builder" | "reviewer" | "integrator" | "you" | "forge";
+
+type ActivityEntry = {
+  eventType: string;
+  metadata: Record<string, string | number | boolean>;
+  actor?: { kind?: string; id: string };
+};
+
+export type ActivityFeedRow = {
+  id: string;
+  at: string;
+  role: ActivityRole;
+  text: string;
+  revision?: number;
+  link?: { href: string; label: string };
+  count?: number;
+  live?: boolean;
+};
+
+export function activityRole(entry: ActivityEntry): ActivityRole {
+  if (entry.eventType === "system_action") return "forge";
+  if (entry.actor && entry.actor.kind !== "agent") return "you";
+  if (entry.eventType.includes("planning") || entry.eventType.includes("plan")) return "planner";
+  if (entry.eventType.includes("review") || entry.eventType === "phase_repair_required") return "reviewer";
+  if (entry.eventType.includes("development") || entry.eventType.includes("repair")) return "builder";
+  return "integrator";
+}
+
+export function activityRoleLabel(role: ActivityRole): string {
+  return role === "you" ? "You" : `${role[0]!.toUpperCase()}${role.slice(1)}`;
+}
+
+function commandSentence(command: string): string {
+  switch (command) {
+    case "approve_plan": return "You approved the plan";
+    case "request_plan_revision": return "You asked for plan changes";
+    case "reject_plan": return "You rejected the plan";
+    case "retry_development": return "You retried development";
+    case "cancel_development":
+    case "cancel_issue": return "You cancelled";
+    case "rescue_task": return "You rescued the task";
+    default: return command ? `You ran ${command.replaceAll("_", "-")}` : "You took an action";
+  }
+}
+
+export function activitySentence(entry: ActivityEntry, role: ActivityRole): string {
+  const subject = activityRoleLabel(role);
+  if (entry.eventType === "task_created") return `${subject} created this task`;
+  if (entry.eventType === "system_action") return "Forge resynced the task";
+  if (entry.eventType === "member_action") return commandSentence(String(entry.metadata.command ?? entry.metadata.action ?? ""));
+  if (entry.eventType === "planning_started") {
+    if (entry.metadata.planningStage === "completed") return "Planner finished the plan";
+    if (entry.metadata.planningStage === "queued") return "Planner is waiting to start";
+    return "Planner started the plan";
+  }
+  if (entry.eventType === "phase_development") return "Builder started work";
+  if (entry.eventType === "phase_ci_waiting") return "Integrator is waiting for CI";
+  if (entry.eventType === "phase_delivery_reviewed") return "Reviewer approved the delivery";
+  if (entry.eventType === "phase_repair_required") return "Reviewer asked for fixes";
+  if (entry.eventType === "phase_done") return "Integrator completed the task";
+  if (entry.eventType.startsWith("phase_")) return `${subject} moved the task to ${phaseLabel(entry.eventType.slice("phase_".length) as IssuePhase)}`;
+  return `${subject} ${entry.eventType.replaceAll("_", " ")}`;
+}
+
+export function compactActivityRows(rows: ActivityFeedRow[]): ActivityFeedRow[] {
+  return rows.toSorted((left, right) => Date.parse(left.at) - Date.parse(right.at)).reduce<ActivityFeedRow[]>((compact, row) => {
+    const previous = compact.at(-1);
+    if (row.live && previous?.live) {
+      previous.at = row.at;
+      previous.text = row.text;
+      previous.role = row.role;
+      return compact;
+    }
+    if (previous && !row.live && !previous.live && previous.role === row.role && previous.text === row.text) {
+      previous.at = row.at;
+      previous.count = (previous.count ?? 1) + (row.count ?? 1);
+      return compact;
+    }
+    compact.push(row);
+    return compact;
+  }, []);
+}

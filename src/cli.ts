@@ -17,8 +17,11 @@ import { ProjectionRebuildFailure, ProjectionRebuildService } from "./projection
 import { runAgentWrapper } from "./agent-wrapper.js";
 import { reconcileAgentExecutions } from "./agent-recovery.js";
 import { reconcileDeveloperExecutions } from "./developer-recovery.js";
+import { formatDoctor, runDoctor } from "./diagnostics/doctor.js";
+import { formatTaskDiagnostic, inspectTask, writeTaskBundle } from "./diagnostics/task.js";
 
 const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
+const commandArgs = process.argv.slice(process.argv[2] === "--" ? 4 : 3);
 const foreground = process.argv.includes("--foreground");
 
 async function stopForge(config: ReturnType<typeof loadConfig>): Promise<void> {
@@ -41,10 +44,30 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "help") {
-    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|rebuild-projections|migrate|start|stop|restart> [--foreground]\n");
+    process.stdout.write("Usage: pnpm run forge <setup|recover|backup|verify-backup|restore|rebuild-projections|migrate|task|doctor|start|stop|restart> [--foreground]\n");
     return;
   }
   const config = loadConfig();
+  if (command === "task") {
+    const taskId = commandArgs[0];
+    if (!taskId || taskId.startsWith("--")) throw new Error("task requires a task ID");
+    const database = new ForgeDatabase(config.databasePath);
+    try {
+      const diagnostic = await inspectTask(config, database, taskId, process.argv.includes("--history"));
+      if (process.argv.includes("--bundle")) process.stdout.write(`bundle      ${await writeTaskBundle(config, database, taskId)}\n`);
+      process.stdout.write(process.argv.includes("--json") ? `${JSON.stringify(diagnostic, null, 2)}\n` : formatTaskDiagnostic(diagnostic));
+    } finally { database.close(); }
+    return;
+  }
+  if (command === "doctor") {
+    const database = new ForgeDatabase(config.databasePath);
+    try {
+      const checks = await runDoctor(config, database, { fix: process.argv.includes("--fix") });
+      process.stdout.write(formatDoctor(checks));
+      if (checks.some((check) => check.status === "FAIL")) process.exitCode = 1;
+    } finally { database.close(); }
+    return;
+  }
   if (command === "migrate") {
     const database = new ForgeDatabase(config.databasePath);
     try {

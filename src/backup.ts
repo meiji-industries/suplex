@@ -292,7 +292,7 @@ export class BackupService {
  * reauthentication and any later mutation remain explicit operator actions.
  */
 export async function reconcileRestoredState(database: ForgeDatabase, github: GithubReleasePort): Promise<RestoredStateReconciliation> {
-  const developerExecutions = reconcileRestoredDeveloperExecutions(database);
+  const developerExecutions = await reconcileRestoredDeveloperExecutions(database);
   const releases = database.authQuery((db) => db.prepare("SELECT id, repository, head_branch AS branch, base_branch AS baseBranch, head_sha AS headSha, pr_number AS pullRequestNumber FROM forge_releases WHERE pr_number IS NOT NULL ORDER BY updated_at, id").all() as Array<{ id: string; repository: string; branch: string; baseBranch: string; headSha: string; pullRequestNumber: number | null }>);
   const providers: RestoredProviderReconciliation[] = [];
   for (const release of releases) {

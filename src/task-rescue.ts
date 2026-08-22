@@ -7,7 +7,7 @@ import type { IssueCommand } from "./commands/registry.js";
 import { connectTemporal } from "./temporal/service.js";
 import { issueStateQuery } from "./temporal/workflows.js";
 import { IssueWorkflowStateSchema } from "./temporal/issue-contracts.js";
-import { routeWorkflowToCurrentDeployment } from "./developer-reconciliation-recovery.js";
+import { routeWorkflowToCurrentDeployment } from "./worker-deployment.js";
 import type { ForgeTask, TaskService } from "./tasks.js";
 
 export type RescueStep = { name: string; outcome: "completed" | "skipped" | "failed"; detail: string };

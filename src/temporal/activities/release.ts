@@ -1,7 +1,6 @@
 import type { ReleaseActivities, PublishReleaseActivityInput } from "../contracts/activities/release.js";
 import type { AttentionCategory } from "../contracts/primitives.js";
 import { z } from "zod";
-import { DeveloperDeliverySchema as CanonicalDeveloperDeliverySchema, ExecutionReceiptSchema } from "../../developer-contracts.js";
 import type { ActivityContext } from "./context.js";
 
 const LegacyReleaseDeliverySchema = z.object({
@@ -17,23 +16,7 @@ const LegacyReleaseDeliverySchema = z.object({
   }).passthrough()).default([]),
 }).passthrough();
 
-const ReconciledReleaseDeliverySchema = z.object({
-  kind: z.literal("developer-reconciliation"),
-  report: CanonicalDeveloperDeliverySchema,
-  receipts: z.array(ExecutionReceiptSchema).optional(),
-  git: z.object({ changedPaths: z.array(z.string()) }).passthrough(),
-}).passthrough();
-
 export function releaseDeliveryProjection(value: unknown): { summary?: string; changes?: string[]; filesChanged?: string[]; commandsRun?: string[]; testResults?: string[] } {
-  const reconciled = ReconciledReleaseDeliverySchema.safeParse(value);
-  if (reconciled.success) {
-    const report = reconciled.data.report;
-    return {
-      summary: report.summary,
-      changes: report.steps.map((step) => step.notes).filter(Boolean),
-      filesChanged: reconciled.data.git.changedPaths,
-    };
-  }
   const legacy = LegacyReleaseDeliverySchema.parse(value);
   return {
     ...(legacy.summary ? { summary: legacy.summary } : {}),
@@ -56,7 +39,7 @@ export function createReleaseActivities(ctx: ActivityContext): ReleaseActivities
           JOIN forge_project_revisions pr ON pr.id = (SELECT current.id FROM forge_project_revisions current WHERE current.project_id = t.project_id AND current.state = 'accepted' ORDER BY current.revision DESC LIMIT 1)
           JOIN forge_developer_executions d ON d.id = ? AND d.task_id = t.id AND d.company_id = t.company_id AND d.workflow_id = t.workflow_id AND d.status = 'completed'
           JOIN forge_delivery_reviews r2 ON r2.id = ? AND r2.task_id = t.id AND r2.company_id = t.company_id AND r2.workflow_id = t.workflow_id AND r2.outcome = 'approved'
-          JOIN forge_artifacts da ON da.id = d.delivery_artifact_id AND da.company_id = d.company_id AND da.kind IN ('developer-delivery', 'developer-repair', 'developer-reconciliation', 'forward-merge-delivery')
+          JOIN forge_artifacts da ON da.id = d.delivery_artifact_id AND da.company_id = d.company_id AND da.kind IN ('developer-delivery', 'developer-repair', 'forward-merge-delivery')
           WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ?`).get(input.developerExecutionId, input.reviewId, input.taskId, input.companyId, input.workflowId) as { projectRevisionId: string; normalizedJson: string; developerExecutionId: string; worktreePath: string; branchName: string; targetBaseSha: string; subjectCommit: string; subjectTree: string; deliveryArtifactId: string; deliveryStoragePath: string; deliverySha: string; reviewId: string; title: string } | undefined);
         if (!context) throw new GithubReleaseFailure("stale-reviewed-revision", "The exact approved Developer revision is unavailable");
         identity = { repository: "", branchName: context.branchName, headSha: context.subjectCommit, headTree: context.subjectTree };

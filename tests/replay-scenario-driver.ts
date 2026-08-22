@@ -101,7 +101,7 @@ type ReplayScenarioScriptBaseHelpers = Omit<ReplayScenarioScriptHelpers, "drive"
 type ReplayScenarioDefinitionUnion = typeof replayScenarios[number];
 
 function artifact(kind: DurableArtifactReference["kind"], id: string): DurableArtifactReference {
-  return { artifactId: id, companyId: "fixture-company", kind, sha256: "a".repeat(64), byteSize: 1, mimeType: "application/json" };
+  return { artifactId: id, companyId: "fixture-company", kind, byteSize: 1, mimeType: "application/json" };
 }
 
 function deferred<T = void>(): Deferred<T> {
@@ -165,7 +165,6 @@ function createSharedActivities(context: ReplayScenarioActivityContext): Partial
     },
     async recordDeliveryDecision() { return { artifactId: "delivery-decision" }; },
     async findActiveDeveloperExecution() { return null; },
-    async reconcileDeveloperDeliveryEvidence() { return null; },
     async preparePlanRevision(input) { return { status: "accepted" as const, revisionRequestId: `revision-${input.workflowId}-${input.requestRevision}`, coordinates: { disposition: "new" as const, revisionRequestId: `revision-${input.workflowId}-${input.requestRevision}`, exactBaseSha: input.exactBaseSha! } }; },
     async authorizePlanRevision() {},
     async createSuccessor(input) { return { successorTaskId: input.successorTaskId, successorWorkflowId: input.successorWorkflowId, predecessorTaskId: input.predecessorTaskId, projectRevisionId: "project-revision", creationRevision: input.acceptedRevision }; },

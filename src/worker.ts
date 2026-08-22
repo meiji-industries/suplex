@@ -7,7 +7,7 @@ import { createActivities } from "./temporal/activities.js";
 import { StructuredLogger } from "./logging.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { reconcileDeveloperExecutions } from "./developer-recovery.js";
-import { activateLocalWorkerDeployment, reconcileBlockedDeveloperDeliveries, routeWorkflowToCurrentDeployment } from "./developer-reconciliation-recovery.js";
+import { activateLocalWorkerDeployment } from "./worker-deployment.js";
 import { reconcileSuccessorIntents } from "./successor-recovery.js";
 import { reconcileTaskCreationIntents } from "./task-creation-recovery.js";
 import { activityPayloadInterceptors } from "./temporal/payload-boundary-interceptors.js";
@@ -79,7 +79,6 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   let heartbeat: NodeJS.Timeout | undefined;
   let workerRun: Promise<void> | undefined;
   let creationRecovery: Promise<void> | undefined;
-  let deliveryRecovery: Promise<number | undefined> | undefined;
   let shutdown: (() => void) | undefined;
   try {
     logger.info("Worker startup: connecting to Temporal");
@@ -126,10 +125,6 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
         creationRecovery = runStartupSweep(logger, "task-creation-reconciliation", () => reconcileTaskCreationIntents(database, config))
           .finally(() => { creationRecovery = undefined; });
       }
-      if (!deliveryRecovery) {
-        deliveryRecovery = runStartupSweep(logger, "developer-delivery-reconciliation", () => reconcileBlockedDeveloperDeliveries(database, config, undefined, (workflowId) => routeWorkflowToCurrentDeployment(connection!, config, workflowId, workerId)))
-          .finally(() => { deliveryRecovery = undefined; });
-      }
     };
     refreshRegistration();
     void runStartupSweep(logger, "agent-execution-reconciliation", () => reconcileAgentExecutions(database));
@@ -155,7 +150,6 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       clearInterval(heartbeat);
     }
     await creationRecovery;
-    await deliveryRecovery;
     database.unregisterWorker(workerId);
     if (shutdown) {
       process.removeListener("SIGTERM", shutdown);
@@ -168,7 +162,6 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       clearInterval(heartbeat);
     }
     await creationRecovery;
-    await deliveryRecovery;
     // Cleanup must never mask the original startup error: drain the worker
     // before closing the connection, and swallow secondary failures.
     try { worker?.shutdown(); } catch { /* worker already stopped */ }

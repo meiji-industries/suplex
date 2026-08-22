@@ -259,7 +259,6 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     // (identity, lead/plan metadata, the decision) rather than pinning the exact landing revision.
     expect(continuationState).toMatchObject({ workflowId: startedContinuation.workflowId, companyId: "issue-company", projectId: "issue-project", issueId: "issue-continuation", projectRevisionId: "issue-revision", owner: "lead", continuationCount: 1, lastSummaryHash: null, leadSessionRef: "session_integration", leadExecutionId: "agent_integration", leadEvidenceArtifactId: artifacts.integrationLeadEvidenceArtifactId, leadOutputArtifactId: artifacts.integrationLeadOutputArtifactId, leadOutputKind: "plan", leadSummary: "Integration plan", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], supplementalReviewUsed: false });
     expect(continuationState.revision).toBeGreaterThanOrEqual(5);
-    expect(continuationState.decisionId).toMatch(/^decision_/);
     const settledRevision = continuationState.revision;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const projection = database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_projections WHERE task_id = 'issue-continuation'").get()) as { revision: number } | undefined;

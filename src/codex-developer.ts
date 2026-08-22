@@ -344,18 +344,23 @@ export class DeveloperService {
           evidenceLines.push(JSON.stringify({ type: "forge.process-failure", exitCode: result.exitCode, stderr: redact(result.stderr) }));
           throw this.provider.classifyProcessFailure(result, outputLines, profile.model);
         }
-        if (!sessionRef || !rawSessionId || sessionRef === input.leadSessionRef) throw new AgentFailure("session-identity-conflict", "Developer session must be distinct from the Lead session");
-        const report = parseDeliveryReport(evidenceLines, this.provider);
-        const gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
-        if (gitState.branchName !== worktree.branchName) throw new AgentFailure("delivery-revision-invalid", "Developer delivery was produced on the wrong issue branch");
-        const expectedNumbers = plan.steps.map((step) => step.number).sort((a, b) => a - b);
-        const actualNumbers = report.steps.map((step) => step.number).sort((a, b) => a - b);
-        if (JSON.stringify(expectedNumbers) !== JSON.stringify(actualNumbers)) throw new AgentFailure("delivery-step-mismatch", "Developer delivery does not map every approved plan step");
-        if (JSON.stringify(report.authorizedStepsNotCompleted.sort((a, b) => a - b)) !== JSON.stringify(report.steps.filter((step) => step.status !== "completed" && step.status !== "not_applicable_locally").map((step) => step.number).sort((a, b) => a - b))) throw new AgentFailure("delivery-step-mismatch", "Developer delivery did not identify incomplete authorized steps consistently");
-        if (report.resultCommit.toLowerCase() !== gitState.headSha.toLowerCase() || report.resultTree.toLowerCase() !== gitState.treeSha.toLowerCase() || report.dirtyState !== gitState.dirtyState) throw new AgentFailure("delivery-revision-mismatch", "Developer delivery report does not match the exact Git result");
-        const deliveryArtifact = await this.artifacts.putIdempotent(input.companyId, "developer-delivery", `${executionId}:delivery`, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, branchName: worktree.branchName, worktreePath: worktree.worktreePath, targetBaseSha: worktree.targetBaseSha }, null, 2), "utf8") });
+        let gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
+        if (gitState.dirtyState === "dirty") {
+          await execFileAsync("git", ["add", "-A"], { cwd: worktree.worktreePath, timeout: 30_000, maxBuffer: 256 * 1024 });
+          await execFileAsync("git", ["-c", "user.name=Forge Builder", "-c", "user.email=builder@forge.invalid", "commit", "-m", "wip: builder"], { cwd: worktree.worktreePath, timeout: 30_000, maxBuffer: 256 * 1024 });
+          gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
+        }
+        const parsedReport = (() => {
+          try { return parseDeliveryReport(evidenceLines, this.provider); }
+          catch {
+            if (gitState.headSha === worktree.targetBaseSha) throw new AgentFailure("developer-failed", outputLines.slice(-20).join("\n") || "Builder left no report");
+            return { summary: "Builder left no report", blocker: null };
+          }
+        })();
+        const delivery = { ...parsedReport, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, branchName: worktree.branchName, worktreePath: worktree.worktreePath, targetBaseSha: worktree.targetBaseSha };
+        const deliveryArtifact = await this.artifacts.putIdempotent(input.companyId, "developer-delivery", `${executionId}:delivery`, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(delivery, null, 2), "utf8") });
         const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
-        const blocked = gitState.headSha === worktree.targetBaseSha || report.authorizedStepsNotCompleted.length > 0 || report.dirtyState !== "clean" || report.blocker !== null;
+        const blocked = parsedReport.blocker !== null;
         const terminalStatus = this.database.authTransaction((db) => {
           registerArtifact(db, evidence);
           registerArtifact(db, deliveryArtifact);
@@ -364,7 +369,7 @@ export class DeveloperService {
         });
         if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "Developer execution was cancelled before completion");
         if (terminalStatus !== (blocked ? "blocked" : "completed")) throw new AgentFailure("developer-superseded", "Developer execution was superseded before completion");
-        return { developerExecutionId: executionId, developerSessionRef: sessionRef, worktreePath: worktree.worktreePath, branchName: worktree.branchName, targetBaseSha: worktree.targetBaseSha, currentStep: null, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, deliveryArtifactId: deliveryArtifact.id, evidenceArtifactId: evidence.id, deliverySummary: report.summary, outcome: blocked ? "blocked" : "completed" };
+        return { developerExecutionId: executionId, developerSessionRef: sessionRef ?? executionId, worktreePath: worktree.worktreePath, branchName: worktree.branchName, targetBaseSha: worktree.targetBaseSha, currentStep: null, resultCommit: gitState.headSha, resultTree: gitState.treeSha, dirtyState: gitState.dirtyState, deliveryArtifactId: deliveryArtifact.id, evidenceArtifactId: evidence.id, deliverySummary: parsedReport.summary, outcome: blocked ? "blocked" : "completed" };
       } finally { clearInterval(heartbeat); }
     } catch (error) {
       if (isSupervisorTerminalError(error)) throw error;

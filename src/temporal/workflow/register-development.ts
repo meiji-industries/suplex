@@ -91,29 +91,7 @@ export function registerDevelopmentHandlers(ctx: IssueWorkflowContext): void {
     }
     // Retain this marker for retries recorded before retry_development always started
     // a fresh turn. Those histories invoked the patch regardless of reconcileOnly.
-    const reconciliationRecoveryEnabled = ctx.patched(ctx.developerReconciliationRecoveryPatch);
-    // `retry_development` originally reconciled evidence before scheduling a
-    // replacement Developer turn. Keep that exact command sequence for
-    // histories created before the fresh-turn behavior was introduced.
-    if (!ctx.patched("forge-retry-fresh-turn-v1") && ctx.state.phase === "delivery_blocked" && ctx.state.developerExecutionId && reconciliationRecoveryEnabled) {
-      const priorExecutionId = ctx.state.developerExecutionId;
-      const reconciled = await activityProxies.reconcileDeveloperDeliveryEvidence({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, developerExecutionId: priorExecutionId });
-      if (reconciled?.outcome === "completed") {
-        const applied = await ctx.withStateMutation(() => {
-          if (ctx.state.revision !== command.expectedRevision || ctx.state.phase !== "delivery_blocked" || ctx.state.developerExecutionId !== priorExecutionId) return false;
-          ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ctx.addRevisionCommand(["review_delivery", "cancel_issue"]), pendingAction: "Lead delivery review", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, developerSessionRef: reconciled.developerSessionRef, branchName: reconciled.branchName, targetBaseSha: reconciled.targetBaseSha, currentStep: reconciled.currentStep, resultCommit: reconciled.resultCommit, resultTree: reconciled.resultTree, dirtyState: reconciled.dirtyState, deliveryArtifactId: reconciled.deliveryArtifactId, developerEvidenceArtifactId: reconciled.evidenceArtifactId, deliverySummary: reconciled.deliverySummary, developerOutcome: "completed", ...ctx.recoveryFields("active", null, "Stored Developer evidence was reconciled automatically.", null), activeOperation: null, blocker: null, stateChangedAt: new Date().toISOString() });
-          ctx.markCommandProcessed(command.commandId);
-          return true;
-        });
-        if (applied) await ctx.project();
-        else await ctx.recordHandlerNoop("retry_development", "Developer delivery reconciliation was superseded by another command.");
-        return ctx.state;
-      }
-      if (command.reconcileOnly) {
-        await ctx.recordHandlerNoop("retry_development", "Stored Developer evidence did not complete reconciliation.");
-        return ctx.state;
-      }
-    }
+    void ctx.patched(ctx.developerReconciliationRecoveryPatch);
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;
     const supersedesExecutionId = ctx.state.developerExecutionId!;

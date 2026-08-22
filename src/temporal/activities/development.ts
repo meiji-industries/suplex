@@ -8,9 +8,6 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
     async findActiveDeveloperExecution(input) {
       return database.authQuery((db) => db.prepare("SELECT id AS executionId, session_ref AS sessionRef FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status IN ('starting', 'running', 'cancelling') ORDER BY started_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId) as { executionId: string; sessionRef: string } | undefined) ?? null;
     },
-    async reconcileDeveloperDeliveryEvidence() {
-      return null;
-    },
     async runDeveloperExecution(input) {
       const operation = developer.run ? developer.run.bind(developer) : defaultDeveloper.run.bind(defaultDeveloper);
       const result = await invokeAgent(input, () => operation(input));

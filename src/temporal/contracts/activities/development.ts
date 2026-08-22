@@ -206,7 +206,6 @@ export type WorkflowDeveloperRepairActivityInput = Omit<DeveloperRepairActivityI
 export interface DevelopmentActivities {
   findActiveDeveloperExecution(input: { taskId: string; companyId: string; workflowId: string }): Promise<{ executionId: string; sessionRef: string } | null>;
   cancelDeveloperExecution(input: DeveloperCancellationActivityInput): Promise<DeveloperCancellationResult>;
-  reconcileDeveloperDeliveryEvidence(input: { taskId: string; companyId: string; workflowId: string; developerExecutionId: string }): Promise<WorkflowDeveloperExecutionResult | null>;
   runDeveloperExecution(input: DeveloperExecutionActivityInput): Promise<WorkflowDeveloperExecutionResult>;
   runDeveloperExecutionSupervised(input: SupervisedDeveloperExecutionActivityInput): Promise<DeveloperTurnActivityOutcome<WorkflowDeveloperExecutionResult>>;
   runDeveloperRepair(input: WorkflowDeveloperRepairActivityInput): Promise<WorkflowDeveloperRepairResult>;

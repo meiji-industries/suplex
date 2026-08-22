@@ -79,6 +79,21 @@ test("stale projections do not write and re-issued events replace their state", 
   }
 });
 
+test("invalid projection cache input is warned and never fails the workflow activity", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-projection-invalid-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    const projection = createProjectionActivities(createActivityContext(database, createTestConfig(root)));
+    const invalid = { schemaVersion: 1, runId: "run-integrity", eventId: "workflow-integrity:bad", state: { issueId: "task-integrity" } } as unknown as IssueProjectionEvent;
+    await expect(projection.projectIssueState(invalid)).resolves.toEqual(invalid.state);
+    expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_issue_projections WHERE task_id = ?").get("task-integrity"))).toEqual({ count: 0 });
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("projectIssueState replaces a higher projection revision after a workflow reset", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-projection-reset-test-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));

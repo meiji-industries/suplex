@@ -8,6 +8,7 @@ import { Worker, type WorkflowBundleWithSourceMap } from "@temporalio/worker";
 import { z } from "zod";
 
 import { buildProductionWorkflowBundle, temporalDataConverter } from "./workflow-bundle.js";
+import { AuthorizedPlanSubjectSchema } from "../developer-contracts.js";
 import { IssueWorkflowStateSchema, type IssueWorkflowState } from "./issue-contracts.js";
 import { assertHistoryEventCountWithinLimit, encodedPayloadSize, WORKFLOW_PAYLOAD_LIMIT_BYTES } from "./policy.js";
 
@@ -19,6 +20,13 @@ const absolutePath = /(?:^|[\s"'])\/(?:Users|private|tmp|var\/folders|home)\//i;
 const diffMarker = /^(?:diff --git|@@ |<{7}|={7}|>{7})/m;
 const forbiddenFixtureTerms = /\b(?:password|secret|credential|authorization|prompt|source|description|image)\b|Bearer\s+\S+|api[_-]?key/i;
 const forbiddenFixturePaths = /^(?:\/Users\/|\/private\/var\/folders\/|\/var\/folders\/)/;
+const authorizationKeys = new Set(["authorizationId", "taskId", "companyId", "projectId", "workflowId", "planRevision", "planArtifactId", "planSha256", "authorizationKind", "approvalDecisionId", "authorizedAt"]);
+
+function approvedAuthorizationEnvelope(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return !Object.keys(record).some((key) => !authorizationKeys.has(key)) && AuthorizedPlanSubjectSchema.safeParse(record).success;
+}
 
 export const ReplayFixtureManifestEntrySchema = z.object({
   id: z.string().min(1),
@@ -74,6 +82,10 @@ function scanSafeValue(value: unknown, path: string): void {
   }
   if (!value || typeof value !== "object") return;
   for (const [key, child] of Object.entries(value)) {
+    if (key === "authorization" && approvedAuthorizationEnvelope(child)) {
+      scanSafeValue(child, `${path}.${key}`);
+      continue;
+    }
     if (forbiddenKey.test(key)) throw new Error(`Replay fixture contains forbidden field at ${path}.${key}`);
     scanSafeValue(child, `${path}.${key}`);
   }

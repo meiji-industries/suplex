@@ -77,7 +77,7 @@ async function mutationBundle(mode: "compatible" | "incompatible") {
 
 test("INV-15 the versioned manifest consumes every sanitized fixture and batch replays the production bundle", async () => {
   const manifest = await readReplayManifest(manifestPath);
-  expect(manifest.fixtures).toHaveLength(45);
+  expect(manifest.fixtures).toHaveLength(46);
   expect(manifest.fixtures.map((fixture) => fixture.scenario)).toEqual(expect.arrayContaining([
     "backlog_planning",
     "normal_success",
@@ -116,6 +116,7 @@ test("INV-15 the versioned manifest consumes every sanitized fixture and batch r
     "decision_resolution",
     "cancel_while_planning",
     "blocked_configuration",
+    "live_deprecated_patch_markers",
   ]));
   const continueRuns = manifest.fixtures.filter((fixture) => fixture.scenario === "continue_as_new");
   expect(continueRuns.map((fixture) => fixture.runIndex)).toEqual([0, 1, 2]);

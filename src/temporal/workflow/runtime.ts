@@ -199,6 +199,9 @@ export function createAcquireExternalTurn(
           assertCurrent();
           const resultExecutionId = executionId(result);
           if (current.executionId && resultExecutionId && current.executionId !== resultExecutionId) throw ApplicationFailure.nonRetryable("capacity_owner_mismatch", "capacity_owner_mismatch", { requestId: request.id });
+          // Deprecated: this marker replaced forge-capacity-ownership-clear-v1
+          // briefly. Both calls must remain at this position for persisted runs.
+          void options.patched("forge-no-ownership-v2");
           if ((current as { status: string }).status === "ownership_ambiguous" && !options.patched("forge-capacity-ownership-clear-v1")) {
             observedRevision = await options.projectCapacityState({ ...(admission.publicState as object), status: "ownership_ambiguous", position: null, reason: null, retryAt: null } as unknown as IssueWorkflowState["capacity"], "Needs a retry");
             return result;
@@ -242,6 +245,8 @@ export function createAcquireExternalTurn(
         await options.projectState(stateRef.get());
         throw ApplicationFailure.nonRetryable(category, category, stateRef.get().capacityBlocker);
       }
+      // Deprecated: see the matching completion-path marker above.
+      void options.patched("forge-no-ownership-v2");
       if ((admission as { status: string }).status === "ownership_ambiguous" && !options.patched("forge-capacity-ownership-clear-v1")) {
         const state = stateRef.get();
         const legacyAdmission = admission as unknown as { publicState: IssueWorkflowState["capacity"] };

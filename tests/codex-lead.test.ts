@@ -13,7 +13,7 @@ import { AgentFailure, AgentService, LeadOutputSchema, parseLeadOutput, parseMer
 import { CodexLeadOutputJsonSchema } from "../src/codex-lead-contracts.js";
 import { DeveloperService } from "../src/codex-developer.js";
 import { createTestConfig } from "../src/config.js";
-import { ForgeDatabase, ProjectionIntegrityFailure } from "../src/database.js";
+import { ForgeDatabase } from "../src/database.js";
 import { asNonRetryableApplicationFailure, createActivities } from "../src/temporal/activities.js";
 import { DeliveryOperationBlockCodeSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeveloperRepairActivityResultSchema } from "../src/temporal/issue-contracts.js";
 
@@ -620,7 +620,6 @@ test("permanent agent failures become non-retryable Temporal application failure
   const actual = asNonRetryableApplicationFailure(new AgentFailure("model-unavailable", "Choose a supported model", { nonRetryable: true }));
   expect(actual).toBeInstanceOf(ApplicationFailure);
   expect(actual).toMatchObject({ type: "model-unavailable", nonRetryable: true, message: "Choose a supported model", details: [{ code: "model-unavailable", summary: "Choose a supported model" }] });
-  expect(asNonRetryableApplicationFailure(new ProjectionIntegrityFailure("Projection identity conflict", { taskId: "task_1", revision: 0 }))).toMatchObject({ type: "projection_invalid", nonRetryable: true, message: "Projection identity conflict" });
 });
 
 test("Developer activities preserve the configured service receiver", async () => {

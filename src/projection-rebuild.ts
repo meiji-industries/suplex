@@ -112,7 +112,6 @@ export class ProjectionRebuildService {
           const code = error instanceof WorkflowNotFoundError ? "projection_history_incomplete" : error instanceof ProjectionRebuildFailure ? error.code : "projection_history_decode_failed";
           const summary = error instanceof WorkflowNotFoundError ? "Temporal history is missing for the selected task" : error instanceof Error ? error.message : "Temporal projection history could not be decoded";
           findings.push({ taskId: task.id, code, summary: summary.slice(0, 240) });
-          this.database.recordProjectionIntegrityFinding({ companyId: task.company_id, taskId: task.id, workflowId: task.workflow_id, revision: undefined, eventId: undefined, code, summary });
           if (tasks.length === 1) {
             throw error instanceof ProjectionRebuildFailure
               ? error

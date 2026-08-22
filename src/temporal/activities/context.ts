@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { ApplicationFailure, CancelledFailure, Context } from "@temporalio/activity";
 import { z } from "zod";
 
-import { ProjectionIntegrityFailure, projectionStateHash, type ForgeDatabase } from "../../database.js";
+import { projectionStateHash, type ForgeDatabase } from "../../database.js";
 import type { ForgeConfig } from "../../config.js";
 import { ArtifactStore, type StoredArtifact } from "../../artifacts.js";
 import { redact } from "../../logging.js";
@@ -85,9 +85,6 @@ export function asNonRetryableApplicationFailure(error: unknown): ApplicationFai
   }
   if (error instanceof WorktreeFailure) {
     return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
-  }
-  if (error instanceof ProjectionIntegrityFailure) {
-    return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message, taskId: error.taskId, revision: error.revision });
   }
   if (error instanceof PlanGovernanceConflict) {
     return ApplicationFailure.nonRetryable(error.message, error.code);
@@ -410,7 +407,6 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     CancelledFailure,
     Context,
     z,
-    ProjectionIntegrityFailure,
     projectionStateHash,
     ArtifactStore,
     redact,

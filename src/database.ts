@@ -61,23 +61,6 @@ export interface IssueProjectionRecord {
   decisionId?: string | null;
   state?: Record<string, unknown>;
 }
-export class ProjectionIntegrityFailure extends Error {
-  readonly code: string;
-  readonly taskId: string | undefined;
-  readonly revision: number | undefined;
-
-  readonly eventId: string | undefined;
-
-  constructor(message: string, details: { taskId?: string; revision?: number; eventId?: string } = {}, code = "projection_invalid") {
-    super(message);
-    this.name = "ProjectionIntegrityFailure";
-    this.code = code;
-    this.taskId = details.taskId;
-    this.revision = details.revision;
-    this.eventId = details.eventId;
-  }
-}
-
 export function projectionStateHash(state: unknown): string {
   return createHash("sha256").update(canonicalJson(state)).digest("hex");
 }
@@ -422,7 +405,8 @@ export class ForgeDatabase {
     const eventType = parsed.phase === "backlog" ? "task_created" : parsed.phase === "planning" ? "planning_started" : `phase_${parsed.phase}`;
     const task = database.prepare("SELECT company_id, project_id, workflow_id FROM forge_tasks WHERE id = ?").get(parsed.issueId) as { company_id: string; project_id: string; workflow_id: string } | undefined;
     if (!task || task.company_id !== parsed.companyId || task.project_id !== parsed.projectId || task.workflow_id !== parsed.workflowId) {
-      throw new ProjectionIntegrityFailure("Projection event identity does not match its task", { taskId: parsed.issueId, revision: parsed.revision, eventId: parsed.lastEventId }, "projection_identity_conflict");
+      projectionLogger.warn("Skipping projection with task identity that no longer matches");
+      return;
     }
     let eventById = database.prepare("SELECT workflow_id, revision, event_hash FROM forge_issue_timeline WHERE id = ?").get(parsed.lastEventId) as { workflow_id: string; revision: number; event_hash: string } | undefined;
     let eventByRevision = database.prepare("SELECT id, event_hash FROM forge_issue_timeline WHERE workflow_id = ? AND revision = ?").get(parsed.workflowId, parsed.revision) as { id: string; event_hash: string } | undefined;
@@ -457,7 +441,10 @@ export class ForgeDatabase {
     const snapshot = database.prepare("SELECT state_json FROM forge_workflow_snapshots WHERE task_id = ? AND revision = ?").get(parsed.issueId, parsed.revision) as { state_json: string } | undefined;
     if (snapshot) {
       let stored: unknown;
-      try { stored = JSON.parse(snapshot.state_json); } catch { throw new ProjectionIntegrityFailure("Authoritative workflow snapshot is not valid JSON", { taskId: parsed.issueId, revision: parsed.revision }); }
+      try { stored = JSON.parse(snapshot.state_json); } catch {
+        projectionLogger.warn("Replacing unreadable workflow projection snapshot");
+        stored = null;
+      }
       const storedRecord = stored as Record<string, unknown>;
       const storedParsed = IssueWorkflowStateSchema.safeParse({ ...storedRecord, issueId: storedRecord.issueId ?? parsed.issueId, companyId: storedRecord.companyId ?? parsed.companyId, projectId: storedRecord.projectId ?? parsed.projectId, workflowId: storedRecord.workflowId ?? parsed.workflowId, projectRevisionId: storedRecord.projectRevisionId ?? parsed.projectRevisionId, owner: storedRecord.owner === "system" ? "human" : storedRecord.owner, continuationCount: storedRecord.continuationCount ?? 0, lastSummaryHash: storedRecord.lastSummaryHash ?? null });
       if (!storedParsed.success || projectionStateHash(storedParsed.data) !== stateHash) {
@@ -536,46 +523,40 @@ export class ForgeDatabase {
     }
   }
 
-  recordProjectionIntegrityFinding(input: { companyId: string; taskId: string; workflowId: string; revision: number | undefined; eventId: string | undefined; code: string; summary: string }): void {
-    try {
-      this.db.prepare(`INSERT INTO forge_projection_integrity_findings (id, company_id, task_id, workflow_id, revision, event_id, code, summary, detected_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-        .run(`finding_${createHash("sha256").update(`${input.taskId}:${input.eventId ?? "unknown"}:${input.code}`).digest("hex").slice(0, 32)}`, input.companyId, input.taskId, input.workflowId, input.revision ?? null, input.eventId ?? null, input.code, input.summary.slice(0, 240), new Date().toISOString());
-    } catch {
-      // Finding persistence must not replace the original typed failure.
-    }
-  }
-
-  private recordProjectionFinding(event: Partial<IssueProjectionEvent>, failure: ProjectionIntegrityFailure): void {
-    if (!event.state?.companyId || !event.state.issueId || !event.state.workflowId) return;
-    this.recordProjectionIntegrityFinding({ companyId: event.state.companyId, taskId: event.state.issueId, workflowId: event.state.workflowId, revision: event.state.revision, eventId: event.eventId, code: failure.code, summary: failure.message });
-  }
-
   observeIssueProjection(event: IssueProjectionEvent): void {
-    const validated = IssueProjectionEventSchema.parse(event);
+    const parsed = IssueProjectionEventSchema.safeParse(event);
+    if (!parsed.success) {
+      projectionLogger.warn("Skipping invalid workflow projection observation");
+      return;
+    }
+    const validated = parsed.data;
     const stateHash = projectionStateHash(validated.state);
     this.db.transaction(() => {
       const task = this.db.prepare("SELECT company_id, project_id, workflow_id FROM forge_tasks WHERE id = ?").get(validated.state.issueId) as { company_id: string; project_id: string; workflow_id: string } | undefined;
-      if (!task || task.company_id !== validated.state.companyId || task.project_id !== validated.state.projectId || task.workflow_id !== validated.state.workflowId) throw new ProjectionIntegrityFailure("Projection event identity does not match its task", { taskId: validated.state.issueId, revision: validated.state.revision, eventId: validated.eventId }, "projection_identity_conflict");
+      if (!task || task.company_id !== validated.state.companyId || task.project_id !== validated.state.projectId || task.workflow_id !== validated.state.workflowId) {
+        projectionLogger.warn("Skipping workflow projection observation with mismatched task identity");
+        return;
+      }
       const current = this.db.prepare("SELECT authoritative_revision, authoritative_event_hash FROM forge_issue_projections WHERE task_id = ?").get(validated.state.issueId) as { authoritative_revision: number; authoritative_event_hash: string } | undefined;
       if (current && current.authoritative_revision <= validated.state.revision) this.db.prepare("UPDATE forge_issue_projections SET authoritative_revision = ?, authoritative_event_hash = ? WHERE task_id = ?").run(validated.state.revision, stateHash, validated.state.issueId);
     })();
   }
 
   projectIssueEvent(event: IssueProjectionEvent): void {
-    let validated: IssueProjectionEvent;
+    const validated = IssueProjectionEventSchema.safeParse(event);
+    if (!validated.success) {
+      projectionLogger.warn("Skipping invalid workflow projection event");
+      return;
+    }
     try {
-      validated = IssueProjectionEventSchema.parse(event);
-      if (validated.state.issueId.length === 0) throw new ProjectionIntegrityFailure("Projection identity is invalid", { taskId: validated.state.issueId, revision: validated.state.revision }, "projection_identity_conflict");
-      this.db.transaction(() => this.applyIssueProjection(this.db, validated.state, new Date().toISOString(), validated.runId))();
+      this.db.transaction(() => this.applyIssueProjection(this.db, validated.data.state, new Date().toISOString(), validated.data.runId))();
     } catch (error) {
-      const failure = error instanceof ProjectionIntegrityFailure ? error : new ProjectionIntegrityFailure("Workflow projection event failed validation");
-      this.recordProjectionFinding((event ?? {}) as Partial<IssueProjectionEvent>, failure);
-      throw failure;
+      projectionLogger.warn("Workflow projection write failed", {}, { error: error instanceof Error ? error.message : String(error) });
     }
   }
 
   projectIssueState(state: IssueProjectionRecord): void {
-    const parsed = IssueWorkflowStateSchema.parse({
+    const parsed = IssueWorkflowStateSchema.safeParse({
       ...(state.state ?? {}),
       issueId: state.taskId,
       companyId: state.companyId,
@@ -589,12 +570,23 @@ export class ForgeDatabase {
       lastEventId: state.lastEventId,
       ...(state.projectRevisionId ? { projectRevisionId: state.projectRevisionId } : {}),
     });
-    this.db.transaction(() => this.applyIssueProjection(this.db, parsed, new Date().toISOString(), state.runId ?? parsed.workflowId))();
+    if (!parsed.success) {
+      projectionLogger.warn("Skipping invalid workflow state projection");
+      return;
+    }
+    try {
+      this.db.transaction(() => this.applyIssueProjection(this.db, parsed.data, new Date().toISOString(), state.runId ?? parsed.data.workflowId))();
+    } catch (error) {
+      projectionLogger.warn("Workflow state projection write failed", {}, { error: error instanceof Error ? error.message : String(error) });
+    }
   }
 
   replaceIssueProjectionFromEvents(taskId: string, events: IssueProjectionEvent[]): void {
-    const validated = events.map((event) => IssueProjectionEventSchema.parse(event)).sort((left, right) => left.state.revision - right.state.revision);
-    if (validated.length === 0 || validated.some((event) => event.state.issueId !== taskId)) throw new ProjectionIntegrityFailure("Projection rebuild events do not match the selected task", { taskId }, "projection_identity_conflict");
+    const validated = events.map((event) => IssueProjectionEventSchema.safeParse(event)).filter((event): event is { success: true; data: IssueProjectionEvent } => event.success).map((event) => event.data).sort((left, right) => left.state.revision - right.state.revision);
+    if (validated.length === 0 || validated.some((event) => event.state.issueId !== taskId)) {
+      projectionLogger.warn("Skipping projection rebuild with invalid or mismatched events");
+      return;
+    }
     try {
       this.db.transaction(() => {
         this.db.prepare("DELETE FROM forge_issue_projections WHERE task_id = ?").run(taskId);
@@ -603,10 +595,7 @@ export class ForgeDatabase {
         for (const event of validated) this.applyIssueProjection(this.db, event.state, new Date().toISOString(), event.runId);
       })();
     } catch (error) {
-      const failure = error instanceof ProjectionIntegrityFailure ? error : new ProjectionIntegrityFailure("Projection rebuild failed", { taskId });
-      const event = validated.find((candidate) => candidate.state.revision === failure.revision) ?? validated.at(-1);
-      if (event) this.recordProjectionFinding(event, failure);
-      throw failure;
+      projectionLogger.warn("Projection rebuild write failed", {}, { error: error instanceof Error ? error.message : String(error) });
     }
   }
 

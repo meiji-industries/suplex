@@ -39,6 +39,9 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
       return ctx.state;
     }
     const artifactBackedReview = ctx.patched(ctx.artifactBackedReviewPatch);
+    // Deprecated: histories created before the minimum repair loop recorded this
+    // marker here. Keep the call forever so those histories retain command order.
+    void ctx.patched(ctx.exactDeliveryReviewPatch);
     if (!("attemptId" in result)) {
       const legacyResult = result as LegacyReviewResult;
       if (artifactBackedReview && !legacyResult.reviewArtifact) throw ApplicationFailure.nonRetryable("Delivery review artifact is missing", "delivery_review_artifact_missing");

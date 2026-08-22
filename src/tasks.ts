@@ -1147,12 +1147,12 @@ export class TaskService {
       await this.maybeFault("after_manifest_persisted", { intentId: reserved.intent.id, taskId });
       briefArtifact = await this.artifacts.putArtifact(companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: briefBytes, taskId });
       await this.maybeFault("after_artifact_finalized", { intentId: reserved.intent.id, taskId, artifactIndex: 0 });
-      this.updateCreationIntent(reserved.intent.id, { artifactIds: [briefArtifact.id] }, reserved.intent.lease_token);
+      this.updateCreationIntent(reserved.intent.id, { artifactIds: [configurationArtifact.id, briefArtifact.id] }, reserved.intent.lease_token);
       for (const [imageIndex, { image, bytes }] of decodedImages.entries()) {
         const artifact = await this.artifacts.putArtifact(companyId, "task-image", { filename: image.filename, mimeType: image.mimeType, bytes, taskId });
         await this.maybeFault("after_artifact_finalized", { intentId: reserved.intent.id, taskId, artifactIndex: imageIndex + 1 });
         imageArtifacts.push(artifact);
-        this.updateCreationIntent(reserved.intent.id, { artifactIds: [briefArtifact, ...imageArtifacts].filter((entry): entry is StoredArtifact => Boolean(entry)).map((entry) => entry.id) }, reserved.intent.lease_token);
+        this.updateCreationIntent(reserved.intent.id, { artifactIds: [configurationArtifact, briefArtifact, ...imageArtifacts].filter((entry): entry is StoredArtifact => Boolean(entry)).map((entry) => entry.id) }, reserved.intent.lease_token);
       }
       if (!briefArtifact) throw new ArtifactFailure("artifact-corrupt", "Task brief could not be stored");
       await this.maybeFault("after_artifact_staged", { intentId: reserved.intent.id, taskId });
@@ -2246,13 +2246,13 @@ export class TaskService {
   }
 
   private taskQuery(scope: string): string {
-    return `SELECT t.id, t.company_id, t.project_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.auto_approve_plan, t.pull_request_mode, t.delivery_target, t.run_project_tests, t.visual_evidence, t.delivery_worktree_path, t.delivery_branch_name, t.delivery_commit, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.successor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.authoritative_revision, ip.projected_at, ip.phase, ip.owner, ip.allowed_commands_json, ip.pending_action, COALESCE((SELECT s.state_json FROM forge_workflow_snapshots s WHERE s.task_id = t.id ORDER BY s.revision DESC LIMIT 1), '{}') AS state_json, (SELECT a.filename FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS brief_filename, (SELECT a.mime_type FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS brief_mime_type, (SELECT a.byte_size FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS brief_byte_size, (SELECT a.storage_path FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS brief_storage_path, (SELECT a.sha256 FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS brief_sha256 FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id JOIN forge_issue_projections ip ON ip.task_id = t.id WHERE ${scope}`;
+    return `SELECT t.id, t.company_id, t.project_id, CASE WHEN c.issue_code IS NOT NULL AND t.issue_number IS NOT NULL THEN c.issue_code || '-' || t.issue_number ELSE NULL END AS issue_key, t.title, t.brief_artifact_id, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review, t.auto_approve_plan, t.pull_request_mode, t.delivery_target, t.run_project_tests, t.visual_evidence, t.delivery_worktree_path, t.delivery_branch_name, t.delivery_commit, t.workflow_id, t.project_revision_id, t.predecessor_task_id, t.successor_task_id, t.created_at, t.updated_at, ip.revision AS projection_revision, ip.authoritative_revision, ip.projected_at, ip.phase, ip.owner, ip.allowed_commands_json, ip.pending_action, COALESCE((SELECT s.state_json FROM forge_workflow_snapshots s WHERE s.task_id = t.id ORDER BY s.revision DESC LIMIT 1), '{}') AS state_json, (SELECT a.filename FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS brief_filename, (SELECT a.mime_type FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS brief_mime_type, (SELECT a.byte_size FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS brief_byte_size, (SELECT a.storage_path FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS brief_storage_path, (SELECT a.sha256 FROM forge_artifacts a WHERE a.id = t.brief_artifact_id) AS brief_sha256 FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id JOIN forge_issue_projections ip ON ip.task_id = t.id LEFT JOIN forge_memberships m ON m.company_id = t.company_id WHERE ${scope}`;
   }
 
   private async deleteTask(taskId: string, artifacts: Array<StoredArtifact | undefined>): Promise<void> {
     const stored = this.database.authTransaction((db) => {
-      const task = db.prepare("SELECT brief_artifact_id, image_artifact_ids_json FROM forge_tasks WHERE id = ?").get(taskId) as { brief_artifact_id: string; image_artifact_ids_json: string } | undefined;
-      const ids = [...new Set([...(task ? [task.brief_artifact_id, ...parseImageIds(task.image_artifact_ids_json)] : []), ...artifacts.flatMap((artifact) => artifact ? [artifact.id] : [])])];
+      const task = db.prepare("SELECT brief_artifact_id, image_artifact_ids_json, project_configuration_artifact_id FROM forge_tasks WHERE id = ?").get(taskId) as { brief_artifact_id: string; image_artifact_ids_json: string; project_configuration_artifact_id: string | null } | undefined;
+      const ids = [...new Set([...(task ? [task.brief_artifact_id, ...parseImageIds(task.image_artifact_ids_json), ...(task.project_configuration_artifact_id ? [task.project_configuration_artifact_id] : [])] : []), ...artifacts.flatMap((artifact) => artifact ? [artifact.id] : [])])];
       const rows = ids.length
         ? db.prepare(`SELECT id, company_id, storage_path FROM forge_artifacts WHERE id IN (${ids.map(() => "?").join(",")})`).all(...ids) as Array<{ id: string; company_id: string; storage_path: string }>
         : [];

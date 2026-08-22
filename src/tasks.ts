@@ -1465,7 +1465,7 @@ export class TaskService {
       let state = await this.workflow.execute(commandName, task.workflowId, workflowInput);
       this.recordTaskCommand(task, actorUserId, commandName, state.revision);
       if (commandName === "approve_plan" && state.phase === "ready_for_development") {
-        const startInput: StartPlanningInput = { expectedRevision: state.revision, actorUserId, ...(state.planAuthorizationId ? { planAuthorizationId: state.planAuthorizationId } : {}) };
+        const startInput: StartPlanningInput = { expectedRevision: state.revision, actorUserId };
         try {
           state = this.workflow.acceptDevelopment
             ? await this.workflow.acceptDevelopment(task.workflowId, startInput)

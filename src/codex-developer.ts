@@ -75,6 +75,7 @@ export const DeveloperDeliveryReportSchema = z.object({
   resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
   dirtyState: z.enum(["clean", "dirty"]),
   blocker: z.string().max(4_000).nullable(),
+  visualEvidence: z.object({ captured: z.boolean(), paths: z.array(z.string().min(1).max(500)).max(32), summary: z.string().max(2_000).optional() }).optional(),
 });
 
 export const DeveloperRepairReportSchema = z.object({
@@ -302,7 +303,7 @@ export class DeveloperService {
       db.prepare(`INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, NULL)`).run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, worktree.branchName, worktree.worktreePath, worktree.targetBaseSha, wrapperId, guard!.directory, prior?.id ?? null, startedAt, startedAt);
       this.bindCapacityInTransaction(db, input, executionId, existing?.sessionRef ?? undefined, worktree.worktreePath);
     });
-    const prompt = this.prompt(context.title, brief, planText, leadEvidence, worktree);
+    const prompt = this.prompt(context.title, brief, planText, leadEvidence, worktree, input.runProjectTests, input.visualEvidence);
     const evidenceLines = [JSON.stringify({ type: "forge.prompt", text: redact(prompt) })];
     const outputLines: string[] = [];
     let sessionRef: string | undefined = existing?.sessionRef ?? undefined;
@@ -359,7 +360,9 @@ export class DeveloperService {
       } finally { clearInterval(heartbeat); }
     } catch (error) {
       if (isSupervisorTerminalError(error)) throw error;
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("developer-failed", "Codex Developer execution failed");
+      // Keep the real cause: a swallowed message made launch-path bugs look like Builder failures.
+      const failure = error instanceof AgentFailure ? error : new AgentFailure("developer-failed", `Builder could not start: ${error instanceof Error ? error.message : String(error)}`);
+      if (!(error instanceof AgentFailure)) console.error("Builder launch failed", executionId, error);
       const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
       this.database.authTransaction((db) => {
         const finishedAt = this.now().toISOString();
@@ -724,8 +727,9 @@ export class DeveloperService {
     ].join("\n\n");
   }
 
-  private prompt(title: string, brief: string, plan: string, evidence: string, worktree: { branchName: string; worktreePath: string; targetBaseSha: string }): string {
-    return `You are Forge's authenticated Developer. Execute the authorized Lead plan prescriptively in the isolated worktree only. Current target base SHA: ${worktree.targetBaseSha}. The plan describes intent and scope, not a file manifest. If the repository has changed (files moved/renamed/deleted, migrations regenerated), implement the intent against the current tree and note the deviation in the step notes. Only report incomplete when the intent itself cannot be achieved. Do not redesign the plan, expand scope, modify the target repository, use GitHub or any provider, push, create a pull request, merge, rebase, amend, reset, clean, or rewrite history. You may edit files in this worktree, run safe local verification, and create one or more ordinary local commits; do not amend or rewrite commits that already exist on the branch. During execution, post concise public progress updates before each substantive action and after notable results: say what you are inspecting, changing, or verifying and why, without exposing private chain-of-thought. Before finishing, ensure the worktree is clean and return exactly one JSON object with no markdown fences or commentary matching: {"kind":"delivery","summary":"...","steps":[{"number":1,"status":"completed|incomplete|not_completed|blocked","filesChanged":[],"commandsRun":[],"testResults":[],"notes":"..."}],"authorizedStepsNotCompleted":[],"resultCommit":"40+ hex","resultTree":"40+ hex","dirtyState":"clean","blocker":null}. Include every approved step number, concrete files, commands, test outcomes, resulting commit/tree, and any incomplete authorized step. For any incomplete, not_completed, or blocked step, list its number in authorizedStepsNotCompleted and provide a non-null blocker.
+  private prompt(title: string, brief: string, plan: string, evidence: string, worktree: { branchName: string; worktreePath: string; targetBaseSha: string }, runProjectTests?: boolean, visualEvidence?: "off" | "capture" | "required"): string {
+    const controls = [runProjectTests === false ? "Do not run the project's configured verification suite; it was intentionally skipped for this task. You may run focused checks when useful." : "Run appropriate local verification, including the configured project suite when it applies.", visualEvidence === "required" ? "Visual evidence is required: capture relevant visual evidence and report its paths in visualEvidence. Missing evidence will block delivery review." : visualEvidence === "capture" ? "Capture visual evidence when it helps demonstrate the change, and report any paths in visualEvidence." : "Do not spend time capturing visual evidence unless the work itself needs it."].join(" ");
+    return `You are Forge's authenticated Developer. Execute the authorized Lead plan prescriptively in the isolated worktree only. Current target base SHA: ${worktree.targetBaseSha}. The plan describes intent and scope, not a file manifest. If the repository has changed (files moved/renamed/deleted, migrations regenerated), implement the intent against the current tree and note the deviation in the step notes. Only report incomplete when the intent itself cannot be achieved. Do not redesign the plan, expand scope, modify the target repository, use GitHub or any provider, push, create a pull request, merge, rebase, amend, reset, clean, or rewrite history. You may edit files in this worktree, run safe local verification, and create one or more ordinary local commits; do not amend or rewrite commits that already exist on the branch. ${controls} During execution, post concise public progress updates before each substantive action and after notable results: say what you are inspecting, changing, or verifying and why, without exposing private chain-of-thought. Before finishing, ensure the worktree is clean and return exactly one JSON object with no markdown fences or commentary matching: {"kind":"delivery","summary":"...","steps":[{"number":1,"status":"completed|incomplete|not_completed|blocked","filesChanged":[],"commandsRun":[],"testResults":[],"notes":"..."}],"authorizedStepsNotCompleted":[],"resultCommit":"40+ hex","resultTree":"40+ hex","dirtyState":"clean","blocker":null,"visualEvidence":{"captured":false,"paths":[]}}. Include every approved step number, concrete files, commands, test outcomes, resulting commit/tree, and any incomplete authorized step. For any incomplete, not_completed, or blocked step, list its number in authorizedStepsNotCompleted and provide a non-null blocker.
 
 Task: ${title}
 Brief:

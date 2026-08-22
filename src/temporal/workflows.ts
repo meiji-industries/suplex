@@ -386,7 +386,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       if (workflowContext.state.phase === "cancelled" || workflowContext.state.phase === "done") return workflowContext.state;
       if (githubSyncRequested) {
         githubSyncRequested = false;
-        await syncGithubPullRequest();
+        if (patched("forge-pr-reconciler-v1")) await syncGithubPullRequest();
         continue;
       }
       if (workflowContext.state.phase === "releasing" && workflowContext.state.releaseRetryAt) {
@@ -403,7 +403,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         const delay = Math.max(0, pollAt - Date.now());
         if (delay > 0) await sleep(delay);
         if (workflowContext.state.phase !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
-        await syncGithubPullRequest();
+        if (patched("forge-pr-reconciler-v1")) await syncGithubPullRequest();
         if (workflowContext.state.phase === "ci_waiting") await workflowContext.reconcileCiTurn();
         continue;
       }

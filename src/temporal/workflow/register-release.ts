@@ -11,6 +11,12 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
     await ctx.project();
     if (!ctx.state.deliveryReviewId || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree) throw new Error("Approved exact delivery is required before publishing");
     if (!ctx.patched("forge-kodiak-merge-v1") && !(await ctx.runTargetBaseCheckpoint("pre_release"))) return ctx.state;
+    // Publication always starts by making the exact reviewed branch observable
+    // on GitHub. This patch preserves histories created before the extra
+    // activity existed; new histories record it before PR creation.
+    if (ctx.patched("forge-push-before-pr-v1")) {
+      await activityProxies.pushDeliveryBranch({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, branchName: ctx.state.branchName, commitSha: ctx.state.resultCommit });
+    }
     const typedReleaseResult = ctx.patched(ctx.typedReleaseResultPatch);
     const publishInput = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, reviewId: ctx.state.deliveryReviewId, developerExecutionId: ctx.state.developerExecutionId!, branchName: ctx.state.branchName, targetBaseSha: ctx.state.targetBaseSha, subjectCommit: ctx.state.resultCommit, subjectTree: ctx.state.resultTree, pullRequestMode: ctx.input.pullRequestMode ?? "draft", ...(ctx.state.releaseId ? { releaseId: ctx.state.releaseId } : {}) };
     const rawResult = await activityProxies.publishRelease((typedReleaseResult ? publishInput : { ...publishInput, planSummary: ctx.state.leadSummary ?? "Approved Forge plan", deliverySummary: ctx.state.deliverySummary ?? "Exact Developer delivery", verificationSummary: "Lead delivery review approved", ...(ctx.state.pullRequestNumber ? { expectedPullRequestNumber: ctx.state.pullRequestNumber } : {}) }) as contracts.PublishReleaseActivityInput);

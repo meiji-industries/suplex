@@ -240,14 +240,14 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       return Date.parse(retryAt) > Date.now() ? retryAt : null;
     } catch { return null; }
   };
-  const api = async (args: string[], operation: string, allowNotFound = false): Promise<unknown> => {
+  const api = async (args: string[], operation: string, allowNotFound = false, notFoundSummary?: string): Promise<unknown> => {
     try { return parseJson((await runGh(args)).stdout); } catch (error) {
       if (error instanceof GithubReleaseFailure) throw error;
       if (error instanceof GithubCommandFailure) {
         const parsed = restError(error.result.stdout);
         if (allowNotFound && parsed?.status === 404) return null;
         if (allowNotFound && !parsed) throw providerFailure("invalid-provider-response", "GitHub returned an unvalidated branch error");
-        if (parsed?.status === 404) throw providerFailure("provider-unavailable", "GitHub resource was not found or is inaccessible");
+        if (parsed?.status === 404) throw providerFailure("provider-unavailable", notFoundSummary ?? "GitHub resource was not found or is inaccessible");
         if (parsed?.status === 403 || parsed?.status === 429) {
           const retryAt = await retryAtFromRateLimit();
           if (retryAt) throw providerFailure("provider-rate-limited", parsed.message, retryAt);
@@ -338,7 +338,7 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       return rows.map(pull);
     },
     async createDraftPullRequest(input) {
-      const value = await api(["api", "--method", "POST", `repos/${input.repository}/pulls`, "-f", `title=${input.title}`, "-f", `head=${input.headBranch}`, "-f", `base=${input.baseBranch}`, "-f", `body=${input.body}`, "-F", "draft=true"], "draft pull request creation");
+      const value = await api(["api", "--method", "POST", `repos/${input.repository}/pulls`, "-f", `title=${input.title}`, "-f", `head=${input.headBranch}`, "-f", `base=${input.baseBranch}`, "-f", `body=${input.body}`, "-F", "draft=true"], "draft pull request creation", false, `Branch ${input.headBranch} is not on GitHub yet`);
       return pull(value);
     },
     async updateDraftPullRequest(input) {

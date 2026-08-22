@@ -27,8 +27,8 @@ export const DeveloperRepairActivityInputSchema = z.object({
   targetBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
   subjectCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
   subjectTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  blockingFindings: z.array(DeliveryFindingSchema).max(64),
-  repairPlan: z.string().min(1).max(12_000).optional(),
+  blockingFindings: z.array(DeliveryFindingSchema),
+  repairPlan: z.string().min(1).optional(),
   repairPlanArtifactId: durableId.optional(),
   capacityRequestId: durableId.optional(),
 });
@@ -50,7 +50,7 @@ export const DeveloperRepairActivityResultSchema = z.discriminatedUnion("outcome
     dirtyState: z.literal("clean"),
     deliveryArtifactId: durableId,
     evidenceArtifactId: durableId,
-    summary: z.string().min(1).max(2_000),
+    summary: z.string().min(1),
   }).strict(),
   z.object({
     outcome: z.literal("blocked"),

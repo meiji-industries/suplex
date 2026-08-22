@@ -47,11 +47,11 @@ export const DeliveryReviewActivityResultSchema = z.discriminatedUnion("outcome"
       opinionArtifactId: durableId,
       evidenceArtifactId: durableId,
       opinion: z.enum(["approved", "blocking"]),
-      summary: z.string().min(1).max(2_000),
-      repairPlan: z.string().max(12_000).nullable().optional(),
+      summary: z.string().min(1),
+      repairPlan: z.string().nullable().optional(),
       repairPlanArtifactId: durableId.nullable().optional(),
       repairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),
-      findings: z.array(DeliveryFindingSchema).max(64),
+      findings: z.array(DeliveryFindingSchema),
       supersedesReviewId: durableId.nullable(),
       reviewArtifact: DurableArtifactReferenceSchema.optional(),
     }).strict(),
@@ -76,7 +76,7 @@ export const DeliveryDecisionActivityInputSchema = z.object({
   companyId: durableId,
   workflowId: durableId,
   actorUserId: durableId,
-  note: z.string().min(1).max(4_000),
+  note: z.string().min(1),
 });
 
 export type DeliveryReviewResult = DeliveryReviewActivityResult;
@@ -105,7 +105,7 @@ export const DeliveryRepairPlanInputSchema = z.object({
   targetBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
   subjectCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
   subjectTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  findings: z.array(DeliveryFindingSchema).min(1).max(64),
+  findings: z.array(DeliveryFindingSchema).min(1),
   capacityRequestId: durableId.optional(),
 });
 
@@ -118,8 +118,8 @@ export const DeliveryRepairPlanResultSchema = z.object({
   planSha256: z.string().regex(/^[a-f0-9]{64}$/i),
   evidenceArtifactId: durableId,
   leadSessionRef: durableId,
-  summary: z.string().min(1).max(2_000),
-  findings: z.array(DeliveryFindingSchema).max(64),
+  summary: z.string().min(1),
+  findings: z.array(DeliveryFindingSchema),
 });
 
 export type DeliveryRepairPlanResult = z.infer<typeof DeliveryRepairPlanResultSchema>;

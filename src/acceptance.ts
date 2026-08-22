@@ -52,7 +52,7 @@ const RawAcceptanceInputSchema = z.object({
   leadSessionRef: durableId,
   actorUserId: durableId,
   decision: AcceptanceDecisionSchema.default("accept"),
-  reason: z.string().max(4_000).optional(),
+  reason: z.string().optional(),
 }).strict().superRefine((value, context) => {
   if (!value.deliveryReviewId && !value.reviewId) context.addIssue({ code: "custom", path: ["deliveryReviewId"], message: "An exact delivery review is required" });
   if (value.deliveryReviewId && value.reviewId && value.deliveryReviewId !== value.reviewId) context.addIssue({ code: "custom", path: ["deliveryReviewId"], message: "Delivery review references conflict" });

@@ -32,7 +32,7 @@ export const PlanCommandInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   actorUserId: durableId,
   commandId: durableId.optional().default("legacy-command"),
-  note: z.string().max(4_000).optional(),
+  note: z.string().optional(),
   worktreeDecision: z.enum(["reuse", "new"]).optional(),
   exactBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i).optional(),
   decision: z.enum(["accept", "request_changes", "cancel"]).optional(),
@@ -44,14 +44,14 @@ export const PlanCommandInputSchema = z.object({
   answerSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 
-const RevisionCommandBaseSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000), worktreeDisposition: z.enum(["reuse", "new"]).optional(), exactBaseSha: exactSha.optional() }).strict();
+const RevisionCommandBaseSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1), worktreeDisposition: z.enum(["reuse", "new"]).optional(), exactBaseSha: exactSha.optional() }).strict();
 type ParsedPlanRevisionCommand =
   | { expectedRevision: number; actorUserId: string; reason: string; worktreeDisposition: "reuse" }
   | { expectedRevision: number; actorUserId: string; reason: string; worktreeDisposition: "new"; exactBaseSha: string };
 // Old workflow histories include a worktree choice. New requests always reuse when possible;
 // retain those fields solely so historical update payloads can still be parsed.
 export const PlanRevisionCommandSchema = RevisionCommandBaseSchema.transform(({ worktreeDisposition: _worktreeDisposition, exactBaseSha: _exactBaseSha, ...input }): ParsedPlanRevisionCommand => ({ ...input, worktreeDisposition: "reuse" }));
-export const ContinueWorkCommandSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000) }).strict();
+export const ContinueWorkCommandSchema = z.object({ expectedRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1) }).strict();
 
 export type StartPlanningInput = z.input<typeof StartPlanningInputSchema>;
 export type RecordProgressInput = z.input<typeof RecordProgressInputSchema>;

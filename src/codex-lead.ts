@@ -35,25 +35,25 @@ const LeadReviewResponseSchema = z.object({
   version: z.literal(1),
   originalPlanRevision: z.number().int().nonnegative(),
   reviewArtifactId: durableId,
-  reviewResponse: z.string().min(1).max(20_000),
+  reviewResponse: z.string().min(1),
   result: LeadOutputSchema,
 }).strict();
 export { AskUserQuestionSchema, DecisionBlockerSchema, LeadOutputSchema, LeadPlanSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type AskUserQuestion, type PersistedLeadOutput } from "./lead-contracts.js";
 export type { DecisionBlocker, LeadOutput, LeadPlan, LeadPlanningActivityInput, LeadPlanningResult, LegacyLeadPlanningResult } from "./lead-contracts.js";
 export const SupplementalReviewSchema = z.object({
   kind: z.literal("review"),
-  summary: z.string().min(1).max(2_000),
+  summary: z.string().min(1),
   opinion: z.enum(["approve", "request_changes"]),
-  concerns: z.array(z.string().max(4_000)).max(16),
-  requiredChanges: z.array(z.string().max(4_000)).max(16),
+  concerns: z.array(z.string()),
+  requiredChanges: z.array(z.string()),
 });
 
 const DeliveryRepairLeadOutputSchema = z.object({
   kind: z.literal("delivery_repair_plan"),
-  summary: z.string().min(1).max(2_000),
-  steps: z.array(z.object({ number: z.number().int().positive(), instruction: z.string().min(1).max(4_000), verification: z.string().min(1).max(4_000) })).min(1).max(32),
-  verificationStrategy: z.string().min(1).max(12_000),
-  unresolvedTechnicalQuestions: z.array(z.string().max(2_000)).max(16).length(0),
+  summary: z.string().min(1),
+  steps: z.array(z.object({ number: z.number().int().positive(), instruction: z.string().min(1), verification: z.string().min(1) })).min(1),
+  verificationStrategy: z.string().min(1),
+  unresolvedTechnicalQuestions: z.array(z.string()).length(0),
 });
 export type SupplementalReview = z.infer<typeof SupplementalReviewSchema>;
 

@@ -8,8 +8,8 @@ function isTrimmed(value: string): boolean {
 
 export const GitPresentationSchema = z.object({
   branchSlug: z.string().min(2).max(48).regex(branchSlugPattern),
-  pullRequestTitle: z.string().min(1).max(100).refine(isTrimmed, "Pull request titles must be trimmed"),
-  pullRequestDescription: z.string().min(1).max(2_000).refine(isTrimmed, "Pull request descriptions must be trimmed"),
+  pullRequestTitle: z.string().min(1).refine(isTrimmed, "Pull request titles must be trimmed"),
+  pullRequestDescription: z.string().min(1).refine(isTrimmed, "Pull request descriptions must be trimmed"),
 }).strict();
 
 export type GitPresentation = z.infer<typeof GitPresentationSchema>;

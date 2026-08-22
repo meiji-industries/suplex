@@ -5,14 +5,14 @@ const sha256 = z.string().regex(/^[a-f0-9]{64}$/i);
 const commitSha = z.string().regex(/^[a-f0-9]{40,64}$/i);
 const repositoryIdentity = z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/);
 
-const relativeRepositoryPath = z.string().min(1).max(1_000).refine((value) => {
+const relativeRepositoryPath = z.string().min(1).refine((value) => {
   if (value.startsWith("/") || value.includes("\\")) return false;
   const segments = value.split("/");
   return segments.every((segment) => segment.length > 0 && segment !== "." && segment !== "..");
 }, "Repository paths must be normalized repository-relative paths");
 
-const uniqueStrings = <T extends z.ZodType<string>>(schema: T, max: number) => z.array(schema).max(max).refine((values) => new Set(values).size === values.length, "Values must be unique");
-const uniqueNumbers = (max: number) => z.array(z.number().int().positive()).max(max).refine((values) => new Set(values).size === values.length, "Values must be unique");
+const uniqueStrings = <T extends z.ZodType<string>>(schema: T) => z.array(schema).refine((values) => new Set(values).size === values.length, "Values must be unique");
+const uniqueNumbers = () => z.array(z.number().int().positive()).refine((values) => new Set(values).size === values.length, "Values must be unique");
 
 export const AcceptedProjectRevisionSchema = z.object({
   projectRevisionId: id,
@@ -60,17 +60,17 @@ export type AuthorizedPlanSubject = z.infer<typeof AuthorizedPlanSubjectSchema>;
 
 export const DeveloperContextSchema = z.object({
   includeTaskBrief: z.boolean(),
-  evidenceArtifactIds: uniqueStrings(id, 32),
-  imageArtifactIds: uniqueStrings(id, 32),
-  repositoryInstructionPaths: uniqueStrings(relativeRepositoryPath, 64),
-  artifactStepNumbers: z.record(relativeRepositoryPath, uniqueNumbers(64)).default({}),
+  evidenceArtifactIds: uniqueStrings(id),
+  imageArtifactIds: uniqueStrings(id),
+  repositoryInstructionPaths: uniqueStrings(relativeRepositoryPath),
+  artifactStepNumbers: z.record(relativeRepositoryPath, uniqueNumbers()).default({}),
 });
 
 export type DeveloperContext = z.infer<typeof DeveloperContextSchema>;
 
 export const PlanStepVerificationSchema = z.object({
   stepNumber: z.number().int().positive(),
-  commands: z.array(z.string().min(1).max(500)).max(32),
+  commands: z.array(z.string().min(1)),
 });
 
 export const EvidenceManifestEntrySchema = z.object({
@@ -80,7 +80,7 @@ export const EvidenceManifestEntrySchema = z.object({
   sha256: sha256.optional(),
   byteSize: z.number().int().nonnegative().max(8 * 1024 * 1024),
   stagedFilename: z.string().min(1).max(160).regex(/^[A-Za-z0-9._-]+$/),
-  planStepNumbers: z.array(z.number().int().positive()).max(64),
+  planStepNumbers: z.array(z.number().int().positive()),
 }).superRefine((value, context) => {
   if ((value.artifactId === null) === (value.repositoryPath === null)) {
     context.addIssue({ code: "custom", path: ["artifactId"], message: "Exactly one artifact or repository path is required" });
@@ -91,9 +91,9 @@ export const EvidenceManifestSchema = z.object({
   version: z.literal(1),
   authorizedPlan: AuthorizedPlanSubjectSchema,
   projectRevision: AcceptedProjectRevisionSchema,
-  entries: z.array(EvidenceManifestEntrySchema).min(1).max(128),
+  entries: z.array(EvidenceManifestEntrySchema).min(1),
   contradictionRule: z.literal("stop_before_unrelated_edits"),
-  verificationCommands: z.array(PlanStepVerificationSchema).max(64),
+  verificationCommands: z.array(PlanStepVerificationSchema),
   createdAt: z.string().datetime(),
 }).superRefine((value, context) => {
   const keys = value.entries.map((entry) => `${entry.kind}:${entry.artifactId ?? entry.repositoryPath}`);
@@ -133,7 +133,7 @@ export const ExecutionReceiptSchema = z.object({
   stepNumber: z.number().int().positive().nullable(),
   sourceItemId: z.string().max(256).nullable(),
   occurredAt: z.string().datetime(),
-  summary: z.string().max(4_000),
+  summary: z.string(),
   exitCode: z.number().int().nullable(),
   artifactId: id.nullable(),
   artifactSha256: sha256.nullable(),
@@ -166,18 +166,18 @@ export type OwnedExternalProcessIdentity = z.infer<typeof OwnedExternalProcessId
 
 export const DeveloperDeliverySchema = z.object({
   kind: z.literal("delivery"),
-  summary: z.string().min(1).max(2_000),
+  summary: z.string().min(1),
   steps: z.array(z.object({
     number: z.number().int().positive(),
     status: z.enum(["completed", "incomplete", "not_completed", "blocked", "not_applicable_locally"]),
-    filesChanged: z.array(z.string().max(500)).max(128),
-    notes: z.string().max(4_000),
-  })).min(1).max(64),
-  authorizedStepsNotCompleted: z.array(z.number().int().positive()).max(64),
+    filesChanged: z.array(z.string()),
+    notes: z.string(),
+  })).min(1),
+  authorizedStepsNotCompleted: z.array(z.number().int().positive()),
   resultCommit: commitSha,
   resultTree: commitSha,
   dirtyState: z.enum(["clean", "dirty"]),
-  blocker: z.string().max(4_000).nullable(),
+  blocker: z.string().nullable(),
 });
 
 export type DeveloperDelivery = z.infer<typeof DeveloperDeliverySchema>;

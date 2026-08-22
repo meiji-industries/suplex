@@ -236,18 +236,18 @@ export const DeveloperRecoveryFields = {
 export const DeliveryFindingSchema = z.object({
   findingId: durableId,
   severity: z.enum(["blocking", "advisory"]),
-  rationale: z.string().min(1).max(8_000),
-  evidenceRef: z.string().min(1).max(2_000),
+  rationale: z.string().min(1),
+  evidenceRef: z.string().min(1),
   disposition: z.enum(["open", "accepted", "repaired"]),
-  repairInstruction: z.string().max(8_000).nullable(),
+  repairInstruction: z.string().nullable(),
 });
 
 export const DeliveryReviewSchema = z.object({
   kind: z.literal("delivery_review"),
-  summary: z.string().min(1).max(2_000),
+  summary: z.string().min(1),
   outcome: z.enum(["approved", "blocking"]),
-  findings: z.array(DeliveryFindingSchema).max(64),
-  repairPlan: z.string().max(12_000).nullable(),
+  findings: z.array(DeliveryFindingSchema),
+  repairPlan: z.string().nullable(),
 }).superRefine((value, context) => {
   const findingIds = new Set<string>();
   for (const [index, finding] of value.findings.entries()) {
@@ -267,11 +267,11 @@ export const CiRepairPlanSchema = z.object({
   ciRunId: durableId,
   ciAttemptId: durableId,
   failedHeadSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  rootCause: z.string().min(1).max(2_000),
-  failedChecks: z.array(z.object({ name: z.string().min(1).max(200), evidenceArtifactId: durableId, diagnosis: z.string().min(1).max(2_000) }).strict()).min(1),
-  steps: z.array(z.object({ number: z.number().int().positive(), instruction: z.string().min(1).max(2_000), verification: z.string().min(1).max(1_000) }).strict()).min(1),
-  localVerification: z.array(z.string().min(1).max(500)).min(1),
-  unresolvedQuestions: z.array(z.string().min(1).max(1_000)).max(0),
+  rootCause: z.string().min(1),
+  failedChecks: z.array(z.object({ name: z.string().min(1), evidenceArtifactId: durableId, diagnosis: z.string().min(1) }).strict()).min(1),
+  steps: z.array(z.object({ number: z.number().int().positive(), instruction: z.string().min(1), verification: z.string().min(1) }).strict()).min(1),
+  localVerification: z.array(z.string().min(1)).min(1),
+  unresolvedQuestions: z.array(z.string().min(1)).max(0),
   // "rerun" means the failure is not caused by this delivery: re-run the failed provider jobs instead of editing code.
   disposition: z.enum(["repair", "rerun"]).default("repair"),
 }).strict().superRefine((value, context) => {
@@ -281,10 +281,10 @@ export type CiRepairPlan = z.infer<typeof CiRepairPlanSchema>;
 
 export const MergeConflictPlanSchema = z.object({
   kind: z.literal("merge_conflict_plan"),
-  summary: z.string().min(1).max(2_000),
-  resolutions: z.array(z.object({ file: z.string().min(1).max(1_000), resolution: z.string().min(1).max(8_000), number: z.number().int().positive().optional(), intendedResult: z.string().min(1).max(4_000).optional(), issueInvariant: z.string().min(1).max(4_000).optional(), baseInvariant: z.string().min(1).max(4_000).optional(), compatibilityConcern: z.string().min(1).max(4_000).optional() })).min(1).max(128),
-  verificationStrategy: z.string().min(1).max(12_000),
-  unresolvedQuestions: z.array(z.string().max(2_000)).max(16).length(0),
+  summary: z.string().min(1),
+  resolutions: z.array(z.object({ file: z.string().min(1), resolution: z.string().min(1), number: z.number().int().positive().optional(), intendedResult: z.string().min(1).optional(), issueInvariant: z.string().min(1).optional(), baseInvariant: z.string().min(1).optional(), compatibilityConcern: z.string().min(1).optional() })).min(1),
+  verificationStrategy: z.string().min(1),
+  unresolvedQuestions: z.array(z.string()).length(0),
 });
 
 export type MergeConflictPlan = z.infer<typeof MergeConflictPlanSchema>;

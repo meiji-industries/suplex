@@ -61,38 +61,38 @@ const ProjectRevisionSchema = z.object({
 const DeveloperDeliveryStepSchema = z.object({
   number: z.number().int().positive(),
   status: z.enum(["completed", "incomplete", "not_completed", "blocked", "not_applicable_locally"]),
-  filesChanged: z.array(z.string().max(500)).max(128),
-  commandsRun: z.array(z.string().max(500)).max(128).optional(),
-  testResults: z.array(z.string().max(2_000)).max(64).optional(),
-  notes: z.string().max(4_000),
+  filesChanged: z.array(z.string()),
+  commandsRun: z.array(z.string()).optional(),
+  testResults: z.array(z.string()).optional(),
+  notes: z.string(),
 });
 export const DeveloperDeliveryReportSchema = z.object({
   kind: z.literal("delivery"),
-  summary: z.string().min(1).max(2_000),
-  steps: z.array(DeveloperDeliveryStepSchema).min(1).max(64),
-  authorizedStepsNotCompleted: z.array(z.number().int().positive()).max(64),
+  summary: z.string().min(1),
+  steps: z.array(DeveloperDeliveryStepSchema).min(1),
+  authorizedStepsNotCompleted: z.array(z.number().int().positive()),
   resultCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
   resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
   dirtyState: z.enum(["clean", "dirty"]),
-  blocker: z.string().max(4_000).nullable(),
-  visualEvidence: z.object({ captured: z.boolean(), paths: z.array(z.string().min(1).max(500)).max(32), summary: z.string().max(2_000).optional() }).optional(),
+  blocker: z.string().nullable(),
+  visualEvidence: z.object({ captured: z.boolean(), paths: z.array(z.string().min(1)), summary: z.string().optional() }).optional(),
 });
 
 export const DeveloperRepairReportSchema = z.object({
-  summary: z.string().min(1).max(2_000),
-  blocker: z.string().max(4_000).nullable(),
+  summary: z.string().min(1),
+  blocker: z.string().nullable(),
 }).strict();
 
 export const DeveloperMergeConflictResolutionReportSchema = z.object({
   kind: z.literal("merge_conflict_resolution"),
-  summary: z.string().min(1).max(2_000),
-  resolvedFiles: z.array(z.string().min(1).max(1_000)).max(128),
-  commandsRun: z.array(z.string().max(500)).min(1).max(128),
-  testResults: z.array(z.string().max(2_000)).min(1).max(64),
+  summary: z.string().min(1),
+  resolvedFiles: z.array(z.string().min(1)),
+  commandsRun: z.array(z.string()).min(1),
+  testResults: z.array(z.string()).min(1),
   resultCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
   resultTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
   dirtyState: z.enum(["clean", "dirty"]),
-  blocker: z.string().max(4_000).nullable(),
+  blocker: z.string().nullable(),
 });
 
 export type DeveloperDeliveryReport = z.infer<typeof DeveloperDeliveryReportSchema>;

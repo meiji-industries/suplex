@@ -21,10 +21,10 @@ export const ForwardMergeConflictArtifactSchema = z.object({
   observedBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i),
   priorHead: z.string().regex(/^[a-f0-9]{40,64}$/i),
   priorTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
-  conflictFiles: z.array(z.string().min(1).max(1_000)).min(1).max(128),
+  conflictFiles: z.array(z.string().min(1)).min(1),
   combinedDiff: z.string().max(240_000),
-  priorCommitSummary: z.string().max(4_000),
-  baseCommitSummary: z.string().max(4_000),
+  priorCommitSummary: z.string(),
+  baseCommitSummary: z.string(),
   commandEvidence: z.object({ command: z.literal("git diff --cc --no-ext-diff"), complete: z.literal(true) }).strict(),
 }).strict();
 export type ForwardMergeConflictArtifact = z.infer<typeof ForwardMergeConflictArtifactSchema>;

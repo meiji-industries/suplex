@@ -51,7 +51,7 @@ export interface ConsolidateLeadPlanActivityInput {
 
 export const PreparePlanRevisionActivityInputSchema = z.object({
   taskId: durableId, companyId: durableId, workflowId: durableId, projectId: durableId, projectRevisionId: durableId,
-  requestRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1).max(4_000),
+  requestRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1),
   worktreeDisposition: z.enum(["reuse", "new"]), exactBaseSha: exactSha.optional(), developerExecutionId: durableId.optional(),
 }).strict().superRefine((value, context) => {
   if (value.worktreeDisposition === "new" && !value.exactBaseSha) context.addIssue({ code: "custom", path: ["exactBaseSha"], message: "New worktrees require an exact base SHA" });
@@ -65,7 +65,7 @@ export const PreparePlanRevisionActivityResultSchema = z.discriminatedUnion("sta
 export type PreparePlanRevisionActivityResult = z.infer<typeof PreparePlanRevisionActivityResultSchema>;
 export const CreateSuccessorActivityInputSchema = z.object({
   predecessorTaskId: durableId, predecessorWorkflowId: durableId, acceptedRevision: z.number().int().nonnegative(), successorTaskId: durableId,
-  successorWorkflowId: durableId, companyId: durableId, projectId: durableId, actorUserId: durableId, reason: z.string().trim().min(1).max(4_000),
+  successorWorkflowId: durableId, companyId: durableId, projectId: durableId, actorUserId: durableId, reason: z.string().trim().min(1),
   intentId: durableId,
 }).strict();
 export type CreateSuccessorActivityInput = z.infer<typeof CreateSuccessorActivityInputSchema>;

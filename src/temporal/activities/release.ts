@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { ActivityContext } from "./context.js";
 
 const LegacyReleaseDeliverySchema = z.object({
-  summary: z.string().max(2_000).optional(),
+  summary: z.string().optional(),
   filesChanged: z.array(z.string()).optional(),
   commandsRun: z.array(z.string()).optional(),
   testResults: z.array(z.string()).optional(),

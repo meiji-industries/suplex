@@ -11,8 +11,8 @@ export const deliveryReviewStateFields = {
   deliveryReviewArtifact: DurableArtifactReferenceSchema.optional(),
   deliveryReviewOutcome: z.enum(["approved", "blocking"]).nullable().optional(),
   deliveryReviewSummary: SafeSummarySchema.nullable().optional(),
-  deliveryBlockingFindings: z.array(DeliveryFindingSchema).max(64).optional(),
-  deliveryRepairPlan: z.string().max(12_000).nullable().optional(),
+  deliveryBlockingFindings: z.array(DeliveryFindingSchema).optional(),
+  deliveryRepairPlan: z.string().nullable().optional(),
   deliveryRepairPlanArtifactId: durableId.nullable().optional(),
   /** Historical compatibility only; ignored after deserialization. */
   deliveryRepairPlanSha256: z.string().regex(/^[a-f0-9]{64}$/i).nullable().optional(),

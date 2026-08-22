@@ -17,16 +17,15 @@ const durableId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*
 
 export const LeadPlanStepSchema = z.object({
   number: z.number().int().positive(),
-  instruction: z.string().min(1).max(4_000),
-  entryPoint: z.string().min(1).max(1_000).nullable().default(null),
-  completionCriterion: z.string().min(1).max(4_000).nullable().default(null),
-  verification: z.string().min(1).max(4_000),
-  verificationCommands: z.array(PlanStepVerificationSchema.shape.commands.element).max(32).default([]),
+  instruction: z.string().min(1),
+  entryPoint: z.string().min(1).nullable().default(null),
+  completionCriterion: z.string().min(1).nullable().default(null),
+  verification: z.string().min(1),
+  verificationCommands: z.array(PlanStepVerificationSchema.shape.commands.element).default([]),
 }).strict();
 
 export const ContiguousLeadStepsSchema = z.array(LeadPlanStepSchema)
   .min(1)
-  .max(64)
   .superRefine((steps, context) => {
     for (const [index, step] of steps.entries()) {
       if (step.number !== index + 1) {
@@ -41,22 +40,22 @@ export const ContiguousLeadStepsSchema = z.array(LeadPlanStepSchema)
 
 export const LeadPlanSchema = z.object({
   kind: z.literal("plan"),
-  summary: z.string().min(1).max(2_000),
+  summary: z.string().min(1),
   gitPresentation: GitPresentationSchema,
-  reproduction: z.string().max(20_000).nullable(),
-  rootCauseAnalysis: z.string().max(20_000).nullable(),
+  reproduction: z.string().nullable(),
+  rootCauseAnalysis: z.string().nullable(),
   steps: ContiguousLeadStepsSchema,
-  compatibilityAnalysis: z.string().min(1).max(20_000),
-  operationalAnalysis: z.string().min(1).max(20_000),
-  verificationStrategy: z.string().min(1).max(20_000),
-  unresolvedTechnicalQuestions: z.array(z.string().max(2_000)).length(0),
+  compatibilityAnalysis: z.string().min(1),
+  operationalAnalysis: z.string().min(1),
+  verificationStrategy: z.string().min(1),
+  unresolvedTechnicalQuestions: z.array(z.string()).length(0),
   materialCategories: z.array(PlanMaterialCategorySchema).max(6),
   preservedWorktreeCompatibility: z.boolean().nullable().default(null),
-  affectedPaths: z.array(z.string().min(1).max(1_000)).min(1).max(128),
+  affectedPaths: z.array(z.string().min(1)).min(1),
   materiality: z.array(z.object({
     category: PlanMaterialCategorySchema,
-    rationale: z.string().min(1).max(500),
-    evidenceRefs: z.array(z.string().min(1).max(1_000)).min(1).max(8),
+    rationale: z.string().min(1),
+    evidenceRefs: z.array(z.string().min(1)).min(1),
   }).strict()).max(6),
   developerContext: DeveloperContextSchema.default({
     includeTaskBrief: false,
@@ -82,14 +81,14 @@ export const LeadPlanSchema = z.object({
 });
 
 export const AskUserQuestionOptionSchema = z.object({
-  label: z.string().min(1).max(80),
-  description: z.string().min(1).max(300),
+  label: z.string().min(1),
+  description: z.string().min(1),
 }).strict();
 
 export const AskUserQuestionSchema = z.object({
-  header: z.string().min(1).max(12),
+  header: z.string().min(1),
   id: z.string().min(1).max(64).regex(/^[a-z][a-z0-9_]*$/),
-  question: z.string().min(1).max(4_000),
+  question: z.string().min(1),
   options: z.array(AskUserQuestionOptionSchema).length(3),
   isOther: z.literal(true),
   isSecret: z.literal(false),
@@ -101,10 +100,10 @@ export const AskUserQuestionSchema = z.object({
 const decisionBlockerShape = {
   kind: z.literal("decision_blocker"),
   category: z.literal("human_decision").default("human_decision"),
-  summary: z.string().min(1).max(2_000),
-  evidence: z.string().min(1).max(10_000),
+  summary: z.string().min(1),
+  evidence: z.string().min(1),
   owner: z.literal("human"),
-  nextAction: z.string().min(1).max(4_000),
+  nextAction: z.string().min(1),
   resumePhase: z.literal("planning").default("planning"),
 };
 
@@ -121,11 +120,11 @@ export const LeadOutputJsonSchema = z.toJSONSchema(LeadOutputSchema);
 const PersistedLegacyLeadPlanSchema = z.object({
   ...LeadPlanSchema.shape,
   gitPresentation: GitPresentationSchema.nullable().default(null),
-  affectedPaths: z.array(z.string().min(1).max(1_000)).max(128).default([]),
+  affectedPaths: z.array(z.string().min(1)).default([]),
   materiality: z.array(z.object({
     category: PlanMaterialCategorySchema,
-    rationale: z.string().min(1).max(500),
-    evidenceRefs: z.array(z.string().min(1).max(1_000)).min(1).max(8),
+    rationale: z.string().min(1),
+    evidenceRefs: z.array(z.string().min(1)).min(1),
   }).strict()).max(6).default([]),
 }).strict().superRefine((value, context) => {
   const stepNumbers = value.steps.map((step) => step.number);
@@ -147,7 +146,7 @@ const PersistedLegacyLeadPlanSchema = z.object({
   }
 });
 
-const PersistedLegacyDecisionBlockerSchema = z.object({ ...decisionBlockerShape, question: z.string().min(1).max(4_000) }).strict();
+const PersistedLegacyDecisionBlockerSchema = z.object({ ...decisionBlockerShape, question: z.string().min(1) }).strict();
 
 export const PersistedLeadOutputSchema = z.union([LeadOutputSchema, PersistedLegacyLeadPlanSchema, PersistedLegacyDecisionBlockerSchema]);
 const generatedLeadOutputJsonSchema = LeadOutputJsonSchema as { oneOf?: Array<Record<string, unknown>> } & Record<string, unknown>;
@@ -168,12 +167,11 @@ const leadOutputProperties = Object.fromEntries([...leadOutputPropertyEntries.en
     const contextSchema = schemaObject as { properties?: Record<string, unknown> };
     if (contextSchema.properties) contextSchema.properties.artifactStepNumbers = {
       type: "array",
-      maxItems: 128,
       items: {
         type: "object",
         properties: {
-          artifactIdOrPath: { type: "string", minLength: 1, maxLength: 1_000 },
-          stepNumbers: { type: "array", maxItems: 64, items: { type: "integer", minimum: 1 } },
+          artifactIdOrPath: { type: "string", minLength: 1 },
+          stepNumbers: { type: "array", items: { type: "integer", minimum: 1 } },
         },
         required: ["artifactIdOrPath", "stepNumbers"],
         additionalProperties: false,

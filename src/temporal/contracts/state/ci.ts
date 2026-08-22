@@ -19,7 +19,7 @@ export const ciStateFields = {
   ciRepairPlanId: durableId.nullable().optional(),
   ciRepairPlanArtifactId: durableId.nullable().optional(),
   ciRepairPlanEvidenceArtifactId: durableId.nullable().optional(),
-  ciRepairPlanSummary: z.string().max(2_000).nullable().optional(),
+  ciRepairPlanSummary: z.string().nullable().optional(),
   ciRepairLeadExecutionId: durableId.nullable().optional(),
   ciRepairLeadSessionRef: durableId.nullable().optional(),
   ciRepairDeveloperExecutionId: durableId.nullable().optional(),

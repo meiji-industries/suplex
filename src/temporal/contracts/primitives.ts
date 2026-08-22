@@ -69,6 +69,7 @@ export const ReconcileTargetBaseActivityInputSchema = z.object({
   taskId: durableId,
   companyId: durableId,
   workflowId: durableId,
+  /** Historical compatibility only; ignored by snapshot readers. */
   projectRevisionId: durableId,
   checkpoint: TargetBaseCheckpointSchema,
   developerExecutionId: durableId,
@@ -147,6 +148,7 @@ export const SuccessorReferenceSchema = z.object({
   successorTaskId: durableId,
   successorWorkflowId: durableId,
   predecessorTaskId: durableId,
+  /** Historical compatibility only; ignored by snapshot readers. */
   projectRevisionId: durableId,
   creationRevision: z.number().int().nonnegative(),
 }).strict();

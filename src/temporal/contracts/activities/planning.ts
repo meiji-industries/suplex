@@ -8,6 +8,7 @@ export interface SupplementalReviewActivityInput {
   companyId: string;
   workflowId: string;
   projectId: string;
+  /** @deprecated Parsed for Temporal history compatibility; ignored. */
   projectRevisionId: string;
   briefArtifactId: string;
   imageArtifactIds: string[];
@@ -38,6 +39,7 @@ export interface ConsolidateLeadPlanActivityInput {
   companyId: string;
   workflowId: string;
   projectId: string;
+  /** @deprecated Parsed for Temporal history compatibility; ignored. */
   projectRevisionId: string;
   briefArtifactId: string;
   imageArtifactIds: string[];
@@ -52,7 +54,7 @@ export interface ConsolidateLeadPlanActivityInput {
 }
 
 export const PreparePlanRevisionActivityInputSchema = z.object({
-  taskId: durableId, companyId: durableId, workflowId: durableId, projectId: durableId, projectRevisionId: durableId,
+  taskId: durableId, companyId: durableId, workflowId: durableId, projectId: durableId, projectRevisionId: durableId.optional(),
   requestRevision: z.number().int().nonnegative(), actorUserId: durableId, reason: z.string().trim().min(1),
   worktreeDisposition: z.enum(["reuse", "new"]), exactBaseSha: exactSha.optional(), developerExecutionId: durableId.optional(),
 }).strict().superRefine((value, context) => {

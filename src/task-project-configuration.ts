@@ -29,6 +29,11 @@ export const TaskProjectConfigurationSchema = z.object({
 
 export type TaskProjectConfiguration = z.infer<typeof TaskProjectConfigurationSchema>;
 
+export type LoadedTaskProjectConfiguration = TaskProjectConfiguration & {
+  artifactId: string;
+  artifactSha256: string;
+};
+
 export function parseTaskProjectConfiguration(value: string | unknown): TaskProjectConfiguration {
   try {
     return TaskProjectConfigurationSchema.parse(typeof value === "string" ? JSON.parse(value) : value);
@@ -38,11 +43,15 @@ export function parseTaskProjectConfiguration(value: string | unknown): TaskProj
 }
 
 /** Reads the immutable configuration belonging to a task. */
-export function readTaskProjectConfiguration(
+/**
+ * Loads the immutable configuration captured for a task.  Runtime code must
+ * use this rather than consulting the mutable project row or its revisions.
+ */
+export function loadTaskConfiguration(
   db: Database.Database,
   artifacts: ArtifactStore,
   input: { taskId: string; companyId: string },
-): TaskProjectConfiguration {
+): LoadedTaskProjectConfiguration {
   const task = db.prepare(`SELECT t.id, t.project_configuration_artifact_id
     FROM forge_tasks t
     WHERE t.id = ? AND t.company_id = ?`).get(input.taskId, input.companyId) as {
@@ -50,7 +59,10 @@ export function readTaskProjectConfiguration(
     } | undefined;
   if (!task) throw new Error("Task project configuration is unavailable");
   if (!task.project_configuration_artifact_id) throw new Error("Task project configuration is unavailable");
-  const artifact = db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-project-configuration'").get(task.project_configuration_artifact_id, input.companyId) as { storage_path: string; sha256: string } | undefined;
+  const artifact = db.prepare("SELECT id, storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-project-configuration'").get(task.project_configuration_artifact_id, input.companyId) as { id: string; storage_path: string; sha256: string } | undefined;
   if (!artifact) throw new Error("Task project configuration is unavailable");
-  return parseTaskProjectConfiguration(artifacts.getArtifactSync({ companyId: input.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 }).toString("utf8"));
+  return { ...parseTaskProjectConfiguration(artifacts.getArtifactSync({ companyId: input.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 }).toString("utf8")), artifactId: artifact.id, artifactSha256: artifact.sha256 };
 }
+
+/** @deprecated Use loadTaskConfiguration. */
+export const readTaskProjectConfiguration = loadTaskConfiguration;

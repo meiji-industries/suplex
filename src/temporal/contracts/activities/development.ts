@@ -12,7 +12,7 @@ export const DeveloperRepairActivityInputSchema = z.object({
   companyId: durableId,
   workflowId: durableId,
   projectId: durableId,
-  projectRevisionId: durableId,
+  projectRevisionId: durableId.optional(),
   planRevision: z.number().int().nonnegative(),
   roleProfiles: z.object({ planner: durableId.optional(), builder: durableId.optional(), reviewer: durableId.optional(), integrator: durableId.optional() }),
   leadSessionRef: durableId,

@@ -24,6 +24,7 @@ export const IssueWorkflowInputSchema = z.object({
   companyId: durableId,
   projectId: durableId,
   issueId: durableId,
+  /** Historical compatibility only; ignored by snapshot readers. */
   projectRevisionId: durableId,
   briefArtifactId: durableId,
   briefSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),

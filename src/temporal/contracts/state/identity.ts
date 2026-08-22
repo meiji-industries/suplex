@@ -6,6 +6,7 @@ export const identityStateFields = {
   companyId: durableId,
   projectId: durableId,
   issueId: durableId,
+  /** Historical compatibility only; ignored by snapshot readers. */
   projectRevisionId: durableId,
   /** Historical compatibility only; ignored after deserialization. */
   requestHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),

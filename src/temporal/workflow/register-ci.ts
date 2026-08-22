@@ -59,6 +59,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     const expectedRevision = ctx.state.revision;
     let result;
     try {
+      if (ctx.patched("forge-github-sync-v1") && ctx.state.releaseRepository && ctx.state.branchName) await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
       result = await activityProxies.reconcileCi({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, releaseId: ctx.state.releaseId, expectedHeadSha: ctx.state.expectedHeadSha, attemptNumber: attempt });
     } catch (error) {
       if (ctx.state.phase !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId || ctx.state.expectedHeadSha !== expectedHeadSha) return ctx.state;

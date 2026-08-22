@@ -9,6 +9,9 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "releasing", owner: "lead", allowedCommands: [], pendingAction: "Opening the pull request", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     if (!ctx.state.deliveryReviewId || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree) throw new Error("Approved exact delivery is required before publishing");
+    // New histories observe first: a PR opened from GitHub is provider truth,
+    // while the existing publish activity retains its historical adoption path.
+    if (ctx.patched("forge-github-sync-v1") && ctx.state.releaseRepository) await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
     if (!ctx.patched("forge-kodiak-merge-v1") && !(await ctx.runTargetBaseCheckpoint("pre_release"))) return ctx.state;
     // Publication always starts by making the exact reviewed branch observable
     // on GitHub. This patch preserves histories created before the extra

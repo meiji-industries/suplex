@@ -18,6 +18,7 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
     }
     let result;
     try {
+      if (ctx.patched("forge-github-sync-v1") && ctx.state.releaseRepository && ctx.state.branchName) await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
       result = await activityProxies.reconcileMerge({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, acceptanceId: ctx.state.acceptanceId });
     } catch {
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "manual_merge", owner: "human", allowedCommands: ["reconcile_merge", "cancel_issue"], pendingAction: "GitHub merge state is temporarily unavailable", mergeAttempt: attempt, mergeOutcome: "provider_unavailable", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });

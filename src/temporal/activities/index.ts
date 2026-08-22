@@ -8,6 +8,7 @@ import { createActivityContext } from "./context.js";
 import { createProjectionActivities } from "./projection.js";
 import { createPlanningActivities } from "./planning.js";
 import { createGovernanceActivities } from "./governance.js";
+import { createGithubSyncActivities } from "./github-sync.js";
 import { createDevelopmentActivities } from "./development.js";
 import { createDeliveryReviewActivities } from "./delivery-review.js";
 import { createReleaseActivities } from "./release.js";
@@ -23,6 +24,7 @@ export function createActivities(database: ForgeDatabase, config: ForgeConfig, o
     ...createProjectionActivities(ctx),
     ...createPlanningActivities(ctx),
     ...createGovernanceActivities(ctx),
+    ...createGithubSyncActivities(ctx),
     ...createDevelopmentActivities(ctx),
     ...createDeliveryReviewActivities(ctx),
     ...createReleaseActivities(ctx),

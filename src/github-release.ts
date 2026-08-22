@@ -60,6 +60,21 @@ export interface GithubPullRequest {
   autoMergeEnabled?: boolean;
 }
 
+/** The provider truth used by Forge when reconciling an externally changed PR. */
+export interface GithubPullRequestObservation {
+  exists: boolean;
+  number: number | null;
+  url: string | null;
+  state: "open" | "closed" | "merged" | null;
+  isDraft: boolean | null;
+  headSha: string | null;
+  baseSha: string | null;
+  mergeable: string | null;
+  checks: { total: number; pending: number; failing: number; successful: number };
+  autoMergeEnabled: boolean | null;
+  reviewDecision: string | null;
+}
+
 export interface ExactPullRequestIdentity {
   repository: string;
   owner: string;
@@ -90,6 +105,7 @@ export interface GithubReleasePort {
   createDraftPullRequest(input: DraftPullRequestCreate): Promise<GithubPullRequest>;
   updateDraftPullRequest(input: DraftPullRequestUpdate): Promise<GithubPullRequest>;
   getPullRequest(input: { repository: string; number: number }): Promise<GithubPullRequest>;
+  observePullRequest?(input: { repository: string; branch: string; pullRequestNumber?: number | null }): Promise<GithubPullRequestObservation>;
   mergePullRequest?(input: { repository: string; number: number; headSha: string }): Promise<void>;
 }
 
@@ -143,6 +159,21 @@ const PullListResponseSchema = z.array(z.object({
   baseRefName: z.string().min(1).max(256),
   baseRefOid: z.string().regex(shaPattern),
 }));
+const PullViewResponseSchema = z.object({
+  number: z.number().int().positive(),
+  url: z.string().url(),
+  state: z.enum(["OPEN", "CLOSED", "MERGED"]),
+  isDraft: z.boolean(),
+  headRefOid: z.string().regex(shaPattern),
+  baseRefOid: z.string().regex(shaPattern),
+  mergeable: z.string().nullable(),
+  autoMergeRequest: z.object({}).nullable(),
+  reviewDecision: z.string().nullable(),
+  statusCheckRollup: z.array(z.object({
+    status: z.string().nullable().optional(),
+    conclusion: z.string().nullable().optional(),
+  }).passthrough()).nullable(),
+});
 const RateLimitResponseSchema = z.object({ resources: z.object({ core: z.object({ reset: z.number().int() }) }) });
 
 class GithubCommandFailure extends Error {
@@ -184,6 +215,36 @@ function normalizeGithubPull(value: unknown): GithubPullRequest {
   const headRepository = row.head.repo.full_name.toLowerCase();
   const state = row.state === "closed" && row.merged_at !== null ? "merged" : row.state;
   return { number: row.number, url: row.html_url, repository: headRepository, headBranch: row.head.ref, baseBranch: row.base.ref, headSha: row.head.sha, baseSha: row.base.sha, isDraft: row.draft, state, mergedAt: row.merged_at, ...(row.auto_merge ? { autoMergeEnabled: true } : {}) };
+}
+
+function summarizeChecks(checks: z.infer<typeof PullViewResponseSchema>["statusCheckRollup"]): GithubPullRequestObservation["checks"] {
+  const summary = { total: 0, pending: 0, failing: 0, successful: 0 };
+  for (const check of checks ?? []) {
+    summary.total += 1;
+    if (check.status !== "COMPLETED") summary.pending += 1;
+    else if (check.conclusion === "SUCCESS" || check.conclusion === "NEUTRAL" || check.conclusion === "SKIPPED") summary.successful += 1;
+    else summary.failing += 1;
+  }
+  return summary;
+}
+
+export function mapGithubPullRequestObservation(value: unknown): GithubPullRequestObservation {
+  const parsed = PullViewResponseSchema.safeParse(value);
+  if (!parsed.success) throw providerFailure("invalid-provider-response", "GitHub pull request observation is malformed");
+  const pull = parsed.data;
+  return {
+    exists: true,
+    number: pull.number,
+    url: pull.url,
+    state: pull.state.toLowerCase() as "open" | "closed" | "merged",
+    isDraft: pull.isDraft,
+    headSha: pull.headRefOid,
+    baseSha: pull.baseRefOid,
+    mergeable: pull.mergeable,
+    checks: summarizeChecks(pull.statusCheckRollup),
+    autoMergeEnabled: pull.autoMergeRequest !== null,
+    reviewDecision: pull.reviewDecision,
+  };
 }
 
 function restError(value: string): { status: number; message: string; reset?: number } | undefined {
@@ -348,6 +409,21 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
     async getPullRequest(input) {
       const value = await api(["api", `repos/${input.repository}/pulls/${input.number}`], "pull request observation");
       return pull(value);
+    },
+    async observePullRequest(input) {
+      let number = input.pullRequestNumber ?? null;
+      if (number === null) {
+        const candidates = await this.listPullRequests({ repository: input.repository, owner: input.repository.split("/")[0]!, headBranch: input.branch, baseBranch: "" });
+        number = candidates[0]?.number ?? null;
+      }
+      if (number === null) return { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, checks: { total: 0, pending: 0, failing: 0, successful: 0 }, autoMergeEnabled: null, reviewDecision: null };
+      try {
+        const raw = parseJson((await runGh(["pr", "view", String(number), "--repo", input.repository, "--json", "number,url,state,isDraft,headRefOid,baseRefOid,mergeable,autoMergeRequest,reviewDecision,statusCheckRollup"])).stdout);
+        return mapGithubPullRequestObservation(raw);
+      } catch (error) {
+        if (error instanceof GithubCommandFailure && /not found/i.test(`${error.result.stdout}\n${error.result.stderr}`)) return { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, checks: { total: 0, pending: 0, failing: 0, successful: 0 }, autoMergeEnabled: null, reviewDecision: null };
+        throw error instanceof GithubReleaseFailure ? error : classifyCommandFailure(error, "pull request observation");
+      }
     },
     async markReadyForReview(input) {
       const current = await this.getPullRequest({ repository: input.repository, number: input.number });

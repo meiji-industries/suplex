@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { buildDraftPullRequestProjection, createGithubReleasePort, GithubReleaseFailure, sanitizePublicText, type GithubCommandSpec, type GithubCommandResult } from "../src/github-release.js";
+import { buildDraftPullRequestProjection, createGithubReleasePort, GithubReleaseFailure, mapGithubPullRequestObservation, sanitizePublicText, type GithubCommandSpec, type GithubCommandResult } from "../src/github-release.js";
 import { ReleaseFailureCodeSchema } from "../src/release-failures.js";
 import { jsonRequired } from "../src/task-utils.js";
 
@@ -86,6 +86,29 @@ test("uses supported gh commands and parses branch and pull observations", async
 
   const mismatchedUpdate = runnerFor([{ stdout: pull({ title: "Wrong title", body: "Useful description" }), stderr: "" }]);
   await expect(createGithubReleasePort({ runner: mismatchedUpdate.runner }).updateDraftPullRequest({ repository: "acme/forge", number: 7, title: "Improve releases", body: "Useful description" })).rejects.toMatchObject({ code: "invalid-provider-response" });
+});
+
+test("maps GitHub's pull-request observation into Forge's provider truth", () => {
+  expect(mapGithubPullRequestObservation({
+    number: 1484,
+    url: "https://github.com/acme/forge/pull/1484",
+    state: "OPEN",
+    isDraft: false,
+    headRefOid: headSha,
+    baseRefOid: baseSha,
+    mergeable: "MERGEABLE",
+    autoMergeRequest: null,
+    reviewDecision: "APPROVED",
+    statusCheckRollup: [
+      { status: "COMPLETED", conclusion: "SUCCESS" },
+      { status: "IN_PROGRESS", conclusion: null },
+      { status: "COMPLETED", conclusion: "FAILURE" },
+    ],
+  })).toEqual({
+    exists: true, number: 1484, url: "https://github.com/acme/forge/pull/1484", state: "open", isDraft: false,
+    headSha, baseSha, mergeable: "MERGEABLE", autoMergeEnabled: false, reviewDecision: "APPROVED",
+    checks: { total: 3, pending: 1, failing: 1, successful: 1 },
+  });
 });
 
 test("reconciles a manually advanced branch by rebasing before a normal push", async () => {

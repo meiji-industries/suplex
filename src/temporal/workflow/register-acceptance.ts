@@ -19,6 +19,7 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
   let accept: (rawInput: contracts.PlanCommandInput, decision: "accept" | "request_changes") => Promise<contracts.IssueWorkflowState>;
   const runFinalReviewTurn = async (): Promise<contracts.IssueWorkflowState> => {
     if (!ctx.state.releaseId || !ctx.state.deliveryReviewId || !ctx.state.ciRunId || !ctx.state.leadSessionRef || !ctx.state.leadOutputArtifactId || !ctx.state.developerExecutionId || !ctx.state.deliveryArtifactId || !ctx.state.developerEvidenceArtifactId || !ctx.state.branchName || !ctx.state.targetBaseSha || !ctx.state.resultCommit || !ctx.state.resultTree) throw new Error("Exact release, pull request, delivery review, CI, Lead, and Developer evidence is required for final review");
+    if (ctx.patched("forge-github-sync-v1") && ctx.state.releaseRepository) await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
     if (!ctx.patched("forge-kodiak-merge-v1") && !(await ctx.runTargetBaseCheckpoint("pre_final_review"))) return ctx.state;
     let result;
     try {

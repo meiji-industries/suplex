@@ -1,110 +1,18 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { ChevronRight, CircleX, LoaderCircle } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 
-import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion.js";
-import { Alert } from "../ui/alert.js";
-import { Badge } from "../ui/badge.js";
-import { Card, CardContent } from "../ui/card.js";
-import { Collapsible } from "../ui/collapsible.js";
-import { Separator } from "../ui/separator.js";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs.js";
-import { Timeline, TimelineContent, TimelineDate, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "../ui/timeline.js";
-import { invocationActorLabel, TaskInvocations, type TaskInvocation } from "./task-invocations.js";
-import { ProfileAvatar, type DiceBearCollection } from "./profile-avatar.js";
-import { TaskStatus } from "./task-status.js";
-import { withCompany } from "../../lib/api.js";
+import { ProfileAvatar } from "./profile-avatar.js";
 import { relativeTime } from "../../lib/view-shared.js";
+import { readJson } from "../../lib/api.js";
 import { phaseLabel, type IssuePhase } from "../../../issue-phases.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
-import { CommitSha } from "./commit-sha.js";
-import { DeliveryReviewPanel } from "./delivery-review-panel.js";
 
 export type TaskActivityEntry = TaskResponse["activity"][number];
-type LinkedTask = NonNullable<TaskResponse["predecessor"]>;
-type ProcessingActivity = { agentName: string; avatarSeed: string };
-type DeveloperAttempt = { attempt: number };
-type CiActivityState = { outcome: string | null; status: string; attempts: ReadonlyArray<{ attemptNumber: number; outcome: string; checks: ReadonlyArray<{ status: string; selectedForEvaluation: boolean }> }> };
-type DurableTaskHistory = Pick<TaskResponse, "id" | "timeline" | "agentInvocations" | "planHistory" | "planDecisionHistory" | "revisionHistory" | "developerExecutionHistory" | "deliveryReviewHistory" | "predecessor" | "successor"> & { repository?: string | undefined };
-type TaskHistoryContext = { originalPlan?: { content: ReactNode; current: boolean }; materiality?: { content: ReactNode; routine: boolean }; memberDecision?: ReactNode };
-type ActivityGroup = { kind: "entry" | "development" | "ci"; entries: TaskActivityEntry[]; startIndex: number };
-
-function activityDate(timestamp: string): string {
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(new Date(timestamp));
-}
+type ActivityRole = "planner" | "builder" | "reviewer" | "integrator" | "you";
+type LiveActivityEvent = { at: string; kind: "thinking" | "command" | "output" | "message" | "status"; text: string; exitCode?: number };
+type ActivityFeed = { execution: { id: string; role: Exclude<ActivityRole, "you">; status: string; currentStep: string | null } | null; events: LiveActivityEvent[] };
+type FeedRow = { id: string; at: string; role: ActivityRole; text: string; revision?: number; link?: { href: string; label: string } };
 
 export const activityRelativeDate = relativeTime;
-
-function activityCopy(entry: TaskActivityEntry): string {
-  if (entry.eventType === "member_action") return `chose ${String(entry.metadata?.actionLabel ?? entry.metadata?.command ?? "an action")}`;
-  if (entry.eventType === "task_created") return "created the task";
-  if (entry.eventType === "planning_started") {
-    if (entry.metadata.planningStage === "active") return "planning began";
-    if (entry.metadata.planningStage === "completed") return "planning completed";
-    if (entry.metadata.planningStage === "queued") return "waiting for planning capacity";
-    if (entry.metadata.planningStage === "rate_limited") return "waiting for provider reset";
-    return "started planning";
-  }
-  if (entry.eventType.startsWith("phase_")) {
-    const phase = entry.eventType.slice("phase_".length);
-    return `moved the task to ${phaseLabel(phase as IssuePhase)}`;
-  }
-  return entry.eventType.replaceAll("_", " ");
-}
-
-function activityActor(entry: TaskActivityEntry, actionIndex: number, invocations: TaskInvocation[], processing?: ProcessingActivity): { label: string; initials: string; avatarSeed?: string; avatarCollection?: DiceBearCollection } {
-  if (entry.actor) {
-    const isAgent = "kind" in entry.actor && entry.actor.kind === "agent";
-    return {
-      label: entry.actor.displayName,
-      initials: entry.actor.displayName.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "?",
-      avatarSeed: entry.actor.avatarSeed ?? ("username" in entry.actor ? entry.actor.username : entry.actor.displayName),
-      avatarCollection: isAgent ? "bottts-neutral" : "pixel-art-neutral",
-    };
-  }
-  if (entry.eventType === "task_created") return { label: "Forge", initials: "F" };
-  const profileInvocations = invocations.filter((invocation) => invocation.agentName);
-  const invocation = profileInvocations[Math.min(actionIndex, profileInvocations.length - 1)];
-  const agentName = invocation?.agentName ?? (entry.eventType === "planning_started" ? processing?.agentName : undefined);
-  const label = invocation ? invocationActorLabel(invocation) : agentName ?? "Forge";
-  const avatarSeed = invocation?.avatarSeed ?? (entry.eventType === "planning_started" ? processing?.avatarSeed : undefined);
-  return { label, initials: agentName?.split(/\s+/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase() || "F", ...(avatarSeed ? { avatarSeed } : {}) };
-}
-
-function groupActivity(timeline: TaskActivityEntry[]): ActivityGroup[] {
-  const groups: ActivityGroup[] = [];
-  let activeDevelopmentGroup: ActivityGroup | undefined;
-  timeline.forEach((entry, index) => {
-    const previous = groups.at(-1);
-    const lastEntry = previous?.entries.at(-1);
-    if (entry.eventType === "phase_development" && activeDevelopmentGroup) {
-      activeDevelopmentGroup.entries.push(entry);
-      activeDevelopmentGroup.startIndex = index;
-    } else if (entry.eventType === "phase_ci_waiting" && previous?.kind === "ci" && lastEntry?.eventType === "phase_ci_waiting") {
-      previous.entries.push(entry);
-      previous.startIndex = index;
-    } else if ((entry.eventType === "phase_blocked" || entry.eventType === "phase_delivery_blocked") && activeDevelopmentGroup) {
-      activeDevelopmentGroup.entries.push(entry);
-      activeDevelopmentGroup.startIndex = index;
-    } else {
-      const group = { kind: entry.eventType === "phase_development" ? "development" : entry.eventType === "phase_ci_waiting" ? "ci" : "entry", entries: [entry], startIndex: index } as ActivityGroup;
-      groups.push(group);
-      if (group.kind === "development") activeDevelopmentGroup = group;
-    }
-    if (entry.kind === "member" && /(?:Start|Retry) development/i.test(String(entry.metadata.actionLabel ?? entry.metadata.command ?? ""))) activeDevelopmentGroup = undefined;
-    if (entry.kind !== "member" && !["phase_development", "phase_blocked", "phase_delivery_blocked"].includes(entry.eventType)) activeDevelopmentGroup = undefined;
-  });
-  return groups.sort((left, right) => left.startIndex - right.startIndex);
-}
-
-function ciPollState(ci: CiActivityState | undefined): string {
-  const attempt = ci?.attempts[0];
-  const state = attempt?.outcome ?? ci?.outcome ?? ci?.status ?? "waiting";
-  const label = state === "waiting" ? "polling" : state.replaceAll("_", " ");
-  if (!attempt) return label;
-  const checks = attempt.checks.filter((check) => check.selectedForEvaluation);
-  const completed = checks.filter((check) => check.status === "completed").length;
-  return `poll ${attempt.attemptNumber} · ${label}${checks.length ? ` · ${completed}/${checks.length} checks` : ""}`;
-}
 
 export function extractAgentTranscript(evidence: string): string {
   return evidence.split("\n").flatMap((line) => {
@@ -117,7 +25,7 @@ export function extractAgentTranscript(evidence: string): string {
   }).join("\n\n").slice(0, 12_000);
 }
 
-type HarnessMessage = { kind?: string | undefined; summary?: string | undefined; outcome?: string | undefined; findings?: Array<{ severity?: string | undefined; rationale?: string | undefined; disposition?: string | undefined }> | undefined; repairPlan?: string | null | undefined };
+type HarnessMessage = { kind?: string; summary?: string };
 
 export function harnessSummary(message: HarnessMessage): string | undefined {
   if (message.kind !== "decision_blocker" || !message.summary) return message.summary;
@@ -125,162 +33,110 @@ export function harnessSummary(message: HarnessMessage): string | undefined {
   return file ? `There is a conflict in ${file}. Choose how to resolve it.` : "There is a conflict that needs your choice.";
 }
 
-function parseHarnessMessage(output: string): HarnessMessage | undefined {
-  const firstMessage = output.split("\n\n", 1)[0] ?? "";
-  try {
-    const parsed: unknown = JSON.parse(firstMessage);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
-    const source = parsed as Record<string, unknown>;
-    const findings = Array.isArray(source.findings) ? source.findings.flatMap((finding) => {
-      if (!finding || typeof finding !== "object" || Array.isArray(finding)) return [];
-      const item = finding as Record<string, unknown>;
-      return [{ ...(typeof item.severity === "string" ? { severity: item.severity } : {}), ...(typeof item.rationale === "string" ? { rationale: item.rationale } : {}), ...(typeof item.disposition === "string" ? { disposition: item.disposition } : {}) }];
-    }) : undefined;
-    return { kind: typeof source.kind === "string" ? source.kind : undefined, summary: typeof source.summary === "string" ? source.summary : undefined, outcome: typeof source.outcome === "string" ? source.outcome : undefined, findings, repairPlan: typeof source.repairPlan === "string" ? source.repairPlan : null };
-  } catch {
-    return undefined;
+function roleLabel(role: ActivityRole): string {
+  return role === "you" ? "You" : `${role[0]!.toUpperCase()}${role.slice(1)}`;
+}
+
+function roleFor(entry: TaskActivityEntry): ActivityRole {
+  if (entry.actor && !("kind" in entry.actor && entry.actor.kind === "agent")) return "you";
+  if (entry.eventType.includes("planning") || entry.eventType.includes("plan")) return "planner";
+  if (entry.eventType.includes("review")) return "reviewer";
+  if (entry.eventType.includes("development") || entry.eventType.includes("repair")) return "builder";
+  return "integrator";
+}
+
+function timelineText(entry: TaskActivityEntry, role: ActivityRole): string {
+  const subject = roleLabel(role);
+  if (entry.eventType === "task_created") return `${subject} created this task`;
+  if (entry.eventType === "member_action") {
+    const command = String(entry.metadata.command ?? "");
+    if (command === "approve_plan") return "You approved the plan";
+    if (command === "request_plan_revision") return "You asked for plan changes";
+    if (command === "reject_plan") return "You rejected the plan";
+    return `You ${String(entry.metadata.actionLabel ?? "took an action").replace(/^./, (letter) => letter.toLowerCase())}`;
   }
+  if (entry.eventType === "planning_started") {
+    if (entry.metadata.planningStage === "completed") return "Planner finished the plan";
+    if (entry.metadata.planningStage === "queued") return "Planner is waiting to start";
+    return "Planner started the plan";
+  }
+  if (entry.eventType === "phase_development") return "Builder started work";
+  if (entry.eventType === "phase_ci_waiting") return "Integrator is waiting for CI";
+  if (entry.eventType === "phase_delivery_reviewed") return "Reviewer approved the delivery";
+  if (entry.eventType === "phase_repair_required") return "Reviewer asked for fixes";
+  if (entry.eventType === "phase_done") return "Integrator completed the task";
+  if (entry.eventType.startsWith("phase_")) return `${subject} moved the task to ${phaseLabel(entry.eventType.slice("phase_".length) as IssuePhase)}`;
+  return `${subject} ${entry.eventType.replaceAll("_", " ")}`;
 }
 
-function AgentHarnessOutput({ taskId, invocation }: { taskId: string; invocation: TaskInvocation }) {
-  const [output, setOutput] = useState<string | null>(null);
+function liveText(event: LiveActivityEvent, role: Exclude<ActivityRole, "you">): string {
+  const subject = roleLabel(role);
+  if (event.kind === "command") return `${subject} ran a command`;
+  if (event.kind === "status") return /completed|finished/i.test(event.text) ? `${subject} finished work` : `${subject} is working`;
+  if (event.kind === "thinking") return `${subject} is thinking`;
+  return `${subject} sent an update`;
+}
+
+function timelineLink(entry: TaskActivityEntry, release: { pullRequestUrl?: string | null; pullRequestNumber?: number | null } | null | undefined, ci: unknown): FeedRow["link"] {
+  if (entry.eventType === "planning_started" && entry.metadata.planningStage === "completed") return { href: "#plan", label: "View plan" };
+  if (entry.eventType === "phase_development" || entry.eventType === "phase_repair_required") return { href: "#diffs", label: "View changes" };
+  if (entry.eventType === "phase_ci_waiting" && ci) return { href: "#checks", label: "View CI" };
+  if (release?.pullRequestUrl && (entry.eventType.includes("release") || entry.eventType.includes("merge") || entry.eventType === "phase_done")) return { href: release.pullRequestUrl, label: `PR #${release.pullRequestNumber}` };
+  return undefined;
+}
+
+function useLiveActivity(taskId: string): ActivityFeed | null {
+  const [feed, setFeed] = useState<ActivityFeed | null>(null);
   useEffect(() => {
-    if (!invocation.evidenceArtifactId) return;
-    const controller = new AbortController();
-    void fetch(`/api/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(invocation.evidenceArtifactId)}`, { signal: controller.signal })
-      .then(async (response) => response.ok ? extractAgentTranscript(await response.text()) : "")
-      .then((next) => { if (!controller.signal.aborted) setOutput(next); })
-      .catch(() => { if (!controller.signal.aborted) setOutput(""); });
-    return () => controller.abort();
-  }, [invocation.evidenceArtifactId, taskId]);
-  if (!invocation.evidenceArtifactId) return null;
-  if (!output) return null;
-  const message = parseHarnessMessage(output);
-  const summary = message ? harnessSummary(message) : undefined;
-  const findings = message?.findings?.filter((finding) => finding.rationale || finding.severity) ?? [];
-  return <Card data-agent-harness-output data-agent-execution-id={invocation.id} size="sm" className="mt-2 gap-0">
-    <CardContent className="gap-2 py-2 text-[12px]">
-      {summary ? <p className="whitespace-pre-wrap break-words">{summary}</p> : null}
-      {findings.length ? <div className="divide-y border-y text-[11px]">{findings.map((finding, index) => <div className="py-1.5" key={`${finding.severity ?? "finding"}-${index}`}><span className="font-medium">{finding.severity ?? "Finding"}</span>{finding.rationale ? <span className="text-muted-foreground"> · {finding.rationale}</span> : null}</div>)}</div> : null}
-      {message?.repairPlan ? <div className="text-[11px]"><span className="font-medium">Repair plan</span><span className="text-muted-foreground"> · {message.repairPlan}</span></div> : null}
-      {!summary ? <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words text-[11px] leading-4 text-foreground">{output}</pre> : null}
-    </CardContent>
-  </Card>;
+    let active = true;
+    void readJson<ActivityFeed>(`/api/tasks/${encodeURIComponent(taskId)}/activity`).then((value) => { if (active) setFeed(value); }).catch(() => { if (active) setFeed(null); });
+    const stream = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/activity/stream`);
+    stream.addEventListener("activity", (message) => {
+      try {
+        const event = JSON.parse((message as MessageEvent<string>).data) as LiveActivityEvent;
+        if (active) setFeed((current) => ({ execution: current?.execution ?? null, events: [...(current?.events ?? []), event].slice(-300) }));
+      } catch { /* Ignore malformed live activity. */ }
+    });
+    return () => { active = false; stream.close(); };
+  }, [taskId]);
+  return feed;
 }
 
-function BlockedReason({ value }: { value: string }) {
-  return <Collapsible.Root className="group/blocked-reason min-w-0">
-    <Alert variant="destructive" data-task-blocked-reason className="flex min-w-0 items-center gap-2 px-3 py-2 text-[12px]">
-      <CircleX className="size-4 shrink-0" />
-      <Collapsible.Trigger className="flex min-w-0 flex-1 items-center gap-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-ring">
-        <span className="min-w-0 flex-1 truncate" title={value}>{value}</span>
-        <ChevronRight aria-hidden="true" className="size-3 shrink-0 text-current transition-transform group-data-[panel-open]/blocked-reason:rotate-90" />
-      </Collapsible.Trigger>
-    </Alert>
-    <Collapsible.Panel className="mt-1 border-l border-destructive/30 pl-3 text-[12px] text-destructive whitespace-pre-wrap break-words">{value}</Collapsible.Panel>
-  </Collapsible.Root>;
-}
-
-function ActivityTimeline({ taskId, timeline, invocations = [], revisionContent, processing, collapsePlan, deliveryReviewTask, repository, developerAttempts = [], ci }: { taskId: string; timeline: TaskActivityEntry[]; invocations?: TaskInvocation[]; revisionContent?: { revision: number; content: ReactNode } | undefined; processing?: ProcessingActivity | undefined; collapsePlan?: boolean; deliveryReviewTask?: TaskResponse; repository?: string | undefined; developerAttempts?: ReadonlyArray<DeveloperAttempt> | undefined; ci?: CiActivityState | undefined }) {
-  const contentEntryId = revisionContent ? (timeline.find((entry) => entry.revision === revisionContent.revision && entry.kind !== "member") ?? timeline.find((entry) => entry.revision === revisionContent.revision))?.id : undefined;
-  const deliveryReviewEventTypes = deliveryReviewTask?.reviewLineage.currentReview?.outcome === "approved" ? ["phase_delivery_reviewed"] : deliveryReviewTask?.reviewLineage.currentReview ? ["phase_repair_required"] : ["phase_repair_required", "phase_delivery_blocked"];
-  const deliveryReviewEntryId = deliveryReviewTask ? [...timeline].reverse().find((entry) => deliveryReviewEventTypes.includes(entry.eventType))?.id : undefined;
-  const groups = groupActivity(timeline);
-  let developmentGroupIndex = 0;
-  return <div data-task-activity>
-    <Timeline orientation="vertical" value={0}>
-      {groups.map((group, index) => {
-        const entry = group.entries[0]!;
-        const latestEntry = group.entries.at(-1)!;
-        const actionIndex = timeline.slice(0, group.startIndex).filter((candidate) => candidate.kind !== "member" && candidate.eventType !== "task_created").length;
-        const actor = activityActor(entry, actionIndex, invocations, processing);
-        const groupEntryIds = new Set(group.entries.map((candidate) => candidate.id));
-        const phaseInvocations = invocations.filter((invocation) => groupEntryIds.has([...timeline].reverse().find((candidate) => Date.parse(candidate.createdAt) <= Date.parse(invocation.startedAt))?.id ?? ""));
-        const blockedReasons = group.entries.flatMap((candidate) => typeof candidate.metadata.blockedReason === "string" ? [candidate.metadata.blockedReason] : []);
-        const hasBlocker = blockedReasons.length > 0;
-        const attemptIndex = group.kind === "development" ? developmentGroupIndex++ : -1;
-        const title = group.kind === "development" ? hasBlocker ? "Development stopped" : (developerAttempts[attemptIndex]?.attempt ?? attemptIndex + 1) > 1 ? "Development retry started" : "Development started" : group.kind === "ci" ? `Waiting for CI · ${ciPollState(ci)}${group.entries.length > 1 ? ` · ${group.entries.length} polls` : ""}` : activityCopy(entry);
-        const hasDeliveryReview = group.entries.some((candidate) => candidate.id === deliveryReviewEntryId);
-        return <TimelineItem key={entry.id} step={index + 1} data-task-activity-kind={entry.kind ?? "workflow"} data-task-activity-revision={entry.revision} data-task-activity-revisions={group.entries.map((candidate) => candidate.revision).join(",")}>
-          <TimelineHeader className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-            <TimelineSeparator />
-            <TimelineTitle className="text-xs">{actor.label}</TimelineTitle>
-            <span className={`text-xs ${hasBlocker ? "text-destructive" : "text-muted-foreground"}`}>{title}</span>
-            <span className="text-xs text-muted-foreground">·</span>
-            <TimelineDate dateTime={latestEntry.createdAt} title={activityDate(latestEntry.createdAt)} className="mb-0 font-normal">{activityRelativeDate(latestEntry.createdAt)}</TimelineDate>
-            <TimelineIndicator className="flex size-6 items-center justify-center border bg-muted text-[10px] font-semibold text-muted-foreground">{actor.avatarSeed ? <ProfileAvatar name={actor.label} seed={actor.avatarSeed} {...(actor.avatarCollection ? { collection: actor.avatarCollection } : {})} /> : actor.initials}</TimelineIndicator>
-          </TimelineHeader>
-          <TimelineContent className="text-[12px]">
-            {blockedReasons.length ? <div className="mt-2 space-y-1">{blockedReasons.map((reason, reasonIndex) => <BlockedReason key={`${reason}-${reasonIndex}`} value={reason} />)}</div> : null}
-            {group.entries.some((candidate) => candidate.id === contentEntryId) ? <div data-task-activity-plan className={collapsePlan ? "mt-2 text-foreground" : "mt-4 text-foreground"}>{revisionContent?.content}</div> : null}
-            {hasDeliveryReview ? <section data-task-activity-delivery-review className="mt-3" aria-label="Delivery review result"><p className="mb-1 text-[11px] font-medium text-muted-foreground">Review result</p><DeliveryReviewPanel task={deliveryReviewTask!} repository={repository} /></section> : null}
-            {phaseInvocations.map((invocation) => <AgentHarnessOutput key={invocation.id} taskId={taskId} invocation={invocation} />)}
-          </TimelineContent>
-        </TimelineItem>;
-      })}
-      {processing ? <TimelineItem step={timeline.length + 1} data-task-activity-processing>
-        <TimelineHeader className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
-          <TimelineSeparator />
-          <TimelineTitle className="text-xs">{processing.agentName}</TimelineTitle>
-          <span className="text-xs text-muted-foreground">is working</span>
-          <TimelineIndicator className="flex size-6 items-center justify-center border bg-muted text-muted-foreground"><LoaderCircle className="size-3 animate-spin" /></TimelineIndicator>
-        </TimelineHeader>
-      </TimelineItem> : null}
-    </Timeline>
-  </div>;
-}
-
-export function TaskActivity({ taskId, timeline, agentInvocations, revisionContent, processing, collapsePlan, deliveryReviewTask, repository, developerAttempts, ci, children }: { taskId?: string; timeline: TaskActivityEntry[]; agentInvocations: TaskInvocation[]; revisionContent?: { revision: number; content: ReactNode } | undefined; processing?: ProcessingActivity | undefined; collapsePlan?: boolean; deliveryReviewTask?: TaskResponse; repository?: string | undefined; developerAttempts?: ReadonlyArray<DeveloperAttempt> | undefined; ci?: CiActivityState | undefined; children?: ReactNode }) {
-  const placedContent = revisionContent && timeline.some((entry) => entry.revision === revisionContent.revision) ? revisionContent : undefined;
-  return <section data-task-activity-feed className="space-y-3">
-    <ActivityTimeline taskId={taskId ?? ""} timeline={timeline} invocations={agentInvocations} revisionContent={placedContent} processing={processing} repository={repository} developerAttempts={developerAttempts} ci={ci} {...(deliveryReviewTask ? { deliveryReviewTask } : {})} {...(collapsePlan === undefined ? {} : { collapsePlan })} />
-    {children}
+export function TaskActivity({ taskId = "", timeline, release, ci, onViewChanges }: {
+  taskId?: string;
+  timeline: TaskActivityEntry[];
+  release?: { pullRequestUrl?: string | null; pullRequestNumber?: number | null } | null | undefined;
+  ci?: unknown;
+  agentInvocations?: unknown;
+  processing?: unknown;
+  collapsePlan?: boolean;
+  deliveryReviewTask?: unknown;
+  repository?: string | undefined;
+  developerAttempts?: unknown;
+  revisionContent?: unknown;
+  children?: unknown;
+  onViewChanges?: (() => void) | undefined;
+}) {
+  const feed = useLiveActivity(taskId);
+  const rows = useMemo(() => {
+    const durable = timeline.map((entry): FeedRow => {
+      const role = roleFor(entry);
+      const link = timelineLink(entry, release, ci);
+      return { id: entry.id, at: entry.createdAt, role, text: timelineText(entry, role), revision: entry.revision, ...(link ? { link } : {}) };
+    });
+    const live = (feed?.events ?? []).map((event, index): FeedRow => ({ id: `live-${event.at}-${event.kind}-${index}`, at: event.at, role: feed?.execution?.role ?? "integrator", text: liveText(event, feed?.execution?.role ?? "integrator") }));
+    return [...durable, ...live].sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
+  }, [ci, feed, release, timeline]);
+  return <section data-task-activity-feed className="space-y-1" aria-label="Activity">
+    <div data-task-activity className="divide-y">
+      {rows.map((row) => <div className="flex min-w-0 items-center gap-2 py-2 text-xs" key={row.id} data-task-activity-kind={row.role} {...(row.revision === undefined ? {} : { "data-task-activity-revision": row.revision })}>
+        <ProfileAvatar name={roleLabel(row.role)} seed={row.role} size="xs" />
+        <span className="shrink-0 font-medium">{roleLabel(row.role)}</span>
+        <span className="min-w-0 flex-1 text-muted-foreground">{row.text.replace(new RegExp(`^${roleLabel(row.role)}\\s+`), "")}</span>
+        {row.link ? <a className="shrink-0 underline underline-offset-2" href={row.link.href} onClick={row.link.label === "View changes" && onViewChanges ? (event) => { event.preventDefault(); onViewChanges(); } : undefined} target={row.link.href.startsWith("http") ? "_blank" : undefined} rel={row.link.href.startsWith("http") ? "noreferrer" : undefined}>{row.link.label}</a> : null}
+        <time className="shrink-0 text-[11px] text-muted-foreground" dateTime={row.at} title={new Date(row.at).toLocaleString()}>{activityRelativeDate(row.at)}</time>
+      </div>)}
+      {!rows.length ? <p className="py-2 text-xs text-muted-foreground">No activity yet.</p> : null}
+    </div>
   </section>;
-}
-
-export function TaskHistory({ task, companyId, repository, context = {} }: { task: DurableTaskHistory; companyId: string; repository?: string | undefined; context?: TaskHistoryContext }) {
-  const planCount = task.planHistory.length + task.planDecisionHistory.length;
-  const durableCount = planCount + task.revisionHistory.length + task.developerExecutionHistory.length + task.deliveryReviewHistory.length;
-  const hasDecisions = Boolean(context.memberDecision) || planCount > 0 || task.revisionHistory.length > 0 || task.deliveryReviewHistory.length > 0;
-  const artifact = (artifactId: string, label: string) => <a href={`/api/tasks/${task.id}/artifacts/${artifactId}`} target="_blank" rel="noreferrer">{label}</a>;
-  const taskLink = (linked: LinkedTask, label: string) => <a href={withCompany(`/tasks/${encodeURIComponent(linked.id)}`, companyId)}>{label}: {linked.issueKey ? <span className="text-muted-foreground">{linked.issueKey} </span> : null}{linked.title} · <TaskStatus phase={linked.phase} /></a>;
-  return (
-    <section data-task-history>
-      <Accordion>
-        <AccordionItem value="history">
-          <AccordionTrigger><span><span>History</span> · {durableCount}</span></AccordionTrigger>
-          <AccordionContent>
-            <div className="space-y-4">
-              <div className="text-xs text-muted-foreground">{durableCount} immutable {durableCount === 1 ? "record" : "records"}</div>
-              {task.predecessor || task.successor ? <div className="flex flex-wrap gap-3 text-xs">{task.predecessor ? taskLink(task.predecessor, "Predecessor") : null}{task.successor ? taskLink(task.successor, "Successor") : null}</div> : null}
-              <Separator />
-              <Tabs defaultValue="invocations">
-                <TabsList className="max-w-full overflow-x-auto">
-                  {context.originalPlan ? <TabsTrigger value="original-plan">Original plan <Badge variant={context.originalPlan.current ? "secondary" : "outline"}>{context.originalPlan.current ? "Current" : "Superseded"}</Badge></TabsTrigger> : null}
-                  {context.materiality ? <TabsTrigger value="materiality">Materiality <Badge variant="secondary">{context.materiality.routine ? "Routine" : "Material"}</Badge></TabsTrigger> : null}
-                  {hasDecisions ? <TabsTrigger value="decisions">Decisions</TabsTrigger> : null}
-                  {task.developerExecutionHistory.length ? <TabsTrigger value="development">Development</TabsTrigger> : null}
-                  <TabsTrigger value="invocations">Invocations</TabsTrigger>
-                </TabsList>
-                {context.originalPlan ? <TabsContent value="original-plan">{context.originalPlan.content}</TabsContent> : null}
-                {context.materiality ? <TabsContent value="materiality">{context.materiality.content}</TabsContent> : null}
-                {hasDecisions ? <TabsContent value="decisions" className="space-y-4 text-xs">
-                  {context.memberDecision}
-                  {task.planHistory.map((entry) => <div key={`plan-${entry.revision}`}>Plan r{entry.revision} · {entry.kind} · {entry.summary} · {artifact(entry.outputArtifactId, "plan")} · {artifact(entry.evidenceArtifactId, "evidence")}</div>)}
-                  {task.planDecisionHistory.map((entry) => <div key={entry.id}>Plan r{entry.planRevision} · {entry.decision} · {artifact(entry.noteArtifactId, "decision note")}</div>)}
-                  {task.revisionHistory.map((entry) => <div key={entry.id}>Request r{entry.requestRevision} · {entry.disposition} · {entry.status} · {entry.blockerCode ?? entry.branchName ?? entry.exactBaseSha ?? "coordinates recorded"} · {artifact(entry.reasonArtifactId, "revision reason")}</div>)}
-                  {task.deliveryReviewHistory.map((entry) => <div key={entry.id}>Plan r{entry.planRevision} · cycle {entry.repairCycle} · {entry.outcome} · {entry.summary} · {artifact(entry.opinionArtifactId, "review")} · {artifact(entry.evidenceArtifactId, "evidence")}</div>)}
-                </TabsContent> : null}
-                {task.developerExecutionHistory.length ? <TabsContent value="development" className="space-y-2 text-xs">{task.developerExecutionHistory.map((entry) => <div key={entry.id}>Plan r{entry.planRevision} · attempt {entry.attempt} · {entry.status} · {entry.branchName} · {entry.resultCommit ? <CommitSha sha={entry.resultCommit} repository={repository} /> : entry.failureSummary ?? "no result"}{entry.deliveryArtifactId ? <> · {artifact(entry.deliveryArtifactId, "delivery")}</> : null}{entry.evidenceArtifactId ? <> · {artifact(entry.evidenceArtifactId, "evidence")}</> : null}</div>)}</TabsContent> : null}
-                <TabsContent value="invocations">
-                  <div className="mb-3 text-xs text-muted-foreground">{task.agentInvocations.length} agent {task.agentInvocations.length === 1 ? "attempt" : "attempts"}</div>
-                  <TaskInvocations invocations={task.agentInvocations} />
-                </TabsContent>
-              </Tabs>
-            </div>
-          </AccordionContent>
-        </AccordionItem>
-      </Accordion>
-    </section>
-  );
 }

@@ -1562,7 +1562,7 @@ export class TaskService {
       UNION ALL
       SELECT id, role, status, NULL AS currentStep, started_at AS startedAt FROM forge_agent_executions WHERE task_id = ? AND company_id = ?
     ) ORDER BY CASE WHEN status IN ('starting', 'running', 'active', 'reconnecting', 'cancelling', 'result_pending_claim') THEN 0 ELSE 1 END, startedAt DESC LIMIT 1`).get(task.id, task.companyId, task.id, task.companyId) as { id: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: string; currentStep: string | number | null } | undefined);
-    if (!execution || !/^[A-Za-z0-9_-]+$/.test(execution.id)) return { execution: null, events: [] };
+    if (!execution || !["starting", "running", "active", "reconnecting", "cancelling", "result_pending_claim"].includes(execution.status) || !/^[A-Za-z0-9_-]+$/.test(execution.id)) return { execution: null, events: [] };
     const currentStep = execution.currentStep === null ? null : String(execution.currentStep);
     const root = resolve(this.config.runtimeRoot);
     const directory = resolve(root, execution.role === "builder" ? "developer-executions" : "agent-turns", execution.id);

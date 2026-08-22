@@ -13,7 +13,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs.
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog.js";
 import { ApplicationFrame } from "../components/app/application-frame.js";
 import { getWorkerHealthFailure, useSystemHealth } from "../components/app/system-health.js";
-import { TaskActivity, TaskHistory } from "../components/app/task-history.js";
+import { TaskActivity } from "../components/app/task-history.js";
 import DeveloperDiff, { useAppThemeType } from "../components/app/developer-diff.js";
 import { TaskLeadPlan } from "../components/app/task-lead-plan.js";
 import { invocationActorLabel, workflowOwnerLabel } from "../components/app/task-invocations.js";
@@ -21,11 +21,9 @@ import { TaskProgress } from "../components/app/task-progress.js";
 import { taskIsProcessing, taskPresentationPhase, TaskStatus } from "../components/app/task-status.js";
 import { DeveloperRecoveryStatus } from "../components/app/developer-recovery-status.js";
 import type { DeveloperRecoveryAction } from "../components/app/developer-recovery-actions.js";
-import { MaterialitySummary } from "../components/app/materiality-summary.js";
 import { CommitSha } from "../components/app/commit-sha.js";
 import { PlanBlockerResponseForm } from "../components/app/plan-blocker-response-form.js";
 import { PlanDecisionForm } from "../components/app/plan-decision-form.js";
-import { PlanSubjectSummary } from "../components/app/plan-subject-summary.js";
 import { SupplementalReviewPanel } from "../components/app/supplemental-review-panel.js";
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import { DeveloperEvidence, type DeveloperExecutionEventView } from "../components/tasks/developer-evidence.js";
@@ -40,39 +38,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } 
 type DevelopmentExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; lastOutputAt?: string | null; currentStep: string | null };
 type DevelopmentState = { status: string; execution: DevelopmentExecution | null };
 type DeveloperEventState = { executionId: string | null; events: DeveloperExecutionEventView[]; terminalSteps: Record<number, "completed" | "blocked"> };
-type ActivityEvent = { at: string; kind: "thinking" | "command" | "output" | "message" | "status"; text: string; exitCode?: number };
-type ActivityFeed = { execution: { id: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: string; currentStep: string | null } | null; events: ActivityEvent[] };
 const noopExecutionStatus = (): void => {};
-
-function ActivityPanel({ task }: { task: ApiTask }): ReactElement | null {
-  const shouldShow = task.owner === "lead" || Boolean(task.developerExecution && ["starting", "running", "cancelling"].includes(task.developerExecution.status)) || task.agentInvocations.some((invocation) => ["starting", "running", "cancelling"].includes(invocation.status));
-  const [feed, setFeed] = useState<ActivityFeed | null>(null);
-  const [paused, setPaused] = useState(false);
-  const logRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    let active = true;
-    void readJson<ActivityFeed>(`/api/tasks/${encodeURIComponent(task.id)}/activity`).then((value) => { if (active) setFeed(value); }).catch(() => { if (active) setFeed(null); });
-    const stream = new EventSource(`/api/tasks/${encodeURIComponent(task.id)}/activity/stream`);
-    stream.addEventListener("activity", (message) => { try { const event = JSON.parse((message as MessageEvent<string>).data) as ActivityEvent; if (active) setFeed((current) => ({ execution: current?.execution ?? null, events: [...(current?.events ?? []), event].slice(-300) })); } catch { /* Ignore malformed live activity. */ } });
-    return () => { active = false; stream.close(); };
-  }, [task.id]);
-  useEffect(() => { if (!paused) logRef.current?.scrollTo({ top: logRef.current.scrollHeight }); }, [feed?.events, paused]);
-  if (!shouldShow && !feed?.execution) return null;
-  const events = feed?.events ?? [];
-  const status = [...events].reverse().find((event) => event.kind === "status");
-  return <Card data-task-activity-panel size="sm" aria-label="Activity">
-    <CardHeader>
-      <CardTitle><h3>Activity</h3></CardTitle>
-      {status ? <CardAction><span className="text-[11px] font-normal text-muted-foreground" aria-live="polite">{status.text}</span></CardAction> : null}
-    </CardHeader>
-    <CardContent>
-      <div ref={logRef} className="max-h-72 overflow-auto border border-border bg-muted/30 font-mono text-[11px] leading-5" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
-      {events.filter((event) => event.kind !== "status").map((event, index) => <div className="flex gap-2 border-b border-border/50 px-2 py-1 last:border-0" key={`${event.at}:${event.kind}:${index}`}><time className="shrink-0 text-muted-foreground">{new Date(event.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time><Badge variant="outline" className="h-5 shrink-0 rounded-sm px-1 font-mono text-[10px]">{event.kind}</Badge><div className="min-w-0 flex-1 whitespace-pre-wrap break-words">{event.kind === "output" ? <details><summary className="cursor-pointer">{event.exitCode === undefined ? "Output" : `Exit ${event.exitCode}`}</summary><pre className="mt-1 whitespace-pre-wrap break-words">{event.text}</pre></details> : <>{event.text}{event.exitCode === undefined ? null : <span className="ml-2 text-muted-foreground">exit {event.exitCode}</span>}</>}</div></div>)}
-      {!events.some((event) => event.kind !== "status") ? <div className="px-2 py-2 text-muted-foreground">Waiting for activity…</div> : null}
-      </div>
-    </CardContent>
-  </Card>;
-}
 
 function NextAction({ value }: { value: string | null }): ReactElement {
   if (value === "Lead delivery review" || value?.startsWith("Fresh Lead delivery review")) return <>Forge is checking the completed work against the approved plan.</>;
@@ -555,13 +521,11 @@ function InlineTaskEditor({ field, value, onSave }: { field: "title" | "descript
     : <button type="button" data-task-description-editor aria-label="Edit task description" onClick={start} className="block w-full whitespace-pre-wrap text-left font-sans text-[13px] leading-5">{value || "No description."}</button>;
 }
 
-export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onDuplicate, onUpdateDetails, onRefresh, onRescue }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onDuplicate: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport> }): ReactElement {
+export function TaskDetailsPage({ task, project, companyId: _companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady, onDuplicate, onUpdateDetails, onRefresh, onRescue }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onDuplicate: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport> }): ReactElement {
   const approveCommand = task.commands.find((command) => command.name === "approve_plan");
   const revisionCommand = task.commands.find((command) => command.name === "request_plan_revision");
   const blockerCommand = task.commands.find((command) => command.name === "respond_plan_blocker");
   const visibleLeadPlan = task.leadOutput && (task.leadOutput.content.kind !== "decision_blocker" || !task.governance.blocker) ? task.leadOutput : undefined;
-  const visibleLeadPlanRevision = visibleLeadPlan ? task.planHistory.find((plan) => plan.outputArtifactId === visibleLeadPlan.outputArtifactId)?.revision : undefined;
-  const completedPlanningRevision = [...task.activity].reverse().find((entry) => entry.eventType === "planning_started" && entry.metadata.planningStage === "completed")?.revision;
   const exactApproveCommand = approveCommand ? { endpoint: approveCommand.endpoint, expectedRevision: approveCommand.expectedRevision } : undefined;
   const exactRevisionCommand = revisionCommand ? { endpoint: revisionCommand.endpoint, expectedRevision: revisionCommand.expectedRevision } : undefined;
   const decisionControls = task.phase === "approval" && (exactApproveCommand || exactRevisionCommand) ? <PlanDecisionForm key={task.revision} {...(exactApproveCommand ? { approveCommand: exactApproveCommand } : {})} {...(exactRevisionCommand ? { revisionCommand: exactRevisionCommand } : {})} busy={busy} onSubmit={(payload) => onPlanAction(payload.command.endpoint as TaskPlanAction, payload.note, { idempotencyKey: payload.idempotencyKey })} error={error} /> : null;
@@ -609,11 +573,9 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
   const leadPlanProps = visibleLeadPlan ? { output: visibleLeadPlan, ...(decisionControls ? { decisionControls } : {}), ...(task.developerExecution ? { stepProgress: { taskId: task.id, execution: task.developerExecution, repository: project?.repository, events: developerEventState.executionId === task.developerExecution.id ? developerEventState.events : [], terminalSteps: developerEventState.executionId === task.developerExecution.id ? developerEventState.terminalSteps : {} } } : {}) } : undefined;
   const leadPlan = leadPlanProps ? <TaskLeadPlan {...leadPlanProps} /> : undefined;
   const currentPlan = decisionControls && leadPlan ? leadPlan : undefined;
-  const activityPlanRevision = completedPlanningRevision ?? visibleLeadPlanRevision;
-  const activityPlan = !currentPlan && leadPlanProps && activityPlanRevision != null ? { revision: activityPlanRevision, content: <TaskLeadPlan {...leadPlanProps} collapsible /> } : undefined;
-  const activityCount = task.activity.length + (activityPlan && task.activity.some((entry) => entry.revision === activityPlan.revision) ? 1 : 0);
+  const activityCount = task.activity.length;
   const activityContent = <>
-    <TaskActivity taskId={task.id} timeline={task.activity} agentInvocations={task.agentInvocations} processing={task.capacity?.status === "active" ? task.capacity : undefined} collapsePlan={!['backlog', 'planning', 'approval'].includes(task.phase)} deliveryReviewTask={task} repository={project?.repository} developerAttempts={task.developerExecutionHistory} ci={task.ci} {...(activityPlan ? { revisionContent: activityPlan } : {})} />
+    <TaskActivity taskId={task.id} timeline={task.activity} release={task.release} ci={task.ci} onViewChanges={openDiff} />
     {task.images.length ? <section className="space-y-2"><h3 className="text-xs font-semibold">Attachments</h3><div className="flex flex-wrap gap-3">{task.images.map((image) => <a className="text-xs underline underline-offset-2" href={`/api/tasks/${task.id}/images/${image.artifactId}`} target="_blank" rel="noreferrer" key={image.artifactId}>{image.filename}</a>)}</div></section> : null}
     {task.governance.supplementalReview ? <SupplementalReviewPanel value={{ reviewerProfileId: task.governance.supplementalReview.reviewerProfile.name, opinion: task.governance.supplementalReview.opinion, concerns: task.governance.supplementalReview.concerns, requiredChanges: task.governance.supplementalReview.requiredChanges, leadResponse: task.governance.supplementalReview.leadResponse.text }} /> : null}
   </>;
@@ -657,7 +619,6 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                     <RescueControls task={task} busy={busy} onRescue={onRescue} />
                     {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} developmentStatus={developerLiveness ? <DevelopmentStatus state={developerLiveness} now={developmentNow} inline /> : undefined} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} compact /></DeveloperRecoveryStatus> : <LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
                     {task.developerExecution ? <DeveloperEvidence execution={task.developerExecution} onViewChanges={openDiff} /> : null}
-                    <ActivityPanel task={task} />
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
                     {currentPlan ?? decisionControls}
                     {task.governance.blocker && blockerCommand ? <PlanBlockerResponseForm blocker={task.governance.blocker} expectedRevision={blockerCommand.expectedRevision} busy={busy} onSubmit={(payload) => onPlanAction(blockerCommand.endpoint as TaskPlanAction, undefined, { answer: payload.answer, idempotencyKey: payload.idempotencyKey, expectedWorkflowRevision: payload.expectedWorkflowRevision })} error={error} /> : task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">{task.governance.blocker.header}</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}
@@ -682,11 +643,6 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
                   </CardContent>
                 </Card> : null}
                 <FinalGatePanel task={task} />
-                <Card size="sm"><CardContent><TaskHistory task={task} companyId={companyId} repository={project?.repository} context={{
-                  ...(task.governance.originalPlan ? { originalPlan: { current: task.governance.originalPlan.status === "current", content: <div className="space-y-4"><PlanSubjectSummary subject={task.governance.originalPlan.subject} current={task.governance.originalPlan.status === "current"} label="Original plan" createdAt={task.governance.originalPlan.createdAt} detailsOnly />{task.governance.finalPlan && task.governance.finalPlan.subject.outputId !== task.governance.originalPlan.subject.outputId ? <PlanSubjectSummary subject={task.governance.finalPlan.subject} current={task.governance.finalPlan.status === "current"} label={`Final plan v${task.governance.finalPlan.subject.finalVersion}`} createdAt={task.governance.finalPlan.createdAt} detailsOnly /> : null}{task.governance.previousPlans?.map((plan) => <PlanSubjectSummary key={plan.subject.outputId} subject={plan.subject} current={false} createdAt={plan.createdAt} detailsOnly />) ?? null}</div> } } : {}),
-                  ...(task.governance.materiality ? { materiality: { routine: task.governance.materiality.categories.length === 0, content: <MaterialitySummary detailsOnly value={{ categories: task.governance.materiality.categories, artifactId: task.governance.materiality.evidenceArtifactId, artifactSha256: task.governance.materiality.evidenceArtifactSha256, evidence: task.governance.materiality.evidence.map((entry) => ({ category: entry.category, rationale: entry.rationale, evidenceRefs: entry.refs })) }} /> } } : {}),
-                  ...(task.governance.decision ? { memberDecision: <section className="space-y-1" data-plan-decision><h3 className="text-xs font-semibold">Member decision</h3><div className="text-[13px]">{task.governance.decision.decision} · {task.governance.decision.actor.displayName}</div><p className="whitespace-pre-wrap text-[12px]">{task.governance.decision.note}</p></section> } : {}),
-                }} /></CardContent></Card>
                   </TabsContent>
                 </Tabs>
               </div>

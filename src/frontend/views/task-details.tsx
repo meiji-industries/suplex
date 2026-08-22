@@ -615,7 +615,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
     {task.governance.supplementalReview ? <SupplementalReviewPanel value={{ reviewerProfileId: task.governance.supplementalReview.reviewerProfile.name, opinion: task.governance.supplementalReview.opinion, concerns: task.governance.supplementalReview.concerns, requiredChanges: task.governance.supplementalReview.requiredChanges, leadResponse: task.governance.supplementalReview.leadResponse.text }} /> : null}
   </>;
   const developerExecution = task.developerExecution;
-  const hasChanges = developerExecution !== undefined && Boolean(developerExecution.resultCommit) && ["completed", "unverified"].includes(developerExecution.status);
+  const hasChanges = developerExecution !== undefined && Boolean(developerExecution.resultCommit);
   const hasChecks = Boolean(task.ci);
   const pullRequestInMain = Boolean(task.release?.pullRequestUrl && task.release.pullRequestNumber !== null) && (["releasing", "ci_waiting", "final_review", "ready_reconciliation", "manual_merge", "done"].includes(task.phase) || task.phase === "delivery_blocked" && task.allowedCommands.includes("reconcile_ci"));
   const workContent = <>

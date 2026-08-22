@@ -948,10 +948,8 @@ export class TaskService {
 
   async getDeveloperDiff(actorUserId: string, taskId: string): Promise<TaskDeveloperDiff> {
     const task = this.getTask(actorUserId, taskId);
-    const execution = task.developerExecution;
-    if (!execution || !["completed", "unverified"].includes(execution.status) || !execution.resultCommit) throw new TaskFailure("Developer diff is not available until development completes", [], 409);
-    const worktree = this.database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ?").get(execution.id, task.id, task.companyId) as { worktreePath: string } | undefined);
-    if (!worktree) throw new TaskFailure("Developer diff is unavailable", [], 409);
+    const execution = this.database.authQuery((db) => db.prepare("SELECT branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, result_commit AS resultCommit FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND result_commit IS NOT NULL ORDER BY attempt DESC, started_at DESC LIMIT 1").get(task.id, task.companyId) as { branchName: string; worktreePath: string; targetBaseSha: string; resultCommit: string } | undefined);
+    if (!execution) throw new TaskFailure("Developer diff is not available until development completes", [], 409);
     const project = this.projects.getProject(actorUserId, task.projectId);
     if (project.companyId !== task.companyId) throw new TaskFailure("Not found", [], 404);
     try {
@@ -961,8 +959,8 @@ export class TaskService {
         taskId: task.id,
         targetBaseSha: execution.targetBaseSha,
         branchName: execution.branchName,
-        worktreePath: worktree.worktreePath,
-        ...(execution.resultCommit ? { resultCommit: execution.resultCommit } : {}),
+        worktreePath: execution.worktreePath,
+        resultCommit: execution.resultCommit,
       });
       return { patch: diff.patch, branchName: execution.branchName, repository: project.repository, baseSha: execution.targetBaseSha, headSha: diff.headSha };
     } catch (error) {

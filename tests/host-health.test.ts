@@ -7,7 +7,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { checkWorker } from "../src/host-health.js";
 import { CodexReadinessProbe, checkGithubAuthentication } from "../src/provider-readiness.js";
 import { runtimeIdentifiers } from "../src/runtime-identifiers.js";
-import { deploymentVersionOptions, workerHasLivePollers } from "../src/worker.js";
+import { deploymentVersionOptions, logReconciliation, workerHasLivePollers } from "../src/worker.js";
 import { workflowBundleBuildId } from "../src/temporal/workflow-bundle.js";
 
 test("worker readiness requires both live Temporal pollers", () => {
@@ -21,6 +21,22 @@ test("worker deployment versions are code-derived and auto-upgrade existing work
   const second = workflowBundleBuildId("test-installation", { code: "workflow bundle two" });
   expect(first).not.toBe(second);
   expect(deploymentVersionOptions("test-installation", first)).toEqual({ useWorkerVersioning: true, version: { deploymentName: "runtime-test-installation", buildId: first }, defaultVersioningBehavior: "AUTO_UPGRADE" });
+});
+
+test("idle periodic reconciliations do not emit info logs", () => {
+  const debug: Array<{ message: string; context: object }> = [];
+  const info: Array<{ message: string; context: object }> = [];
+  const logger = {
+    debug(message: string, context: object) { debug.push({ message, context }); },
+    info(message: string, context: object) { info.push({ message, context }); },
+  };
+
+  logReconciliation(logger, "task-creation-reconciliation", 0, 0, { inspected: 0, started: 0, failed: 0 });
+  expect(info).toEqual([]);
+  expect(debug).toEqual([expect.objectContaining({ message: "Worker periodic reconciliation idle: task-creation-reconciliation" })]);
+
+  logReconciliation(logger, "task-creation-reconciliation", 4, 1, { inspected: 1, started: 1, failed: 0 });
+  expect(info).toEqual([expect.objectContaining({ message: "Worker periodic reconciliation changed state: task-creation-reconciliation" })]);
 });
 
 test("worker readiness distinguishes missing, stale, and current registrations", async () => {

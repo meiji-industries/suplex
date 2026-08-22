@@ -19,8 +19,14 @@ interface CreationIntentRow {
   supplemental_review: number;
 }
 
+export interface TaskCreationReconciliationResult {
+  inspected: number;
+  started: number;
+  failed: number;
+}
+
 /** Start committed task workflows that were interrupted before Temporal confirmation. */
-export async function reconcileTaskCreationIntents(database: ForgeDatabase, config: ForgeConfig, startWorkflow: typeof startIssueWorkflow = startIssueWorkflow): Promise<void> {
+export async function reconcileTaskCreationIntents(database: ForgeDatabase, config: ForgeConfig, startWorkflow: typeof startIssueWorkflow = startIssueWorkflow): Promise<TaskCreationReconciliationResult> {
   const intents = database.authQuery((db) => db.prepare(`SELECT i.id, i.task_id, i.workflow_id, i.company_id, i.project_id, i.project_revision_id,
       t.request_hash, t.brief_artifact_id, b.sha256 AS brief_sha256, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review
     FROM forge_task_creation_intents i
@@ -28,6 +34,8 @@ export async function reconcileTaskCreationIntents(database: ForgeDatabase, conf
     JOIN forge_artifacts b ON b.id = t.brief_artifact_id AND b.company_id = i.company_id
     WHERE i.state = 'workflow_starting'
     ORDER BY i.created_at, i.id`).all() as CreationIntentRow[]);
+  let started = 0;
+  let failed = 0;
   for (const intent of intents) {
     try {
       await startWorkflow(config, {
@@ -47,8 +55,11 @@ export async function reconcileTaskCreationIntents(database: ForgeDatabase, conf
     } catch (error) {
       const errorCode = error instanceof IssueWorkflowStartFailure ? error.code : "workflow_start_ambiguous";
       database.authQuery((db) => db.prepare("UPDATE forge_task_creation_intents SET error_code = ?, updated_at = ? WHERE id = ? AND state = 'workflow_starting'").run(errorCode, new Date().toISOString(), intent.id));
+      failed += 1;
       continue;
     }
     database.authQuery((db) => db.prepare("UPDATE forge_task_creation_intents SET state = 'started', error_code = NULL, lease_token = NULL, lease_expires_at = NULL, updated_at = ? WHERE id = ? AND state = 'workflow_starting'").run(new Date().toISOString(), intent.id));
+    started += 1;
   }
+  return { inspected: intents.length, started, failed };
 }

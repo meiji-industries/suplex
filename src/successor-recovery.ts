@@ -18,9 +18,15 @@ interface SuccessorIntentRow {
   state: "prepared" | "workflow_starting" | "started" | "linked";
 }
 
+export interface SuccessorReconciliationResult {
+  inspected: number;
+  linked: number;
+}
+
 /** Reconcile successors whose durable rows were committed before Temporal start completed. */
-export async function reconcileSuccessorIntents(database: ForgeDatabase, config: ForgeConfig, startWorkflow: typeof startIssueWorkflow = startIssueWorkflow): Promise<void> {
+export async function reconcileSuccessorIntents(database: ForgeDatabase, config: ForgeConfig, startWorkflow: typeof startIssueWorkflow = startIssueWorkflow): Promise<SuccessorReconciliationResult> {
   const intents = database.authQuery((db) => db.prepare("SELECT id, predecessor_task_id, predecessor_workflow_id, accepted_revision, successor_task_id, successor_workflow_id, company_id, project_id, project_revision_id, actor_user_id, state FROM forge_successor_intents WHERE state IN ('prepared', 'workflow_starting', 'started') ORDER BY created_at, id").all() as SuccessorIntentRow[]);
+  let linked = 0;
   for (const intent of intents) {
     const task = database.authQuery((db) => db.prepare(`SELECT t.brief_artifact_id AS briefArtifactId, b.sha256 AS briefSha256, t.image_artifact_ids_json AS imageIdsJson, t.role_agents_json AS roleAgentsJson, t.supplemental_review AS supplementalReview, t.request_hash AS requestHash
       FROM forge_tasks t JOIN forge_artifacts b ON b.id = t.brief_artifact_id
@@ -52,5 +58,7 @@ export async function reconcileSuccessorIntents(database: ForgeDatabase, config:
       db.prepare("UPDATE forge_task_creation_intents SET state = 'started', updated_at = ? WHERE id = ? AND state = 'workflow_starting'").run(now, `creation_${intent.id}`);
       db.prepare("INSERT OR IGNORE INTO forge_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES (?, ?, 'successor_linked', ?, ?, ?)").run(`audit_successor_link_${intent.id}`, intent.actor_user_id, intent.company_id, JSON.stringify({ intentId: intent.id, predecessorTaskId: intent.predecessor_task_id, successorTaskId: intent.successor_task_id, successorWorkflowId: intent.successor_workflow_id }), now);
     });
+    linked += 1;
   }
+  return { inspected: intents.length, linked };
 }

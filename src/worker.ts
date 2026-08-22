@@ -39,15 +39,24 @@ async function waitForWorkerPolling(worker: Worker, failure: { error?: unknown }
   throw new Error("Temporal worker did not start polling its workflow and activity task queues");
 }
 
-const startupSweepTimeoutMs = 30_000;
+const reconciliationTimeoutMs = 30_000;
+const taskCreationReconciliationIntervalMs = 60_000;
 
 /**
  * Recovery inspects local processes, SQLite, and Temporal. None of those
  * checks are allowed to keep a healthy worker from polling its task queue.
  */
-function runStartupSweep<T>(logger: StructuredLogger, name: string, sweep: () => Promise<T>, timeoutMs = startupSweepTimeoutMs): Promise<T | undefined> {
+export function logReconciliation(logger: Pick<StructuredLogger, "debug" | "info">, name: string, durationMs: number, changes: number, counts: Record<string, number>): void {
+  const context = { durationMs, changes, ...counts };
+  if (changes === 0) {
+    logger.debug(`Worker periodic reconciliation idle: ${name}`, context as never);
+    return;
+  }
+  logger.info(`Worker periodic reconciliation changed state: ${name}`, context as never);
+}
+
+function runReconciliation<T>(logger: StructuredLogger, name: string, sweep: () => Promise<T>, countChanges: (result: T) => number, counts: (result: T) => Record<string, number>, timeoutMs = reconciliationTimeoutMs): Promise<T | undefined> {
   const startedAt = Date.now();
-  logger.info(`Worker startup sweep started: ${name}`);
   let timeout: NodeJS.Timeout | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timeout = setTimeout(() => reject(new Error(`timed out after ${timeoutMs}ms`)), timeoutMs);
@@ -55,11 +64,11 @@ function runStartupSweep<T>(logger: StructuredLogger, name: string, sweep: () =>
   });
   return Promise.race([Promise.resolve().then(sweep), deadline])
     .then((result) => {
-      logger.info(`Worker startup sweep completed: ${name} (${Date.now() - startedAt}ms)`);
+      logReconciliation(logger, name, Date.now() - startedAt, countChanges(result), counts(result));
       return result;
     })
     .catch((error: unknown) => {
-      logger.error(`Worker startup sweep did not complete: ${name} (${Date.now() - startedAt}ms)`, {}, { error: error instanceof Error ? error.message : "unknown error" });
+      logger.error(`Worker periodic reconciliation did not complete: ${name} (${Date.now() - startedAt}ms)`, {}, { error: error instanceof Error ? error.message : "unknown error" });
       return undefined;
     })
     .finally(() => {
@@ -77,6 +86,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   let connection: NativeConnection | undefined;
   let worker: Worker | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
+  let creationReconciliationHeartbeat: NodeJS.Timeout | undefined;
   let workerRun: Promise<void> | undefined;
   let creationRecovery: Promise<void> | undefined;
   let shutdown: (() => void) | undefined;
@@ -121,18 +131,27 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
       } else {
         database.unregisterWorker(workerId);
       }
-      if (!creationRecovery) {
-        creationRecovery = runStartupSweep(logger, "task-creation-reconciliation", () => reconcileTaskCreationIntents(database, config))
-          .finally(() => { creationRecovery = undefined; });
-      }
+    };
+    const reconcileTaskCreation = (): void => {
+      if (creationRecovery) return;
+      creationRecovery = runReconciliation(
+        logger,
+        "task-creation-reconciliation",
+        () => reconcileTaskCreationIntents(database, config),
+        (result) => result.started + result.failed,
+        (result) => ({ inspected: result.inspected, started: result.started, failed: result.failed }),
+      ).then(() => undefined).finally(() => { creationRecovery = undefined; });
     };
     refreshRegistration();
-    void runStartupSweep(logger, "agent-execution-reconciliation", () => reconcileAgentExecutions(database));
-    void runStartupSweep(logger, "developer-execution-reconciliation", () => reconcileDeveloperExecutions(database));
-    void runStartupSweep(logger, "successor-intent-reconciliation", () => reconcileSuccessorIntents(database, config));
-    void runStartupSweep(logger, "capacity-ledger-reconciliation", async () => new CapacityManager(database, config).reconcileFromLedgers());
+    reconcileTaskCreation();
+    void runReconciliation(logger, "agent-execution-reconciliation", () => reconcileAgentExecutions(database), (result) => result.filter((outcome) => outcome.status === "failed").length, (result) => ({ inspected: result.length, failed: result.filter((outcome) => outcome.status === "failed").length }));
+    void runReconciliation(logger, "developer-execution-reconciliation", () => reconcileDeveloperExecutions(database), (result) => result.filter((outcome) => outcome.status === "failed").length, (result) => ({ inspected: result.length, failed: result.filter((outcome) => outcome.status === "failed").length }));
+    void runReconciliation(logger, "successor-intent-reconciliation", () => reconcileSuccessorIntents(database, config), (result) => result.linked, (result) => ({ inspected: result.inspected, linked: result.linked }));
+    void runReconciliation(logger, "capacity-ledger-reconciliation", async () => new CapacityManager(database, config).reconcileFromLedgers(), (result) => result, (result) => ({ reconciled: result }));
     heartbeat = setInterval(refreshRegistration, 10_000);
     heartbeat.unref();
+    creationReconciliationHeartbeat = setInterval(reconcileTaskCreation, taskCreationReconciliationIntervalMs);
+    creationReconciliationHeartbeat.unref();
 
     let shuttingDown = false;
     shutdown = (): void => {
@@ -149,6 +168,9 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
     if (heartbeat) {
       clearInterval(heartbeat);
     }
+    if (creationReconciliationHeartbeat) {
+      clearInterval(creationReconciliationHeartbeat);
+    }
     await creationRecovery;
     database.unregisterWorker(workerId);
     if (shutdown) {
@@ -160,6 +182,9 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   } catch (error) {
     if (heartbeat) {
       clearInterval(heartbeat);
+    }
+    if (creationReconciliationHeartbeat) {
+      clearInterval(creationReconciliationHeartbeat);
     }
     await creationRecovery;
     // Cleanup must never mask the original startup error: drain the worker

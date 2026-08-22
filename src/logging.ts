@@ -269,6 +269,10 @@ export class StructuredLogger {
     return StructuredLogger.fromLogger(this.logger.child(redact(context) as LogContext));
   }
 
+  debug(message: string, context: LogContext = {}): void {
+    this.write("debug", message, context);
+  }
+
   info(message: string, context: LogContext = {}): void {
     this.write("info", message, context);
   }
@@ -281,7 +285,7 @@ export class StructuredLogger {
     this.write("error", message, { ...context, ...details });
   }
 
-  private write(level: "info" | "warn" | "error", message: string, context: object): void {
+  private write(level: "debug" | "info" | "warn" | "error", message: string, context: object): void {
     this.logger[level](redact({
       timestamp: new Date().toISOString(),
       message,

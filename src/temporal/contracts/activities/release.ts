@@ -37,4 +37,5 @@ export type PublishReleaseActivityResult = z.infer<typeof PublishReleaseActivity
 
 export interface ReleaseActivities {
   publishRelease(input: PublishReleaseActivityInput): Promise<PublishReleaseActivityResult>;
+  pushDeliveryBranch(input: { taskId: string; companyId: string; workflowId: string; branchName: string; commitSha: string }): Promise<{ repository: string; branchName: string; commitSha: string }>;
 }

@@ -131,6 +131,11 @@ export const { recordDeliveryDecision } = proxyActivities<IssueActivities>({
   retry: { maximumAttempts: 1 },
 });
 
+export const { pushDeliveryBranch } = proxyActivities<IssueActivities>({
+  startToCloseTimeout: "2 minutes",
+  retry: EXTERNAL_AGENT_RETRY_POLICY,
+});
+
 export const { publishRelease } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "10 minutes",
   retry: { maximumAttempts: 5, initialInterval: "5 seconds", maximumInterval: "1 minute" },
@@ -220,4 +225,3 @@ export const { requestCapacity, tryAcquireCapacity, inspectCapacity, requeueCapa
   startToCloseTimeout: "1 minute",
   retry: { maximumAttempts: 5, initialInterval: "1 second", maximumInterval: "15 seconds" },
 });
-

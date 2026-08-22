@@ -493,6 +493,24 @@ export class ReleaseService {
     this.database.authTransaction((db) => db.prepare("UPDATE forge_releases SET status = 'ready', updated_at = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ? AND status = 'draft'").run(new Date().toISOString(), release.id, input.taskId, input.companyId, input.workflowId));
   }
 
+  /** Push a reviewed task branch without creating a release or pull request. */
+  async pushBranch(input: { repository: string; worktreePath: string; branchName: string; commitSha: string }): Promise<void> {
+    await this.github.checkAuthentication();
+    if ((await this.github.getRemoteRepository({ cwd: input.worktreePath })) !== input.repository.toLowerCase()) throw providerFailure("wrong-remote", "Local origin does not match the pinned repository");
+    const local = await this.github.inspectLocalRevision({ cwd: input.worktreePath });
+    if (!local.clean || local.branch !== input.branchName || local.headSha.toLowerCase() !== input.commitSha.toLowerCase()) throw providerFailure("stale-reviewed-revision", "Task worktree no longer matches the reviewed branch");
+    const remote = await this.github.getBranchHead({ repository: input.repository, branch: input.branchName });
+    if (remote?.toLowerCase() !== input.commitSha.toLowerCase()) {
+      try { await this.github.pushNormal({ cwd: input.worktreePath, branch: input.branchName }); }
+      catch {
+        const observed = await this.github.getBranchHead({ repository: input.repository, branch: input.branchName });
+        if (observed?.toLowerCase() !== input.commitSha.toLowerCase()) throw providerFailure("provider-unavailable", "Branch push outcome is unconfirmed");
+      }
+    }
+    const confirmed = await this.github.getBranchHead({ repository: input.repository, branch: input.branchName });
+    if (confirmed?.toLowerCase() !== input.commitSha.toLowerCase()) throw providerFailure("provider-unavailable", "Branch push did not produce the reviewed commit");
+  }
+
   private fail(input: PublishReleaseInput, error: unknown): never {
     const failure = error instanceof GithubReleaseFailure ? error : providerFailure("provider-unavailable", "Release provider request failed");
     const releaseKey = releaseKeyFor(input, input.coordinates, input.reviewedRevision);

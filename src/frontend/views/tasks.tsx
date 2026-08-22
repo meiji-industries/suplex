@@ -2,6 +2,7 @@ import { Collapsible } from ".././components/ui/collapsible.js";
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
 import { Button, buttonVariants } from ".././components/ui/button.js";
 import { Checkbox } from ".././components/ui/checkbox.js";
+import { RadioGroup, RadioGroupItem } from ".././components/ui/radio-group.js";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbSeparator } from ".././components/ui/breadcrumb.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from ".././components/ui/dropdown-menu.js";
 import { Input } from ".././components/ui/input.js";
@@ -44,7 +45,7 @@ function taskListDate(timestamp: string): string {
   return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(date);
 }
 
-function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, projects, projectId, onProjectChange, agents, roleAgents, onRoleAgentChange, title, onTitleChange, description, onDescriptionChange, autoApprovePlan, onAutoApprovePlanChange, pullRequestMode, onPullRequestModeChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
+function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, projects, projectId, onProjectChange, agents, roleAgents, onRoleAgentChange, title, onTitleChange, description, onDescriptionChange, autoApprovePlan, onAutoApprovePlanChange, deliveryTarget, onDeliveryTargetChange, runProjectTests, onRunProjectTestsChange, visualEvidence, onVisualEvidenceChange, supplementalReview, onSupplementalReviewChange, images, onAddImages, onRemoveImage, busy, error, onSubmit }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   companyName: string | undefined;
@@ -61,8 +62,14 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
   onDescriptionChange: (description: string) => void;
   autoApprovePlan: boolean;
   onAutoApprovePlanChange: (autoApprovePlan: boolean) => void;
-  pullRequestMode: "draft" | "ready" | "auto_merge";
-  onPullRequestModeChange: (pullRequestMode: "draft" | "ready" | "auto_merge") => void;
+  deliveryTarget: "local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged";
+  onDeliveryTargetChange: (deliveryTarget: "local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged") => void;
+  runProjectTests: boolean;
+  onRunProjectTestsChange: (value: boolean) => void;
+  visualEvidence: "off" | "capture" | "required";
+  onVisualEvidenceChange: (value: "off" | "capture" | "required") => void;
+  supplementalReview: boolean;
+  onSupplementalReviewChange: (value: boolean) => void;
   images: Array<{ filename: string; mimeType: string; base64: string }>;
   onAddImages: (files: File[]) => Promise<void>;
   onRemoveImage: (index: number) => void;
@@ -72,6 +79,9 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
 }): ReactElement {
   const active = companyStatus === "active";
   const agentRoles = ["planner", "reviewer", "builder", "integrator"] as const;
+  const project = projects.find((candidate) => candidate.id === projectId);
+  const hasProjectTests = Boolean(project?.verificationCommand.trim());
+  const canSupplementalReview = Boolean(project?.roleDefaults.reviewer && roleAgents.reviewer);
   const pasteImages = (event: ClipboardEvent<HTMLFormElement>): void => {
     const files = Array.from(event.clipboardData.files);
     if (!files.length || busy) return;
@@ -111,13 +121,23 @@ function NewTaskDialog({ open, onOpenChange, companyName, companyStatus, project
                 </DropdownMenuContent>
               </DropdownMenu>
               <Select value={projectId || null} onValueChange={(value) => onProjectChange(value ?? "")}><SelectTrigger id="task-project" aria-label="Project" size="sm" className="w-auto min-w-0 rounded-full border-border bg-background px-2.5 shadow-none"><FolderKanban className="size-3.5 text-muted-foreground" /><SelectValue placeholder="Project">{(value) => projects.find((project) => project.id === value)?.name ?? (value ? "Unavailable project" : "Project")}</SelectValue></SelectTrigger><SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent></Select>
-              <Select value={pullRequestMode} onValueChange={(value) => { if (value === "draft" || value === "ready" || value === "auto_merge") onPullRequestModeChange(value); }}><SelectTrigger aria-label="Pull request handling" size="sm" className="w-auto min-w-0 rounded-full border-border bg-background px-2.5 shadow-none"><SelectValue>{(value) => value === "ready" ? "PR: Ready" : value === "auto_merge" ? "PR: Auto-merge" : "PR: Draft"}</SelectValue></SelectTrigger><SelectContent><SelectItem value="draft">Draft</SelectItem><SelectItem value="ready">Ready for review</SelectItem><SelectItem value="auto_merge">Auto-merge</SelectItem></SelectContent></Select>
               <Button type="button" variant="outline" size="icon-sm" className="rounded-full" aria-label="More task properties"><Ellipsis className="size-3.5" /></Button>
               <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">
                 <label className="flex cursor-pointer items-center gap-2 text-xs"><Checkbox id="task-auto-approve-plan" checked={autoApprovePlan} onCheckedChange={(checked) => onAutoApprovePlanChange(checked === true)} />Auto-approve plan</label>
                 <Button type="submit" size="sm" variant="outline" disabled={busy || !projectId || !title.trim() || !description.trim()} title="Create task (⌘Enter)">{busy ? "Saving…" : "Create task"}</Button>
               </DialogFooter>
             </div>
+            <fieldset className="border-t border-border/70 px-5 py-3">
+              <legend className="px-0 text-xs font-medium">Delivery &amp; checks</legend>
+              <RadioGroup aria-label="Delivery target" value={deliveryTarget} onValueChange={(value) => { if (["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"].includes(value)) onDeliveryTargetChange(value as typeof deliveryTarget); }} className="mt-2 flex flex-wrap gap-x-3 gap-y-2">
+                {[["local_worktree", "Keep in worktree"], ["remote_branch", "Push branch"], ["pull_request_draft", "Draft pull request"], ["pull_request_ready", "Ready for review"], ["merged", "Fully merged"]].map(([value, label]) => <label className="flex items-center gap-1.5 text-xs" key={value}><RadioGroupItem value={value} />{label}</label>)}
+              </RadioGroup>
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+                {hasProjectTests ? <label className="flex items-center gap-2"><Checkbox checked={runProjectTests} onCheckedChange={(checked) => onRunProjectTestsChange(checked === true)} />Run project tests</label> : <span className="text-muted-foreground">No project test command configured.</span>}
+                {canSupplementalReview ? <label className="flex items-center gap-2"><Checkbox checked={supplementalReview} onCheckedChange={(checked) => onSupplementalReviewChange(checked === true)} />Second review</label> : null}
+                <label className="flex items-center gap-2">Visual evidence <Select value={visualEvidence} onValueChange={(value) => { if (value === "off" || value === "capture" || value === "required") onVisualEvidenceChange(value); }}><SelectTrigger aria-label="Visual evidence" size="sm"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="off">Off</SelectItem><SelectItem value="capture">Capture</SelectItem><SelectItem value="required">Required</SelectItem></SelectContent></Select></label>
+              </div>
+            </fieldset>
           </form>
         ) : <p className="text-xs text-muted-foreground">{companyStatus === "paused" ? "Company paused. New tasks are unavailable." : companyStatus === "archived" ? "Company archived. New tasks are unavailable." : "No active company is available."}</p>}
       </DialogContent>
@@ -141,7 +161,10 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [autoApprovePlan, setAutoApprovePlan] = useState(false);
-  const [pullRequestMode, setPullRequestMode] = useState<"draft" | "ready" | "auto_merge">("draft");
+  const [deliveryTarget, setDeliveryTarget] = useState<"local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged">("pull_request_draft");
+  const [runProjectTests, setRunProjectTests] = useState(true);
+  const [visualEvidence, setVisualEvidence] = useState<"off" | "capture" | "required">("off");
+  const [supplementalReview, setSupplementalReview] = useState(false);
   const [images, setImages] = useState<Array<{ filename: string; mimeType: string; base64: string }>>([]);
   const [error, setError] = useState("");
   const [createError, setCreateError] = useState("");
@@ -196,7 +219,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   }, [mode]);
   useEffect(() => {
     selectedRef.current = undefined;
-    setSelected(undefined); setProjectId(""); setRoleAgentOverrides({}); setTitle(""); setDescription(""); setAutoApprovePlan(false); setPullRequestMode("draft"); setImages([]); setCreateError(""); setDetailNotFound(false);
+    setSelected(undefined); setProjectId(""); setRoleAgentOverrides({}); setTitle(""); setDescription(""); setAutoApprovePlan(false); setDeliveryTarget("pull_request_draft"); setRunProjectTests(true); setVisualEvidence("off"); setSupplementalReview(false); setImages([]); setCreateError(""); setDetailNotFound(false);
   }, [companyId]);
   useEffect(() => {
     const events = new EventSource("/api/tasks/events");
@@ -243,7 +266,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     if (!companyId || currentCompany?.status !== "active") return;
     setBusy(true); setCreateError(""); setError("");
     try {
-      const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, roleAgents: newTaskRoleAgents, autoApprovePlan, pullRequestMode, idempotencyKey: crypto.randomUUID() }) });
+      const result = await readJson<ApiTask>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ projectId, title, description, images, roleAgents: newTaskRoleAgents, autoApprovePlan, deliveryTarget, runProjectTests, visualEvidence, supplementalReview, idempotencyKey: crypto.randomUUID() }) });
       const taskPath = withCompany(`/tasks/${encodeURIComponent(result.id)}`, companyId);
       if (result.allowedCommands.includes("start_planning")) {
         if (planningUnavailable) { navigate(taskPath); setError(planningUnavailable); return; }
@@ -457,7 +480,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
           })}
         </div> : null}
         {!currentCompany && scopeLoaded ? <div className="px-4 py-8 text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</div> : null}
-        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); else { setAutoApprovePlan(false); setPullRequestMode("draft"); } }} companyName={currentCompany?.name} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setRoleAgentOverrides({}); }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => ({ ...current, [role]: agentId }))} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} autoApprovePlan={autoApprovePlan} onAutoApprovePlanChange={setAutoApprovePlan} pullRequestMode={pullRequestMode} onPullRequestModeChange={setPullRequestMode} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} />
+        <NewTaskDialog open={createOpen} onOpenChange={(open) => { setCreateOpen(open); if (open) setCreateError(""); else { setAutoApprovePlan(false); setDeliveryTarget("pull_request_draft"); setRunProjectTests(true); setVisualEvidence("off"); setSupplementalReview(false); } }} companyName={currentCompany?.name} companyStatus={currentCompany?.status} projects={availableProjects} projectId={projectId} onProjectChange={(nextProjectId) => { setProjectId(nextProjectId); setRoleAgentOverrides({}); }} agents={agents} roleAgents={newTaskRoleAgents} onRoleAgentChange={(role, agentId) => setRoleAgentOverrides((current) => { const next = { ...current, [role]: agentId }; if (role === "reviewer" && !agentId) setSupplementalReview(false); return next; })} title={title} onTitleChange={setTitle} description={description} onDescriptionChange={setDescription} autoApprovePlan={autoApprovePlan} onAutoApprovePlanChange={setAutoApprovePlan} deliveryTarget={deliveryTarget} onDeliveryTargetChange={setDeliveryTarget} runProjectTests={runProjectTests} onRunProjectTestsChange={setRunProjectTests} visualEvidence={visualEvidence} onVisualEvidenceChange={setVisualEvidence} supplementalReview={supplementalReview} onSupplementalReviewChange={setSupplementalReview} images={images} onAddImages={addImages} onRemoveImage={(index) => setImages((current) => current.filter((_, candidate) => candidate !== index))} busy={busy} error={createError} onSubmit={create} />
       </div>
     </ApplicationFrame>
   );

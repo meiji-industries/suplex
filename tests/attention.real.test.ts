@@ -82,7 +82,7 @@ test.skipIf(!runRealJourney)("real Codex/GitHub attention decision produces a sa
     }
     if (!temporalConnection) throw new Error("Temporal did not become available");
     await ensureTemporalFoundation(temporalConnection, config);
-    temporalConnection.close();
+    await temporalConnection.close();
 
     database = new ForgeDatabase(config.databasePath);
     const artifacts = new ArtifactStore(config.artifactRoot);

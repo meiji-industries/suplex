@@ -27,7 +27,7 @@ async function waitForTemporal(config: ForgeConfig, timeoutMs = 30_000): Promise
   while (Date.now() < deadline) {
     try {
       const temporal = await connectTemporal(config);
-      temporal.connection.close();
+      await temporal.connection.close();
       return;
     } catch (error) {
       lastError = error;
@@ -229,7 +229,7 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
     try {
       await ensureTemporalFoundation(temporal.connection, config);
     } finally {
-      temporal.connection.close();
+      await temporal.connection.close();
     }
 
     registry = {

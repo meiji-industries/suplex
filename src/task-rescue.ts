@@ -48,7 +48,7 @@ export class TaskRescueService {
         const scheduledAt = pending?.scheduledTime as { seconds?: number | string } | undefined;
         const seconds = scheduledAt?.seconds === undefined ? null : Number(scheduledAt.seconds) * 1000;
         workflow = { status: String(info.status ?? "running"), lastWorkflowTaskFailure: typeof pending?.failure === "object" ? JSON.stringify(pending.failure).slice(0, 500) : null, pendingWorkflowTaskAgeSeconds: seconds === null ? null : Math.max(0, Math.floor((Date.now() - seconds) / 1000)), buildId: typeof info.workerVersionStamp === "object" ? JSON.stringify(info.workerVersionStamp) : null, currentBuildId: null };
-      } finally { temporal.connection.close(); }
+      } finally { await temporal.connection.close(); }
     } catch { /* diagnostics must remain useful when Temporal is unavailable */ }
     return { workflow, executions: local.executions.map((entry) => ({ ...entry, terminal: terminalExecution.has(entry.status) })), capacityRequests: local.capacityRequests, leases: [] };
   }
@@ -65,7 +65,7 @@ export class TaskRescueService {
         const runId = description.rootExecution?.runId ?? description.runId;
         this.database.projectIssueState({ taskId: state.issueId, companyId: state.companyId, projectId: state.projectId, workflowId: state.workflowId, ...(runId ? { runId } : {}), revision: state.revision, phase: state.phase, owner: state.owner, allowedCommands: state.allowedCommands, pendingAction: state.pendingAction, lastEventId: state.lastEventId, state });
         steps.push(this.record(task, "Resync projection", "completed", `Projected workflow revision ${state.revision}.`));
-      } finally { temporal.connection.close(); }
+      } finally { await temporal.connection.close(); }
     } catch (error) {
       steps.push(this.record(task, "Resync projection", "failed", error instanceof Error ? error.message.slice(0, 300) : "Could not query the live workflow state."));
     }
@@ -83,7 +83,7 @@ export class TaskRescueService {
           await temporal.connection.workflowService.resetWorkflowExecution({ namespace: this.config.temporalNamespace, workflowExecution: { workflowId: task.workflowId, ...(runId ? { runId } : {}) }, reason: "Forge task rescue", requestId: randomUUID(), workflowTaskFinishEventId: finishEventId, resetReapplyType: 1 } as never);
           await routeWorkflowToCurrentDeployment(temporal.connection as never, this.config, task.workflowId, "forge-task-rescue");
           steps.push(this.record(task, "Re-dispatch workflow", "completed", "Reset to the last workflow task and cleared the versioning override."));
-        } finally { temporal.connection.close(); }
+        } finally { await temporal.connection.close(); }
       } catch (error) { steps.push(this.record(task, "Re-dispatch workflow", "failed", error instanceof Error ? error.message.slice(0, 300) : "Temporal reset failed.")); }
     } else steps.push(this.record(task, "Re-dispatch workflow", "skipped", "Workflow has no stale or failed workflow task."));
     const released = this.database.authTransaction((db) => {

@@ -123,6 +123,9 @@ test("reconciliation blocks replacement startup when a matching recorded process
 test("reconciliation refuses a live legacy process record without exact ownership identity", async () => {
   const worker = ownedProcess("worker", 4101);
   const { executable: _executable, argv: _argv, startTime: _startTime, ...legacyWorker } = worker;
+  void _executable;
+  void _argv;
+  void _startTime;
   const controller = reconciliationController({
     async inspect(pid) {
       return pid === worker.pid ? inspection(worker) : undefined;

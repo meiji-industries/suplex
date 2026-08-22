@@ -15,6 +15,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;
+      void _worktreePath;
       const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, safeResult.failureCode === "delivery-reconciliation-failed" ? "unsafe_recovery" : "agent_contradiction", safeResult.failureCode ?? "developer_delivery_blocked", safeResult.deliverySummary) : undefined;
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, ...(attention ? { attentionEvidenceArtifactId: attention.artifactId } : {}), deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) });
     },
@@ -24,6 +25,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
         activityWorktrees.set(result.developerExecutionId, result.worktreePath);
         activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
         const { worktreePath: _worktreePath, ...safeResult } = result;
+        void _worktreePath;
         const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, safeResult.failureCode === "delivery-reconciliation-failed" ? "unsafe_recovery" : "agent_contradiction", safeResult.failureCode ?? "developer_delivery_blocked", safeResult.deliverySummary) : undefined;
         return { ...safeResult, ...(attention ? { attentionEvidenceArtifactId: attention.artifactId } : {}), deliverySummary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.deliverySummary)) };
       }));
@@ -36,6 +38,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
       activityWorktrees.set(result.developerExecutionId, result.worktreePath);
       activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
       const { worktreePath: _worktreePath, ...safeResult } = result;
+      void _worktreePath;
       const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, "verification_unrecoverable", "developer_repair_blocked", safeResult.summary) : undefined;
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId, sessionRef: result.developerSessionRef, worktreePath: result.worktreePath }, { ...safeResult, ...(attention ? { attentionEvidenceArtifactId: attention.artifactId } : {}), summary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.summary)) });
     },
@@ -46,6 +49,7 @@ export function createDevelopmentActivities(ctx: ActivityContext): DevelopmentAc
         activityWorktrees.set(result.developerExecutionId, result.worktreePath);
         activityWorktreesByBranch.set(`${input.workflowId}:${result.branchName}`, result.worktreePath);
         const { worktreePath: _worktreePath, ...safeResult } = result;
+        void _worktreePath;
         const attention = safeResult.outcome === "blocked" ? await putAttentionEvidence(input, "verification_unrecoverable", "developer_repair_blocked", safeResult.summary) : undefined;
         return { ...safeResult, ...(attention ? { attentionEvidenceArtifactId: attention.artifactId } : {}), summary: SafeSummarySchema.parse(normalizeSafeSummary(safeResult.summary)) };
       }));

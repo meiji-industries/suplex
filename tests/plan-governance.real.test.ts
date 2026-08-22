@@ -175,7 +175,7 @@ test("authenticated Ticket 07 production proof is present and complete", async (
     }
     if (!temporalConnection) throw new Error("BLOCKED: local Temporal could not be started for the real Ticket 07 proof");
     await ensureTemporalFoundation(temporalConnection, config);
-    temporalConnection.close();
+    await temporalConnection.close();
 
     database = new ForgeDatabase(config.databasePath);
     database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('ticket07-admin', 'Ticket 07 Admin', 'ticket07-admin@forge.local', 'admin', 'active', ?, ?)").run(startedAt, startedAt));

@@ -89,6 +89,7 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
       const worktreePath = input.worktreePath ?? latestWorktree(input, input.priorDeveloperExecutionId);
       const supervised = await invokeAgent(input, () => runSupervised<WorkflowCiRepairActivityResult>(input, async (service) => {
         const { worktreePath: _worktreePath, ...result } = await service.runCiRepair({ ...input, worktreePath });
+        void _worktreePath;
         return result;
       }));
       if (supervised.status !== "completed") throw ApplicationFailure.nonRetryable(supervised.summary, supervised.reasonCode, { executionId: supervised.developerExecutionId });

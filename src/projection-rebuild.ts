@@ -122,7 +122,7 @@ export class ProjectionRebuildService {
     } catch (error) {
       throw error;
     } finally {
-      temporal.connection.close();
+      await temporal.connection.close();
     }
     return { rebuilt, findings };
   }

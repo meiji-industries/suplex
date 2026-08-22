@@ -68,7 +68,7 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
       try {
         const connection = await Connection.connect({ address: config.temporalAddress, connectTimeout: "1 second" });
         await ensureTemporalFoundation(connection, config);
-        connection.close();
+        await connection.close();
         return;
       } catch { await new Promise((resolve) => setTimeout(resolve, 250)); }
     }
@@ -191,7 +191,7 @@ test("browser task remains in authoritative Planning across API, Worker, and Tem
         const serialized = JSON.stringify(history).toLowerCase();
         for (const forbidden of ["durable browser task", "survive the restart", imagePath.toLowerCase(), root.toLowerCase(), "ivborw0kggo", invitation.token.toLowerCase(), cookies.join(";").toLowerCase()]) expect(serialized).not.toContain(forbidden);
         await new (await import("@temporalio/client")).Client({ connection: temporal, namespace: config.temporalNamespace }).workflow.getHandle(workflowId).terminate("test complete");
-      } finally { temporal.close(); }
+      } finally { await temporal.close(); }
       await context.close();
     } finally { await browser.close(); }
   } finally {

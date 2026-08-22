@@ -442,6 +442,7 @@ test("repairs the legacy revision-zero seed before applying the Temporal initial
     projectState(value.database, planning);
     projectState(value.database, approval);
     const { issueId, repairCycle: _repairCycle, ...seed } = canonical;
+    void _repairCycle;
     const legacy = { ...seed, taskId: issueId };
     const legacyHash = projectionStateHash(legacy);
     value.database.authTransaction((db) => {

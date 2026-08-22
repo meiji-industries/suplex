@@ -1,0 +1,54 @@
+import tseslint from "typescript-eslint";
+
+const droppedTables = [
+  "forge_developer_execution_leases",
+  "forge_developer_execution_truth",
+  "forge_developer_result_claims",
+  "forge_developer_result_conflicts",
+  "forge_plan_authorizations",
+  "forge_issue_governance",
+  "forge_projection_integrity_findings",
+  "forge_projection_invalidations",
+  "forge_capacity_requests",
+  "forge_project_revisions",
+  "forge_issue_outputs",
+].join("|");
+
+export default tseslint.config({
+  ignores: ["dist/**", "node_modules/**", ".scratch/**", "coverage/**"],
+}, {
+  files: ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
+  plugins: {
+    "@typescript-eslint": tseslint.plugin,
+  },
+  languageOptions: {
+    parser: tseslint.parser,
+    parserOptions: {
+      projectService: true,
+      tsconfigRootDir: import.meta.dirname,
+    },
+  },
+  rules: {
+    "@typescript-eslint/no-floating-promises": "error",
+    "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", caughtErrors: "all" }],
+    "@typescript-eslint/switch-exhaustiveness-check": "error",
+    "no-restricted-syntax": ["error",
+      {
+        selector: "CallExpression[callee.object.name='JSON'][callee.property.name='parse']",
+        message: "Use the json() helper from task-utils.ts instead of JSON.parse().",
+      },
+      {
+        selector: `CallExpression[callee.object.name='db'][callee.property.name='prepare'][arguments.0.value=/${droppedTables}/]`,
+        message: "Do not query a table removed by a migration.",
+      },
+    ],
+  },
+}, {
+  files: ["src/task-utils.ts"],
+  rules: {
+    "no-restricted-syntax": ["error", {
+      selector: `CallExpression[callee.object.name='db'][callee.property.name='prepare'][arguments.0.value=/${droppedTables}/]`,
+      message: "Do not query a table removed by a migration.",
+    }],
+  },
+});

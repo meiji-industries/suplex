@@ -647,7 +647,7 @@ export class ReleaseService {
       if (remoteHead?.toLowerCase() !== adoptedReviewed.commitSha.toLowerCase()) {
         try {
           await this.github.pushNormal({ cwd: coordinates.worktreePath, branch: coordinates.headBranch });
-        } catch (error) {
+        } catch {
           try {
             const observed = await this.github.getBranchHead({ repository: activeCoordinates.repository, branch: activeCoordinates.headBranch });
             if (observed?.toLowerCase() === adoptedReviewed.commitSha.toLowerCase()) this.updateOperation(pushKey, "completed");

@@ -28,7 +28,7 @@ test("runs and replays the Temporal scenario corpus", async () => {
         for (const execution of executions.filter(({ scenario }) => requested.size === 0 || requested.has(scenario))) await captureWorkflowHistory({ address: config.temporalAddress, namespace: config.temporalNamespace, workflowId: execution.workflowId, firstRunId: execution.firstRunId, scenario: execution.scenario, currentPhase: execution.currentPhase, outputDir: process.env.FORGE_REPLAY_CAPTURE_PATH, ...(replacementIds[execution.scenario] ? { replace: replacementIds[execution.scenario] } : {}) });
       }
     } finally {
-      scenarioClient.connection.close();
+      await scenarioClient.connection.close();
     }
 
 

@@ -153,7 +153,7 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
         const history = await ciReplayClient.client.workflow.getHandle(fixtureWorkflowId).fetchHistory();
         await replayIssueHistory(history as ReplayHistory, `ci-${name}-replay`);
       }
-    } finally { ciReplayClient.connection.close(); }
+    } finally { await ciReplayClient.connection.close(); }
 
     const recoveryWorkflowId = `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-start-failure`;
     await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-start-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, continuationState: { phase: "development", revision: 4, owner: "lead", allowedCommands: ["cancel_development", "reject_plan", "cancel_issue"], pendingAction: "Developer execution", lastEventId: `${recoveryWorkflowId}:4`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_integration", leadOutputArtifactId: "artifact_integration_output", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], supplementalReviewUsed: false, repairCycle: 0 } });

@@ -90,7 +90,7 @@ export class TemporalHealthProbe {
         details: { namespace: this.config.temporalNamespace, address: this.config.temporalAddress },
       };
     } finally {
-      connection?.close();
+      await connection?.close();
     }
   }
 }
@@ -112,7 +112,7 @@ export async function startProbeWorkflow(config: ForgeConfig, input: Omit<ProbeW
     });
     return { workflowId: handle.workflowId, runId: handle.firstExecutionRunId };
   } finally {
-    temporalClient.connection.close();
+    await temporalClient.connection.close();
   }
 }
 
@@ -122,7 +122,7 @@ export async function queryProbeWorkflow(config: ForgeConfig, workflowId: string
     const handle: WorkflowHandle<typeof probeWorkflow> = temporalClient.client.workflow.getHandle(workflowId, runId);
     return ProbeWorkflowStateSchema.parse(await handle.query(probeStateQuery));
   } finally {
-    temporalClient.connection.close();
+    await temporalClient.connection.close();
   }
 }
 
@@ -225,7 +225,7 @@ export async function startIssueWorkflow(config: ForgeConfig, input: Omit<IssueW
       }
     }
   } finally {
-    temporalClient.connection.close();
+    await temporalClient.connection.close();
   }
 }
 
@@ -249,7 +249,7 @@ export async function executeIssueCommand(config: ForgeConfig, workflowId: strin
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
     return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates[command] as never, { args: [validatedInput as never], updateId: (validatedInput as { commandId: string }).commandId }));
   } finally {
-    temporalClient.connection.close();
+    await temporalClient.connection.close();
   }
 }
 
@@ -269,7 +269,7 @@ export async function acceptIssuePlanning(config: ForgeConfig, workflowId: strin
     }
     throw new Error("Planning update was accepted but did not advance Workflow state");
   } finally {
-    temporalClient.connection.close();
+    await temporalClient.connection.close();
   }
 }
 
@@ -289,7 +289,7 @@ export async function acceptIssueDevelopment(config: ForgeConfig, workflowId: st
     }
     throw new Error(`${issueCommands[command].label} update was accepted but did not advance Workflow state`);
   } finally {
-    temporalClient.connection.close();
+    await temporalClient.connection.close();
   }
 }
 
@@ -301,7 +301,7 @@ export async function reconcileIssueDeveloperDelivery(config: ForgeConfig, workf
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
     return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.retry_development, { args: [validatedInput], updateId: validatedInput.commandId }));
-  } finally { temporalClient.connection.close(); }
+  } finally { await temporalClient.connection.close(); }
 }
 
 export async function resolveIssueDecisionBlocker(config: ForgeConfig, workflowId: string, input: ResolveDecisionBlockerInput): Promise<IssueWorkflowState> {
@@ -313,7 +313,7 @@ export async function resolveIssueDecisionBlocker(config: ForgeConfig, workflowI
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
     return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.resolve_decision_blocker, { args: [validatedInput] }));
-  } finally { temporalClient.connection.close(); }
+  } finally { await temporalClient.connection.close(); }
 }
 
 export async function resyncIssueProjection(config: ForgeConfig, workflowId: string, input: StartPlanningInput): Promise<IssueWorkflowState> {
@@ -324,7 +324,7 @@ export async function resyncIssueProjection(config: ForgeConfig, workflowId: str
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
     return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.resync_projection, { args: [validatedInput] }));
-  } finally { temporalClient.connection.close(); }
+  } finally { await temporalClient.connection.close(); }
 }
 
 export async function rejectIssuePlan(config: ForgeConfig, workflowId: string, input: PlanCommandInput): Promise<IssueWorkflowState> {
@@ -336,7 +336,7 @@ export async function rejectIssuePlan(config: ForgeConfig, workflowId: string, i
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
     return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.reject_plan, { args: [validatedInput], updateId: validatedInput.commandId }));
-  } finally { temporalClient.connection.close(); }
+  } finally { await temporalClient.connection.close(); }
 }
 
 export async function reviseIssuePlan(config: ForgeConfig, workflowId: string, input: PlanRevisionCommand): Promise<IssueWorkflowState> {
@@ -348,7 +348,7 @@ export async function reviseIssuePlan(config: ForgeConfig, workflowId: string, i
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
     return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.revise_plan, { args: [validatedInput] }));
-  } finally { temporalClient.connection.close(); }
+  } finally { await temporalClient.connection.close(); }
 }
 
 export async function continueIssueWork(config: ForgeConfig, workflowId: string, input: ContinueWorkCommand): Promise<IssueWorkflowState> {
@@ -360,7 +360,7 @@ export async function continueIssueWork(config: ForgeConfig, workflowId: string,
   try {
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
     return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.continue_work, { args: [validatedInput] }));
-  } finally { temporalClient.connection.close(); }
+  } finally { await temporalClient.connection.close(); }
 }
 
 export async function queryIssueWorkflow(config: ForgeConfig, workflowId: string): Promise<IssueWorkflowState> {
@@ -371,7 +371,7 @@ export async function queryIssueWorkflow(config: ForgeConfig, workflowId: string
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
     return IssueWorkflowStateSchema.parse(await handle.query(issueStateQuery));
   } finally {
-    temporalClient.connection.close();
+    await temporalClient.connection.close();
   }
 }
 
@@ -385,6 +385,6 @@ export async function recordIssueProgress(config: ForgeConfig, workflowId: strin
     const handle: WorkflowHandle<typeof issueWorkflow> = temporalClient.client.workflow.getHandle(workflowId);
     return IssueWorkflowStateSchema.parse(await handle.executeUpdate(issueUpdates.record_progress, { args: [validatedInput], updateId: validatedInput.commandId }));
   } finally {
-    temporalClient.connection.close();
+    await temporalClient.connection.close();
   }
 }

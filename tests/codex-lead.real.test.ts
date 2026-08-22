@@ -120,7 +120,7 @@ test("the mandatory release seam proves HTTP, Temporal, real Codex, browser reso
     expect(temporalConnection).toBeDefined();
     if (!temporalConnection) throw new Error("The isolated Temporal server did not start");
     await ensureTemporalFoundation(temporalConnection, config);
-    temporalConnection.close();
+    await temporalConnection.close();
     temporalConnection = undefined;
 
     server = await createForgeServer(config, { logSink: (line) => capturedLogs.push(line) });
@@ -248,7 +248,7 @@ test("the mandatory release seam proves HTTP, Temporal, real Codex, browser reso
     expect(await narrow.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await desktopContext.close();
     await narrowContext.close();
-    browser.close();
+    await browser.close();
     browser = undefined;
 
     const executions = server.database.authQuery((db) => db.prepare("SELECT task_id, session_ref, resolved_model, resolved_reasoning_level, resolved_service_priority, wrapper_pid, process_pid FROM forge_agent_executions WHERE company_id = ? ORDER BY started_at").all(company.id) as Array<{ task_id: string; session_ref: string | null; resolved_model: string; resolved_reasoning_level: string; resolved_service_priority: string; wrapper_pid: number | null; process_pid: number | null }>);
@@ -269,7 +269,7 @@ test("the mandatory release seam proves HTTP, Temporal, real Codex, browser reso
     const firstHistory = JSON.stringify(await historyClient.workflow.getHandle((firstPlan.workflowId as string)).fetchHistory());
     const secondHistory = JSON.stringify(await historyClient.workflow.getHandle((secondPlan.workflowId as string)).fetchHistory());
     const blockerHistory = JSON.stringify(await historyClient.workflow.getHandle((blocked.workflowId as string)).fetchHistory());
-    historyConnection.close();
+    await historyConnection.close();
     const artifactRows = server.database.authQuery((db) => db.prepare("SELECT storage_path FROM forge_artifacts WHERE company_id = ?").all(company.id) as Array<{ storage_path: string }>);
     const artifactText = (await Promise.all(artifactRows.map(async (row) => (await import("node:fs/promises")).readFile(join(config.artifactRoot, row.storage_path)))).then((buffers) => buffers.map((bytes) => bytes.toString("utf8")))).join("\n");
     const publicPayload = JSON.stringify([firstPlan, revised, secondPlan, blocked, resolved]);
@@ -318,8 +318,8 @@ test("the mandatory release seam proves HTTP, Temporal, real Codex, browser reso
   } finally {
     await browser?.close().catch(() => undefined);
     if (listening && server) await server.app.close().catch(() => undefined);
-    temporalConnection?.close();
-    worker?.shutdown();
+    await temporalConnection?.close();
+    await worker?.shutdown();
     await workerRun?.catch(() => undefined);
     await workerConnection?.close();
     server?.database.close();

@@ -137,7 +137,7 @@ export function createTemporalHarness(): TemporalHarness {
       throw new Error(`Temporal connection was not established: ${temporalError}`);
     }
     await ensureTemporalFoundation(temporalConnection, config);
-    temporalConnection.close();
+    await temporalConnection.close();
     workflowBundle = await buildProductionWorkflowBundle();
 
     database = new ForgeDatabase(config.databasePath);
@@ -186,6 +186,7 @@ export function createTemporalHarness(): TemporalHarness {
           return { status: "interrupted" as const, developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-child-missing", summary: "The recorded Builder PID is no longer running." };
         }
         const { worktreePath: _worktreePath, ...result } = await integrationDeveloper.run({ executionId: input.developerTurnExecutionId });
+        void _worktreePath;
         return { status: "completed" as const, result, resultHash: "a".repeat(64) };
       },
       async runLeadPlanning(input: Parameters<typeof baseActivities.runLeadPlanning>[0]) {

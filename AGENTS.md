@@ -1,5 +1,8 @@
 # Forge agent guidance
 
+For visible sub-agent pane delegation and its verification rules, read
+`docs/agents/subagents-in-herdr-panes.md`.
+
 ## Product UI
 
 Forge is a dense productivity application. Its interaction and information

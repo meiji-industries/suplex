@@ -10,6 +10,15 @@ Default sub-agent: **omp** (`oh-my-pi`) with `gpt-5.6-terra`, thinking
 Codex CLI (`codex exec … --model gpt-5.6-terra -c model_reasoning_effort=medium
 `) remains a supported fallback via `herdr pane run`.
 
+## Choose the runner to fit the job
+
+Use **omp** for bounded work (roughly ten files or fewer): its visible TUI is
+excellent for observing every edit and tool call. Its per-turn output limit can
+turn a large refactor into a misleading `Partial` handoff, though. For work
+that must take a red tree all the way to green, use `codex exec` in a pane.
+Do not build resume loops: `codex exec resume` has no `-C` option. Start a
+fresh pane instead.
+
 ## The flow (Herdr agent API)
 
 ```bash
@@ -46,8 +55,10 @@ Why the agent API rather than `herdr pane run`: Herdr validates that the
 expected agent is actually running, and gives real lifecycle states.
 `blocked` means the agent is sitting at an approval/question dialog — read the
 screen (`herdr agent read`) and ask the user; never answer the dialog yourself.
-`idle` before the report file exists means the agent stopped early — read its
-last output and `herdr agent prompt <name> "Continue …"` the same session.
+`agent wait` can settle at `idle` simply because the user looked at the pane;
+it is not a completion signal by itself. Treat only `idle` with the required
+report, `done`, or `blocked` as actionable. An `idle` agent without its report
+stopped early — read its last output and prompt it to continue.
 
 Why not `omp -p`: print mode shows only the final answer; the TUI streams every
 tool call and edit, which is the point of the pane.
@@ -78,19 +89,40 @@ Every brief must state, explicitly:
 - the dev stack may be running from this checkout: do not restart, kill, or
   run `mise run dev/down`; say "restart needed" in the final report instead.
 
-When sub-agents must touch the same file, serialise them.
+Shared core files (`tasks.ts`, `codex-lead.ts`, contracts, and comparable
+integration hubs) are serial work. Parallelise only disjoint file sets, and
+put the ownership map in every brief.
+
+## Temporal and migrations are history, not cleanup
+
+- Never delete a `ctx.patched(...)` call, even when the behavior is gone; keep
+  the marker as an ignored compatibility call. Never delete an activity call
+  that recorded histories scheduled. Either deletion makes replay
+  nondeterministic.
+- Change workflow code with fixtures made from live histories, then run replay.
+  The workflow bundle (`src/temporal/workflow/**`, `workflows.ts`,
+  `contracts/**`, `commands/**`, and `lead-contracts.ts`) must not import Node
+  modules or `src/task-utils.ts`.
+- A migration's identity is its timestamp. Never delete a migration once it may
+  have reached the development database; if reverting its code, retain the
+  migration and make application code match the database it created.
 
 ## Brief checklist
 
-Verification commands with the bar ("0 failures"; replay must stay N/N; never
-delete an existing `ctx.patched(...)` call — removed behaviours keep their
-markers as ignored calls), the owner directive in one line, the concrete
-deletion list, the rule ("no state may land owner=human because …"), commit
-message(s), and the final-report contents (verbatim test counts per project,
-commit hashes, what was left and why, "restart needed").
+Include all of the following:
+
+- a one-line owner directive: "you are the only agent / here are the other
+  agents and their files"; the ownership principles; and the current
+  `git status --short` map;
+- the concrete scope/deletion list, acceptance rule, commit message, and bars:
+  `pnpm typecheck` must be zero and the required unit run must finish with its
+  exact counts; replay must remain N/N;
+- "a `Partial` report will be sent back" and the required report contents:
+  exact test counts, commits, remaining work and reason, and `restart needed`.
 
 ## Orchestrator duties after the report
 
-Re-run `pnpm typecheck` yourself; spot-check the claimed test counts; confirm
-"pre-existing failures" really are pre-existing before accepting them; close
-the pane; restart nothing — ask the user.
+Reports lie by omission. Re-run `pnpm typecheck` yourself and run the required
+unit command through completion before accepting a report; spot-check its
+claimed counts. Do not accept "pre-existing failures" from an agent that owns
+the whole tree. Close the pane when verified; restart nothing — ask the user.

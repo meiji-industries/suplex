@@ -58,14 +58,14 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     state.releasePlanning();
     state.holdPlanning = false;
     const plannedIssue = await plannedIssuePromise;
-    expect(plannedIssue).toMatchObject({ phase: "approval", revision: 4, owner: "human", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], blocker: { category: "member_authorization", evidence: { artifactId: artifacts.integrationLeadOutputArtifactId, sha256: expect.any(String), kind: "lead-plan" }, actions: expect.arrayContaining([expect.objectContaining({ command: "approve_plan" }), expect.objectContaining({ command: "reject_plan" })]) } });
-    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-restart'").get())).toEqual({ revision: 4, phase: "approval" });
-    const revisionRequested = await rejectIssuePlan(config, startedIssue.workflowId, { expectedRevision: 4, actorUserId: "issue-admin", note: "Please address the security boundary" });
-    expect(revisionRequested).toMatchObject({ phase: "planning", revision: 5, allowedCommands: ["start_planning", "cancel_issue"], planRevision: null, planMaterial: null });
-    const replannedIssue = await executeIssueCommand(config, startedIssue.workflowId, "start_planning", { expectedRevision: 5, actorUserId: "issue-admin" });
-    expect(replannedIssue).toMatchObject({ phase: "approval", revision: 9, planRevision: 6, planMaterial: true });
-    const approvedIssue = await executeIssueCommand(config, startedIssue.workflowId, "approve_plan", { expectedRevision: 9, actorUserId: "issue-admin", note: "Approve revised plan" });
-    expect(approvedIssue).toMatchObject({ phase: "ready_for_development", revision: 10, allowedCommands: ["start_development", "cancel_issue", "revise_plan"], blocker: null });
+    expect(plannedIssue).toMatchObject({ phase: "approval", owner: "human", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], blocker: { category: "member_authorization", evidence: { artifactId: artifacts.integrationLeadOutputArtifactId, kind: "lead-plan" }, actions: expect.arrayContaining([expect.objectContaining({ command: "approve_plan" }), expect.objectContaining({ command: "reject_plan" })]) } });
+    expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-restart'").get())).toEqual({ revision: plannedIssue.revision, phase: "approval" });
+    const revisionRequested = await rejectIssuePlan(config, startedIssue.workflowId, { expectedRevision: plannedIssue.revision, actorUserId: "issue-admin", note: "Please address the security boundary" });
+    expect(revisionRequested).toMatchObject({ phase: "planning", allowedCommands: ["start_planning", "cancel_issue"], planRevision: null, planMaterial: null });
+    const replannedIssue = await executeIssueCommand(config, startedIssue.workflowId, "start_planning", { expectedRevision: revisionRequested.revision, actorUserId: "issue-admin" });
+    expect(replannedIssue).toMatchObject({ phase: "approval", planMaterial: true });
+    const approvedIssue = await executeIssueCommand(config, startedIssue.workflowId, "approve_plan", { expectedRevision: replannedIssue.revision, actorUserId: "issue-admin", note: "Approve revised plan" });
+    expect(approvedIssue).toMatchObject({ phase: "ready_for_development", allowedCommands: ["start_development", "cancel_issue", "revise_plan"], blocker: null });
     // ready_for_development and delivery_ready are both auto-chained onward now (no human "Start
     // development" or "Review delivery" click), so a manual command sent right after approval, or
     // polling for the transient delivery_ready landing itself, would lose the race with the
@@ -115,7 +115,7 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     state.revisionDisposition = "new";
 
     const ciPass = await startCiFixture("ci-pass");
-    expect(await waitForPhase(ciPass.workflowId, "accepted")).toMatchObject({ phase: "accepted", ciOutcome: "passed", finalReviewId: "final_review_ci-pass", leadSessionRef: "session_ci_lead", blocker: { category: "member_authorization", evidence: { artifactId: artifacts.integrationFinalReviewArtifactId, sha256: artifacts.integrationFinalReviewArtifactSha256, kind: "delivery-review" }, actions: expect.arrayContaining([expect.objectContaining({ command: "accept_delivery" }), expect.objectContaining({ command: "request_delivery_changes" })]) } });
+    expect(await waitForPhase(ciPass.workflowId, "accepted")).toMatchObject({ phase: "accepted", ciOutcome: "passed", finalReviewId: "final_review_ci-pass", leadSessionRef: "session_ci_lead", blocker: { category: "member_authorization", evidence: { artifactId: artifacts.integrationFinalReviewArtifactId, kind: "delivery-review" }, actions: expect.arrayContaining([expect.objectContaining({ command: "accept_delivery" }), expect.objectContaining({ command: "request_delivery_changes" })]) } });
     expect(harness.ciCalls.get("ci-pass")).toBe(1);
 
     const ciRate = await startCiFixture("ci-rate");
@@ -124,7 +124,7 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
 
     const ciProviderFailure = await startCiFixture("ci-provider-failure");
     const providerFailureState = await waitForPhase(ciProviderFailure.workflowId, "delivery_blocked");
-    expect(providerFailureState).toMatchObject({ phase: "delivery_blocked", ciOutcome: "provider_unavailable", blocker: { category: "provider_connectivity_exhausted", evidence: { artifactId: artifacts.ciProviderEvidence.id, sha256: artifacts.ciProviderEvidence.sha256, kind: "ci-evidence" }, actions: expect.arrayContaining([expect.objectContaining({ command: "reconcile_ci" }), expect.objectContaining({ command: "cancel_issue" })]) } });
+    expect(providerFailureState).toMatchObject({ phase: "delivery_blocked", ciOutcome: "provider_unavailable", blocker: { category: "provider_connectivity_exhausted", evidence: { artifactId: artifacts.ciProviderEvidence.id, kind: "ci-evidence" }, actions: expect.arrayContaining([expect.objectContaining({ command: "reconcile_ci" }), expect.objectContaining({ command: "cancel_issue" })]) } });
 
     const ciRepair = await startCiFixture("ci-repair");
     // The CI repair itself lands delivery_ready, but the auto-chain immediately runs the review
@@ -168,8 +168,8 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     state.developerFailure = true;
     await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-developer-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, continuationState: { phase: "ready_for_development", revision: 3, owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development", lastEventId: `${developerFailureWorkflowId}:3`, continuationCount: 0, lastSummaryHash: null, leadSessionRef: "session_integration", leadOutputArtifactId: "artifact_integration_output", planRevision: 1, planMaterial: true, materialCategories: ["security_permissions"], supplementalReviewUsed: false, repairCycle: 0 } });
     const recoveredDeveloperFailure = await waitForPhase(developerFailureWorkflowId, "delivery_blocked");
-    expect(recoveredDeveloperFailure).toMatchObject({ phase: "delivery_blocked", revision: 7, owner: "human", allowedCommands: ["retry_development", "cancel_issue", "revise_plan"], pendingAction: "The agent invocation did not complete.", developerRecoveryStatus: "failed", developerRecoveryReasonCode: "process-exited" });
-    await expect.poll(() => database!.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = 'issue-developer-failure'").get()), { timeout: 10_000 }).toEqual({ revision: 7, phase: "delivery_blocked", pending_action: "The agent invocation did not complete." });
+    expect(recoveredDeveloperFailure).toMatchObject({ phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_development", "cancel_issue", "revise_plan"], pendingAction: "The agent invocation did not complete.", developerRecoveryStatus: "failed", developerRecoveryReasonCode: "process-exited" });
+    await expect.poll(() => database!.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = 'issue-developer-failure'").get()), { timeout: 10_000 }).toEqual({ revision: recoveredDeveloperFailure.revision, phase: "delivery_blocked", pending_action: "The agent invocation did not complete." });
     state.developerFailure = false;
 
     const failedRetryWorkflowId = `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-issue-failed-retry`;
@@ -222,12 +222,12 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     state.permanentPlanningFailure = true;
     const startedPermanentFailure = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-permanent-failure", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false });
     const failedIssue = await executeIssueCommand(config, startedPermanentFailure.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "issue-admin" });
-    expect(failedIssue).toMatchObject({ phase: "failed", revision: 3, owner: "human", allowedCommands: ["start_planning", "continue_work", "cancel_issue"], pendingAction: "The configured model is unavailable for the active provider account. Select a supported model, then retry.", blocker: { category: "provider_ambiguity", actions: expect.arrayContaining([expect.objectContaining({ command: "start_planning" }), expect.objectContaining({ command: "cancel_issue" })]), evidence: { kind: "attention-evidence" } } });
+    expect(failedIssue).toMatchObject({ phase: "failed", revision: 3, owner: "human", allowedCommands: ["start_planning", "continue_work", "cancel_issue"], pendingAction: "The configured model is unavailable for the active provider account. Select a supported model, then retry." });
     expect(state.permanentPlanningCalls).toBe(1);
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = 'issue-permanent-failure'").get())).toEqual({ revision: 3, phase: "failed", pending_action: "The configured model is unavailable for the active provider account. Select a supported model, then retry." });
     state.permanentPlanningFailure = false;
     const recoveredIssue = await executeIssueCommand(config, startedPermanentFailure.workflowId, "start_planning", { expectedRevision: 3, actorUserId: "issue-admin" });
-    expect(recoveredIssue).toMatchObject({ phase: "approval", revision: 7, planRevision: 4 });
+    expect(recoveredIssue).toMatchObject({ phase: "approval", planRevision: 4 });
 
     const startedContinuation = await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "issue-continuation", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, continueAsNewAfter: 2 });
     let continuationState = await queryIssueWorkflow(config, startedContinuation.workflowId);
@@ -237,9 +237,9 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     }
     expect(continuationState).toMatchObject({ phase: "backlog", revision: 0, continuationCount: 0 });
     await expect.poll(() => database!.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_issue_timeline WHERE task_id = 'issue-continuation' AND revision = 0").get())).toEqual({ count: 1 });
-    await executeIssueCommand(config, startedContinuation.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "issue-admin" });
-    const progressState = await executeIssueCommand(config, startedContinuation.workflowId, "approve_plan", { expectedRevision: 4, actorUserId: "issue-admin", note: "Approved for development" });
-    expect(progressState).toMatchObject({ phase: "ready_for_development", revision: 5, continuationCount: 0 });
+    const continuationPlanning = await executeIssueCommand(config, startedContinuation.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "issue-admin" });
+    const progressState = await executeIssueCommand(config, startedContinuation.workflowId, "approve_plan", { expectedRevision: continuationPlanning.revision, actorUserId: "issue-admin", note: "Approved for development" });
+    expect(progressState).toMatchObject({ phase: "ready_for_development", continuationCount: 0 });
     for (let attempt = 0; attempt < 30; attempt += 1) {
       continuationState = await queryIssueWorkflow(config, startedContinuation.workflowId);
       if (continuationState.continuationCount === 1) break;

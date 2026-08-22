@@ -4,12 +4,38 @@ import { TERMINAL_PHASES } from "../../issue-phases.js";
 import { assertPayloadWithinLimit } from "../policy.js";
 import { ContinueWorkCommandSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, StartPlanningInputSchema } from "../issue-contracts.js";
 import { issueUpdates } from "../issue-updates.js";
-import { acceptDelivery, cancelDeveloperExecution, createSuccessor, recordDeliveryDecision } from "./activity-proxies.js";
+import { acceptDelivery, cancelCapacity, cancelCapacityExecution, cancelDeveloperExecution, createSuccessor, finalizeCapacity, inspectCapacity, recordDeliveryDecision } from "./activity-proxies.js";
 import type { IssueWorkflowContext } from "./context.js";
 
 export function registerLifecycleHandlers(ctx: IssueWorkflowContext): void {
-  const cancelCurrentCapacity = async (): Promise<{ status: "cancelled"; executionId?: string | undefined }> => ({ status: "cancelled" });
-  const settleCancelledCapacity = async (_executionId: string): Promise<"settled" | "none"> => "none";
+  const cancelQueuedCapacity = async (): Promise<void> => {
+    if (!ctx.state.capacity || !["queued", "rate_limited"].includes(ctx.state.capacity.status)) return;
+    await cancelCapacity({ requestId: ctx.state.capacity.requestId, reason: "workflow phase changed" });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, capacity: null, revision: ctx.state.revision + 1, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    await ctx.project();
+  };
+  const cancelCurrentCapacity = async (): Promise<{ status: "cancelled"; executionId?: string | undefined }> => {
+    if (!ctx.state.capacity) return { status: "cancelled" };
+    if (["queued", "rate_limited"].includes(ctx.state.capacity.status)) {
+      await cancelQueuedCapacity();
+      return { status: "cancelled" };
+    }
+    if (ctx.state.capacity.status === "active") {
+      return cancelCapacityExecution({ requestId: ctx.state.capacity.requestId });
+    }
+    return { status: "cancelled" };
+  };
+  const settleCancelledCapacity = async (executionId: string): Promise<"settled" | "none"> => {
+    if (!ctx.state.capacity) return "none";
+    const request = await inspectCapacity({ requestId: ctx.state.capacity.requestId });
+    if (request.status === "active" && request.executionId === executionId) {
+      await finalizeCapacity({ requestId: request.id, expectedExecutionId: executionId, terminalReason: "cancelled" });
+      ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, capacity: null, capacityBlocker: null, revision: ctx.state.revision + 1, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      await ctx.project();
+      return "settled";
+    }
+    return "none";
+  };
   const developerCancellationAvailable = (): boolean => ctx.state.phase === "development" || (ctx.state.phase === "delivery_blocked" && (ctx.state.developerRecoveryStatus === "cancellation_requested" || (ctx.state.developerRecoveryStatus === "interrupted" && ctx.state.capacity !== null)));
   setHandler(issueUpdates.cancel_issue, ctx.guarded(async (rawInput) => {
     if (!ctx.exactPlanAuthorityEnabled && ctx.captureInitialProjectionState) await condition(() => ctx.initialProjectionComplete);

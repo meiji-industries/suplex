@@ -7,6 +7,7 @@ import {
   type IssueWorkflowState,
   type LeadPlanningResult,
 } from "../issue-contracts.js";
+import { cancelCapacityExecution, finalizeCapacity, inspectCapacity, rateLimitCapacity, requestCapacity, requeueCapacity, tryAcquireCapacity } from "./activity-proxies.js";
 import { repairDelivery, reviewDelivery } from "./register-delivery-review.js";
 import { startDevelopment } from "./register-development.js";
 import { resolveMergeConflict } from "./register-merge.js";
@@ -148,17 +149,126 @@ export function createAcquireExternalTurn(
     capacityReadmissionPatch: string;
   },
 ): IssueWorkflowContext["acquireExternalTurn"] {
-  return async <T>(_spec: { operation: CapacityOperation; role: CapacityRole; profileId?: string | undefined; sessionRef?: string | null | undefined; worktreePath?: string | null | undefined }, run: (capacityRequestId?: string) => Promise<T>, _executionId: (result: T) => string | undefined): Promise<T> => {
-    // Preserve historical markers while new turns use the worker-local counter.
-    void options.patched(options.durableCapacityPatch);
-    void options.patched(options.capacityFinalizationOwnershipPatch);
-    void options.patched(options.capacityReadmissionPatch);
-    void options.patched("forge-no-ownership-v2");
-    void options.patched("forge-capacity-ownership-clear-v1");
-    const state = stateRef.get();
-    stateRef.set(IssueWorkflowStateSchema.parse({ ...state, pendingAction: "Waiting for a free agent slot", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
-    await options.projectState(stateRef.get());
-    return run(undefined);
+  return async <T>(spec: { operation: CapacityOperation; role: CapacityRole; profileId?: string | undefined; sessionRef?: string | null | undefined; worktreePath?: string | null | undefined }, run: (capacityRequestId?: string) => Promise<T>, executionId: (result: T) => string | undefined, durableCapacityEnabled = options.patched(options.durableCapacityPatch)): Promise<T> => {
+    if (options.patched("forge-simple-capacity-v1")) {
+      const state = stateRef.get();
+      stateRef.set(IssueWorkflowStateSchema.parse({ ...state, pendingAction: "Waiting for a free agent slot", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
+      await options.projectState(stateRef.get());
+      return run(undefined);
+    }
+    if (!durableCapacityEnabled) return run(undefined);
+    if (!spec.profileId) throw ApplicationFailure.nonRetryable("profile_unavailable", "profile_unavailable", { operation: spec.operation, role: spec.role });
+    // A cancelled/interrupted turn can leave its released request in durable
+    // workflow state.  Never carry that terminal id into the next admission.
+    const storedCapacity = stateRef.get().capacity;
+    if (options.patched(options.capacityReadmissionPatch) && storedCapacity) {
+      const stored = await inspectCapacity({ requestId: storedCapacity.requestId });
+      if (stored.status !== "active") await options.projectCapacityState(null);
+    }
+    const turnRevision = stateRef.get().revision;
+    const expectedPhase = stateRef.get().phase;
+    const commandsBeforeWait = stateRef.get().allowedCommands;
+    let observedRevision = stateRef.get().revision;
+    const isCurrent = (): boolean => stateRef.get().phase === expectedPhase && stateRef.get().revision === observedRevision;
+    const assertCurrent = (): void => { if (!isCurrent()) throw new Error("External turn became stale"); };
+    const abandonStaleRequest = async (): Promise<void> => {
+      const current = await inspectCapacity({ requestId: request.id });
+      if (["queued", "rate_limited", "active"].includes(current.status)) await cancelCapacityExecution({ requestId: request.id });
+    };
+    const request = await requestCapacity({ logicalTurnKey: `${stateRef.get().workflowId}:${turnRevision}:${spec.operation}`, companyId: stateRef.get().companyId, taskId: stateRef.get().issueId, workflowId: stateRef.get().workflowId, projectRevisionId: stateRef.get().projectRevisionId, workflowRevision: turnRevision, operation: spec.operation, role: spec.role, profileId: spec.profileId, sessionRef: spec.sessionRef ?? null, worktreePath: spec.worktreePath ?? null });
+    if (!isCurrent()) { await abandonStaleRequest(); throw new Error("External turn became stale"); }
+    for (;;) {
+      if (!isCurrent()) { await abandonStaleRequest(); throw new Error("External turn became stale before admission"); }
+      const admission = await tryAcquireCapacity({ requestId: request.id, expectedWorkflowRevision: turnRevision });
+      if (!isCurrent()) { await abandonStaleRequest(); throw new Error("External turn became stale after admission"); }
+      const state = stateRef.get();
+      if ((admission.status === "queued" || admission.status === "rate_limited") && state.allowedCommands.some((command) => !["cancel_issue", "cancel_development"].includes(command))) {
+        const waitingCommands = state.allowedCommands.filter((command) => command === "cancel_issue" || command === "cancel_development");
+        stateRef.set(IssueWorkflowStateSchema.parse({ ...state, allowedCommands: waitingCommands, revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
+        observedRevision = stateRef.get().revision;
+        await options.projectState(stateRef.get());
+      }
+      observedRevision = await options.projectCapacityState(admission.publicState, admission.status === "queued" ? "Waiting for external capacity" : admission.status === "rate_limited" ? "Waiting for provider reset" : stateRef.get().pendingAction ?? undefined);
+      if (!isCurrent()) { await abandonStaleRequest(); throw new Error("External turn became stale after projection"); }
+      if (admission.status === "active") {
+        const activeState = stateRef.get();
+        if (activeState.allowedCommands.length !== commandsBeforeWait.length || activeState.allowedCommands.some((command, index) => command !== commandsBeforeWait[index])) {
+          stateRef.set(IssueWorkflowStateSchema.parse({ ...activeState, allowedCommands: commandsBeforeWait, revision: activeState.revision + 1, lastEventId: `${activeState.workflowId}:${activeState.revision + 1}` }));
+          observedRevision = stateRef.get().revision;
+          await options.projectState(stateRef.get());
+        }
+        assertCurrent();
+        try {
+          const result = await run(request.id);
+          assertCurrent();
+          const current = await inspectCapacity({ requestId: request.id });
+          assertCurrent();
+          const resultExecutionId = executionId(result);
+          if (current.executionId && resultExecutionId && current.executionId !== resultExecutionId) throw ApplicationFailure.nonRetryable("capacity_owner_mismatch", "capacity_owner_mismatch", { requestId: request.id });
+          // Deprecated: this marker replaced forge-capacity-ownership-clear-v1
+          // briefly. Both calls must remain at this position for persisted runs.
+          void options.patched("forge-no-ownership-v2");
+          if ((current as { status: string }).status === "ownership_ambiguous" && !options.patched("forge-capacity-ownership-clear-v1")) {
+            observedRevision = await options.projectCapacityState({ ...(admission.publicState as object), status: "ownership_ambiguous", position: null, reason: null, retryAt: null } as unknown as IssueWorkflowState["capacity"], "Needs a retry");
+            return result;
+          }
+          if (["released", "cancelled", "stale", "exhausted"].includes(current.status) && options.patched(options.capacityReadmissionPatch)) {
+            observedRevision = await options.projectCapacityState(null);
+            return result;
+          }
+          const ownerId = current.executionId;
+          const resultStatus = result && typeof result === "object" && "status" in result ? (result as { status?: unknown }).status : undefined;
+          await finalizeCapacity({ requestId: request.id, expectedExecutionId: ownerId ?? request.id, terminalReason: ownerId ? resultStatus && resultStatus !== "completed" ? "process_failed" : "completed" : "failed_before_start" });
+          assertCurrent();
+          observedRevision = await options.projectCapacityState(null);
+          return result;
+        } catch (error) {
+          if (!isCurrent()) throw error;
+          const current = await inspectCapacity({ requestId: request.id });
+          if (current.status !== "active" && options.patched(options.capacityFinalizationOwnershipPatch)) throw error;
+          const rateLimit = rateLimitFailure(error);
+          if (rateLimit && current.executionId) {
+            const limited = await rateLimitCapacity({ requestId: request.id, executionId: current.executionId, ...(rateLimit.retryAt ? { retryAt: rateLimit.retryAt } : {}) });
+            if (limited.status === "exhausted") {
+              const state = stateRef.get();
+              const blocker = { category: "capacity_exhausted" as const, summary: "No agent slots are free.", nextAction: "Retry or cancel the issue.", resumeOperation: spec.operation };
+              stateRef.set(IssueWorkflowStateSchema.parse({ ...state, capacity: { ...admission.publicState, status: "exhausted", position: null, reason: null, retryAt: null, rateLimitAttempts: limited.rateLimitAttempts }, capacityBlocker: blocker, allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: "Waiting for a free agent slot", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
+              observedRevision = stateRef.get().revision;
+              await options.projectState(stateRef.get());
+              throw ApplicationFailure.nonRetryable("capacity_exhausted", "capacity_exhausted", blocker);
+            }
+            observedRevision = await options.projectCapacityState({ ...admission.publicState, status: "rate_limited", position: null, reason: "rate_limit_reset", retryAt: limited.retryAt, rateLimitAttempts: limited.rateLimitAttempts }, "Waiting for provider reset");
+            continue;
+          }
+          await finalizeCapacity({ requestId: request.id, expectedExecutionId: current.executionId ?? request.id, terminalReason: current.executionId ? "process_failed" : "failed_before_start" });
+          throw error;
+        }
+      }
+      if (admission.status === "exhausted") {
+        const category = "capacity_exhausted" as const;
+        const state = stateRef.get();
+        stateRef.set(IssueWorkflowStateSchema.parse({ ...state, capacity: admission.publicState, capacityBlocker: { category, summary: "No agent slots are free.", nextAction: "Retry or cancel the issue.", resumeOperation: spec.operation }, allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: "Waiting for a free agent slot", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
+        await options.projectState(stateRef.get());
+        throw ApplicationFailure.nonRetryable(category, category, stateRef.get().capacityBlocker);
+      }
+      // Deprecated: see the matching completion-path marker above.
+      void options.patched("forge-no-ownership-v2");
+      if ((admission as { status: string }).status === "ownership_ambiguous" && !options.patched("forge-capacity-ownership-clear-v1")) {
+        const state = stateRef.get();
+        const legacyAdmission = admission as unknown as { publicState: IssueWorkflowState["capacity"] };
+        stateRef.set({ ...state, capacity: legacyAdmission.publicState, capacityBlocker: { category: "ownership_ambiguous", summary: "Forge couldn't confirm the previous run.", nextAction: "Retry or cancel the issue.", resumeOperation: spec.operation } as unknown as IssueWorkflowState["capacityBlocker"], allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: "Needs a retry", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        await options.projectState(stateRef.get());
+        throw ApplicationFailure.nonRetryable("ownership_ambiguous", "ownership_ambiguous", stateRef.get().capacityBlocker);
+      }
+      const retryAt = admission.publicState.retryAt;
+      const retryDelay = admission.status === "rate_limited" && retryAt ? Math.max(1_000, isoEpochMillis(retryAt) - Date.now()) : 5_000;
+      await sleep(retryDelay);
+      if (!isCurrent()) { await abandonStaleRequest(); throw new Error("External turn became stale while waiting for capacity"); }
+      if (admission.status === "rate_limited") {
+        await requeueCapacity({ requestId: request.id });
+        if (!isCurrent()) { await abandonStaleRequest(); throw new Error("External turn became stale while requeueing capacity"); }
+      }
+    }
   };
 }
 

@@ -5,7 +5,7 @@ export type ActivityRole = "planner" | "builder" | "reviewer" | "integrator" | "
 type ActivityEntry = {
   eventType: string;
   metadata: Record<string, string | number | boolean>;
-  actor?: { kind?: string; id: string } | undefined;
+  actor?: { kind?: string | undefined; id: string } | undefined;
 };
 
 export type ActivityFeedRow = {

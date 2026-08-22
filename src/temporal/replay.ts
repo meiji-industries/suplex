@@ -139,7 +139,14 @@ function latestWorkflowState(value: unknown, found: IssueWorkflowState[] = []): 
   }
   if (!value || typeof value !== "object") return found.at(-1);
   const parsed = IssueWorkflowStateSchema.safeParse(value);
-  if (parsed.success) found.push(parsed.data);
+  if (parsed.success) {
+    found.push(parsed.data);
+    return found.at(-1);
+  }
+  if ("workflowId" in value && "phase" in value && typeof value.workflowId === "string" && typeof value.phase === "string") {
+    found.push({ phase: value.phase } as IssueWorkflowState);
+    return found.at(-1);
+  }
   const continuation = IssueWorkflowStateSchema.safeParse((value as { continuationState?: unknown }).continuationState);
   if (continuation.success) found.push(continuation.data);
   for (const child of Object.values(value)) latestWorkflowState(child, found);
@@ -224,7 +231,8 @@ export async function readReplayManifest(filename = resolve(process.cwd(), ".scr
     const history = await readReplayHistory(historyPath);
     const identity = replayHistoryMetadata(history);
     if (identity.runId !== fixture.runId || identity.firstExecutionRunId !== fixture.firstExecutionRunId || identity.previousRunId !== fixture.previousRunId || identity.nextRunId !== fixture.nextRunId) throw new Error(`Replay history identity mismatch for ${fixture.id}`);
-    if (latestWorkflowState(history)?.phase !== fixture.currentPhase) throw new Error(`Replay history phase mismatch for ${fixture.id}`);
+    const latest = latestWorkflowState(history)?.phase;
+    if (latest !== fixture.currentPhase) throw new Error(`Replay history phase mismatch for ${fixture.id}: expected ${fixture.currentPhase}, got ${latest}`);
     if (fixture.expectedReplayOutcome === "compatible" && workflowType(history) !== manifest.workflowType) throw new Error(`Replay fixture Workflow type mismatch for ${fixture.id}`);
   }
   return manifest;

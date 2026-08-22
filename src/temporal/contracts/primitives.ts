@@ -196,15 +196,11 @@ export function normalizeSafeSummary(value: unknown, maxBytes = 240): string {
   return result ? `${result.trimEnd()}${suffix}` : suffix;
 }
 
-export const SafeSummarySchema = z.string().min(1).superRefine((value, context) => {
-  if (/\r|\n/.test(value)) context.addIssue({ code: "custom", message: "Safe summaries must be one line" });
-  if (new TextEncoder().encode(value).byteLength > 240) context.addIssue({ code: "custom", message: "Safe summaries are limited to 240 UTF-8 bytes" });
-});
-
+// A summary is display text: normalise whitespace and truncate, never reject — a long or multi-line message must not fail a turn.
 export function toSafeSummary(value: string): string {
-  const normalized = value.replace(/\s+/gu, " ").trim();
+  const normalized = value.replace(/\s+/gu, " ").trim() || "(no details)";
   const encoder = new TextEncoder();
-  if (encoder.encode(normalized).byteLength <= 240) return SafeSummarySchema.parse(normalized);
+  if (encoder.encode(normalized).byteLength <= 240) return normalized;
   const suffix = "…";
   const budget = 240 - encoder.encode(suffix).byteLength;
   let bounded = "";
@@ -212,8 +208,10 @@ export function toSafeSummary(value: string): string {
     if (encoder.encode(bounded + character).byteLength > budget) break;
     bounded += character;
   }
-  return SafeSummarySchema.parse(`${bounded.trimEnd()}${suffix}`);
+  return `${bounded.trimEnd()}${suffix}`;
 }
+
+export const SafeSummarySchema = z.string().transform(toSafeSummary);
 
 export const ActiveOperationSchema = z.object({
   commandId: durableId,

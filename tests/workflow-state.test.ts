@@ -32,7 +32,7 @@ test("assigns final review to the Reviewer, with Planner fallback", () => {
 
 test("safe summaries are normalized before entering workflow state", () => {
   expect(toSafeSummary("  Review approved.\r\n  Ready to ship.  ")).toBe("Review approved. Ready to ship.");
-  expect(() => toSafeSummary(" \r\n ")).toThrow();
+  expect(toSafeSummary(" \r\n ")).toBe("(no details)");
 
   const longAscii = "Approved because the implementation matches the plan. ".repeat(10);
   const compactAscii = toSafeSummary(longAscii);

@@ -1,5 +1,6 @@
 import { Badge } from "../ui/badge.js";
 import { Button } from "../ui/button.js";
+import { Card, CardContent, CardFooter } from "../ui/card.js";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 import type { DeveloperExecutionEventResponse, TaskResponse } from "../../../http/contracts/tasks.js";
@@ -21,9 +22,11 @@ export function DeveloperEvidence({ execution, onViewChanges }: { execution: Dev
     return () => window.clearInterval(timer);
   }, [running]);
   const blocked = execution.status === "blocked";
-  return <section className="space-y-2" data-developer-evidence>
-    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"><span className="min-w-0 truncate">Attempt {execution.attempt} · <code title={execution.branchName}>{execution.branchName}</code></span><Badge variant={execution.status === "completed" ? "secondary" : blocked || execution.status === "failed" ? "destructive" : "outline"}>{execution.status}</Badge><span className="tabular-nums text-muted-foreground">{duration(execution.startedAt, execution.finishedAt, now)}</span></div>
-    {execution.summary ? <p className={blocked ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{execution.summary}</p> : null}
-    <Button variant="link" size="sm" onClick={onViewChanges}>View changes</Button>
-  </section>;
+  return <Card data-developer-evidence size="sm" aria-label="Developer execution">
+    <CardContent>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs"><span className="min-w-0 truncate">Attempt {execution.attempt} · <code title={execution.branchName}>{execution.branchName}</code></span><Badge variant={execution.status === "completed" ? "secondary" : blocked || execution.status === "failed" ? "destructive" : "outline"}>{execution.status}</Badge><span className="tabular-nums text-muted-foreground">{duration(execution.startedAt, execution.finishedAt, now)}</span></div>
+      {execution.summary ? <p className={blocked ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>{execution.summary}</p> : null}
+    </CardContent>
+    <CardFooter><Button variant="link" size="sm" onClick={onViewChanges}>View changes</Button></CardFooter>
+  </Card>;
 }

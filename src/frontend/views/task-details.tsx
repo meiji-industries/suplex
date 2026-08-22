@@ -60,13 +60,18 @@ function ActivityPanel({ task }: { task: ApiTask }): ReactElement | null {
   if (!shouldShow && !feed?.execution) return null;
   const events = feed?.events ?? [];
   const status = [...events].reverse().find((event) => event.kind === "status");
-  return <section data-task-activity-panel className="space-y-2 border-t pt-3" aria-label="Activity">
-    <div className="flex items-center justify-between gap-2"><h3 className="text-xs font-semibold">Activity</h3>{status ? <span className="text-[11px] text-muted-foreground" aria-live="polite">{status.text}</span> : null}</div>
-    <div ref={logRef} className="max-h-72 overflow-auto border border-border bg-muted/30 font-mono text-[11px] leading-5" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
+  return <Card data-task-activity-panel size="sm" aria-label="Activity">
+    <CardHeader>
+      <CardTitle><h3>Activity</h3></CardTitle>
+      {status ? <CardAction><span className="text-[11px] font-normal text-muted-foreground" aria-live="polite">{status.text}</span></CardAction> : null}
+    </CardHeader>
+    <CardContent>
+      <div ref={logRef} className="max-h-72 overflow-auto border border-border bg-muted/30 font-mono text-[11px] leading-5" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
       {events.filter((event) => event.kind !== "status").map((event, index) => <div className="flex gap-2 border-b border-border/50 px-2 py-1 last:border-0" key={`${event.at}:${event.kind}:${index}`}><time className="shrink-0 text-muted-foreground">{new Date(event.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time><Badge variant="outline" className="h-5 shrink-0 rounded-sm px-1 font-mono text-[10px]">{event.kind}</Badge><div className="min-w-0 flex-1 whitespace-pre-wrap break-words">{event.kind === "output" ? <details><summary className="cursor-pointer">{event.exitCode === undefined ? "Output" : `Exit ${event.exitCode}`}</summary><pre className="mt-1 whitespace-pre-wrap break-words">{event.text}</pre></details> : <>{event.text}{event.exitCode === undefined ? null : <span className="ml-2 text-muted-foreground">exit {event.exitCode}</span>}</>}</div></div>)}
       {!events.some((event) => event.kind !== "status") ? <div className="px-2 py-2 text-muted-foreground">Waiting for activity…</div> : null}
-    </div>
-  </section>;
+      </div>
+    </CardContent>
+  </Card>;
 }
 
 function NextAction({ value }: { value: string | null }): ReactElement {
@@ -453,12 +458,17 @@ function RescueControls({ task, busy, onRescue }: { task: ApiTask; busy: boolean
   if (["done", "cancelled"].includes(task.phase)) return null;
   const run = async (): Promise<void> => { setConfirmOpen(false); setReport(await onRescue()); };
   const loadDiagnostics = (): void => { setDiagnosticsOpen((open) => !open); if (!diagnostics) void readJson<Diagnostics>(`/api/tasks/${encodeURIComponent(task.id)}/diagnostics`).then(setDiagnostics).catch(() => setDiagnostics(null)); };
-  return <section className="space-y-2" data-task-rescue>
-    <div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmOpen(true)}>{busy ? "Rescuing…" : "Rescue"}</Button><Button size="sm" variant="ghost" onClick={loadDiagnostics} aria-expanded={diagnosticsOpen}>Diagnostics</Button></div>
-    {report ? <div className="space-y-1 text-xs" data-rescue-report>{report.steps.map((step) => <div key={step.name}><span className="font-medium">{step.name}</span> · {step.outcome}: {step.detail}</div>)}</div> : null}
-    {diagnosticsOpen ? <div className="border-l pl-3 text-xs" data-task-diagnostics>{diagnostics ? <><div>Workflow: {diagnostics.workflow.status}{diagnostics.workflow.pendingWorkflowTaskAgeSeconds !== null ? ` · pending ${diagnostics.workflow.pendingWorkflowTaskAgeSeconds}s` : ""}</div>{diagnostics.workflow.lastWorkflowTaskFailure ? <div>Last failure: {diagnostics.workflow.lastWorkflowTaskFailure}</div> : null}<div>Executions: {diagnostics.executions.map((entry) => `${entry.kind} ${entry.status}${entry.pid ? ` (pid ${entry.pid})` : ""}`).join(", ") || "none"}</div><div>Capacity: {diagnostics.capacityRequests.map((entry) => `${entry.status}${entry.executionId ? ` (${entry.executionId})` : ""}`).join(", ") || "none"}</div><div>Leases: {diagnostics.leases.map((entry) => `${entry.executionId} ${entry.status}`).join(", ") || "none"}</div></> : "Loading diagnostics…"}</div> : null}
+  return <Card data-task-rescue size="sm" aria-label="Task recovery">
+    <CardHeader>
+      <CardTitle><h3>Task recovery</h3></CardTitle>
+      <CardAction><div className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setConfirmOpen(true)}>{busy ? "Rescuing…" : "Rescue"}</Button><Button size="sm" variant="ghost" onClick={loadDiagnostics} aria-expanded={diagnosticsOpen}>Diagnostics</Button></div></CardAction>
+    </CardHeader>
+    {report || diagnosticsOpen ? <CardContent>
+      {report ? <div className="space-y-1 text-xs" data-rescue-report>{report.steps.map((step) => <div key={step.name}><span className="font-medium">{step.name}</span> · {step.outcome}: {step.detail}</div>)}</div> : null}
+      {diagnosticsOpen ? <div className="border-l pl-3 text-xs" data-task-diagnostics>{diagnostics ? <><div>Workflow: {diagnostics.workflow.status}{diagnostics.workflow.pendingWorkflowTaskAgeSeconds !== null ? ` · pending ${diagnostics.workflow.pendingWorkflowTaskAgeSeconds}s` : ""}</div>{diagnostics.workflow.lastWorkflowTaskFailure ? <div>Last failure: {diagnostics.workflow.lastWorkflowTaskFailure}</div> : null}<div>Executions: {diagnostics.executions.map((entry) => `${entry.kind} ${entry.status}${entry.pid ? ` (pid ${entry.pid})` : ""}`).join(", ") || "none"}</div><div>Capacity: {diagnostics.capacityRequests.map((entry) => `${entry.status}${entry.executionId ? ` (${entry.executionId})` : ""}`).join(", ") || "none"}</div><div>Leases: {diagnostics.leases.map((entry) => `${entry.executionId} ${entry.status}`).join(", ") || "none"}</div></> : "Loading diagnostics…"}</div> : null}
+    </CardContent> : null}
     <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Rescue this task?</AlertDialogTitle><AlertDialogDescription>Forge will re-dispatch the workflow to the current worker, release stale locks, and retry the current step.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => void run()}>Rescue task</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
-  </section>;
+  </Card>;
 }
 
 function PlanningRunCard({ task }: { task: ApiTask }): ReactElement | null {
@@ -639,7 +649,7 @@ export function TaskDetailsPage({ task, project, companyId, busy, error, isAdmin
             <div data-task-content className="min-w-0 px-4 pt-4 pb-6 sm:px-6 lg:px-10">
               <div data-task-content-inner className="mx-auto max-w-4xl space-y-7">
                 <InlineTaskEditor field="description" value={task.description} onSave={async (description) => onUpdateDetails({ description })} />
-                <div data-task-current className="sticky top-0 z-10 -mx-4 border-y border-border/70 bg-background/95 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10">
+                <div data-task-current className="-mx-4 border-y border-border/70 bg-background px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10">
                   <div className="mx-auto max-w-4xl space-y-4">
                     <PlanningRunCard task={task} />
                     {task.phase === "planning" ? <LiveExecutionRun taskId={task.id} eventPath="planning-events" activityLabel="Planner" onRefresh={onRefresh} /> : null}

@@ -11,7 +11,6 @@ export function createCiActivities(ctx: ActivityContext): CiActivities {
       if (!context) return attentionFailure(input, "provider_ambiguity", "ci_repository_context_unavailable", "CI repository context is unavailable.");
       try {
         const result = await ci.reconcile({ taskId: input.taskId, companyId: input.companyId, releaseId: input.releaseId, expectedHeadSha: input.expectedHeadSha, attemptNumber: input.attemptNumber });
-        const evidenceArtifactSha256 = artifactSha256(input.companyId, result.evidenceArtifactId);
         return { runId: result.runId, attemptId: result.attemptId, attemptNumber: result.attemptNumber, expectedHeadSha: result.expectedHeadSha, observedHeadSha: result.observedHeadSha, evidenceArtifactId: result.evidenceArtifactId, outcome: result.outcome, reason: result.reason, owner: result.owner, repairable: result.repairable, summary: result.summary, retryAt: result.retryAt, nextPollAt: result.nextPollAt, policyHash: result.policyHash, propagationDeadline: result.propagationDeadline, overallDeadline: result.overallDeadline };
       } catch (error) {
         const category: AttentionCategory = error instanceof CiProviderFailure && error.code === "authentication" ? "provider_authentication" : error instanceof CiFailure && error.code === "scope" ? "provider_ambiguity" : error instanceof CiProviderFailure && (error.code === "rate_limited" || error.code === "transient") ? "provider_connectivity_exhausted" : "provider_ambiguity";

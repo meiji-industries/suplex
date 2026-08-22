@@ -139,9 +139,7 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
     },
     async runLeadPlanning(input) {
       const result = await invokeAgent(input, () => agent?.runLeadPlanning ? agent.runLeadPlanning(input) : defaultAgent.runLeadPlanning(input, agentRuntime()));
-      const leadEvidenceArtifactSha256 = artifactSha256(input.companyId, result.leadEvidenceArtifactId);
-      const leadOutputArtifactSha256 = artifactSha256(input.companyId, result.leadOutputArtifactId);
-      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, { ...result, ...(leadEvidenceArtifactSha256 ? { leadEvidenceArtifactSha256, leadEvidenceSha256: leadEvidenceArtifactSha256 } : {}), ...(leadOutputArtifactSha256 ? { leadOutputArtifactSha256, leadOutputSha256: leadOutputArtifactSha256 } : {}), leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) });
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, { ...result, leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) });
     },
     async runSupplementalReview(input) {
       const result = await invokeAgent(input, () => agent?.runSupplementalReview ? agent.runSupplementalReview(input) : defaultAgent.runSupplementalReview(input, agentRuntime()));
@@ -149,9 +147,7 @@ export function createPlanningActivities(ctx: ActivityContext): PlanningActiviti
     },
     async consolidateLeadPlan(input) {
       const result = await invokeAgent(input, () => agent?.consolidateLeadPlan ? agent.consolidateLeadPlan(input) : defaultAgent.consolidateLeadPlan(input, agentRuntime()));
-      const leadEvidenceArtifactSha256 = artifactSha256(input.companyId, result.leadEvidenceArtifactId);
-      const leadOutputArtifactSha256 = artifactSha256(input.companyId, result.leadOutputArtifactId);
-      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, { ...result, ...(leadEvidenceArtifactSha256 ? { leadEvidenceArtifactSha256, leadEvidenceSha256: leadEvidenceArtifactSha256 } : {}), ...(leadOutputArtifactSha256 ? { leadOutputArtifactSha256, leadOutputSha256: leadOutputArtifactSha256 } : {}), leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) });
+      return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: result.leadExecutionId, sessionRef: result.leadSessionRef }, { ...result, leadSummary: SafeSummarySchema.parse(normalizeSafeSummary(result.leadSummary)) });
     },
   };
 }

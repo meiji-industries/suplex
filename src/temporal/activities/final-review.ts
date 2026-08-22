@@ -32,7 +32,6 @@ export function createFinalReviewActivities(ctx: ActivityContext): FinalReviewAc
       const normalized = normalizeReviewResult(review, reviewInput);
       if (normalized.outcome !== "completed") throw new AgentFailure(normalized.code, normalized.summary);
       const reviewArtifact = await durableArtifactReference(database, artifacts, input.companyId, normalized.review.opinionArtifactId, "delivery-review");
-      const evidenceArtifactSha256 = artifactSha256(input.companyId, normalized.review.evidenceArtifactId);
       return bindCapacityExecution(input.capacityRequestId, { executionKind: "agent", executionId: normalized.review.leadExecutionId, sessionRef: normalized.review.leadSessionRef, worktreePath }, { finalReviewId: normalized.review.reviewId, leadExecutionId: normalized.review.leadExecutionId, leadSessionRef: normalized.review.leadSessionRef, opinionArtifactId: normalized.review.opinionArtifactId, evidenceArtifactId: normalized.review.evidenceArtifactId, reviewArtifact, outcome: normalized.review.opinion, summary: SafeSummarySchema.parse(normalizeSafeSummary(normalized.review.summary)), findings: normalized.review.findings, repairPlan: normalized.review.repairPlan ?? null, repairPlanArtifactId: normalized.review.repairPlanArtifactId ?? null, repairPlanSha256: normalized.review.repairPlanSha256 ?? null });
     },
   };

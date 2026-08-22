@@ -13,7 +13,14 @@ export type ApiModel = ModelResponse;
 export type ApiCheck = ProjectCheckResponse;
 export type ApiInvitation = InvitationSummaryResponse;
 export type ApiCredential = CredentialResponse;
-export type ApiProject = ProjectResponse;
+export type ApiProject = ProjectResponse & {
+  status?: "draft" | "active" | "paused" | "needs-reactivation" | "archived";
+  activeRevisionId?: string;
+  configurationRevision?: number;
+  configurationIdentity?: string;
+  baseSha?: string;
+  targetSha?: string;
+};
 export type ApiAttentionAction = AttentionActionResponse;
 export type ApiAttentionItem = AttentionItemResponse;
 export type ApiAttentionCompany = CompanyAttentionResponse;

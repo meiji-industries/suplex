@@ -1,6 +1,5 @@
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
 import { Button } from ".././components/ui/button.js";
-import { Badge } from ".././components/ui/badge.js";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from ".././components/ui/card.js";
 import { Checkbox } from ".././components/ui/checkbox.js";
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from ".././components/ui/field.js";
@@ -10,7 +9,6 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { CreateButton } from ".././components/ui/create-button.js";
 import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { ProfileAvatar } from ".././components/app/profile-avatar.js";
-import { CommitSha } from "../components/app/commit-sha.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
@@ -166,7 +164,7 @@ function ProjectSettingsDialog({
         })
         .catch(() => { if (!cancelled) setCheckOptions([]); })
         .finally(() => { if (!cancelled) setChecksLoading(false); });
-      if (project.status === "draft" && project.setupCommand === "pnpm install" && project.verificationCommand === "pnpm test") {
+      if (project.setupCommand === "pnpm install" && project.verificationCommand === "pnpm test") {
         void readJson<{ setupCommand: string; verificationCommand: string }>(`/api/projects/${project.id}/repository-defaults`)
           .then((defaults) => {
             if (!cancelled) setForm((current) => current ? { ...current, ...defaults } : current);
@@ -315,11 +313,6 @@ export function ProjectsView(): ReactElement {
 
   const visibleProjects = loadedCompanyId === companyId ? projects : [];
 
-  const changeStatus = async (projectId: string, status: "activate" | "reactivate" | "pause" | "archive"): Promise<void> => {
-    setLoadError("");
-    try { await readJson(`/api/projects/${projectId}/${status}`, { method: "POST", body: "{}" }); await reload(); }
-    catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; setLoadError(reason instanceof Error ? reason.message : "Project update failed"); }
-  };
 
   return (
     <ApplicationFrame title="Projects" headerRight={currentCompany?.status === "active" ? <CreateButton onClick={() => setCreateOpen(true)} disabled={!companyId}>New Project</CreateButton> : undefined}>
@@ -328,24 +321,26 @@ export function ProjectsView(): ReactElement {
           {currentCompany && currentCompany.status !== "active" ? <p className="mb-3 text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p> : null}
           {currentCompany ? (
             <div className="grid gap-3">
-              {visibleProjects.map((project) => {
-                const requirements = activationRequirements({ requiredChecks: project.requiredChecks, builderAgent: project.roleDefaults.builder });
-                const missingRequirements = requirements.filter((requirement) => !requirement.complete);
-                const ready = missingRequirements.length === 0;
-                return (
-                  <article key={project.id}>
-                    <Card size="sm">
+              {visibleProjects.map((project) => (
+                <article key={project.id}>
+                  <Card size="sm">
                     <CardHeader>
-                      <CardTitle><div className="flex min-w-0 flex-wrap items-center gap-2"><span className="text-[13px]">{project.name}</span>{project.status === "draft" ? <Badge variant="secondary" data-status="draft"><span className="size-1.5 rounded-full bg-amber-500" />Draft</Badge> : <Badge variant="secondary" data-status={project.status}>{project.status}</Badge>}<span className="text-[11px] font-normal text-muted-foreground">revision {project.configurationRevision}</span></div></CardTitle>
+                      <CardTitle><span className="text-[13px]">{project.name}</span></CardTitle>
                     </CardHeader>
                     <CardContent>
-                      <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><span className="truncate">{project.repositoryPath}</span><span className="truncate">{project.repository ?? "Repository not verified"}</span><span>Revision hash {project.configurationIdentity ? `${project.configurationIdentity.slice(0, 8)}…` : "unaccepted"}</span><span>Base {project.baseBranch} · {project.baseSha ? <CommitSha sha={project.baseSha} repository={project.repository} abbreviated={`${project.baseSha.slice(0, 8)}…`} /> : "unaccepted"}</span><span>Target {project.targetBranch} · {project.targetSha ? <CommitSha sha={project.targetSha} repository={project.repository} abbreviated={`${project.targetSha.slice(0, 8)}…`} /> : "unaccepted"}</span><span>{project.requiredChecks.length} required checks</span><span>Defaults: Planner {agents.find((agent) => agent.id === project.roleDefaults.planner)?.name ?? "—"} · Reviewer {agents.find((agent) => agent.id === project.roleDefaults.reviewer)?.name ?? "—"} · Builder {agents.find((agent) => agent.id === project.roleDefaults.builder)?.name ?? "—"} · Integrator {agents.find((agent) => agent.id === project.roleDefaults.integrator)?.name ?? "—"}</span>{project.status === "draft" && missingRequirements.length ? <span className="font-medium text-amber-700 sm:col-span-2">{missingRequirements.length} activation requirements missing: {missingRequirements.map((requirement) => requirement.label).join(" · ")}</span> : null}</div>
+                      <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2">
+                        <span className="truncate">{project.repositoryPath}</span>
+                        <span className="truncate">{project.repository ?? "Repository unavailable"}</span>
+                        <span>Base {project.baseBranch}</span>
+                        <span>Target {project.targetBranch}</span>
+                        <span>{project.requiredChecks.length} required checks</span>
+                        <span>Defaults: Planner {agents.find((agent) => agent.id === project.roleDefaults.planner)?.name ?? "—"} · Reviewer {agents.find((agent) => agent.id === project.roleDefaults.reviewer)?.name ?? "—"} · Builder {agents.find((agent) => agent.id === project.roleDefaults.builder)?.name ?? "—"} · Integrator {agents.find((agent) => agent.id === project.roleDefaults.integrator)?.name ?? "—"}</span>
+                      </div>
                     </CardContent>
-                    <CardFooter className="border-t"><div className="flex w-full flex-wrap justify-end gap-1.5">{project.status === "draft" && ready ? <Button size="sm" onClick={() => void changeStatus(project.id, "activate")}>Activate</Button> : null}{project.status === "needs-reactivation" || project.status === "paused" ? <Button size="sm" onClick={() => void changeStatus(project.id, "reactivate")}>Reactivate</Button> : null}{project.status === "active" || project.status === "needs-reactivation" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "pause")}>Pause</Button> : null}{project.status !== "archived" ? <Button variant={project.status === "draft" && !ready ? "default" : "ghost"} size="sm" onClick={() => setSettingsProject(project)}>Configure</Button> : null}{project.status !== "archived" ? <Button variant="ghost" size="sm" onClick={() => void changeStatus(project.id, "archive")}>Archive</Button> : null}<a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></CardFooter>
-                    </Card>
-                  </article>
-                );
-              })}
+                    <CardFooter className="border-t"><div className="flex w-full flex-wrap justify-end gap-1.5"><Button variant="ghost" size="sm" onClick={() => setSettingsProject(project)}>Configure</Button><a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={`/api/projects/${project.id}`}>Inspect</a></div></CardFooter>
+                  </Card>
+                </article>
+              ))}
               {!loading && loadedCompanyId === companyId && visibleProjects.length === 0 ? <div className="py-8 text-center text-xs text-muted-foreground">No projects configured.</div> : null}
             </div>
           ) : <p className="text-xs text-muted-foreground">{loading ? "Loading companies" : companyError ? "Unable to load companies" : user?.role === "admin" ? "Create a company to begin." : "No company access. Ask an administrator to assign a company."}</p>}

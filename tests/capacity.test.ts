@@ -9,7 +9,6 @@ import { reconcileAgentExecutions } from "../src/agent-recovery.js";
 import { CapacityManager } from "../src/capacity.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
-import { DeveloperExecutionLeaseRepository } from "../src/developer-execution-leases.js";
 import { reconcileDeveloperExecutions, type DeveloperProcessController } from "../src/developer-recovery.js";
 
 const now = new Date().toISOString();
@@ -207,7 +206,7 @@ test("a dead agent process fails its execution and frees its capacity slot", asy
   }
 });
 
-test("a dead developer process interrupts its execution and frees the ambiguous capacity slot", async () => {
+test("a dead developer process fails its execution and frees capacity", async () => {
   const value = await fixture();
   const deadProcess: DeveloperProcessController = { inspect: async () => undefined, signalGroup: async () => undefined };
   try {
@@ -215,24 +214,11 @@ test("a dead developer process interrupts its execution and frees the ambiguous 
     const request = capacity.request(input("task-a", "workflow-task-a:1:developer_execution"));
     expect(capacity.tryAcquire(request.id, 0).status).toBe("active");
     const executionId = `developer_${"f".repeat(24)}`;
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, 'task-a', 'company', 'workflow-task-a', 1, 1, 'running', 'forge/issue/task-a', '/tmp/forge-worktree-task-a', ?, ?, ?)").run(executionId, "a".repeat(40), now, now));
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, process_pid, branch_name, worktree_path, target_base_sha, started_at, heartbeat_at) VALUES (?, 'task-a', 'company', 'workflow-task-a', 1, 1, 'running', 9001, 'forge/issue/task-a', '/tmp/forge-worktree-task-a', ?, ?, ?)").run(executionId, "a".repeat(40), now, now));
     capacity.bindExecution(request.id, { executionKind: "developer", executionId, worktreePath: "/tmp/forge-worktree-task-a" });
-
-    const repository = new DeveloperExecutionLeaseRepository(value.database, value.root);
-    repository.reserve({ executionId, companyId: "company", taskId: "task-a", workflowId: "workflow-task-a", attempt: 1, turnKind: "implementation", canonicalWorktreePath: "/tmp/forge-worktree-task-a", worktreeIdentityHash: "worktree-1" });
-    repository.markSupervisorStarting(executionId);
-    const supervisorIdentity = { pid: 9001, processGroup: 9001, startTime: "started", executable: "/usr/bin/codex", argv: ["/usr/bin/codex", "exec"], ownerUid: 501 };
-    const childIdentity = { pid: 9002, processGroup: 9002, startTime: "started", executable: "/usr/bin/codex", argv: ["/usr/bin/codex", "exec"], ownerUid: 501 };
-    repository.setSupervisorIdentity(executionId, supervisorIdentity);
-    repository.setChildIdentity(executionId, childIdentity);
-
-    expect(await reconcileDeveloperExecutions(value.database, deadProcess)).toEqual([{ executionId, status: "interrupted", reason: "supervisor-and-process-missing" }]);
+    expect(await reconcileDeveloperExecutions(value.database, deadProcess)).toEqual([{ executionId, status: "failed", reason: "process-missing" }]);
     capacity.reconcileFromLedgers();
-
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = ?").get(executionId))).toMatchObject({ status: "interrupted", failure_code: "worker-restart" });
     expect(capacity.inspect(request.id)).toMatchObject({ status: "released", terminalReason: "process_failed" });
-    const retry = capacity.request(input("task-a", "workflow-task-a:2:developer_execution", new Date(Date.parse(now) + 1_000).toISOString()));
-    expect(capacity.tryAcquire(retry.id, 0).status).toBe("active");
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

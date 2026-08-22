@@ -353,13 +353,11 @@ export interface MaterialityView {
 export interface SupplementalReviewView {
   reviewId: string;
   reviewerProfile: { id: string; name: string };
-  opinion: SupplementalReview["opinion"];
+  verdict: SupplementalReview["verdict"];
   summary: string;
-  concerns: string[];
-  requiredChanges: string[];
+  concerns: SupplementalReview["concerns"];
   artifactId: string;
-  artifactSha256: string;
-  leadResponse: { text: string; artifactId: string; artifactSha256: string };
+  plannerResponse?: string;
   createdAt: string;
 }
 
@@ -440,6 +438,7 @@ export interface ForgeTask {
     decision?: PlanDecisionView;
     blocker?: PlanBlockerView;
   };
+  planReview?: SupplementalReviewView | null;
   planRevision?: number | null;
   planAuthorizationId?: string | null;
   planArtifactSha256?: string | null;
@@ -1902,7 +1901,7 @@ export class TaskService {
     const originalPlan = (originalSubject ? plans.find((plan) => plan.subject.outputId === originalSubject.outputId) : undefined) ?? finalPlan;
     const previousPlans = plans.filter((plan) => plan.subject.outputId !== finalSubject.outputId);
     const materiality = materialitySubject ? this.materialityView(row.company_id, materialitySubject) : undefined;
-    const supplementalReview = originalSubject ? this.supplementalReviewView(row, originalSubject) : undefined;
+    const supplementalReview = this.supplementalReviewView(row);
     const decision = this.planDecisionView(row, finalSubject);
     return { originalPlan, finalPlan, previousPlans, ...(materiality ? { materiality } : {}), ...(supplementalReview ? { supplementalReview } : {}), ...(decision ? { decision } : {}), ...(blocker ? { blocker } : {}) };
   }
@@ -1923,20 +1922,19 @@ export class TaskService {
     }
   }
 
-  private supplementalReviewView(task: TaskRow, originalSubject: PlanSubject): SupplementalReviewView | undefined {
-    const row = this.database.authQuery((db) => db.prepare(`SELECT r.id AS reviewId, r.profile_id AS profileId, r.opinion_artifact_id AS artifactId, r.opinion_artifact_sha256 AS artifactSha256, r.summary, r.created_at AS createdAt, a.storage_path AS opinionStoragePath, rr.response_artifact_id AS responseArtifactId, rr.response_artifact_sha256 AS responseArtifactSha256, ra.storage_path AS responseStoragePath
+  private supplementalReviewView(task: TaskRow): SupplementalReviewView | undefined {
+    const row = this.database.authQuery((db) => db.prepare(`SELECT r.id AS reviewId, r.profile_id AS profileId, r.opinion_artifact_id AS artifactId, r.summary, r.created_at AS createdAt, a.storage_path AS opinionStoragePath, a.sha256 AS opinionSha256, r.planner_response_artifact_id AS responseArtifactId, ra.storage_path AS responseStoragePath, ra.sha256 AS responseSha256
       FROM forge_plan_reviews r JOIN forge_artifacts a ON a.id = r.opinion_artifact_id
-      LEFT JOIN forge_plan_review_responses rr ON rr.review_id = r.id
-      LEFT JOIN forge_artifacts ra ON ra.id = rr.response_artifact_id
-      WHERE r.task_id = ? AND r.company_id = ? AND r.workflow_id = ? AND r.original_plan_revision = ? 
-      ORDER BY r.created_at DESC, r.id DESC LIMIT 1`).get(task.id, task.company_id, task.workflow_id, originalSubject.originalPlanRevision) as { reviewId: string; profileId: string; artifactId: string; artifactSha256: string; summary: string; createdAt: string; opinionStoragePath: string; responseArtifactId: string | null; responseArtifactSha256: string | null; responseStoragePath: string | null } | undefined);
-    if (!row || !row.responseArtifactId || !row.responseArtifactSha256 || !row.responseStoragePath) return undefined;
+      LEFT JOIN forge_artifacts ra ON ra.id = r.planner_response_artifact_id
+      WHERE r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?
+      ORDER BY r.created_at DESC, r.id DESC LIMIT 1`).get(task.id, task.company_id, task.workflow_id) as { reviewId: string; profileId: string; artifactId: string; summary: string; createdAt: string; opinionStoragePath: string; opinionSha256: string; responseArtifactId: string | null; responseStoragePath: string | null; responseSha256: string | null } | undefined);
+    if (!row) return undefined;
     const profile = this.database.authQuery((db) => db.prepare("SELECT id, name FROM forge_profiles WHERE id = ?").get(row.profileId) as { id: string; name: string } | undefined);
     try {
-      const opinion = SupplementalReviewSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.opinionStoragePath, sha256: row.artifactSha256 }).toString("utf8")));
-      const responseRaw = JSON.parse(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.responseStoragePath, sha256: row.responseArtifactSha256 }).toString("utf8")) as { reviewResponse?: unknown; summary?: unknown };
-      const text = typeof responseRaw.reviewResponse === "string" ? responseRaw.reviewResponse : typeof responseRaw.summary === "string" ? responseRaw.summary : "Lead response recorded.";
-      return { reviewId: row.reviewId, reviewerProfile: { id: profile?.id ?? row.profileId, name: profile?.name ?? "Reviewer" }, opinion: opinion.opinion, summary: opinion.summary, concerns: opinion.concerns, requiredChanges: opinion.requiredChanges, artifactId: row.artifactId, artifactSha256: row.artifactSha256, leadResponse: { text, artifactId: row.responseArtifactId, artifactSha256: row.responseArtifactSha256 }, createdAt: row.createdAt };
+      const opinion = SupplementalReviewSchema.parse(JSON.parse(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.opinionStoragePath, sha256: row.opinionSha256 }).toString("utf8")));
+      const responseRaw = row.responseArtifactId && row.responseStoragePath && row.responseSha256 ? JSON.parse(this.artifacts.readSync({ companyId: task.company_id, storagePath: row.responseStoragePath, sha256: row.responseSha256 }).toString("utf8")) as { reviewResponse?: unknown; summary?: unknown } : undefined;
+      const plannerResponse = typeof responseRaw?.reviewResponse === "string" ? responseRaw.reviewResponse : typeof responseRaw?.summary === "string" ? responseRaw.summary : undefined;
+      return { reviewId: row.reviewId, reviewerProfile: { id: profile?.id ?? row.profileId, name: profile?.name ?? "Reviewer" }, verdict: opinion.verdict, summary: opinion.summary, concerns: opinion.concerns, artifactId: row.artifactId, ...(plannerResponse ? { plannerResponse } : {}), createdAt: row.createdAt };
     } catch {
       return undefined;
     }

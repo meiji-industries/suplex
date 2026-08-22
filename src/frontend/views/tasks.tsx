@@ -128,16 +128,16 @@ function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId,
               </DropdownMenu>
               <Button type="button" variant="outline" size="icon-sm" className="rounded-full" aria-label="More task properties"><Ellipsis className="size-3.5" /></Button>
               <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">
-                <label className="flex cursor-pointer items-center gap-2 text-xs"><Checkbox id="task-auto-approve-plan" checked={autoApprovePlan} onCheckedChange={(checked) => onAutoApprovePlanChange(checked === true)} />Auto-approve plan</label>
-                <Button type="submit" size="sm" variant="outline" disabled={busy || !projectId || !title.trim() || !description.trim()} title="Create task (⌘Enter)">{busy ? "Saving…" : "Create task"}</Button>
+                <Button type="submit" size="sm" disabled={busy || !projectId || !title.trim() || !description.trim()} title="Create task (⌘Enter)">{busy ? "Saving…" : "Create task"}</Button>
               </DialogFooter>
             </div>
-            <fieldset className="border-t border-border/70 px-5 py-3">
-              <legend className="px-0 text-xs font-medium">Delivery &amp; checks</legend>
-              <RadioGroup aria-label="Delivery target" value={deliveryTarget} onValueChange={(value) => { if (["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"].includes(value)) onDeliveryTargetChange(value as typeof deliveryTarget); }} className="mt-2 flex flex-wrap gap-x-3 gap-y-2">
+            <fieldset className="border-t border-border/70 bg-muted/30 px-5 py-3">
+              <legend className="px-0 text-xs font-medium text-muted-foreground">Delivery &amp; checks</legend>
+              <RadioGroup aria-label="Delivery target" value={deliveryTarget} onValueChange={(value) => { if (["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"].includes(value)) onDeliveryTargetChange(value as typeof deliveryTarget); }} className="mt-2.5 flex flex-wrap gap-x-4 gap-y-2">
                 {[["local_worktree", "Keep in worktree"], ["remote_branch", "Push branch"], ["pull_request_draft", "Draft pull request"], ["pull_request_ready", "Ready for review"], ["merged", "Fully merged"]].map(([value, label]) => <label className="flex items-center gap-1.5 text-xs" key={value}><RadioGroupItem value={value} />{label}</label>)}
               </RadioGroup>
-              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+              <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border/60 pt-2.5 text-xs">
+                <label className="flex cursor-pointer items-center gap-2"><Checkbox id="task-auto-approve-plan" checked={autoApprovePlan} onCheckedChange={(checked) => onAutoApprovePlanChange(checked === true)} />Auto-approve plan</label>
                 {hasProjectTests ? <label className="flex items-center gap-2"><Checkbox checked={runProjectTests} onCheckedChange={(checked) => onRunProjectTestsChange(checked === true)} />Run project tests</label> : <span className="text-muted-foreground">No project test command configured.</span>}
                 {canSupplementalReview ? <label className="flex items-center gap-2"><Checkbox checked={supplementalReview} onCheckedChange={(checked) => onSupplementalReviewChange(checked === true)} />Second review</label> : null}
                 <label className="flex items-center gap-2">Visual evidence <Select value={visualEvidence} onValueChange={(value) => { if (value === "off" || value === "capture" || value === "required") onVisualEvidenceChange(value); }}><SelectTrigger aria-label="Visual evidence" size="sm"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="off">Off</SelectItem><SelectItem value="capture">Capture</SelectItem><SelectItem value="required">Required</SelectItem></SelectContent></Select></label>

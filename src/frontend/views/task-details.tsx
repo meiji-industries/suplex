@@ -596,7 +596,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   const activityCount = task.activity.length;
   const activityContent = <>
     <TaskActivity taskId={task.id} timeline={task.activity} release={task.release} ci={task.ci} onViewChanges={openDiff} />
-    {task.governance.supplementalReview ? <SupplementalReviewPanel value={{ reviewerProfileId: task.governance.supplementalReview.reviewerProfile.name, opinion: task.governance.supplementalReview.opinion, concerns: task.governance.supplementalReview.concerns, requiredChanges: task.governance.supplementalReview.requiredChanges, leadResponse: task.governance.supplementalReview.leadResponse.text }} /> : null}
+    {task.governance.supplementalReview ? <SupplementalReviewPanel value={{ reviewer: { name: task.governance.supplementalReview.reviewerProfile.name }, verdict: task.governance.supplementalReview.verdict, summary: task.governance.supplementalReview.summary, concerns: task.governance.supplementalReview.concerns, plannerResponse: task.governance.supplementalReview.plannerResponse }} /> : null}
   </>;
   const developerExecution = task.developerExecution;
   const hasChanges = developerExecution !== undefined;

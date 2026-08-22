@@ -28,6 +28,8 @@ export interface SupplementalReviewResult {
   executionId: string;
   sessionRef: string;
   summary: string;
+  verdict?: "approve" | "revise";
+  concerns?: Array<{ severity: "blocking" | "advisory"; text: string; step?: number }>;
   subject?: SupplementalReviewSubject;
 }
 

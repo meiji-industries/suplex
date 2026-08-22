@@ -46,6 +46,31 @@ async function autoApprovePlan(ctx: IssueWorkflowContext): Promise<void> {
   await startDevelopment(ctx,{ expectedRevision: ctx.state.revision, commandId: `${ctx.state.workflowId}:auto-start-development:${ctx.state.revision}`, actorUserId: ctx.input.autoApprovePlanActorUserId });
 }
 
+async function runPlanReview(ctx: IssueWorkflowContext, plan: LeadPlanningResult): Promise<LeadPlanningResult> {
+  // Keep completed histories on their recorded sequence. New tasks place the
+  // trusted Reviewer immediately after every Planner turn.
+  if (!ctx.patched("forge-plan-review-v1") || !ctx.input.supplementalReview || !ctx.input.roleProfiles.reviewer || plan.leadOutputKind !== "plan" || !ctx.state.leadOutputArtifactId || !ctx.state.leadEvidenceArtifactId) return plan;
+  try {
+    const review = await ctx.acquireExternalTurn<import("../issue-contracts.js").SupplementalReviewResult>(
+      { operation: "supplemental_review", role: "reviewer", profileId: ctx.input.roleProfiles.reviewer },
+      (capacityRequestId) => runSupplementalReview({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.planRevision ?? ctx.state.revision, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, leadEvidenceArtifactId: ctx.state.leadEvidenceArtifactId!, ...(ctx.state.leadSessionRef ? { primaryLeadSessionRef: ctx.state.leadSessionRef } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) }),
+      (result) => result.executionId,
+    );
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, supplementalReviewUsed: true, supplementalReviewArtifactId: review.reviewArtifactId });
+    if (review.verdict !== "revise" || !review.concerns?.some((concern) => concern.severity === "blocking") || !ctx.state.leadSessionRef) return plan;
+    const revised = await ctx.acquireExternalTurn<LeadPlanningResult>(
+      { operation: "lead_consolidation", role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: ctx.state.leadSessionRef },
+      (capacityRequestId) => consolidateLeadPlan({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, imageArtifactIds: ctx.input.imageArtifactIds, roleProfiles: ctx.input.roleProfiles, revision: ctx.state.revision, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, supplementalReviewArtifactId: review.reviewArtifactId, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+      (result) => result.leadExecutionId,
+    );
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, ...revised, leadReviewResponseArtifactId: revised.leadReviewResponseArtifactId ?? null, finalPlanSubject: revised.planSubject ?? ctx.state.finalPlanSubject });
+    return revised;
+  } catch {
+    // A missing second opinion must never hold up a plan.
+    return plan;
+  }
+}
+
 export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
   setHandler(issueUpdates.start_planning, ctx.guarded(async (rawInput) => {
     if (!ctx.exactPlanAuthorityEnabled && ctx.captureInitialProjectionState) await condition(() => ctx.initialProjectionComplete);
@@ -146,6 +171,7 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
         return ctx.state;
       }
       if (ctx.state.revisionRequestId) await authorizePlanRevision({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, revisionRequestId: ctx.state.revisionRequestId, planRevision: ctx.state.planRevision ?? ctx.state.revision });
+      leadResult = await runPlanReview(ctx, leadResult);
       if (ctx.planGovernanceEnabled()) {
         const route = routeLeadResult({ kind: leadResult.leadOutputKind, material: leadResult.material });
         const exactSubject = Boolean(ctx.state.finalPlanSubject);

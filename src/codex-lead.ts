@@ -40,13 +40,17 @@ const LeadReviewResponseSchema = z.object({
 }).strict();
 export { AskUserQuestionSchema, DecisionBlockerSchema, LeadOutputSchema, LeadPlanSchema, LeadPlanningActivityInputSchema, PersistedLeadOutputSchema, type AskUserQuestion, type PersistedLeadOutput } from "./lead-contracts.js";
 export type { DecisionBlocker, LeadOutput, LeadPlan, LeadPlanningActivityInput, LeadPlanningResult, LegacyLeadPlanningResult } from "./lead-contracts.js";
-export const SupplementalReviewSchema = z.object({
-  kind: z.literal("review"),
+export const SupplementalReviewSchema = z.preprocess((value) => {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const review = value as Record<string, unknown>;
+    if (review.opinion === "approve" || review.opinion === "request_changes") return { verdict: review.opinion === "approve" ? "approve" : "revise", summary: review.summary, concerns: Array.isArray(review.concerns) ? review.concerns.map((text) => ({ severity: "advisory", text })) : Array.isArray(review.requiredChanges) ? review.requiredChanges.map((text) => ({ severity: "blocking", text })) : [] };
+  }
+  return value;
+}, z.object({
+  verdict: z.enum(["approve", "revise"]),
   summary: z.string().min(1),
-  opinion: z.enum(["approve", "request_changes"]),
-  concerns: z.array(z.string()),
-  requiredChanges: z.array(z.string()),
-});
+  concerns: z.array(z.object({ severity: z.enum(["blocking", "advisory"]), text: z.string().min(1), step: z.number().int().positive().optional() })),
+}));
 
 const DeliveryRepairLeadOutputSchema = z.object({
   kind: z.literal("delivery_repair_plan"),
@@ -1209,30 +1213,12 @@ export class AgentService {
       JOIN forge_artifacts oa ON oa.id = io.output_artifact_id JOIN forge_artifacts e ON e.id = io.evidence_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.project_revision_id = ? AND b.id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId, input.projectRevisionId, input.briefArtifactId) as { title: string; normalized_json: string; brief_storage_path: string; brief_sha256: string; output_storage_path: string; output_sha256: string; evidence_storage_path: string; evidence_sha256: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Supplemental review evidence is unavailable");
-    let reviewerProfile = profile;
-    if (input.originalPlanSubject) {
-      if (!input.evidenceManifestArtifactId) throw new AgentFailure("scoped-input-missing", "The supplemental review manifest is unavailable");
-      const pinnedManifest = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'planning-evidence-manifest'").get(input.evidenceManifestArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined);
-      if (!pinnedManifest) throw new AgentFailure("scoped-input-missing", "The supplemental review manifest is unavailable");
-      try {
-        const manifest = JSON.parse((await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: pinnedManifest.storagePath, sha256: pinnedManifest.sha256 })).toString("utf8")) as { profiles?: { reviewer?: ProfileSettings | null } };
-        const pinnedReviewer = manifest.profiles?.reviewer;
-        if (!pinnedReviewer || pinnedReviewer.id !== profile.id || pinnedReviewer.provider !== this.provider.id || !pinnedReviewer.model) throw new AgentFailure("reviewer-profile-unavailable", "The reviewer settings are not present in the pinned manifest");
-        reviewerProfile = { id: pinnedReviewer.id, model: pinnedReviewer.model, reasoningLevel: pinnedReviewer.reasoningLevel as "low" | "medium" | "high" | "xhigh", servicePriority: pinnedReviewer.servicePriority as "standard" | "priority" | "fast" };
-      } catch (error) {
-        if (error instanceof AgentFailure) throw error;
-        throw new AgentFailure("scoped-input-missing", "The pinned supplemental review manifest is invalid");
-      }
-    }
+    const reviewerProfile = profile;
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(context.normalized_json)));
     const brief = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
     const draft = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
     const active = this.activeCapacityExecution(input, "reviewer");
-    const manifest = input.evidenceManifestArtifactId
-      ? this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'planning-evidence-manifest'").get(input.evidenceManifestArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined)
-      : undefined;
-    if (input.evidenceManifestArtifactId && !manifest) throw new AgentFailure("scoped-input-missing", "Supplemental review manifest is unavailable");
-    const manifestText = manifest ? (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: manifest.storagePath, sha256: manifest.sha256 })).toString("utf8") : "";
+    const instructions = await this.repositoryEvidence(repositoryPath);
     const images = this.database.authQuery((db) => {
       if (!input.imageArtifactIds.length) return [] as ImageRow[];
       const placeholders = input.imageArtifactIds.map(() => "?").join(",");
@@ -1255,8 +1241,7 @@ export class AgentService {
     const heartbeat = setInterval(() => void this.databaseHeartbeat(executionId, "running"), 2_000);
     const stopCancellationTracking = this.trackCancellation(executionId, runtime.signal);
     try {
-      const reviewEvidence = input.originalPlanSubject ? manifestText : (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.evidence_storage_path, sha256: context.evidence_sha256 })).toString("utf8");
-      const wrapper = await this.prepareTurnWrapper(executionId, reviewerProfile, repositoryPath, schemaPath, this.reviewPrompt(context.title, brief, context.normalized_json, draft, reviewEvidence), { ...(images.length ? { imagePaths: images.map((image) => resolve(this.config.artifactRoot, image.storage_path)) } : {}) });
+      const wrapper = await this.prepareTurnWrapper(executionId, reviewerProfile, repositoryPath, schemaPath, this.reviewPrompt(context.title, brief, context.normalized_json, draft, instructions), { ...(images.length ? { imagePaths: images.map((image) => resolve(this.config.artifactRoot, image.storage_path)) } : {}) });
       const result = await this.processRunner({
         command: wrapper.command,
         args: wrapper.args,
@@ -1292,8 +1277,8 @@ export class AgentService {
       this.database.authTransaction((db) => {
         db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), evidence.id, executionId);
       });
-      this.database.authTransaction((db) => db.prepare("INSERT INTO forge_plan_reviews (id, task_id, company_id, workflow_id, plan_revision, profile_id, execution_id, session_ref, opinion_artifact_id, evidence_artifact_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.revision, profile.id, executionId, sessionRef, reviewArtifact.id, evidence.id, review.summary, this.now().toISOString()));
-      return { reviewId, reviewArtifactId: reviewArtifact.id, evidenceArtifactId: evidence.id, executionId, sessionRef, summary: review.summary };
+      this.database.authTransaction((db) => db.prepare("INSERT INTO forge_plan_reviews (id, task_id, company_id, workflow_id, plan_revision, profile_id, execution_id, session_ref, opinion_artifact_id, evidence_artifact_id, summary, verdict, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.revision, profile.id, executionId, sessionRef, reviewArtifact.id, evidence.id, review.summary, review.verdict, this.now().toISOString()));
+      return { reviewId, reviewArtifactId: reviewArtifact.id, evidenceArtifactId: evidence.id, executionId, sessionRef, summary: review.summary, verdict: review.verdict, concerns: review.concerns.map((concern) => ({ severity: concern.severity, text: concern.text, ...(concern.step === undefined ? {} : { step: concern.step }) })) };
     } catch (error) {
       const failure = runtime.signal?.aborted ? new AgentFailure("cancelled", "The Codex supplemental review was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("review-failed", "The Codex supplemental review failed");
       const evidence = await this.persistEvidence(input.companyId, executionId, lines);
@@ -1349,7 +1334,7 @@ export class AgentService {
       const persisted = await this.persistOutput({ taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, projectId: rawInput.projectId, projectRevisionId: rawInput.projectRevisionId, briefArtifactId: rawInput.briefArtifactId, imageArtifactIds: rawInput.imageArtifactIds, roleProfiles: rawInput.roleProfiles, revision: rawInput.revision }, executionId, rawInput.leadSessionRef, lines, output, manifest, { finalVersion: 2, ...(rawInput.originalPlanSubject ? { originalPlanRevision: rawInput.originalPlanSubject.originalPlanRevision, supersedesOutputId: rawInput.originalPlanSubject.outputId } : {}) });
       const responseArtifact = await this.artifacts.putArtifact(rawInput.companyId, "lead-review-response", { filename: `${executionId}-review-response.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(response, null, 2), "utf8") });
       const reviewRow = this.database.authQuery((db) => db.prepare("SELECT id FROM forge_plan_reviews WHERE opinion_artifact_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(rawInput.supplementalReviewArtifactId, rawInput.taskId, rawInput.companyId, rawInput.workflowId) as { id: string } | undefined);
-      if (reviewRow && rawInput.originalPlanSubject) new PlanGovernanceRepository(this.database).appendLeadReviewResponse({ reviewId: reviewRow.id, taskId: rawInput.taskId, companyId: rawInput.companyId, workflowId: rawInput.workflowId, originalPlanRevision: rawInput.originalPlanSubject.originalPlanRevision, leadExecutionId: executionId, leadSessionRef: rawInput.leadSessionRef, responseArtifactId: responseArtifact.id, ...(persisted.result.planSubject ? { resultOutputId: persisted.result.planSubject.outputId } : {}), ...(persisted.result.blockerSubject ? { resultBlockerArtifactId: persisted.result.blockerSubject.artifactId } : {}) });
+      if (reviewRow) this.database.authQuery((db) => db.prepare("UPDATE forge_plan_reviews SET planner_response_artifact_id = ? WHERE id = ?").run(responseArtifact.id, reviewRow.id));
       await this.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), persisted.evidence.id, executionId));
       return { ...persisted.result, leadReviewResponseArtifactId: responseArtifact.id };
     } catch (error) {
@@ -1406,8 +1391,8 @@ export class AgentService {
     ].join("\n\n");
   }
 
-  private reviewPrompt(title: string, brief: string, revision: string, draft: string, evidence: string): string {
-    return `You are Forge's independent supplemental reviewer. Do not modify files, review implementation, or become the plan owner. Return exactly one JSON object: {"kind":"review","summary":"...","opinion":"approve"|"request_changes","concerns":[],"requiredChanges":[]}. Read the complete draft and the scoped evidence manifest below. Identify only concrete correctness, acceptance, security/privacy, compatibility, operational, or unintended-scope concerns. Do not infer evidence from any source outside the pinned manifest.\n\nTask: ${title}\nBrief:\n${brief}\n\nPinned Project revision:\n${revision}\n\nDraft Lead plan:\n${draft}\n\nPinned planning evidence manifest (sole evidence source):\n${evidence}`;
+  private reviewPrompt(title: string, brief: string, revision: string, draft: string, instructions: string): string {
+    return `You are the Reviewer, a second set of eyes. Check the plan for correctness, missing steps, risk, scope creep, and testability. Reply JSON: { verdict: 'approve' | 'revise', summary: string, concerns: [{ severity: 'blocking'|'advisory', text: string, step?: number }] }. Do not modify files.\n\nTask: ${title}\nBrief:\n${brief}\n\nProject configuration:\n${revision}\n\nPlan JSON:\n${draft}\n\nRepository instructions the Planner saw:\n${instructions || "(none found)"}`;
   }
 
   private consolidationPrompt(draft: string, review: string, correction: boolean): string {

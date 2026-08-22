@@ -187,7 +187,7 @@ export function registerLifecycleHandlersContinuation(ctx: IssueWorkflowContext)
     const successorWorkflowId = `${ctx.input.workflowId}-successor-${ctx.state.revision}`;
     const intentId = `intent_${ctx.input.workflowId}_${ctx.state.revision}`;
     const successor = await createSuccessor({ predecessorTaskId: ctx.input.issueId, predecessorWorkflowId: ctx.input.workflowId, acceptedRevision: ctx.state.revision, successorTaskId, successorWorkflowId, companyId: ctx.input.companyId, projectId: ctx.input.projectId, actorUserId: command.actorUserId, reason: command.reason, intentId });
-    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, successorTaskId: successor.successorTaskId, successorReference: successor, allowedCommands: [], pendingAction: "Successor created", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, revision: ctx.state.revision + 1 });
+    ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, successorTaskId: successor.successorTaskId, successorReference: successor, allowedCommands: [], pendingAction: "Continued in a new task", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}`, revision: ctx.state.revision + 1 });
     await ctx.project();
     return ctx.state;
   }), { validator(rawInput) {

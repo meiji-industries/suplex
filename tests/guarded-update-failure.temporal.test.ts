@@ -99,7 +99,7 @@ test("a rejected update handler projects a retryable failed state instead of str
         revision: 10,
         owner: "human",
         allowedCommands: ["respond_plan_blocker", "cancel_issue"],
-        pendingAction: "Member decision required",
+        pendingAction: "Needs your call",
         lastEventId: `${workflowId}:10`,
         continuationCount: 0,
         lastSummaryHash: null,
@@ -199,7 +199,7 @@ test("a task created with auto-approve and auto-merge reaches done without anoth
         revision: 10,
         owner: "human",
         allowedCommands: ["respond_plan_blocker", "cancel_issue"],
-        pendingAction: "Member decision required",
+        pendingAction: "Needs your call",
         lastEventId: `${workflowId}:10`,
         continuationCount: 0,
         lastSummaryHash: null,
@@ -222,7 +222,7 @@ test("a task created with auto-approve and auto-merge reaches done without anoth
     expect(projections.map((state) => state.phase)).toContain("development");
 
     const done = await handle.result();
-    expect(done).toMatchObject({ phase: "done", pendingAction: "Merged pull request confirmed", mergeOutcome: "merged", acceptanceId: "acceptance_auto", finalReviewOutcome: "approved", ciOutcome: "passed" });
+    expect(done).toMatchObject({ phase: "done", pendingAction: "Merged", mergeOutcome: "merged", acceptanceId: "acceptance_auto", finalReviewOutcome: "approved", ciOutcome: "passed" });
     expect(projections.map((state) => state.phase).filter((phase, index, all) => phase !== all[index - 1])).toEqual([
       "planning", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "delivery_reviewed",
       "releasing", "ci_waiting", "final_review", "accepted", "manual_merge", "done",
@@ -279,7 +279,7 @@ test("a non-decision command failing from a human-owned state that merely offers
         revision: 10,
         owner: "human",
         allowedCommands: ["respond_plan_blocker", "cancel_issue"],
-        pendingAction: "Member decision required",
+        pendingAction: "Needs your call",
         lastEventId: `${workflowId}:10`,
         continuationCount: 0,
         lastSummaryHash: null,

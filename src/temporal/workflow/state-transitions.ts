@@ -57,7 +57,7 @@ export function repairRequiredState(state: IssueWorkflowState, result: Completed
   const phase = result.review.opinion === "approved" ? "delivery_reviewed" : canRepair ? "repair_required" : "delivery_blocked";
   const owner = phase === "repair_required" ? "lead" : "human";
   const allowedCommands: IssueWorkflowState["allowedCommands"] = phase === "repair_required" ? ["record_delivery_decision", "repair_delivery", "cancel_issue"] : phase === "delivery_blocked" ? ["record_delivery_decision", "cancel_issue"] : ["publish_draft", "cancel_issue"];
-  const pendingAction = phase === "repair_required" ? "Developer repair of blocking findings" : phase === "delivery_blocked" ? "Member decision required" : "Publish draft pull request";
+  const pendingAction = phase === "repair_required" ? "Builder is fixing review findings" : phase === "delivery_blocked" ? "Needs your call" : "Opening the pull request";
   return IssueWorkflowStateSchema.parse({
     ...revisioned(state, phase, owner, allowedCommands, pendingAction),
     blocker: phase === "delivery_blocked" ? humanBlocker("agent_exhausted", result.review.summary, [{ command: "record_delivery_decision", label: "Continue anyway", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], result.review.reviewArtifact ? evidencePointer(result.review.reviewArtifact.artifactId, result.review.reviewArtifact.sha256, "delivery-review") : undefined) : null,
@@ -78,7 +78,7 @@ export function repairRequiredState(state: IssueWorkflowState, result: Completed
 export function repairBlockedState(state: IssueWorkflowState, result: BlockedRepair & { evidenceArtifactSha256?: string }, repairCycleLimit: number): IssueWorkflowState {
   const retry = result.cycle <= repairCycleLimit;
   return IssueWorkflowStateSchema.parse({
-    ...revisioned(state, "delivery_blocked", "human", retry ? ["record_delivery_decision", "repair_delivery", "retry_development", "cancel_issue"] : ["record_delivery_decision", "retry_development", "cancel_issue"], retry ? result.summary : "Member decision required"),
+    ...revisioned(state, "delivery_blocked", "human", retry ? ["record_delivery_decision", "repair_delivery", "retry_development", "cancel_issue"] : ["record_delivery_decision", "retry_development", "cancel_issue"], retry ? result.summary : "Needs your call"),
     blocker: retry ? null : humanBlocker("agent_exhausted", result.summary, [{ command: "record_delivery_decision", label: "Record delivery decision", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(result.evidenceArtifactId, result.evidenceArtifactSha256, "developer-repair")),
     repairCycle: result.cycle,
     deliveryRepairAttemptId: result.repairAttemptId,

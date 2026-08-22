@@ -150,7 +150,7 @@ export function materialitySummary(categories: PlanMaterialCategory[]): string {
 }
 
 export function routeLeadResult(result: { kind: "plan" | "decision_blocker"; material: boolean }): { phase: "ready_for_development" | "approval" | "blocked"; owner: "lead" | "human"; allowedCommands: string[]; pendingAction: string } {
-  if (result.kind === "decision_blocker") return { phase: "blocked", owner: "human", allowedCommands: ["respond_plan_blocker", "cancel_issue"], pendingAction: "Member decision required" };
+  if (result.kind === "decision_blocker") return { phase: "blocked", owner: "human", allowedCommands: ["respond_plan_blocker", "cancel_issue"], pendingAction: "Needs your call" };
   if (result.material) return { phase: "approval", owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan" };
   return { phase: "ready_for_development", owner: "lead", allowedCommands: ["start_development", "cancel_issue"], pendingAction: "Start development" };
 }

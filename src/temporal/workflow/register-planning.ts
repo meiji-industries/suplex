@@ -127,7 +127,7 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
           revision: failureRevision,
           owner: "human",
           allowedCommands: capacityFailure ? ["start_planning", "cancel_issue"] : ctx.reviseContinueEnabled ? ["start_planning", "continue_work", "cancel_issue"] : ["start_planning", "cancel_issue"],
-          pendingAction: capacityFailure ? `${summary} Forge reconciled the capacity record; retry planning.` : summary,
+          pendingAction: capacityFailure ? `${summary} Retry planning.` : summary,
           blocker: failure.category ? humanBlocker(failure.category, summary, [{ command: "start_planning", label: "Retry planning", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], evidencePointer(failure.evidenceArtifactId, failure.evidenceSha256, "attention-evidence")) : null,
           stateChangedAt: new Date().toISOString(),
           lastEventId: `${ctx.state.workflowId}:${failureRevision}`,
@@ -143,7 +143,7 @@ export function registerPlanningHandlers(ctx: IssueWorkflowContext): void {
         ctx.state = IssueWorkflowStateSchema.parse({ ...routedLeadResult, ...(distinctPlanningStates ? { revision: next.revision + 1, lastEventId: `${next.workflowId}:${next.revision + 1}` } : {}), ...(ctx.leadResultKind(leadResult) === "plan" ? { planRevision: next.revision } : {}), supplementalReviewUsed: false });
       }
       if (ctx.state.revisionRequestId && ctx.state.revisedExecutionCoordinates?.disposition === "reuse" && ctx.state.preservedWorktreeCompatibility !== true) {
-        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, phase: "delivery_blocked", owner: "human", allowedCommands: ["revise_plan", "cancel_issue"], pendingAction: "Choose a new exact-base worktree for the incompatible revised plan", blockerCode: "preserved-worktree-incompatible" });
+        ctx.state = IssueWorkflowStateSchema.parse({ ...ctx.state, phase: "delivery_blocked", owner: "human", allowedCommands: ["revise_plan", "cancel_issue"], pendingAction: "Choose a new worktree for the revised plan", blockerCode: "preserved-worktree-incompatible" });
         await ctx.project();
         return ctx.state;
       }

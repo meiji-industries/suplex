@@ -22,7 +22,7 @@ export function registerTargetBaseHandlers(ctx: IssueWorkflowContext): void {
       throw error;
     }
     if (!checkpoint) return ctx.state;
-    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: verificationOnly ? "Retrying pinned forward-merge verification" : "Retrying target-base reconciliation", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+    ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: verificationOnly ? "Checking the merge again" : "Checking for updates", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     await ctx.runTargetBaseCheckpoint(checkpoint, verificationOnly);
     return ctx.state;

@@ -70,7 +70,7 @@ export function applyLeadResult(state: IssueWorkflowState, result: LeadPlanningR
       phase: "blocked",
       owner: "human",
       allowedCommands: ["resolve_decision_blocker", "cancel_issue"],
-      pendingAction: "Human decision required by Lead",
+      pendingAction: "Needs your call",
       blockedCategory: "human_decision",
       blockedResumePhase: "planning",
       blockerArtifactId: result.leadOutputArtifactId,
@@ -200,7 +200,7 @@ export function createAcquireExternalTurn(
           const resultExecutionId = executionId(result);
           if (current.executionId && resultExecutionId && current.executionId !== resultExecutionId) throw ApplicationFailure.nonRetryable("capacity_owner_mismatch", "capacity_owner_mismatch", { requestId: request.id });
           if ((current as { status: string }).status === "ownership_ambiguous" && !options.patched("forge-capacity-ownership-clear-v1")) {
-            observedRevision = await options.projectCapacityState({ ...(admission.publicState as object), status: "ownership_ambiguous", position: null, reason: null, retryAt: null } as unknown as IssueWorkflowState["capacity"], "Ownership verification required");
+            observedRevision = await options.projectCapacityState({ ...(admission.publicState as object), status: "ownership_ambiguous", position: null, reason: null, retryAt: null } as unknown as IssueWorkflowState["capacity"], "Needs a retry");
             return result;
           }
           if (["released", "cancelled", "stale", "exhausted"].includes(current.status) && options.patched(options.capacityReadmissionPatch)) {
@@ -222,8 +222,8 @@ export function createAcquireExternalTurn(
             const limited = await rateLimitCapacity({ requestId: request.id, executionId: current.executionId, ...(rateLimit.retryAt ? { retryAt: rateLimit.retryAt } : {}) });
             if (limited.status === "exhausted") {
               const state = stateRef.get();
-              const blocker = { category: "capacity_exhausted" as const, summary: "External turn capacity was exhausted.", nextAction: "Retry capacity or cancel the issue.", resumeOperation: spec.operation };
-              stateRef.set(IssueWorkflowStateSchema.parse({ ...state, capacity: { ...admission.publicState, status: "exhausted", position: null, reason: null, retryAt: null, rateLimitAttempts: limited.rateLimitAttempts }, capacityBlocker: blocker, allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: "Capacity retry required", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
+              const blocker = { category: "capacity_exhausted" as const, summary: "No agent slots are free.", nextAction: "Retry or cancel the issue.", resumeOperation: spec.operation };
+              stateRef.set(IssueWorkflowStateSchema.parse({ ...state, capacity: { ...admission.publicState, status: "exhausted", position: null, reason: null, retryAt: null, rateLimitAttempts: limited.rateLimitAttempts }, capacityBlocker: blocker, allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: "Waiting for a free agent slot", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
               observedRevision = stateRef.get().revision;
               await options.projectState(stateRef.get());
               throw ApplicationFailure.nonRetryable("capacity_exhausted", "capacity_exhausted", blocker);
@@ -238,14 +238,14 @@ export function createAcquireExternalTurn(
       if (admission.status === "exhausted") {
         const category = "capacity_exhausted" as const;
         const state = stateRef.get();
-        stateRef.set(IssueWorkflowStateSchema.parse({ ...state, capacity: admission.publicState, capacityBlocker: { category, summary: "External turn capacity was exhausted.", nextAction: "Retry capacity or cancel the issue.", resumeOperation: spec.operation }, allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: "Capacity retry required", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
+        stateRef.set(IssueWorkflowStateSchema.parse({ ...state, capacity: admission.publicState, capacityBlocker: { category, summary: "No agent slots are free.", nextAction: "Retry or cancel the issue.", resumeOperation: spec.operation }, allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: "Waiting for a free agent slot", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
         await options.projectState(stateRef.get());
         throw ApplicationFailure.nonRetryable(category, category, stateRef.get().capacityBlocker);
       }
       if ((admission as { status: string }).status === "ownership_ambiguous" && !options.patched("forge-capacity-ownership-clear-v1")) {
         const state = stateRef.get();
         const legacyAdmission = admission as unknown as { publicState: IssueWorkflowState["capacity"] };
-        stateRef.set({ ...state, capacity: legacyAdmission.publicState, capacityBlocker: { category: "ownership_ambiguous", summary: "Forge cannot prove external process ownership.", nextAction: "Verify ownership before retrying or cancelling.", resumeOperation: spec.operation } as unknown as IssueWorkflowState["capacityBlocker"], allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: "Ownership verification required", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
+        stateRef.set({ ...state, capacity: legacyAdmission.publicState, capacityBlocker: { category: "ownership_ambiguous", summary: "Forge couldn't confirm the previous run.", nextAction: "Retry or cancel the issue.", resumeOperation: spec.operation } as unknown as IssueWorkflowState["capacityBlocker"], allowedCommands: ["retry_capacity", "cancel_issue"], owner: "human", pendingAction: "Needs a retry", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` });
         await options.projectState(stateRef.get());
         throw ApplicationFailure.nonRetryable("ownership_ambiguous", "ownership_ambiguous", stateRef.get().capacityBlocker);
       }

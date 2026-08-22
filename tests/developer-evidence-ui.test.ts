@@ -110,7 +110,7 @@ test("places an approved delivery review at its Reviewed activity, not a later b
 
   expect(html).toContain("Review result");
   expect(html.indexOf("moved the task to Reviewed")).toBeLessThan(html.indexOf("data-task-activity-delivery-review"));
-  expect(html.indexOf("data-task-activity-delivery-review")).toBeLessThan(html.indexOf("moved the task to Blocked"));
+  expect(html.indexOf("data-task-activity-delivery-review")).toBeLessThan(html.indexOf("moved the task to Needs attention"));
 });
 
 test("collapses repeated development and CI updates without changing their audit source", () => {

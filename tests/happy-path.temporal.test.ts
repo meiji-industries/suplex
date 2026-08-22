@@ -206,13 +206,13 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
     await settled();
 
     const done = await handle.result();
-    expect(done).toMatchObject({ phase: "done", pendingAction: "Merged pull request confirmed", allowedCommands: [], mergeOutcome: "merged", acceptanceId: "acceptance-happy", completionReceiptId: "completion-receipt-happy", finalReviewOutcome: "approved", ciOutcome: "passed" });
+    expect(done).toMatchObject({ phase: "done", pendingAction: "Merged", allowedCommands: [], mergeOutcome: "merged", acceptanceId: "acceptance-happy", completionReceiptId: "completion-receipt-happy", finalReviewOutcome: "approved", ciOutcome: "passed" });
     const finalState = await settled();
     expect(finalState.phase).toBe("done"); expect(calls.get("updateCiFromBase")).toBe(2);
     expect(calls.get("reviewDelivery")).toBe(1);
     expect(projections.find((state) => state.phase === "delivery_reviewed")).toMatchObject({ resultCommit: observedCommit, resultTree: observedTree });
 
-    expect(projectedDatabase.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = ?").get(issueId))).toEqual({ revision: done.revision, phase: "done", pending_action: "Merged pull request confirmed" });
+    expect(projectedDatabase.authQuery((db) => db.prepare("SELECT revision, phase, pending_action FROM forge_issue_projections WHERE task_id = ?").get(issueId))).toEqual({ revision: done.revision, phase: "done", pending_action: "Merged" });
     expect(projectedDatabase.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_attention_items WHERE task_id = ? AND active = 1").get(issueId))).toEqual({ count: 0 });
 
     const phaseSequence = projections.map((state) => state.phase).filter((phase, index, all) => phase !== all[index - 1]);

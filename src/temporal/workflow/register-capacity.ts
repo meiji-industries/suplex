@@ -125,7 +125,7 @@ export function registerCapacityHandlers(ctx: IssueWorkflowContext): void {
           ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, developerSessionRef: successfulResult.developerSessionRef, deliverySummary: successfulResult.summary, developerEvidenceArtifactId: successfulResult.evidenceArtifactId, mergeResolutionDeveloperExecutionId: successfulResult.developerExecutionId, mergeResolutionDeveloperSessionRef: successfulResult.developerSessionRef });
         }
       } catch {
-        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Developer conflict resolution is incomplete; retry the same owned turn", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "merge_conflict_required", owner: "human", allowedCommands: ["resolve_merge_conflict", "cancel_issue"], pendingAction: "Builder didn't finish resolving conflicts — retry", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       }
       await ctx.project();
       return ctx.state;

@@ -81,7 +81,7 @@ test("claimed Developer recovery does not hide delivery review actions", () => {
   expect(html).toContain("In Review");
   expect(html).not.toContain('data-task-blocked-card="true"');
   expect(html).toContain('data-size="xs"');
-  expect(html).toContain("What you need to do");
+  expect(html).toContain("Review the changes, then choose what happens next.");
   expect(html).toContain("/tmp/forge/worktrees/task-1");
   expect(html).not.toContain(">cd /tmp/forge/worktrees/task-1<");
   expect(html).toContain("work/readme-joke");
@@ -100,7 +100,7 @@ test("explains required delivery changes in human terms", () => {
     phase: "repair_required",
     allowedCommands: ["repair_delivery"],
     commands: [],
-    pendingAction: "Developer repair of blocking findings",
+    pendingAction: "Builder is fixing review findings",
     projection: { status: "current" },
     deliveryReview: { summary: "Keyboard and logout behavior still need browser verification.", findings: [{ id: "finding-1", severity: "blocking", disposition: "open", rationale: "Runtime behavior is unverified.", repairInstruction: "Verify keyboard navigation and the logout redirect at desktop and mobile widths." }] },
   } as unknown as ApiTask;
@@ -170,7 +170,7 @@ test("shows the exact draft publication preview and diff action", () => {
     phase: "releasing",
     allowedCommands: ["accept_delivery", "publish_draft", "request_delivery_changes"],
     commands: [],
-    pendingAction: "Publish draft pull request",
+    pendingAction: "Opening the pull request",
     projection: { status: "current" },
     developerExecution: { status: "completed", branchName: "work/readme-joke", resultCommit: "a".repeat(40) },
     release: { repository: "acme/forge", baseBranch: "main", headBranch: "work/readme-joke", title: "Add a sound-decision pun", bodyPreview: "Summary\n\nA long description that reviewers should see before opening the diff. It also explains the implementation, verification, compatibility, and operational impact in enough detail to require an expandable preview instead of showing the entire pull request description inline." },
@@ -208,7 +208,7 @@ test("uses planned publication copy before publishing and skeletons while publis
     phase: "delivery_reviewed",
     allowedCommands: ["publish_draft"],
     commands: [],
-    pendingAction: "Publish draft pull request",
+    pendingAction: "Opening the pull request",
     projection: { status: "current" },
     leadOutput: { content: { kind: "plan", gitPresentation: { pullRequestTitle: "Add sign-out controls", pullRequestDescription: "Explain the logout behavior." } } },
   } as unknown as ApiTask;
@@ -245,7 +245,7 @@ test("shows a status card when a background phase has no action", () => {
     onContinueWork: async () => undefined,
   }) }));
   expect(html).toContain('data-task-status-card="true"');
-  expect(html).toContain("Releasing");
+  expect(html).toContain("Opening PR");
   expect(html).toContain("Publishing draft pull request");
 });
 
@@ -288,7 +288,7 @@ test("marks blocked action cards with the destructive status badge", () => {
   expect(html).toContain('data-task-blocked-card="true"');
   expect(html).toContain('data-variant="destructive"');
   expect(html).toContain("bg-destructive/10");
-  expect(html).toContain(">Blocked<");
+  expect(html).toContain(">Needs attention<");
 });
 
 test("claimed Developer recovery does not remain an active Development card", () => {

@@ -189,16 +189,13 @@ export function applyMigrations(db: Database.Database, folder: string): void {
   db.transaction(() => {
     const applied = db.prepare("SELECT hash, created_at FROM __drizzle_migrations").all() as Array<{ hash: string; created_at: number }>;
     const appliedByTimestamp = new Map(applied.map((migration) => [migration.created_at, migration.hash]));
-    const appliedByHash = new Map(applied.map((migration) => [migration.hash, migration.created_at]));
 
+    // A migration's identity is its timestamp. Two migrations with identical SQL are legal,
+    // so there is deliberately no hash→timestamp cross-check here.
     for (const migration of migrations) {
       const hashAtTimestamp = appliedByTimestamp.get(migration.createdAt);
-      const timestampForHash = appliedByHash.get(migration.hash);
       if (hashAtTimestamp !== undefined && hashAtTimestamp !== migration.hash) {
         throw new Error(`Applied migration timestamp has different SQL: ${migration.tag}`);
-      }
-      if (timestampForHash !== undefined && timestampForHash !== migration.createdAt) {
-        throw new Error(`Applied migration hash has a different timestamp: ${migration.tag}`);
       }
     }
 

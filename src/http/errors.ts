@@ -1,3 +1,4 @@
+import { isResponseSerializationError } from "@fastify/type-provider-zod";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 import { AuthFailure } from "../auth.js";
@@ -57,6 +58,11 @@ export function installHttpErrorHandlers(app: FastifyInstance): void {
       const fields = { requestId: request.id, method: request.method, url: request.url, statusCode: error.statusCode, error: redact(error.publicMessage), ...(error instanceof ProjectFailure || error instanceof TaskFailure ? { findings: redact(error.findings) } : {}) };
       if (error.statusCode >= 500) request.log.error({ ...fields, err: error }, "Request failed"); else request.log.warn(fields, "Request rejected");
       sendDomainFailure(reply, error);
+      return;
+    }
+    if (isResponseSerializationError(error)) {
+      request.log.error({ requestId: request.id, method: error.method, url: error.url, issues: error.cause.issues.map((issue) => ({ path: issue.path.join("."), code: issue.code, message: issue.message })) }, "Response doesn't match the schema");
+      reply.code(500).send({ error: "Internal server error" });
       return;
     }
     request.log.error({ requestId: request.id, method: request.method, url: request.url, error: redact(error instanceof Error ? error.message : String(error)) }, "Unhandled request error");

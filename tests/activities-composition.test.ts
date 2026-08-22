@@ -34,6 +34,7 @@ const expectedActivityKeys = [
   "preparePlanRevision",
   "projectIssueState",
   "publishRelease",
+  "pushDeliveryBranch",
   "reconcileAcceptance",
   "reconcileCi",
   "reconcileMerge",
@@ -90,4 +91,3 @@ test("activity factories compose the frozen activity key set without overlap", a
     await rm(root, { recursive: true, force: true });
   }
 });
-

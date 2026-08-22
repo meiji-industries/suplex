@@ -20,8 +20,8 @@ interface CreationIntentRow {
 
 /** Start committed task workflows that were interrupted before Temporal confirmation. */
 export async function reconcileTaskCreationIntents(database: ForgeDatabase, config: ForgeConfig, startWorkflow: typeof startIssueWorkflow = startIssueWorkflow): Promise<void> {
-  const intents = database.authQuery((db) => db.prepare(`SELECT i.id, i.task_id, i.workflow_id, i.company_id, i.project_id, i.project_revision_id, i.request_hash,
-      t.brief_artifact_id, b.sha256 AS brief_sha256, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review
+  const intents = database.authQuery((db) => db.prepare(`SELECT i.id, i.task_id, i.workflow_id, i.company_id, i.project_id, i.project_revision_id,
+      t.request_hash, t.brief_artifact_id, b.sha256 AS brief_sha256, t.image_artifact_ids_json, t.role_agents_json, t.supplemental_review
     FROM forge_task_creation_intents i
     JOIN forge_tasks t ON t.id = i.task_id AND t.company_id = i.company_id AND t.project_id = i.project_id AND t.workflow_id = i.workflow_id AND t.project_revision_id = i.project_revision_id
     JOIN forge_artifacts b ON b.id = t.brief_artifact_id AND b.company_id = i.company_id

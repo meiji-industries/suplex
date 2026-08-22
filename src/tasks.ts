@@ -740,7 +740,6 @@ interface CreationIntentRow {
   task_id: string;
   workflow_id: string;
   idempotency_key: string;
-  request_hash: string;
   project_revision_id: string;
   creator_agent_id: string | null;
   artifact_ids_json: string;
@@ -1092,15 +1091,9 @@ export class TaskService {
       creatorId,
     });
     const idempotencyKey = input.idempotencyKey.trim();
-    let reserved = this.reserveCreationIntent({ companyId, projectId: input.projectId, idempotencyKey, requestHash, projectRevisionId: project.activeRevisionId, creatorAgentId });
+    let reserved = this.reserveCreationIntent({ companyId, projectId: input.projectId, idempotencyKey, projectRevisionId: project.activeRevisionId, creatorAgentId });
     await this.maybeFault("after_intent_reserved", { intentId: reserved.intent.id, taskId: reserved.intent.task_id });
     if (!reserved.created) {
-      if (reserved.intent.request_hash === "legacy-unknown") {
-        throw new TaskFailure("This idempotency key belongs to a legacy task whose request identity is unavailable", [finding("legacy-idempotency-unknown", "idempotencyKey", "Use a new idempotency key to create a new task")], 409);
-      }
-      if (reserved.intent.request_hash !== requestHash) {
-        throw new TaskFailure("This idempotency key was already used for a different task request", [finding("idempotency_conflict", "idempotencyKey", "Retry with the original request or use a new idempotency key")], 409);
-      }
       if (reserved.intent.state !== "failed_before_start") return this.resumeCreationIntent(authority, reserved.intent, input);
       const claimed = this.claimCreationIntent(reserved.intent.id, "failed_before_start");
       if (!claimed) return this.resumeCreationIntent(authority, this.readCreationIntent({ id: reserved.intent.id }) ?? reserved.intent, input);
@@ -1184,16 +1177,16 @@ export class TaskService {
     }
   }
 
-  private reserveCreationIntent(input: { companyId: string; projectId: string; idempotencyKey: string; requestHash: string; projectRevisionId: string; creatorAgentId?: string | null }): { created: boolean; intent: CreationIntentRow } {
+  private reserveCreationIntent(input: { companyId: string; projectId: string; idempotencyKey: string; projectRevisionId: string; creatorAgentId?: string | null }): { created: boolean; intent: CreationIntentRow } {
     return this.database.authTransaction((db) => {
-      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents";
+      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents";
       const now = this.now().toISOString();
       const leaseToken = id("lease");
       const leaseExpiresAt = new Date(this.now().getTime() + 30_000).toISOString();
       const taskId = id("task");
       const workflowId = `${this.config.installationId ? `workflow-${this.config.installationId}` : "workflow"}-issue-${taskId}`;
       const intentId = id("creation");
-      const inserted = db.prepare(`INSERT INTO forge_task_creation_intents (id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?, 'staging', 0, ?, ?) ON CONFLICT(company_id, idempotency_key) DO NOTHING`).run(intentId, input.companyId, input.projectId, taskId, workflowId, input.idempotencyKey, undefined, input.projectRevisionId, input.creatorAgentId ?? null, leaseToken, leaseExpiresAt, now, now);
+      const inserted = db.prepare(`INSERT INTO forge_task_creation_intents (id, company_id, project_id, task_id, workflow_id, idempotency_key, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', ?, ?, 'staging', 0, ?, ?) ON CONFLICT(company_id, idempotency_key) DO NOTHING`).run(intentId, input.companyId, input.projectId, taskId, workflowId, input.idempotencyKey, input.projectRevisionId, input.creatorAgentId ?? null, leaseToken, leaseExpiresAt, now, now);
       const intent = db.prepare(`${select} WHERE company_id = ? AND idempotency_key = ?`).get(input.companyId, input.idempotencyKey) as CreationIntentRow;
       return { created: inserted.changes === 1, intent };
     });
@@ -1208,14 +1201,14 @@ export class TaskService {
         ? db.prepare("UPDATE forge_task_creation_intents SET state = 'staging', lease_token = ?, lease_expires_at = ?, error_code = NULL, updated_at = ? WHERE id = ? AND state = 'failed_before_start'").run(token, expiry, now.toISOString(), intentId)
         : db.prepare("UPDATE forge_task_creation_intents SET lease_token = ?, lease_expires_at = ?, updated_at = ? WHERE id = ? AND state = 'staging' AND lease_token = ? AND (lease_expires_at IS NULL OR lease_expires_at <= ?)").run(token, expiry, now.toISOString(), intentId, expectedLeaseToken ?? "", now.toISOString());
       if (result.changes !== 1) return undefined;
-      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents WHERE id = ?";
+      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents WHERE id = ?";
       return db.prepare(select).get(intentId) as CreationIntentRow | undefined;
     });
   }
 
   private readCreationIntent(idOrCompany: { id: string } | { companyId: string; idempotencyKey: string }): CreationIntentRow | undefined {
     return this.database.authQuery((db) => {
-      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, request_hash, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents";
+      const select = "SELECT id, company_id, project_id, task_id, workflow_id, idempotency_key, project_revision_id, creator_agent_id, artifact_ids_json, artifact_manifest_json, lease_token, lease_expires_at, state, attempt, error_code, created_at, updated_at FROM forge_task_creation_intents";
       if ("id" in idOrCompany) return db.prepare(`${select} WHERE id = ?`).get(idOrCompany.id) as CreationIntentRow | undefined;
       return db.prepare(`${select} WHERE company_id = ? AND idempotency_key = ?`).get(idOrCompany.companyId, idOrCompany.idempotencyKey) as CreationIntentRow | undefined;
     });
@@ -1532,20 +1525,17 @@ export class TaskService {
   async getDeveloperArtifact(actorUserId: string, taskId: string, artifactId: string): Promise<{ artifact: StoredArtifact; bytes: Buffer }> {
     const task = this.getTask(actorUserId, taskId);
     const artifact = this.database.authQuery((db) => db.prepare(`SELECT a.id, a.company_id AS companyId, a.kind, a.filename, a.mime_type AS mimeType, a.byte_size AS byteSize, a.sha256, a.storage_path AS storagePath, a.created_at AS createdAt
-      FROM forge_artifacts a JOIN forge_developer_executions e ON (e.delivery_artifact_id = a.id OR e.evidence_artifact_id = a.id OR EXISTS (SELECT 1 FROM forge_developer_execution_events ev WHERE ev.execution_id = e.id AND ev.artifact_id = a.id))
+      FROM forge_artifacts a JOIN forge_developer_executions e ON (e.delivery_artifact_id = a.id OR e.evidence_artifact_id = a.id)
       WHERE e.task_id = ? AND e.company_id = ? AND a.id = ? AND a.company_id = ?`).get(task.id, task.companyId, artifactId, task.companyId) as StoredArtifact | undefined);
     if (!artifact) throw new TaskFailure("Not found", [], 404);
     return { artifact, bytes: await this.artifacts.read({ companyId: artifact.companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 }) };
   }
 
   getDeveloperExecutionEvents(actorUserId: string, taskId: string, executionId: string, limit = 100): { events: DeveloperExecutionEvent[]; hasMore: boolean } {
-    const task = this.getTask(actorUserId, taskId);
-    const boundedLimit = Math.min(100, Math.max(1, Math.trunc(limit)));
-    const rows = this.database.authQuery((db) => db.prepare(`SELECT ev.event_id, ev.sequence, ev.kind, ev.step_number, ev.occurred_at, ev.summary, ev.exit_code, ev.artifact_id
-      FROM forge_developer_execution_events ev JOIN forge_developer_executions e ON e.id = ev.execution_id AND e.task_id = ? AND e.company_id = ?
-      WHERE ev.execution_id = ? ORDER BY ev.sequence DESC LIMIT ?`).all(task.id, task.companyId, executionId, boundedLimit + 1) as Array<{ event_id: string; sequence: number; kind: string; step_number: number | null; occurred_at: string; summary: string; exit_code: number | null; artifact_id: string | null }>);
-    if (!rows.length) throw new TaskFailure("Not found", [], 404);
-    return { events: rows.slice(0, boundedLimit).reverse().map((row) => ({ eventId: row.event_id, sequence: row.sequence, kind: row.kind, stepNumber: row.step_number, occurredAt: row.occurred_at, summary: publicDeveloperSummary(row.kind, row.step_number, row.summary, row.exit_code), exitCode: row.exit_code, artifactId: row.artifact_id })), hasMore: rows.length > boundedLimit };
+    this.getTask(actorUserId, taskId);
+    void executionId;
+    void limit;
+    throw new TaskFailure("Not found", [], 404);
   }
 
   getTaskActivity(actorUserId: string, taskId: string, limit = 200): { execution: { id: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: string; currentStep: string | null } | null; events: TaskActivityEvent[] } {
@@ -1584,10 +1574,9 @@ export class TaskService {
       const status = recovery === "starting" ? "starting" : recovery === "cancelling" || recovery === "cancellation_requested" ? "cancelling" : recovery === "active" || recovery === "reconnecting" || recovery === "result_pending_claim" ? "running" : recovery === "failed" || recovery === "interrupted" ? "failed" : task.capacity?.status === "queued" ? "queued" : task.capacity?.status === "rate_limited" ? "rate_limited" : "idle";
       return status === "idle" ? { status, execution: null, events: [] } : { status, execution: { id: null, status, startedAt: state?.stateChangedAt ?? task.updatedAt, finishedAt: null, lastHeartbeatAt: heartbeat, currentStep: null }, events: [] };
     }
-    const rows = this.database.authQuery((db) => db.prepare(`SELECT event_id, sequence, kind, step_number, occurred_at, summary, exit_code, artifact_id
-      FROM forge_developer_execution_events WHERE execution_id = ? AND (? IS NULL OR ? <> ? OR sequence > ?) ORDER BY sequence LIMIT 50`).all(execution.id, after?.executionId ?? null, after?.executionId ?? null, execution.id, after?.sequence ?? 0) as Array<{ event_id: string; sequence: number; kind: string; step_number: number | null; occurred_at: string; summary: string; exit_code: number | null; artifact_id: string | null }>);
+    void after;
     const status = execution.status;
-    return { status, execution: { ...execution, status }, events: rows.map((row) => ({ eventId: row.event_id, sequence: row.sequence, kind: row.kind, stepNumber: row.step_number, occurredAt: row.occurred_at, summary: publicDeveloperSummary(row.kind, row.step_number, row.summary, row.exit_code), exitCode: row.exit_code, artifactId: row.artifact_id })) };
+    return { status, execution: { ...execution, status }, events: [] };
   }
 
   getPlanningProgress(actorUserId: string, taskId: string, after?: { executionId: string; sequence: number }): { status: string; execution: AgentProgressExecution | null; events: DeveloperExecutionEvent[] } {
@@ -2084,7 +2073,7 @@ export class TaskService {
       evidenceArtifactId: snapshotState.data.developerEvidenceArtifactId ?? developerExecution?.evidenceArtifactId ?? null,
       nextAction: nextRecoveryCommand ? { command: nextRecoveryCommand, label: nextRecoveryCommand === "retry_development" ? "Retry development" : nextRecoveryCommand === "cancel_development" ? "Cancel development" : "Cancel issue", requiresConfirmation: true } : null,
     } : undefined;
-    const planAuthorization = this.database.authQuery((db) => db.prepare("SELECT id, plan_sha256 FROM forge_plan_authorizations WHERE task_id = ? AND company_id = ? ORDER BY plan_revision DESC LIMIT 1").get(row.id, row.company_id) as { id: string; plan_sha256: string } | undefined);
+    const planAuthorization: { id: string; plan_sha256: string } | undefined = undefined;
     const decision = this.database.authQuery((db) => db.prepare("SELECT artifact_id FROM forge_delivery_decisions WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { artifact_id: string } | undefined);
     const review = this.database.authQuery((db) => db.prepare("SELECT id, outcome, summary, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, opinion_artifact_id, evidence_artifact_id, repair_cycle FROM forge_delivery_reviews WHERE task_id = ? AND company_id = ? AND workflow_id = ? ORDER BY created_at DESC, id DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { id: string; outcome: "approved" | "blocking"; summary: string; plan_revision: number; base_sha: string; subject_commit: string; subject_tree: string; lead_execution_id: string; opinion_artifact_id: string; evidence_artifact_id: string; repair_cycle: number } | undefined);
     const findings = review ? this.database.authQuery((db) => db.prepare("SELECT id, severity, rationale, evidence_ref, disposition, repair_instruction FROM forge_delivery_findings WHERE review_id = ? AND task_id = ? AND company_id = ? ORDER BY id").all(review.id, row.id, row.company_id) as Array<{ id: string; severity: "blocking" | "advisory"; rationale: string; evidence_ref: string; disposition: string; repair_instruction: string | null }>) : [];

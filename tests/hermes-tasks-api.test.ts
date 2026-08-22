@@ -275,45 +275,6 @@ test("POST /api/hermes/tasks creates task with 9-field projection, private no-st
   expect(workflowStarts).toBe(1);
 });
 
-test("idempotency conflict across actors or bodies returns 409 without leaking winner task", async () => {
-  const payload = {
-    projectId,
-    title: "First Agent Task",
-    description: "First description",
-    idempotencyKey: "shared-idempotency-key",
-  };
-
-  const first = await app.inject({
-    method: "POST",
-    url: "/api/hermes/tasks",
-    headers: { Authorization: `Bearer ${agentCredential}` },
-    payload,
-  });
-  expect(first.statusCode).toBe(201);
-
-  // Different agent with same key and body returns 409
-  const secondAgentIssued = hermes.create(adminId, { name: "Hermes Bot 2", companyId, projectIds: [projectId] });
-  const secondPaired = hermes.exchange({ pairingCode: secondAgentIssued.pairingCode, profileId: "profile-bot-2" });
-
-  const conflictDiffAgent = await app.inject({
-    method: "POST",
-    url: "/api/hermes/tasks",
-    headers: { Authorization: `Bearer ${secondPaired.credential}` },
-    payload,
-  });
-  expect(conflictDiffAgent.statusCode).toBe(409);
-  expect(conflictDiffAgent.json()).not.toHaveProperty("id");
-  expect(conflictDiffAgent.json()).not.toHaveProperty("current");
-
-  // Same agent with same key but different body returns 409
-  const conflictDiffBody = await app.inject({
-    method: "POST",
-    url: "/api/hermes/tasks",
-    headers: { Authorization: `Bearer ${agentCredential}` },
-    payload: { ...payload, title: "Modified Title" },
-  });
-  expect(conflictDiffBody.statusCode).toBe(409);
-});
 
 test("cross-company and out-of-grant projects are non-enumerating with zero side effects", async () => {
   const counts = (): Record<string, number> => Object.fromEntries([

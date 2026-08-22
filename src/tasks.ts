@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
@@ -801,7 +801,8 @@ export class TaskService {
   private readonly workflow: IssueWorkflowPort;
   private readonly capacity: CapacityManager;
   private readonly eventListeners = new Set<{ afterCursor: number; send: (event: TaskEvent, cursor: number) => void }>();
-  private eventCursor: number | undefined;
+  private readonly eventVersions = new Map<string, string>();
+  private eventCursor = 0;
   private eventPoller: NodeJS.Timeout | undefined;
 
   constructor(
@@ -833,10 +834,11 @@ export class TaskService {
   }
 
   taskEventCursor(): number {
-    return this.database.authQuery((db) => (db.prepare("SELECT COALESCE(MAX(rowid), 0) AS cursor FROM forge_projection_invalidations").get() as { cursor: number }).cursor);
+    return this.eventCursor;
   }
 
   subscribe(actorUserId: string, listener: (event: TaskEvent, cursor: number) => void, afterCursor = this.taskEventCursor()): () => void {
+    if (this.eventListeners.size === 0) this.pollTaskEvents(false);
     const subscriber = { afterCursor, send: (event: TaskEvent, cursor: number): void => {
       try {
         this.auth.requireCompanyAccess(actorUserId, event.companyId);
@@ -845,11 +847,9 @@ export class TaskService {
         // Scope is checked again at delivery time; a revoked membership receives no event.
       }
     } };
-    if (this.eventListeners.size === 0) this.eventCursor = afterCursor;
     this.eventListeners.add(subscriber);
     if (!this.eventPoller) {
-      // ponytail: one SQLite poller is enough for the single-host MVP; use database change notifications if write volume grows.
-      this.eventPoller = setInterval(() => this.pollTaskEvents(), 100);
+      this.eventPoller = setInterval(() => this.pollTaskEvents(true), 100);
       this.eventPoller.unref();
     }
     return () => {
@@ -857,27 +857,30 @@ export class TaskService {
       if (this.eventListeners.size === 0 && this.eventPoller) {
         clearInterval(this.eventPoller);
         this.eventPoller = undefined;
-        this.eventCursor = undefined;
+        this.eventVersions.clear();
+        this.eventCursor = 0;
       }
     };
   }
 
-  private pollTaskEvents(): void {
-    if (this.eventCursor === undefined || this.eventListeners.size === 0) return;
+  private pollTaskEvents(notify = true): void {
     try {
-      let rows: Array<{ cursor: number; task_id: string; company_id: string; revision: number; attention_changed: number }>;
-      do {
-        rows = this.database.authQuery((db) => db.prepare("SELECT rowid AS cursor, task_id, company_id, revision, attention_changed FROM forge_projection_invalidations WHERE rowid > ? ORDER BY rowid LIMIT 100").all(this.eventCursor) as Array<{ cursor: number; task_id: string; company_id: string; revision: number; attention_changed: number }>);
+      const rows = this.database.authQuery((db) => db.prepare("SELECT task_id, company_id, revision, event_hash FROM forge_issue_projections").all() as Array<{ task_id: string; company_id: string; revision: number; event_hash: string }>);
+      const current = new Map(rows.map((row) => [row.task_id, `${row.revision}:${row.event_hash}`]));
+      if (notify) {
         for (const row of rows) {
-          this.eventCursor = row.cursor;
-          const event: TaskEvent = { type: "invalidate", taskId: row.task_id, companyId: row.company_id, revision: row.revision, attentionChanged: row.attention_changed === 1 };
+          if (this.eventVersions.get(row.task_id) === current.get(row.task_id)) continue;
+          const cursor = ++this.eventCursor;
+          const event: TaskEvent = { type: "invalidate", taskId: row.task_id, companyId: row.company_id, revision: row.revision, attentionChanged: false };
           for (const subscriber of this.eventListeners) {
-            if (row.cursor > subscriber.afterCursor) subscriber.send(event, row.cursor);
+            if (cursor > subscriber.afterCursor) subscriber.send(event, cursor);
           }
         }
-      } while (rows.length === 100);
+      }
+      this.eventVersions.clear();
+      for (const [taskId, version] of current) this.eventVersions.set(taskId, version);
     } catch {
-      // A transient SQLite lock is retried from the same cursor on the next tick.
+      // A transient SQLite lock is retried on the next tick.
     }
   }
 
@@ -944,7 +947,7 @@ export class TaskService {
       // Deliberate last-write-wins: this single-user app does not need expectedRevision here.
       db.prepare("UPDATE forge_tasks SET role_agents_json = ?, updated_at = ? WHERE id = ? AND company_id = ?").run(JSON.stringify(merged), now, taskId, current.companyId);
       this.auth.recordAuditEventInTransaction(db, actorUserId, "task_agents_updated", undefined, current.companyId, { taskId, roleAgents: JSON.stringify(partial) });
-      db.prepare("INSERT INTO forge_projection_invalidations (id, company_id, task_id, revision, attention_changed, created_at) VALUES (?, ?, ?, ?, 0, ?)").run(`task-agents-${randomBytes(8).toString("hex")}`, current.companyId, taskId, current.revision, now);
+      
     });
     return this.getTask(actorUserId, taskId);
   }

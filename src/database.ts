@@ -432,7 +432,6 @@ export class ForgeDatabase {
       database.prepare("DELETE FROM forge_issue_timeline WHERE workflow_id = ? AND revision >= ?").run(parsed.workflowId, parsed.revision);
       database.prepare("DELETE FROM forge_workflow_snapshots WHERE task_id = ? AND revision >= ?").run(parsed.issueId, parsed.revision);
       database.prepare("DELETE FROM forge_issue_projections WHERE task_id = ? AND revision >= ?").run(parsed.issueId, parsed.revision);
-      database.prepare("DELETE FROM forge_projection_invalidations WHERE task_id = ? AND revision >= ?").run(parsed.issueId, parsed.revision);
       eventById = undefined;
       eventByRevision = undefined;
       current = database.prepare("SELECT revision, event_hash, last_event_id, last_run_id, authoritative_revision, authoritative_event_hash FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string; last_event_id: string; last_run_id: string | null; authoritative_revision: number; authoritative_event_hash: string } | undefined;
@@ -471,7 +470,6 @@ export class ForgeDatabase {
       parsed.issueId, parsed.companyId, parsed.projectId, parsed.workflowId, parsed.revision, parsed.phase, parsed.owner, JSON.stringify(parsed.allowedCommands), parsed.pendingAction, updatedAt, parsed.lastEventId, stateHash, authoritativeRevision, authoritativeEventHash, updatedAt, parsed.blocker === undefined ? null : JSON.stringify(parsed.blocker), parsed.stateChangedAt ?? null, projectionStatus, updatedAt,
     );
     database.prepare("UPDATE forge_issue_projections SET last_run_id = ? WHERE task_id = ?").run(runId, parsed.issueId);
-    const hadActiveAttention = Boolean((database.prepare("SELECT 1 AS present FROM forge_attention_items WHERE task_id = ? AND company_id = ? AND active = 1 LIMIT 1").get(parsed.issueId, parsed.companyId) as { present: number } | undefined)?.present);
     database.prepare("UPDATE forge_attention_items SET active = 0, updated_at = ? WHERE task_id = ? AND company_id = ? AND active = 1").run(updatedAt, parsed.issueId, parsed.companyId);
     if (policy.kind === "attention" && (attention || !evidence)) {
       database.prepare(`INSERT INTO forge_attention_items (id, company_id, task_id, category, summary, action, evidence_ref, active, created_at, updated_at, source_revision, activated_at, actions_json, evidence_artifact_id)
@@ -480,7 +478,6 @@ export class ForgeDatabase {
         policy.item.id, parsed.companyId, parsed.issueId, policy.item.category, policy.item.summary, JSON.stringify(policy.item.actions), evidence?.artifactId ?? null, policy.item.activatedAt, updatedAt, policy.item.sourceRevision, policy.item.activatedAt, JSON.stringify(policy.item.actions), evidence?.artifactId ?? null,
       );
     }
-    database.prepare("INSERT OR IGNORE INTO forge_projection_invalidations (id, company_id, task_id, revision, attention_changed, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(`${parsed.workflowId}:${parsed.revision}`, parsed.companyId, parsed.issueId, parsed.revision, policy.kind === "attention" || hadActiveAttention ? 1 : 0, updatedAt);
   }
 
   private normalizeLegacyInitialProjection(database: Database.Database, parsed: IssueWorkflowState, stateHash: string): void {
@@ -503,7 +500,6 @@ export class ForgeDatabase {
       database.prepare("UPDATE forge_workflow_snapshots SET state_json = ? WHERE task_id = ? AND revision = 0 AND state_json = ?").run(JSON.stringify(parsed), parsed.issueId, snapshot.state_json);
       database.prepare("UPDATE forge_issue_timeline SET event_hash = ?, metadata_json = ? WHERE id = ? AND workflow_id = ? AND revision = 0 AND event_hash = ?").run(stateHash, JSON.stringify({ revision: 0, phase: parsed.phase, stateHash }), parsed.lastEventId, parsed.workflowId, storedHash);
       if (current?.revision === 0 && current.event_hash === storedHash) database.prepare("UPDATE forge_issue_projections SET event_hash = ?, authoritative_event_hash = CASE WHEN authoritative_event_hash = ? THEN ? ELSE authoritative_event_hash END WHERE task_id = ? AND revision = 0 AND event_hash = ?").run(stateHash, storedHash, stateHash, parsed.issueId, storedHash);
-      database.prepare("INSERT OR IGNORE INTO forge_projection_invalidations (id, company_id, task_id, revision, attention_changed, created_at) VALUES (?, ?, ?, 0, 0, ?)").run(`${parsed.workflowId}:0`, parsed.companyId, parsed.issueId, new Date().toISOString());
       return;
     }
     if (legacy.issueId !== undefined || legacy.taskId !== parsed.issueId || legacy.repairCycle !== undefined) return;

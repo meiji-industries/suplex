@@ -70,7 +70,6 @@ test("attention page proves desktop and narrow action/evidence disclosure", { ti
           db.prepare("UPDATE forge_issue_projections SET revision = 8, phase = 'delivery_blocked', owner = 'human', allowed_commands_json = '[]', pending_action = NULL, updated_at = ?, projected_at = ?, state_changed_at = ?, projection_status = 'current', reconciled_at = ?, authoritative_revision = 8, last_event_id = 'workflow-a:8' WHERE task_id = 'task-a' AND company_id = 'company-a' AND revision = 7").run(updatedAt, updatedAt, updatedAt, updatedAt);
           db.prepare("INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES ('task-a', 'company-a', 'workflow-a', 8, ?, ?)").run(JSON.stringify({ workflowId: "workflow-a", companyId: "company-a", projectId: "project-a", issueId: "task-a", projectRevisionId: "revision-a", phase: "delivery_blocked", revision: 8, owner: "human", allowedCommands: [], pendingAction: null, lastEventId: "workflow-a:8", continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: updatedAt }), updatedAt);
           db.prepare("UPDATE forge_attention_items SET active = 0, updated_at = ? WHERE id = 'attention-a' AND company_id = 'company-a' AND active = 1").run(updatedAt);
-          db.prepare("INSERT OR IGNORE INTO forge_projection_invalidations (id, company_id, task_id, revision, attention_changed, created_at) VALUES ('workflow-a:8', 'company-a', 'task-a', 8, 1, ?)").run(updatedAt);
         });
         return {} as IssueWorkflowState;
       },

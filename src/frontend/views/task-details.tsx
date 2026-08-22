@@ -20,6 +20,7 @@ import DeveloperDiff from "../components/app/developer-diff.js";
 import { TaskLeadPlan } from "../components/app/task-lead-plan.js";
 import { invocationActorLabel, workflowOwnerLabel } from "../components/app/task-invocations.js";
 import { TaskProgress } from "../components/app/task-progress.js";
+import { PhaseTimings } from "../components/app/phase-timings.js";
 import { taskIsProcessing, taskPresentationPhase, TaskStatus } from "../components/app/task-status.js";
 import { DeveloperRecoveryStatus } from "../components/app/developer-recovery-status.js";
 import type { DeveloperRecoveryAction } from "../components/app/developer-recovery-actions.js";
@@ -648,6 +649,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
             <header className="px-4 pt-4 pb-3 sm:px-6 lg:px-10">
               <div data-task-header-content className="mx-auto max-w-4xl space-y-4">
                 <h2 className="min-w-0"><InlineTaskEditor field="title" value={task.title} onSave={async (title) => onUpdateDetails({ title })} /></h2>
+                <PhaseTimings activity={task.activity} phase={task.phase} updatedAt={task.updatedAt} />
               </div>
             </header>
             <div data-task-content className="min-w-0 px-4 pt-4 pb-6 sm:px-6 lg:px-10">

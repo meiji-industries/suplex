@@ -13,7 +13,6 @@ import { AgentFailure, AgentService, type LeadProcessRunner } from "../../codex-
 import { DeveloperService } from "../../codex-developer.js";
 import { cancelDeveloperExecution, reconcileDeveloperExecutions } from "../../developer-recovery.js";
 import { cancelAgentExecution, reconcileAgentExecutions } from "../../agent-recovery.js";
-import { DeveloperExecutionLeaseRepository, DeveloperLeaseFailure } from "../../developer-execution-leases.js";
 import { runDeveloperTurn, type DeveloperTurnRunResult } from "../../developer-turn-runner.js";
 import { validateSupervisorResult } from "../../developer-supervisor-protocol.js";
 import { AcceptanceFailure, AcceptanceService } from "../../acceptance.js";
@@ -80,9 +79,6 @@ class SupervisedDeveloperTerminalError extends Error {
 }
 
 export function asNonRetryableApplicationFailure(error: unknown): ApplicationFailure | undefined {
-  if (error instanceof DeveloperLeaseFailure) {
-    return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
-  }
   if (error instanceof WorktreeFailure) {
     return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
   }
@@ -245,7 +241,6 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
       // Worktree failures are deterministic until a person changes the local state.
       // Surface them as a Retry blocker instead of allowing Temporal to retry them.
       if (error instanceof WorktreeFailure) await attentionFailure(input, error.code === "host_capacity" ? "capacity_exhausted" : "unsafe_recovery", error.code, error.message);
-      if (error instanceof DeveloperLeaseFailure) await attentionFailure(input, "unsafe_recovery", error.code, error.message);
       const permanentFailure = asNonRetryableApplicationFailure(error) ?? asNonRetryableCapacityFailure(error);
       if (permanentFailure) {
         if (error instanceof AgentFailure) await attentionFailure(input, agentCategory(error), error.code, error.message);
@@ -262,62 +257,12 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     if (capacityRequestId) capacity.bindExecution(capacityRequestId, owner);
     return result;
   };
-  const recoverFinalizedDeveloperResult = async <T>(input: { taskId: string; companyId: string; workflowId: string; planRevision: number } & DeveloperSupervisorActivityIdentity): Promise<{ result: T; resultHash: string } | undefined> => {
-    const terminal = database.authQuery((db) => db.prepare("SELECT 1 FROM forge_developer_executions WHERE id = ? AND status IN ('blocked', 'completed', 'interrupted')").get(input.developerTurnExecutionId));
-    // A terminal row belongs to a previously claimed turn. Its spool must not
-    // turn a new command into a replay of that old delivery.
-    if (terminal) return undefined;
-    const lease = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).get(input.developerTurnExecutionId);
-    // The supervisor atomically publishes result.json before the worker can
-    // perform post-exit verification.  A restart in that gap leaves the SQL
-    // row running, so promote the authenticated on-disk result first.
-    if (lease && !lease.resultHash) {
-      try {
-        const result = validateSupervisorResult(JSON.parse(await readFile(join(lease.executionRoot, lease.resultPath), "utf8")));
-        if (result.executionId === lease.executionId) {
-          new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).recordResultReady(lease.executionId, result);
-        }
-      } catch { /* No complete supervisor result is available yet. */ }
-    }
-    const finalizedLease = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot).get(input.developerTurnExecutionId);
-    if (!finalizedLease?.resultHash) return undefined;
-    const row = database.authQuery((db) => db.prepare(`SELECT d.status, d.session_ref AS sessionRef, d.branch_name AS branchName, d.worktree_path AS worktreePath, d.target_base_sha AS targetBaseSha, d.current_step AS currentStep, d.result_commit AS resultCommit, d.result_tree AS resultTree, d.dirty_state AS dirtyState, d.delivery_artifact_id AS deliveryArtifactId, d.evidence_artifact_id AS evidenceArtifactId, a.storage_path AS deliveryStoragePath, a.sha256 AS deliverySha, e.sha256 AS evidenceSha
-      FROM forge_developer_executions d
-      JOIN forge_artifacts a ON a.id = d.delivery_artifact_id AND a.company_id = d.company_id
-      JOIN forge_artifacts e ON e.id = d.evidence_artifact_id AND e.company_id = d.company_id
-      WHERE d.id = ? AND d.task_id = ? AND d.company_id = ? AND d.workflow_id = ? AND d.plan_revision = ? AND d.attempt = ? AND d.status IN ('completed', 'blocked')`).get(input.developerTurnExecutionId, input.taskId, input.companyId, input.workflowId, input.planRevision, input.developerAttempt) as { status: "completed" | "blocked"; sessionRef: string | null; branchName: string; worktreePath: string; targetBaseSha: string; currentStep: number | null; resultCommit: string | null; resultTree: string | null; dirtyState: "clean" | "dirty" | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null; deliveryStoragePath: string; deliverySha: string; evidenceSha: string } | undefined);
-    if (!row?.sessionRef || !row.resultCommit || !row.resultTree || !row.dirtyState || !row.deliveryArtifactId || !row.evidenceArtifactId) return undefined;
-    const artifactPayload = z.object({ summary: SafeSummarySchema }).passthrough().parse(JSON.parse((await artifacts.read({ companyId: input.companyId, storagePath: row.deliveryStoragePath, sha256: row.deliverySha })).toString("utf8")));
-    let result: unknown;
-    if (input.turnKind === "implementation") {
-      result = { developerExecutionId: input.developerTurnExecutionId, developerSessionRef: row.sessionRef, branchName: row.branchName, targetBaseSha: row.targetBaseSha, currentStep: row.currentStep, resultCommit: row.resultCommit, resultTree: row.resultTree, dirtyState: row.dirtyState, deliveryArtifactId: row.deliveryArtifactId, evidenceArtifactId: row.evidenceArtifactId, deliverySummary: artifactPayload.summary, outcome: row.status } satisfies WorkflowDeveloperExecutionResult;
-    } else if (input.turnKind === "repair") {
-      const coordinates = input as typeof input & SupervisedDeveloperRepairActivityInput;
-      const prior = database.authQuery((db) => db.prepare("SELECT delivery_artifact_id AS deliveryArtifactId, evidence_artifact_id AS evidenceArtifactId FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(coordinates.developerExecutionId, input.taskId, input.companyId, input.workflowId) as { deliveryArtifactId: string | null; evidenceArtifactId: string | null } | undefined);
-      const repair = database.authQuery((db) => db.prepare("SELECT id, review_id AS reviewId, cycle, failure_code AS failureCode FROM forge_delivery_repairs WHERE developer_execution_id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.developerTurnExecutionId, input.taskId, input.companyId, input.workflowId) as { id: string; reviewId: string; cycle: number; failureCode: string | null } | undefined);
-      if (!prior?.deliveryArtifactId || !prior.evidenceArtifactId || !repair) return undefined;
-      const subject = { planRevision: coordinates.planRevision, targetBaseSha: coordinates.targetBaseSha, subjectCommit: coordinates.subjectCommit, subjectTree: coordinates.subjectTree, developerExecutionId: coordinates.developerExecutionId, deliveryArtifactId: prior.deliveryArtifactId, developerEvidenceArtifactId: prior.evidenceArtifactId, leadSessionRef: coordinates.leadSessionRef, developerSessionRef: coordinates.developerSessionRef };
-      result = row.status === "completed"
-        ? { outcome: "completed", repairAttemptId: repair.id, cycle: repair.cycle, reviewId: repair.reviewId, subject, developerExecutionId: input.developerTurnExecutionId, developerSessionRef: row.sessionRef, branchName: row.branchName, resultCommit: row.resultCommit, resultTree: row.resultTree, dirtyState: "clean", deliveryArtifactId: row.deliveryArtifactId, evidenceArtifactId: row.evidenceArtifactId, summary: artifactPayload.summary } satisfies WorkflowDeveloperRepairResult
-        : { outcome: "blocked", repairAttemptId: repair.id, cycle: repair.cycle, reviewId: repair.reviewId, subject, code: DeliveryOperationBlockCodeSchema.catch("worktree-unsafe").parse(repair.failureCode), summary: artifactPayload.summary, evidenceArtifactId: row.evidenceArtifactId, developerExecutionId: input.developerTurnExecutionId, developerSessionRef: row.sessionRef, branchName: row.branchName, resultCommit: row.resultCommit, resultTree: row.resultTree, dirtyState: row.dirtyState } satisfies WorkflowDeveloperRepairResult;
-    } else {
-      const delivery = z.object({ verificationArtifactId: z.string().min(1) }).passthrough().parse(artifactPayload);
-      const verification = database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'forward-merge-verification'").get(delivery.verificationArtifactId, input.companyId) as { sha256: string } | undefined);
-      if (!verification) return undefined;
-      result = { developerExecutionId: input.developerTurnExecutionId, developerSessionRef: row.sessionRef, resultCommit: row.resultCommit, resultTree: row.resultTree, deliveryArtifactId: row.deliveryArtifactId, deliveryArtifactSha256: row.deliverySha, evidenceArtifactId: row.evidenceArtifactId, evidenceArtifactSha256: row.evidenceSha, verificationArtifactId: delivery.verificationArtifactId, verificationArtifactSha256: verification.sha256, summary: artifactPayload.summary } satisfies MergeConflictResolutionActivityResult;
-    }
-    return { result: result as T, resultHash: finalizedLease.resultHash };
-  };
+  const recoverFinalizedDeveloperResult = async <T>(_input: { taskId: string; companyId: string; workflowId: string; planRevision: number } & DeveloperSupervisorActivityIdentity): Promise<{ result: T; resultHash: string } | undefined> => undefined;
   const runSupervised = async <T extends { developerExecutionId: string; evidenceArtifactId: string | null; deliveryArtifactId?: string; verificationArtifact?: { id: string } }>(
     input: { taskId: string; companyId: string; workflowId: string; planRevision: number; capacityRequestId?: string } & DeveloperSupervisorActivityIdentity,
     operation: (service: Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">) => Promise<T>,
   ): Promise<DeveloperTurnActivityOutcome<T>> => {
-    const leases = new DeveloperExecutionLeaseRepository(database, config.runtimeRoot);
     const terminalRow = database.authQuery((db) => db.prepare("SELECT 1 FROM forge_developer_executions WHERE id = ? AND status IN ('blocked', 'completed', 'interrupted')").get(input.developerTurnExecutionId));
-    const priorClaim = terminalRow ? undefined : leases.readClaim(input.developerTurnExecutionId);
-    if (priorClaim) {
-      return { status: "completed", result: JSON.parse(priorClaim.activityResultJson) as T, resultHash: priorClaim.resultHash };
-    }
     let terminal: DeveloperTurnRunResult | undefined;
     const processRunner: LeadProcessRunner = async (invocation) => {
       const env = Object.fromEntries(Object.entries(invocation.env ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
@@ -347,31 +292,12 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     };
     try {
       const recovered = await recoverFinalizedDeveloperResult<T>(input);
-      if (recovered) {
-        const deliveryArtifactId = recovered.result.deliveryArtifactId ?? recovered.result.verificationArtifact?.id;
-        if (!deliveryArtifactId || !recovered.result.evidenceArtifactId) throw new Error("A supervised Developer result requires durable result and evidence artifacts");
-        const claim = leases.claim({ executionId: input.developerTurnExecutionId, resultHash: recovered.resultHash, activityResultJson: JSON.stringify(recovered.result), deliveryArtifactId, evidenceArtifactId: recovered.result.evidenceArtifactId });
-        if (claim.conflict) {
-          return { status: "interrupted", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: leases.get(input.developerTurnExecutionId)?.heartbeatAt ?? null };
-        }
-        return { status: "completed", result: JSON.parse(claim.claim.activityResultJson) as T, resultHash: claim.claim.resultHash };
-      }
+      if (recovered) return { status: "completed", result: recovered.result, resultHash: recovered.resultHash };
       const service = options.developer ? developer as DeveloperService : new DeveloperService(database, config, { github: githubRelease, processRunner });
       const result = await operation(service);
       await bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId }, result);
-      const persistedResultHash = leases.get(input.developerTurnExecutionId)?.resultHash;
-      if (!terminal && !persistedResultHash) {
-        // Explicitly injected Developer ports are test seams and do not launch
-        // an external process. They retain their existing direct behavior.
-        return { status: "completed", result, resultHash: createHash("sha256").update(JSON.stringify(result)).digest("hex") };
-      }
-      const deliveryArtifactId = result.deliveryArtifactId ?? result.verificationArtifact?.id;
-      if (!deliveryArtifactId || !result.evidenceArtifactId) throw new Error("A supervised Developer result requires durable result and evidence artifacts");
-      const claim = leases.claim({ executionId: input.developerTurnExecutionId, resultHash: terminal?.resultHash ?? persistedResultHash!, activityResultJson: JSON.stringify(result), deliveryArtifactId, evidenceArtifactId: result.evidenceArtifactId });
-      if (claim.conflict) {
-        return { status: "interrupted", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-result-claim-conflict", summary: "Forge found conflicting results for the same Developer attempt.", lastHeartbeatAt: terminal?.lastHeartbeatAt ?? null };
-      }
-      return { status: "completed", result: JSON.parse(claim.claim.activityResultJson) as T, resultHash: claim.claim.resultHash };
+      if (!terminal) return { status: "completed", result, resultHash: createHash("sha256").update(JSON.stringify(result)).digest("hex") };
+      return { status: "completed", result, resultHash: terminal.resultHash };
     } catch (error) {
       if (error instanceof SupervisedDeveloperTerminalError) {
         return { status: "interrupted", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-worker-lost", summary: "The Developer process ended before Forge could claim a result.", lastHeartbeatAt: error.result.lastHeartbeatAt };
@@ -417,7 +343,6 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     reconcileDeveloperExecutions,
     cancelAgentExecution,
     reconcileAgentExecutions,
-    DeveloperExecutionLeaseRepository,
     runDeveloperTurn,
     AcceptanceFailure,
     AcceptanceService,

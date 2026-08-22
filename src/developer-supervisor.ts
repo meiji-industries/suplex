@@ -1,8 +1,8 @@
-import { constants, readFileSync } from "node:fs";
+import { constants } from "node:fs";
 import { mkdir, open, readFile, rename, rm, lstat } from "node:fs/promises";
 import { createServer, createConnection, type Socket } from "node:net";
 import { spawn, type ChildProcess } from "node:child_process";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash } from "node:crypto";
 import { createInterface } from "node:readline";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,20 +61,6 @@ async function appendLine(path: string, line: string): Promise<void> {
   try { await handle.write(`${line}\n`); } finally { await handle.close(); }
 }
 
-function tokenMatches(actual: string, expected: string): boolean {
-  const left = Buffer.from(actual);
-  const right = Buffer.from(expected);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
-function readSupervisorToken(executionRoot: string): string {
-  // The Activity writes this 0600 file before it detaches us. Reading it here
-  // avoids retaining an inherited token pipe whose parent disappears on a
-  // tsx-watch restart.
-  const token = readFileSync(join(executionRoot, "lease-token"), "utf8").trim();
-  if (!token || token.length > 256) throw new Error("Developer supervisor lease token is invalid");
-  return token;
-}
 
 async function inspect(controller: ProcessController, pid: number): Promise<ProcessInspection> {
   const result = await controller.inspect(pid);
@@ -100,8 +86,6 @@ async function acquireStartLock(root: string, supervisor: DeveloperSupervisorIde
 interface SupervisorState {
   executionRoot: string;
   executionId: string;
-  token: string;
-  tokenHash: string;
   controller: ProcessController;
   supervisor: DeveloperSupervisorIdentity;
   child: DeveloperSupervisorIdentity;
@@ -200,8 +184,8 @@ async function cancelChild(state: SupervisorState, termGraceMs: number, killGrac
   return { version: 1, status: "terminated", supervisor: state.supervisor, child: state.child, heartbeatAt: state.heartbeatAt, termSentAt: state.termSentAt, killSentAt: state.killSentAt, confirmedExitAt: state.confirmedExitAt };
 }
 
-async function handleSocketRequest(state: SupervisorState, request: DeveloperSupervisorRequest, token: string): Promise<DeveloperSupervisorResponse | null> {
-  if (request.executionId !== state.executionId || !tokenMatches(request.leaseToken, token)) return null;
+async function handleSocketRequest(state: SupervisorState, request: DeveloperSupervisorRequest): Promise<DeveloperSupervisorResponse | null> {
+  if (request.executionId !== state.executionId) return null;
   if (request.command === "status") {
     return DeveloperSupervisorResponseSchema.parse({ version: 1, status: state.status, supervisor: state.supervisor, child: state.child, heartbeatAt: state.heartbeatAt, ...(state.termSentAt ? { termSentAt: state.termSentAt } : {}), ...(state.killSentAt ? { killSentAt: state.killSentAt } : {}), ...(state.confirmedExitAt ? { confirmedExitAt: state.confirmedExitAt } : {}) });
   }
@@ -238,14 +222,10 @@ export function developerSupervisorSpawnOptions(): { detached: true; stdio: "ign
   return { detached: true, stdio: "ignore", env: process.env };
 }
 
-export function spawnDeveloperSupervisor(executionRoot: string, token: string, invocation: DeveloperSupervisorInvocation): ChildProcess {
+export function spawnDeveloperSupervisor(executionRoot: string): ChildProcess {
   const command = developerSupervisorCommand();
   const child = spawn(command.command, [...command.args, executionRoot], developerSupervisorSpawnOptions());
   child.unref();
-  // `token` and `invocation` are persisted by the turn runner before spawn.
-  // Keep the parameters so callers cannot accidentally bypass that protocol.
-  void token;
-  void invocation;
   return child;
 }
 
@@ -260,7 +240,7 @@ async function startSocket(state: SupervisorState): Promise<ReturnType<typeof cr
       const line = data.slice(0, data.indexOf("\n"));
       let request: DeveloperSupervisorRequest;
       try { request = DeveloperSupervisorRequestSchema.parse(JSON.parse(line)); } catch { socket.end(`${JSON.stringify({ version: 1, status: "termination_failed", reasonCode: "developer-supervisor-request-invalid", summary: "Forge rejected the malformed Developer supervisor request." })}\n`); return; }
-      const operation = handleSocketRequest(state, request, state.token).then((response) => {
+      const operation = handleSocketRequest(state, request).then((response) => {
         if (response) socket.end(`${JSON.stringify(response)}\n`);
         else socket.destroy();
       }).catch(() => { socket.end(`${JSON.stringify({ version: 1, status: "termination_failed", reasonCode: "developer-supervisor-handler-failed", summary: "Forge could not complete the bounded Developer supervisor operation." })}\n`); });
@@ -274,7 +254,7 @@ async function startSocket(state: SupervisorState): Promise<ReturnType<typeof cr
 
 async function finalize(state: SupervisorState, childExit: { code: number | null; signal: NodeJS.Signals | null }, eventsPath: string): Promise<DeveloperSupervisorResult> {
   const output = await readFile(eventsPath);
-  const resultBase = { version: 1 as const, executionId: state.executionId, leaseTokenHash: state.tokenHash, supervisor: state.supervisor, child: state.child, exitCode: childExit.code, exitSignal: childExit.signal, outputPath: "events.jsonl" as const, outputSha256: sha256(output), outputTruncated: state.outputTruncated, startedAt: state.startedAt, finishedAt: new Date().toISOString() };
+  const resultBase = { version: 1 as const, executionId: state.executionId, supervisor: state.supervisor, child: state.child, exitCode: childExit.code, exitSignal: childExit.signal, outputPath: "events.jsonl" as const, outputSha256: sha256(output), outputTruncated: state.outputTruncated, startedAt: state.startedAt, finishedAt: new Date().toISOString() };
   const result = withSupervisorResultHash(resultBase);
   const temporary = join(state.executionRoot, "result.json.tmp");
   await atomicWriteJson(temporary, result);
@@ -293,8 +273,6 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
   if (!executionIdPattern.test(executionId) || basename(dirname(root)) !== "developer-executions") throw new Error("Developer supervisor execution root is invalid");
   await rejectSymlinks(dirname(dirname(root)), root);
   await mkdir(root, { recursive: true, mode: 0o700 });
-  const token = readSupervisorToken(root);
-  const tokenHash = createHash("sha256").update(token).digest("hex");
   const controller = options.controller ?? defaultProcessController;
   const supervisorInspection = await inspect(controller, process.pid);
   const supervisor = identity(supervisorInspection);
@@ -347,7 +325,7 @@ export async function runDeveloperSupervisor(executionRoot: string, options: { c
     let resolveFinished!: (result: DeveloperSupervisorResult | undefined) => void;
     const finished = new Promise<DeveloperSupervisorResult | undefined>((resolvePromise) => { resolveFinished = resolvePromise; });
     const gitGuardDirectory = invocation.env.FORGE_GIT_GUARD_DIR && resolve(invocation.env.FORGE_GIT_GUARD_DIR).startsWith(`${root}${sep}`) ? resolve(invocation.env.FORGE_GIT_GUARD_DIR) : null;
-    const state: SupervisorState = { executionRoot: root, executionId, token, tokenHash, controller, supervisor, child, childProcess, gitGuardDirectory, status: "starting", heartbeatAt, startedAt: heartbeatAt, sequence: 0, outputTruncated: false, eventsBytes: 0, termSentAt: null, killSentAt: null, confirmedExitAt: null, pendingControlRequests: new Set(), cancellationTask: null, finished, resolveFinished };
+    const state: SupervisorState = { executionRoot: root, executionId, controller, supervisor, child, childProcess, gitGuardDirectory, status: "starting", heartbeatAt, startedAt: heartbeatAt, sequence: 0, outputTruncated: false, eventsBytes: 0, termSentAt: null, killSentAt: null, confirmedExitAt: null, pendingControlRequests: new Set(), cancellationTask: null, finished, resolveFinished };
     state.status = "running";
     await writeSnapshot(state);
     await writeHeartbeat(state);

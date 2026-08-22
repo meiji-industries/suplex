@@ -55,7 +55,6 @@ export type DeveloperSupervisorHeartbeat = z.infer<typeof DeveloperSupervisorHea
 export const DeveloperSupervisorResultSchema = z.object({
   version: z.literal(1),
   executionId: z.string().regex(/^developer_[a-f0-9]{24}$/),
-  leaseTokenHash: z.string().regex(/^[a-f0-9]{64}$/),
   supervisor: processIdentity,
   child: processIdentity,
   exitCode: z.number().int().nullable(),
@@ -70,10 +69,9 @@ export const DeveloperSupervisorResultSchema = z.object({
 
 export type DeveloperSupervisorResult = z.infer<typeof DeveloperSupervisorResultSchema>;
 
-const token = z.string().min(1).max(256);
 export const DeveloperSupervisorRequestSchema = z.discriminatedUnion("command", [
-  z.object({ version: z.literal(1), command: z.literal("status"), executionId: z.string().regex(/^developer_[a-f0-9]{24}$/), leaseToken: token }).strict(),
-  z.object({ version: z.literal(1), command: z.literal("cancel"), executionId: z.string().regex(/^developer_[a-f0-9]{24}$/), leaseToken: token, termGraceMs: z.number().int().min(0).max(30_000), killGraceMs: z.number().int().min(0).max(30_000) }).strict(),
+  z.object({ version: z.literal(1), command: z.literal("status"), executionId: z.string().regex(/^developer_[a-f0-9]{24}$/) }).strict(),
+  z.object({ version: z.literal(1), command: z.literal("cancel"), executionId: z.string().regex(/^developer_[a-f0-9]{24}$/), termGraceMs: z.number().int().min(0).max(30_000), killGraceMs: z.number().int().min(0).max(30_000) }).strict(),
 ]);
 
 export type DeveloperSupervisorRequest = z.infer<typeof DeveloperSupervisorRequestSchema>;

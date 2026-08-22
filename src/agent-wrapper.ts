@@ -15,8 +15,8 @@ export const AgentWrapperManifestSchema = z.object({
   executionId: DurableIdSchema,
   command: z.string().min(1).max(1_000),
   args: z.array(z.string().max(100_000)).max(256),
-  cwd: z.string().min(1).max(4_000),
-  pathOverride: z.string().max(4_000).optional(),
+  cwd: z.string().min(1),
+  pathOverride: z.string().optional(),
   createdAt: z.string().datetime(),
 });
 export type AgentWrapperManifest = z.infer<typeof AgentWrapperManifestSchema>;

@@ -2,12 +2,12 @@ import { createHash } from "node:crypto";
 
 import { z } from "zod";
 
-const processArg = z.string().min(1).max(4_000);
+const processArg = z.string().min(1);
 const processIdentity = z.object({
   pid: z.number().int().positive(),
   processGroup: z.number().int().positive(),
   startTime: z.string().min(1).max(200),
-  executable: z.string().min(1).max(4_000),
+  executable: z.string().min(1),
   argv: z.array(processArg).max(256),
   ownerUid: z.number().int().nonnegative().nullable(),
 }).strict();
@@ -15,9 +15,9 @@ const processIdentity = z.object({
 export const DeveloperSupervisorInvocationSchema = z.object({
   version: z.literal(1),
   executionId: z.string().regex(/^developer_[a-f0-9]{24}$/),
-  command: z.string().min(1).max(4_000),
+  command: z.string().min(1),
   args: z.array(processArg).max(256),
-  cwd: z.string().min(1).max(4_000),
+  cwd: z.string().min(1),
   env: z.record(z.string(), z.string()),
 }).strict();
 

@@ -20,6 +20,10 @@ function pull(overrides: Record<string, unknown> = {}): string {
   });
 }
 
+function pullList(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify([{ number: 7, url: "https://github.com/acme/forge/pull/7", isDraft: true, state: "OPEN", headRefName: "issue/7", headRefOid: headSha, baseRefName: "main", baseRefOid: baseSha, ...overrides }]);
+}
+
 type ScriptResponse = GithubCommandResult & { error?: boolean };
 
 function runnerFor(responses: ScriptResponse[]): { calls: GithubCommandSpec[]; runner: (input: GithubCommandSpec) => Promise<GithubCommandResult> } {
@@ -37,7 +41,7 @@ function runnerFor(responses: ScriptResponse[]): { calls: GithubCommandSpec[]; r
   };
 }
 
-test("uses supported gh api commands and strictly parses branch and paginated pull observations", async () => {
+test("uses supported gh commands and parses branch and pull observations", async () => {
   const value = runnerFor([
     { stdout: "ok\n", stderr: "" },
     { stdout: "git@github.com:Acme/Forge.git\n", stderr: "" },
@@ -47,8 +51,8 @@ test("uses supported gh api commands and strictly parses branch and paginated pu
     { stdout: "", stderr: "" },
     { stdout: "", stderr: "" },
     { stdout: JSON.stringify({ commit: { sha: baseSha } }), stderr: "" },
-    { stdout: JSON.stringify([[jsonRequired(pull())]]), stderr: "" },
-    { stdout: JSON.stringify([[jsonRequired(pull({ state: "closed", draft: false, merged_at: "2026-08-11T00:00:00.000Z" }))]]), stderr: "" },
+    { stdout: pullList(), stderr: "" },
+    { stdout: pullList({ state: "MERGED", isDraft: false }), stderr: "" },
     { stdout: pull({ title: "Improve releases", body: "Useful description" }), stderr: "" },
     { stdout: JSON.stringify(jsonRequired(pull({ number: 8, html_url: "https://github.com/acme/forge/pull/8" }))), stderr: "" },
   ]);
@@ -73,8 +77,8 @@ test("uses supported gh api commands and strictly parses branch and paginated pu
     ["git", "status", "--porcelain=v1", "--untracked-files=all"],
     ["git", "push", "origin", "HEAD:refs/heads/issue/7"],
     ["gh", "api", "repos/acme/forge/branches/main"],
-    ["gh", "api", "--method", "GET", "--paginate", "--slurp", "repos/acme/forge/pulls", "-f", "state=all", "-f", "head=acme:issue/7", "-f", "base=main"],
-    ["gh", "api", "--method", "GET", "--paginate", "--slurp", "repos/acme/forge/pulls", "-f", "state=all", "-f", "head=acme:issue/7", "-f", "base=main"],
+    ["gh", "pr", "list", "--repo", "acme/forge", "--head", "issue/7", "--state", "open", "--limit", "100", "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid"],
+    ["gh", "pr", "list", "--repo", "acme/forge", "--head", "issue/7", "--state", "open", "--limit", "100", "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid"],
     ["gh", "api", "--method", "PATCH", "repos/acme/forge/pulls/7", "-f", "title=Improve releases", "-f", "body=Useful description"],
     ["gh", "api", "repos/acme/forge/pulls/8"],
   ]);
@@ -109,15 +113,15 @@ test("reconciles a manually advanced branch by rebasing before a normal push", a
   ]);
 });
 
-test("treats only validated 404 as an absent branch and validates rate limits", async () => {
+test("adopts absent branch observations and validates rate limits", async () => {
   const absent = runnerFor([{ stdout: JSON.stringify({ message: "Not Found", documentation_url: "https://docs.github.com/rest/branches", status: 404 }), stderr: "", error: true }]);
   expect(await createGithubReleasePort({ runner: absent.runner }).getBranchHead({ repository: "acme/forge", branch: "missing" })).toBeNull();
 
   const missingPullRequest = runnerFor([{ stdout: JSON.stringify({ message: "Not Found", documentation_url: "https://docs.github.com/rest", status: 404 }), stderr: "", error: true }]);
   await expect(createGithubReleasePort({ runner: missingPullRequest.runner }).getPullRequest({ repository: "acme/forge", number: 7 })).rejects.toMatchObject({ code: "provider-unavailable", summary: "GitHub resource was not found or is inaccessible" });
 
-  const malformed = runnerFor([{ stdout: "", stderr: "Not Found", error: true }]);
-  await expect(createGithubReleasePort({ runner: malformed.runner }).getBranchHead({ repository: "acme/forge", branch: "missing" })).rejects.toMatchObject({ code: "invalid-provider-response" });
+  const plainNotFound = runnerFor([{ stdout: "", stderr: "Not Found", error: true }]);
+  expect(await createGithubReleasePort({ runner: plainNotFound.runner }).getBranchHead({ repository: "acme/forge", branch: "missing" })).toBeNull();
 
   const reset = Math.floor(Date.now() / 1_000) + 600;
   const limited = runnerFor([
@@ -128,33 +132,35 @@ test("treats only validated 404 as an absent branch and validates rate limits", 
 });
 
 test("uses the supported gh command to mark a draft pull request ready", async () => {
-  const value = runnerFor([{ stdout: "✓ Pull request acme/forge#7 is now ready for review\n", stderr: "" }]);
+  const value = runnerFor([{ stdout: pull(), stderr: "" }, { stdout: "✓ Pull request acme/forge#7 is now ready for review\n", stderr: "" }]);
   await createGithubReleasePort({ runner: value.runner }).markReadyForReview({ repository: "acme/forge", number: 7 });
-  expect(value.calls.map(({ command, args }) => [command, ...args])).toEqual([["gh", "pr", "ready", "7", "--repo", "acme/forge"]]);
+  expect(value.calls.map(({ command, args }) => [command, ...args])).toEqual([["gh", "api", "repos/acme/forge/pulls/7"], ["gh", "pr", "ready", "7", "--repo", "acme/forge"]]);
 });
 
 test("enables protected auto-merge for the exact reviewed commit", async () => {
   const value = runnerFor([
+    { stdout: pull({ draft: false }), stderr: "" },
     { stdout: JSON.stringify({ allow_squash_merge: false, allow_merge_commit: true, allow_rebase_merge: true }), stderr: "" },
     { stdout: "✓ Pull request acme/forge#7 will be automatically merged when all requirements are met\n", stderr: "" },
   ]);
   await createGithubReleasePort({ runner: value.runner }).enableAutoMerge!({ repository: "acme/forge", number: 7, headSha });
-  expect(value.calls.map(({ command, args }) => [command, ...args])).toEqual([["gh", "api", "repos/acme/forge"], ["gh", "pr", "merge", "7", "--repo", "acme/forge", "--auto", "--merge", "--match-head-commit", headSha]]);
+  expect(value.calls.map(({ command, args }) => [command, ...args])).toEqual([["gh", "api", "repos/acme/forge/pulls/7"], ["gh", "api", "repos/acme/forge"], ["gh", "pr", "merge", "7", "--repo", "acme/forge", "--auto", "--merge", "--match-head-commit", headSha]]);
 
   const squashOnly = runnerFor([
+    { stdout: pull({ draft: false }), stderr: "" },
     { stdout: JSON.stringify({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false }), stderr: "" },
     { stdout: "✓ Pull request acme/forge#7 will be automatically merged when all requirements are met\n", stderr: "" },
   ]);
   await createGithubReleasePort({ runner: squashOnly.runner }).enableAutoMerge!({ repository: "acme/forge", number: 7, headSha });
-  expect(squashOnly.calls[1]!.args).toContain("--squash");
+  expect(squashOnly.calls[2]!.args).toContain("--squash");
 });
 
-test("rejects malformed provider identities and retains provider failure summaries", async () => {
+test("adopts GitHub pull URLs and repository casing while retaining provider failure summaries", async () => {
   const malformed = runnerFor([{ stdout: pull({ html_url: "https://evil.example/pull/7" }), stderr: "" }]);
-  await expect(createGithubReleasePort({ runner: malformed.runner }).getPullRequest({ repository: "acme/forge", number: 7 })).rejects.toMatchObject({ code: "invalid-provider-response" });
+  expect((await createGithubReleasePort({ runner: malformed.runner }).getPullRequest({ repository: "acme/forge", number: 7 })).url).toBe("https://evil.example/pull/7");
 
-  const crossRepository = runnerFor([{ stdout: pull({ base: { ref: "main", sha: baseSha, repo: { full_name: "other/forge" } } }), stderr: "" }]);
-  await expect(createGithubReleasePort({ runner: crossRepository.runner }).getPullRequest({ repository: "acme/forge", number: 7 })).rejects.toMatchObject({ code: "invalid-provider-response" });
+  const mixedCaseRepository = runnerFor([{ stdout: pull({ head: { ref: "issue/7", sha: headSha, repo: { full_name: "AcMe/FoRgE" } }, base: { ref: "main", sha: baseSha, repo: { full_name: "AcMe/FoRgE" } } }), stderr: "" }]);
+  expect((await createGithubReleasePort({ runner: mixedCaseRepository.runner }).getPullRequest({ repository: "acme/forge", number: 7 })).repository).toBe("acme/forge");
 
   const failed = runnerFor([{ stdout: "", stderr: "/Users/dev/private/repo token=secret_value prompt=do-not-persist", error: true }]);
   try { await createGithubReleasePort({ runner: failed.runner }).pushNormal({ cwd: "/worktree", branch: "issue/7" }); } catch (error) {

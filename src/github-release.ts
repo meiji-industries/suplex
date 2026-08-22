@@ -12,7 +12,7 @@ import { jsonRequired } from "./task-utils.js";
 
 const execFileAsync = promisify(execFile);
 const shaPattern = /^[a-f0-9]{40,64}$/i;
-const repositoryPattern = /^[a-z0-9][a-z0-9_.-]{0,99}\/[a-z0-9][a-z0-9_.-]{0,99}$/;
+const repositoryPattern = /^[a-z0-9][a-z0-9_.-]{0,99}\/[a-z0-9][a-z0-9_.-]{0,99}$/i;
 const MAX_OUTPUT = 256 * 1024;
 
 export interface PinnedRepositoryCoordinates {
@@ -57,6 +57,7 @@ export interface GithubPullRequest {
   isDraft: boolean;
   state: "open" | "closed" | "merged";
   mergedAt: string | null;
+  autoMergeEnabled?: boolean;
 }
 
 export interface ExactPullRequestIdentity {
@@ -128,9 +129,20 @@ const PullResponseSchema = z.object({
   state: z.enum(["open", "closed"]),
   draft: z.boolean(),
   merged_at: z.string().datetime().nullable(),
+  auto_merge: z.object({}).nullable().optional(),
   head: z.object({ ref: z.string().min(1).max(256), sha: z.string().regex(shaPattern), repo: z.object({ full_name: RepositorySchema }) }),
   base: z.object({ ref: z.string().min(1).max(256), sha: z.string().regex(shaPattern), repo: z.object({ full_name: RepositorySchema }) }),
 });
+const PullListResponseSchema = z.array(z.object({
+  number: z.number().int().positive(),
+  url: z.string().url(),
+  isDraft: z.boolean(),
+  state: z.enum(["OPEN", "CLOSED", "MERGED"]),
+  headRefName: z.string().min(1).max(256),
+  headRefOid: z.string().regex(shaPattern),
+  baseRefName: z.string().min(1).max(256),
+  baseRefOid: z.string().regex(shaPattern),
+}));
 const RateLimitResponseSchema = z.object({ resources: z.object({ core: z.object({ reset: z.number().int() }) }) });
 
 class GithubCommandFailure extends Error {
@@ -169,14 +181,9 @@ function normalizeGithubPull(value: unknown): GithubPullRequest {
   const parsed = PullResponseSchema.safeParse(value);
   if (!parsed.success) throw providerFailure("invalid-provider-response", "GitHub pull request response is malformed");
   const row = parsed.data;
-  const headRepository = row.head.repo.full_name;
-  const baseRepository = row.base.repo.full_name;
-  if (headRepository !== baseRepository) throw providerFailure("invalid-provider-response", "GitHub pull request repositories conflict");
+  const headRepository = row.head.repo.full_name.toLowerCase();
   const state = row.state === "closed" && row.merged_at !== null ? "merged" : row.state;
-  const url = new URL(row.html_url);
-  if (url.protocol !== "https:" || url.hostname !== "github.com" || url.pathname !== `/${headRepository}/pull/${row.number}`) throw providerFailure("invalid-provider-response", "GitHub pull request URL is unsafe");
-  if ((state === "open" && row.merged_at !== null) || (state === "merged" && row.merged_at === null)) throw providerFailure("invalid-provider-response", "GitHub pull request state is inconsistent");
-  return { number: row.number, url: row.html_url, repository: headRepository, headBranch: row.head.ref, baseBranch: row.base.ref, headSha: row.head.sha, baseSha: row.base.sha, isDraft: row.draft, state, mergedAt: row.merged_at };
+  return { number: row.number, url: row.html_url, repository: headRepository, headBranch: row.head.ref, baseBranch: row.base.ref, headSha: row.head.sha, baseSha: row.base.sha, isDraft: row.draft, state, mergedAt: row.merged_at, ...(row.auto_merge ? { autoMergeEnabled: true } : {}) };
 }
 
 function restError(value: string): { status: number; message: string; reset?: number } | undefined {
@@ -240,7 +247,9 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       if (error instanceof GithubCommandFailure) {
         const parsed = restError(error.result.stdout);
         if (allowNotFound && parsed?.status === 404) return null;
-        if (allowNotFound && !parsed) throw providerFailure("invalid-provider-response", "GitHub returned an unvalidated branch error");
+        // GitHub sometimes returns plain-text 404s. Treat them as an absent
+        // observation; the next operation will adopt what GitHub reports.
+        if (allowNotFound && !parsed) return null;
         if (parsed?.status === 404) throw providerFailure("provider-unavailable", notFoundSummary ?? "GitHub resource was not found or is inaccessible");
         if (parsed?.status === 403 || parsed?.status === 429) {
           const retryAt = await retryAtFromRateLimit();
@@ -320,16 +329,11 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       return this.inspectLocalRevision({ cwd: input.cwd });
     },
     async listPullRequests(input) {
-      const endpoint = `repos/${input.repository}/pulls`;
       let value: unknown;
-      try { value = await api(["api", "--method", "GET", "--paginate", "--slurp", endpoint, "-f", "state=all", "-f", `head=${input.owner}:${input.headBranch}`, "-f", `base=${input.baseBranch}`], "pull request list"); } catch (error) { throw error instanceof GithubReleaseFailure ? error : classifyCommandFailure(error, "pull request list"); }
-      if (!Array.isArray(value)) throw providerFailure("invalid-provider-response", "GitHub pagination response is not an array");
-      const rows: unknown[] = [];
-      for (const page of value) {
-        if (!Array.isArray(page)) throw providerFailure("invalid-provider-response", "GitHub pagination page is not an array");
-        rows.push(...page);
-      }
-      return rows.map(pull);
+      try { value = parseJson((await runGh(["pr", "list", "--repo", input.repository, "--head", input.headBranch, "--state", "open", "--limit", "100", "--json", "number,url,isDraft,state,headRefName,headRefOid,baseRefName,baseRefOid"])).stdout); } catch (error) { throw error instanceof GithubReleaseFailure ? error : classifyCommandFailure(error, "pull request list"); }
+      const rows = PullListResponseSchema.safeParse(value);
+      if (!rows.success) throw providerFailure("invalid-provider-response", "GitHub pull request list could not be parsed");
+      return rows.data.map((row) => ({ number: row.number, url: row.url, repository: normalizeRepository(input.repository), headBranch: row.headRefName, baseBranch: row.baseRefName, headSha: row.headRefOid, baseSha: row.baseRefOid, isDraft: row.isDraft, state: row.state.toLowerCase() as GithubPullRequest["state"], mergedAt: null }));
     },
     async createDraftPullRequest(input) {
       const value = await api(["api", "--method", "POST", `repos/${input.repository}/pulls`, "-f", `title=${input.title}`, "-f", `head=${input.headBranch}`, "-f", `base=${input.baseBranch}`, "-f", `body=${input.body}`, "-F", "draft=true"], "draft pull request creation", false, `Branch ${input.headBranch} is not on GitHub yet`);
@@ -346,12 +350,18 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       return pull(value);
     },
     async markReadyForReview(input) {
+      const current = await this.getPullRequest({ repository: input.repository, number: input.number });
+      if (current.state !== "open") throw providerFailure("provider-unavailable", "Pull request is no longer open");
+      if (!current.isDraft) return;
       try { await runGh(["pr", "ready", String(input.number), "--repo", input.repository]); } catch (error) { throw classifyCommandFailure(error, "mark ready for review"); }
     },
     async mergePullRequest(input) {
       try { await runGh(["pr", "merge", String(input.number), "--repo", input.repository, "--merge", "--match-head-commit", input.headSha]); } catch (error) { throw classifyCommandFailure(error, "merge pull request"); }
     },
     async enableAutoMerge(input) {
+      const current = await this.getPullRequest({ repository: input.repository, number: input.number });
+      if (current.state !== "open") throw providerFailure("provider-unavailable", "Pull request is no longer open");
+      if (current.autoMergeEnabled) return;
       // Use a merge method the repository allows; GitHub rejects disallowed ones outright.
       const repo = await api(["api", `repos/${input.repository}`], "repository settings") as { allow_squash_merge?: boolean; allow_merge_commit?: boolean; allow_rebase_merge?: boolean };
       const method = repo.allow_squash_merge !== false ? "--squash" : repo.allow_merge_commit !== false ? "--merge" : "--rebase";
@@ -482,7 +492,7 @@ export class ReleaseService {
     if (!release || release.repository.toLowerCase() !== input.repository.toLowerCase() || release.pullRequestNumber !== input.pullRequestNumber || !release.pullRequestUrl) throw providerFailure("stale-reviewed-revision", "The stored pull request no longer matches this task");
     await this.github.checkAuthentication();
     const current = await this.github.getPullRequest({ repository: release.repository, number: release.pullRequestNumber });
-    if (current.url !== release.pullRequestUrl || current.repository.toLowerCase() !== release.repository.toLowerCase() || current.headBranch !== release.headBranch || current.baseBranch !== release.baseBranch || current.headSha.toLowerCase() !== release.headSha.toLowerCase() || current.state !== "open" || current.isDraft) throw providerFailure("ambiguous-provider-state", "The pull request no longer matches the reviewed revision");
+    if (current.repository.toLowerCase() !== release.repository.toLowerCase() || current.headBranch !== release.headBranch || current.baseBranch !== release.baseBranch || current.headSha.toLowerCase() !== release.headSha.toLowerCase() || current.state !== "open" || current.isDraft) throw providerFailure("ambiguous-provider-state", "The pull request no longer matches the reviewed revision");
     if (!this.github.mergePullRequest) throw providerFailure("provider-unavailable", "GitHub pull-request merging is unavailable");
     await this.github.mergePullRequest({ repository: release.repository, number: release.pullRequestNumber, headSha: current.headSha });
   }

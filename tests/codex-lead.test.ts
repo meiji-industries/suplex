@@ -654,6 +654,20 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
   }
 });
 
+async function preparedDeveloper() {
+  const value = await fixture();
+  const artifacts = new ArtifactStore(value.config.artifactRoot);
+  const plan = await artifacts.put("company_1", "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Builder fixture", reproduction: null, rootCauseAnalysis: "Fixture", steps: [{ number: 1, instruction: "Write a marker", verification: "Marker exists" }], compatibilityAnalysis: "None", operationalAnalysis: "None", verificationStrategy: "Inspect the marker", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["MARKER.md"], materiality: [] })) });
+  const evidence = await artifacts.put("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") });
+  value.database.authTransaction((db) => {
+    const now = new Date().toISOString();
+    for (const artifact of [plan, evidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_builder_fixture', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, evidence.id);
+    db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, execution_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, summary, created_at) VALUES ('output_builder_fixture', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'agent_builder_fixture', 1, 'plan', ?, ?, 'session_lead', 'Builder fixture', ?)").run(plan.id, evidence.id, now);
+  });
+  return { value, input: { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id } };
+}
+
 test("Developer execution keeps a Builder delivery commit and summary", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
@@ -689,6 +703,54 @@ test("Developer execution keeps a Builder delivery commit and summary", async ()
     await rm(value.root, { recursive: true, force: true });
   }
 });
+test("Builder commit without a report completes with the fallback summary", async () => {
+  const { value, input } = await preparedDeveloper();
+  const service = new DeveloperService(value.database, value.config, { processRunner: async (invocation) => {
+    await invocation.onStart(4602, "2026-08-11T00:00:00.000Z");
+    await writeFile(join(invocation.cwd, "NO_REPORT.md"), "committed\n");
+    await execFileAsync("git", ["add", "NO_REPORT.md"], { cwd: invocation.cwd });
+    await execFileAsync("git", ["commit", "-m", "Builder change"], { cwd: invocation.cwd });
+    return { exitCode: 0, stderr: "" };
+  }, sessionStore: { async create() { return "session_no_report"; }, async read() { return "raw-no-report"; } } });
+  try {
+    await expect(service.run(input)).resolves.toMatchObject({ outcome: "completed", deliverySummary: "Builder left no report" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("Builder without a report or commit fails with its output tail", async () => {
+  const { value, input } = await preparedDeveloper();
+  const service = new DeveloperService(value.database, value.config, { processRunner: async (invocation) => {
+    await invocation.onStart(4603, "2026-08-11T00:00:00.000Z");
+    await invocation.onLine("Builder stopped before changing files");
+    return { exitCode: 0, stderr: "" };
+  }, sessionStore: { async create() { return "session_empty"; }, async read() { return "raw-empty"; } } });
+  try {
+    await expect(service.run(input)).rejects.toMatchObject({ code: "developer-failed", message: "Builder stopped before changing files" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("Builder dirty worktree is committed before completion", async () => {
+  const { value, input } = await preparedDeveloper();
+  const service = new DeveloperService(value.database, value.config, { processRunner: async (invocation) => {
+    await invocation.onStart(4604, "2026-08-11T00:00:00.000Z");
+    await writeFile(join(invocation.cwd, "DIRTY.md"), "uncommitted\n");
+    return { exitCode: 0, stderr: "" };
+  }, sessionStore: { async create() { return "session_dirty"; }, async read() { return "raw-dirty"; } } });
+  try {
+    const result = await service.run(input);
+    expect(result).toMatchObject({ outcome: "completed", deliverySummary: "Builder left no report", dirtyState: "clean" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 
 test("Developer execution safely resumes an owned worktree after its result was lost", async () => {
   const value = await fixture();

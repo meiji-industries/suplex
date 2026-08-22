@@ -35,7 +35,7 @@ import type { IssueCommandSlug } from "../../commands/registry.js";
 import { BLOCKED_PHASES, TERMINAL_PHASES, phaseLabel } from "../../issue-phases.js";
 import { releaseFailureCopy } from "../../release-failures.js";
 import type { ActivityFeedRow } from "../lib/task-activity-feed.js";
-import { Check, Copy, Ellipsis, ExternalLink, GitPullRequest, LoaderCircle } from "lucide-react";
+import { Check, Copy, Ellipsis, ExternalLink, GitPullRequest, LoaderCircle, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 
 type DevelopmentExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; lastOutputAt?: string | null; currentStep: string | null };
@@ -277,7 +277,7 @@ function ReleasePanel({ task }: { task: ApiTask }): ReactElement | null {
   </Card>;
 }
 
-function PullRequestCard({ task, busy, onMarkReady, onMerge, onCheckCi, onCheckMerge }: { task: ApiTask; busy: boolean; onMarkReady: () => Promise<void>; onMerge?: () => Promise<void>; onCheckCi?: () => Promise<void>; onCheckMerge?: () => Promise<void> }): ReactElement | null {
+function PullRequestCard({ task, busy, onMarkReady, onMerge, onCheckCi, onCheckMerge, onRefresh = async () => undefined }: { task: ApiTask; busy: boolean; onMarkReady: () => Promise<void>; onMerge?: () => Promise<void>; onCheckCi?: () => Promise<void>; onCheckMerge?: () => Promise<void>; onRefresh?: () => Promise<void> }): ReactElement | null {
   const release = task.release;
   if (!release?.pullRequestUrl || release.pullRequestNumber === null) return null;
   const providerState = task.deliveryGate?.release.state;
@@ -304,6 +304,7 @@ function PullRequestCard({ task, busy, onMarkReady, onMerge, onCheckCi, onCheckM
     </CardContent>
     <CardFooter>
       <div className="flex w-full items-center justify-end gap-2">
+        <Button size="sm" variant="outline" onClick={() => void onRefresh()} disabled={busy}><RefreshCw aria-hidden="true" className="size-3.5" />Refresh</Button>
         {onCheckCi ? <Button size="sm" variant="outline" onClick={() => void onCheckCi()} disabled={busy}>{busy ? "Checking…" : "Check CI"}</Button> : null}
         <a className={buttonVariants({ variant: "outline", size: "sm" })} href={release.pullRequestUrl} target="_blank" rel="noreferrer">Open PR<ExternalLink aria-hidden="true" /></a>
         {release.isDraft ? <Button size="sm" onClick={() => void onMarkReady()} disabled={busy}>{busy ? "Marking ready…" : "Mark As Ready"}</Button> : null}
@@ -660,7 +661,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                   <div className="mx-auto max-w-4xl space-y-4">
                     <PlanningRunCard task={task} />
                     {task.phase === "planning" ? <LiveExecutionRun taskId={task.id} eventPath="planning-events" activityLabel="Planner" onRefresh={onRefresh} /> : null}
-                    {pullRequestInMain ? <div data-active-pull-request><PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} {...(task.allowedCommands.includes("reconcile_ci") ? { onCheckCi: () => onPlanAction("reconcile-ci") } : {})} {...(task.allowedCommands.includes("reconcile_merge") ? { onMerge, onCheckMerge: () => onPlanAction("reconcile-merge") } : {})} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
+                    {pullRequestInMain ? <div data-active-pull-request><PullRequestCard task={task} busy={busy} onMarkReady={onMarkReady} onRefresh={onRefresh} {...(task.allowedCommands.includes("reconcile_ci") ? { onCheckCi: () => onPlanAction("reconcile-ci") } : {})} {...(task.allowedCommands.includes("reconcile_merge") ? { onMerge, onCheckMerge: () => onPlanAction("reconcile-merge") } : {})} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
                     <RescueControls task={task} busy={busy} onRescue={onRescue} />
                     {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} developmentStatus={developerLiveness ? <DevelopmentStatus state={developerLiveness} now={developmentNow} inline /> : undefined} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} compact /></DeveloperRecoveryStatus> : <LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
                     {task.developerExecution ? <DeveloperEvidence execution={task.developerExecution} onViewChanges={openDiff} /> : null}

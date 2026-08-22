@@ -297,6 +297,13 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to start planning"); }
     finally { setBusy(false); }
   };
+  const refreshTask = async (): Promise<void> => {
+    if (!selected) return;
+    const refreshed = await readJson<ApiTask>(`/api/tasks/${encodeURIComponent(selected.id)}?refresh=1`);
+    selectedRef.current = refreshed;
+    setSelected(refreshed);
+    setTasks((current) => current.map((task) => task.id === refreshed.id ? refreshed : task));
+  };
   const duplicateTask = async (): Promise<void> => {
     if (!selected) return;
     setBusy(true); setError("");
@@ -390,7 +397,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
   if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
-  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} onMarkReady={markReady} onMerge={mergePullRequest} onDuplicate={duplicateTask} onUpdateDetails={updateTaskDetails} onRefresh={reload} onRescue={rescueTask} />;
+  if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} onMarkReady={markReady} onMerge={mergePullRequest} onDuplicate={duplicateTask} onUpdateDetails={updateTaskDetails} onRefresh={refreshTask} onRescue={rescueTask} />;
 
   if (mode === "board") {
     return (

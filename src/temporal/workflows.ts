@@ -1,21 +1,7 @@
 import { allHandlersFinished, CancellationScope, condition, continueAsNew, defineQuery, isCancellation, patched, setHandler, sleep, workflowInfo } from "@temporalio/workflow";
 
 import { ProbeWorkflowInputSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
-import {
-  buildInitialIssueWorkflowState,
-  IssueProjectionEventSchema,
-  IssueWorkflowInputSchema,
-  IssueWorkflowStateSchema,
-  normalizeSafeSummary,
-  type IssueBlocker,
-  type IssueBlockerAction,
-  type IssueCommand,
-  type IssueWorkflowInput,
-  type IssueWorkflowState,
-  type LeadPlanningResult,
-  type ReconcileTargetBaseActivityResult,
-  type TargetBaseCheckpoint,
-} from "./issue-contracts.js";
+import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, normalizeSafeSummary, type IssueBlocker, type IssueBlockerAction, type IssueCommand, type IssueWorkflowInput, type IssueWorkflowState, type LeadPlanningResult, type ReconcileTargetBaseActivityResult, type TargetBaseCheckpoint } from "./issue-contracts.js";
 import { assertContinuationStateWithinLimit, assertPayloadWithinLimit, WORKFLOW_HISTORY_EVENT_LIMIT } from "./policy.js";
 import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "./target-base.js";
 import {
@@ -23,7 +9,9 @@ import {
   projectIssueStateActivity,
   reconcileTargetBase,
   recordProbeStarted,
+  observeGithubPullRequest,
 } from "./workflow/activity-proxies.js";
+import { syncGithubPullRequestSignal } from "./issue-updates.js";
 import { evidencePointer, humanBlocker } from "./workflow/state-transitions.js";
 import { createIssueWorkflowContext } from "./workflow/context.js";
 import { registerGovernanceHandlers } from "./workflow/register-governance.js";
@@ -151,6 +139,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     return workflowInfo().continueAsNewSuggested || (continueAfter > 0 && revision >= continueAfter) || workflowInfo().historyLength >= WORKFLOW_HISTORY_EVENT_LIMIT;
   };
   let stateMutationLocked = false;
+  let githubSyncRequested = false;
   const withStateMutation = async <T>(operation: () => T): Promise<T> => {
     await condition(() => !stateMutationLocked);
     stateMutationLocked = true;
@@ -253,6 +242,16 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     return false;
   };
   setHandler(issueStateQuery, () => state);
+  setHandler(syncGithubPullRequestSignal, () => { githubSyncRequested = true; });
+  const syncGithubPullRequest = async (): Promise<void> => {
+    if (!state.releaseRepository || !state.branchName) return;
+    const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }), number = state.pullRequestNumber, wasDraft = state.githubPullRequestDraft, common = { githubObservedAt: new Date().toISOString(), githubPullRequestExists: observed.exists, githubPullRequestState: observed.state, githubPullRequestDraft: observed.isDraft, githubPullRequestChecks: observed.checks, githubPullRequestReviewDecision: observed.reviewDecision, githubPullRequestAutoMergeEnabled: observed.autoMergeEnabled, ...(observed.number ? { pullRequestNumber: observed.number } : {}), ...(observed.url ? { pullRequestUrl: observed.url } : {}), ...(observed.headSha ? { expectedHeadSha: observed.headSha } : {}), ...(observed.baseSha ? { targetBaseSha: observed.baseSha } : {}) };
+    const revision = state.revision + 1, event = `${state.workflowId}:${revision}`, changedAt = new Date().toISOString();
+    if (observed.state === "merged") state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Merged on GitHub", mergeOutcome: "merged", resultCommit: observed.headSha ?? state.resultCommit, stateChangedAt: changedAt, lastEventId: event });
+    else if (observed.state === "closed" || (!observed.exists && number != null)) { const summary = observed.state === "closed" ? `Pull request #${number} was closed on GitHub` : "Branch no longer on GitHub"; state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, phase: "delivery_blocked", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: summary, blocker: humanBlocker("target_drift", summary, [{ command: "publish_draft", label: "Reopen or re-publish", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], undefined), stateChangedAt: changedAt, lastEventId: event }); }
+    else state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, ...(observed.exists && observed.isDraft === false && wasDraft === true ? { releaseStatus: "ready" as const, pendingAction: `PR #${observed.number} was marked ready on GitHub` } : {}), stateChangedAt: changedAt, lastEventId: event });
+    await projectIssueState(state);
+  };
   const captureInitialProjectionState = patched(captureInitialProjectionStatePatch);
   const initialProjectionState = state;
   const projectCapacityState = async (capacity: IssueWorkflowState["capacity"], pendingAction?: string): Promise<number> => {
@@ -385,6 +384,11 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     }
     while (true) {
       if (workflowContext.state.phase === "cancelled" || workflowContext.state.phase === "done") return workflowContext.state;
+      if (githubSyncRequested) {
+        githubSyncRequested = false;
+        await syncGithubPullRequest();
+        continue;
+      }
       if (workflowContext.state.phase === "releasing" && workflowContext.state.releaseRetryAt) {
         const delay = Math.max(0, Date.parse(workflowContext.state.releaseRetryAt) - Date.now());
         if (delay > 0) await sleep(delay);
@@ -399,7 +403,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         const delay = Math.max(0, pollAt - Date.now());
         if (delay > 0) await sleep(delay);
         if (workflowContext.state.phase !== "ci_waiting" || workflowContext.state.revision !== sleepingRevision || workflowContext.state.releaseId !== sleepingReleaseId || workflowContext.state.expectedHeadSha !== sleepingHeadSha) continue;
-        await workflowContext.reconcileCiTurn();
+        await syncGithubPullRequest();
+        if (workflowContext.state.phase === "ci_waiting") await workflowContext.reconcileCiTurn();
         continue;
       }
       if (workflowContext.state.phase === "ready_reconciliation") {
@@ -418,7 +423,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         await runAutoChainedCommand(workflowContext, chained);
         continue;
       }
-      await condition(() => (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge" || (allHandlersFinished() && (autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) !== null || canAutoRetryDeliveryBlocker(workflowContext))));
+      await condition(() => githubSyncRequested || (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge" || (allHandlersFinished() && (autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) !== null || canAutoRetryDeliveryBlocker(workflowContext))));
       if (workflowContext.continuationRequested && allHandlersFinished()) {
         if (workflowContext.stateMutationLocked || workflowContext.state.activeOperation !== null) continue;
         const compact = compactStateForContinuation(workflowContext.state);

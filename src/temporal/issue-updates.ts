@@ -1,4 +1,4 @@
-import { defineUpdate } from "@temporalio/workflow";
+import { defineSignal, defineUpdate } from "@temporalio/workflow";
 
 import { ISSUE_COMMAND_NAMES, issueCommands, type IssueCommand } from "../commands/registry.js";
 import type { ContinueWorkCommand, PlanCommandInput, PlanRevisionCommand, RecordProgressInput, ResolveDecisionBlockerInput, SendPlannerNoteInput, StartPlanningInput } from "../commands/inputs.js";
@@ -76,3 +76,6 @@ export const retryCapacityUpdate = issueUpdates.retry_capacity;
 export const requestPlanRevisionUpdate = issueUpdates.request_plan_revision;
 export const respondPlanBlockerUpdate = issueUpdates.respond_plan_blocker;
 export const tellPlannerUpdate = issueUpdates.send_planner_note;
+
+/** A read-triggered, debounced request to reconcile the GitHub PR. */
+export const syncGithubPullRequestSignal = defineSignal("syncGithubPullRequest");

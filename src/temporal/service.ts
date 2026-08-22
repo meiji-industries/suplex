@@ -6,7 +6,7 @@ import type { HealthCheck } from "../health.js";
 import { runtimeIdentifiers } from "../runtime-identifiers.js";
 import { issueCommands, type IssueCommand } from "../commands/registry.js";
 import { issueStateQuery, issueWorkflow, probeStateQuery, probeWorkflow } from "./workflows.js";
-import { issueUpdates } from "./issue-updates.js";
+import { issueUpdates, syncGithubPullRequestSignal } from "./issue-updates.js";
 import { ProbeWorkflowInputSchema, ProbeWorkflowStateSchema, type ProbeWorkflowInput, type ProbeWorkflowState } from "./contracts.js";
 import { ContinueWorkCommandSchema, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, PlanCommandInputSchema, PlanRevisionCommandSchema, RecordProgressInputSchema, ResolveDecisionBlockerInputSchema, SendPlannerNoteInputSchema, StartPlanningInputSchema, type ContinueWorkCommand, type IssueWorkflowInput, type IssueWorkflowState, type PlanCommandInput, type PlanRevisionCommand, type RecordProgressInput, type ResolveDecisionBlockerInput, type SendPlannerNoteInput, type StartPlanningInput } from "./issue-contracts.js";
 import { assertPayloadWithinLimit } from "./policy.js";
@@ -373,6 +373,14 @@ export async function queryIssueWorkflow(config: ForgeConfig, workflowId: string
   } finally {
     await temporalClient.connection.close();
   }
+}
+
+export async function signalIssueGithubPullRequestSync(config: ForgeConfig, workflowId: string): Promise<void> {
+  const identifiers = runtimeIdentifiers(config.installationId);
+  if (!workflowId.startsWith(`${identifiers.workflowPrefix}-issue-`)) throw new Error("Refusing issue workflow outside this installation scope");
+  const temporalClient = await connectTemporal(config);
+  try { await temporalClient.client.workflow.getHandle(workflowId).signal(syncGithubPullRequestSignal); }
+  finally { await temporalClient.connection.close(); }
 }
 
 export async function recordIssueProgress(config: ForgeConfig, workflowId: string, input: RecordProgressInput): Promise<IssueWorkflowState> {

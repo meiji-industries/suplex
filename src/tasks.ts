@@ -469,6 +469,7 @@ export interface ForgeTask {
   successor?: TaskLinkSummary;
   ci?: TaskCiProjection;
   release?: TaskRelease | null;
+  githubPullRequest?: { exists: boolean; number: number | null; url: string | null; state: "open" | "closed" | "merged" | null; isDraft: boolean | null; checks: { total: number; pending: number; failing: number; successful: number }; observedAt: string | null; reviewDecision: string | null; autoMergeEnabled: boolean | null };
   deliveryReview?: {
     id: string;
     outcome: "approved" | "blocking";
@@ -2163,6 +2164,8 @@ export class TaskService {
       actions: json<string[]>(row.allowed_commands_json, []),
     };
     const deliveryGate = this.deliveryGate(row, workflowState);
+    const githubPullRequest = typeof workflowState.githubPullRequestExists === "boolean" ? { exists: workflowState.githubPullRequestExists, number: typeof workflowState.pullRequestNumber === "number" ? workflowState.pullRequestNumber : null, url: typeof workflowState.pullRequestUrl === "string" ? workflowState.pullRequestUrl : null, state: workflowState.githubPullRequestState === "open" || workflowState.githubPullRequestState === "closed" || workflowState.githubPullRequestState === "merged" ? workflowState.githubPullRequestState : null, isDraft: typeof workflowState.githubPullRequestDraft === "boolean" ? workflowState.githubPullRequestDraft : null, checks: workflowState.githubPullRequestChecks && typeof workflowState.githubPullRequestChecks === "object" ? workflowState.githubPullRequestChecks as { total: number; pending: number; failing: number; successful: number } : { total: 0, pending: 0, failing: 0, successful: 0 }, observedAt: typeof workflowState.githubObservedAt === "string" ? workflowState.githubObservedAt : null, reviewDecision: typeof workflowState.githubPullRequestReviewDecision === "string" ? workflowState.githubPullRequestReviewDecision : null, autoMergeEnabled: typeof workflowState.githubPullRequestAutoMergeEnabled === "boolean" ? workflowState.githubPullRequestAutoMergeEnabled : null } : undefined;
+    void githubPullRequest;
     const governanceView = this.planGovernanceView(row, workflowState) ?? {};
     const roleAgents = parseRoleAgents(row.role_agents_json);
     const commands = taskCommandDescriptors(allowedCommands, row.projection_revision);

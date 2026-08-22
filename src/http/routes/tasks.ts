@@ -13,6 +13,7 @@ import developmentEvents from "./development-events.js";
 import { TaskRescueService } from "../../task-rescue.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { ForgeConfig } from "../../config.js";
+import { signalIssueGithubPullRequestSync } from "../../temporal/service.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;
@@ -27,7 +28,6 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   const rescue = options.database && options.config ? new TaskRescueService(tasks, options.database, options.config) : undefined;
   const taskResponse = { response: { 200: TaskResponseSchema } };
   await app.register(developmentEvents, { tasks });
-
   typed.get("/api/tasks", { schema: { response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id) }));
   typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId) }));
   typed.post("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, body: TaskBodySchema, response: { 200: TaskResponseSchema, 201: TaskResponseSchema } } }, async (request, reply) => {
@@ -35,7 +35,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
     const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, { ...body, ...(rawRoleAgents ? { roleAgents: rawRoleAgents } : {}) });
     return reply.code(result.created ? 201 : 200).send(result.task);
   });
-  typed.get("/api/tasks/:taskId", { schema: { params: TaskIdParamsSchema, ...taskResponse } }, async (request, reply) => reply.send(tasks.getTask(request.forgeUser.id, request.params.taskId)));
+  typed.get("/api/tasks/:taskId", { schema: { params: TaskIdParamsSchema, querystring: z.object({ refresh: z.coerce.boolean().optional() }), ...taskResponse } }, async (request, reply) => { const task = tasks.getTask(request.forgeUser.id, request.params.taskId); if (request.query.refresh && options.config) void signalIssueGithubPullRequestSync(options.config, task.workflowId).catch(() => undefined); return reply.header("Cache-Control", "private, no-store").send(task); });
   typed.get("/api/tasks/:taskId/diagnostics", { schema: { params: TaskIdParamsSchema, response: { 200: TaskDiagnosticsResponseSchema } } }, async (request, reply) => {
     if (!rescue) throw new TaskFailure("Task diagnostics are unavailable", [], 503);
     return reply.header("Cache-Control", "private, no-store").send(await rescue.diagnostics(request.forgeUser.id, request.params.taskId));

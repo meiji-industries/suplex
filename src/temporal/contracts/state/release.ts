@@ -19,3 +19,14 @@ export const releaseStateFields2 = {
   releaseRetryAt: z.string().datetime().nullable().optional(),
   releaseOperationAttempt: z.number().int().nonnegative().nullable().optional(),
 };
+
+// Appended: workflow state serialization order is a compatibility boundary.
+export const releaseObservationStateFields = {
+  githubObservedAt: z.string().datetime().nullable().optional(),
+  githubPullRequestExists: z.boolean().nullable().optional(),
+  githubPullRequestState: z.enum(["open", "closed", "merged"]).nullable().optional(),
+  githubPullRequestDraft: z.boolean().nullable().optional(),
+  githubPullRequestChecks: z.object({ total: z.number().int().nonnegative(), pending: z.number().int().nonnegative(), failing: z.number().int().nonnegative(), successful: z.number().int().nonnegative() }).nullable().optional(),
+  githubPullRequestReviewDecision: z.string().max(128).nullable().optional(),
+  githubPullRequestAutoMergeEnabled: z.boolean().nullable().optional(),
+};

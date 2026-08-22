@@ -19,8 +19,6 @@ import { toSafeSummary } from "./temporal/contracts/primitives.js";
 import type { GithubReleasePort } from "./github-release.js";
 import { createGitCommandGuard, withWorktreeMiseTrust, WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { activateOwnedWorktree, reserveOwnedWorktree } from "./worktrees.js";
-import { DeveloperEvidenceBuilder } from "./developer-evidence.js";
-import { DeveloperExecutionLeaseRepository, releaseDeveloperExecutionLease } from "./developer-execution-leases.js";
 import { collectDeveloperGitObservation, developerReconciliationSummary, isLegacyReceiptOnlyRecovery, reconcileDeveloperDelivery, DeveloperReconciliationArtifactSchema } from "./developer-reconciliation.js";
 import { AuthorizedPlanSubjectSchema, EvidenceManifestSchema, ExecutionReceiptSchema, OwnedWorktreeSchema, type ExecutionReceipt, type EvidenceManifest } from "./developer-contracts.js";
 import { createGithubAdapter, type GithubAdapter, type GithubMutationSurface } from "./github.js";
@@ -44,7 +42,6 @@ export function buildDeveloperExecutionPrompt(input: { executionId: string; reus
   return `You are Forge's Developer. Execute only the authorized final plan in this isolated worktree. The final plan is staged at .forge-context/${input.executionId}/final-plan.json. Read only the other files under that execution directory. Current target base SHA: ${input.startingSha}. The plan describes intent and scope, not an exact file manifest. If the repository has changed (files moved/renamed/deleted, migrations regenerated), implement the intent against the current tree and note the deviation in the step notes. Only report incomplete when the intent itself cannot be achieved. If a step requires deployment, physical devices, production access, external services, an unrelated pre-existing test failure, or a local server that cannot start, mark it \`not_applicable_locally\` with a one-line reason and continue with the remaining steps.${worktreeInstruction} During execution, post concise public progress updates before each substantive action and after notable results: say what you are inspecting, changing, or verifying and why, without exposing private chain-of-thought. Create one or more ordinary local commits for the authorized work when new commits are required; do not amend or rewrite commits that already exist on the branch unless rebasing onto the target base requires it. Leave the worktree clean, and return exactly one JSON object with no markdown fences or commentary matching: {"kind":"delivery","summary":"...","steps":[{"number":1,"status":"completed|incomplete|not_completed|blocked|not_applicable_locally","filesChanged":[],"notes":"..."}],"authorizedStepsNotCompleted":[],"resultCommit":"40+ hex","resultTree":"40+ hex","dirtyState":"clean","blocker":null}. Include every approved step number once and keep filesChanged to changed paths. For any incomplete, not_completed, or blocked step, list its number in authorizedStepsNotCompleted and provide a non-null blocker. Forge will run the accepted pinned setup and final verification independently after the Developer process exits. Expected plan verification commands for context:\n${input.verificationSteps}\n${gitRestriction}`;
 }
 
-class StaleRecovery extends Error {}
 
 interface StoredRecoveryRow {
   status: string;
@@ -284,14 +281,12 @@ export class DeveloperService {
 
   async run(rawInput: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<DeveloperExecutionResult> {
     const input = rawInput;
-    if (input.authorization) return this.runAuthorized(input as DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity> & { authorization: NonNullable<DeveloperExecutionActivityInput["authorization"]> });
     const context = this.database.authQuery((db) => db.prepare(`SELECT t.title, r.normalized_json AS normalizedJson, b.storage_path AS briefStoragePath, b.sha256 AS briefSha256, pa.storage_path AS planStoragePath, pa.sha256 AS planSha256, ea.storage_path AS evidenceStoragePath, ea.sha256 AS evidenceSha256, io.id AS outputId, io.original_plan_revision AS originalPlanRevision, io.revision AS outputRevision, io.final_version AS finalVersion, io.output_artifact_id AS artifactId, io.artifact_sha256 AS artifactSha256, io.session_ref AS leadSessionRef, io.execution_id AS leadExecutionId, io.evidence_manifest_artifact_id AS evidenceManifestArtifactId, io.evidence_manifest_sha256 AS evidenceManifestSha256
       FROM forge_tasks t JOIN forge_project_revisions r ON r.id = (SELECT current.id FROM forge_project_revisions current WHERE current.project_id = t.project_id AND current.state = 'accepted' ORDER BY current.revision DESC LIMIT 1)
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id JOIN forge_issue_outputs io ON io.output_artifact_id = ? AND io.task_id = t.id AND io.workflow_id = t.workflow_id
       JOIN forge_artifacts pa ON pa.id = io.output_artifact_id JOIN forge_artifacts ea ON ea.id = io.evidence_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId) as DeveloperContext & { outputId?: string; originalPlanRevision?: number; outputRevision?: number; finalVersion?: number; artifactId?: string; artifactSha256?: string; leadSessionRef?: string; leadExecutionId?: string; evidenceManifestArtifactId?: string; evidenceManifestSha256?: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Authorized Lead delivery evidence is unavailable");
-    if (!input.finalPlanSubject) throw new AgentFailure("plan-authority-missing", "Developer execution requires the final Lead plan subject");
     const projectRevision = ProjectRevisionSchema.safeParse(JSON.parse(context.normalizedJson));
     if (!projectRevision.success) throw new AgentFailure("scoped-input-missing", "Pinned project execution configuration is unavailable");
     const repositoryPath = await scopedRepository(this.config.repositoryRoot, projectRevision.data.repositoryPath);
@@ -396,7 +391,6 @@ export class DeveloperService {
           registerArtifact(db, evidence);
           registerArtifact(db, deliveryArtifact);
           const updated = db.prepare("UPDATE forge_developer_executions SET status = ?, session_ref = ?, finished_at = ?, heartbeat_at = ?, current_step = NULL, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ? AND status IN ('starting', 'running')").run(blocked ? "blocked" : "completed", sessionRef, this.now().toISOString(), this.now().toISOString(), gitState.headSha, gitState.treeSha, gitState.dirtyState, deliveryArtifact.id, evidence.id, executionId);
-          if (updated.changes === 1) releaseDeveloperExecutionLease(db, executionId);
           return updated.changes === 1 ? blocked ? "blocked" : "completed" : (db.prepare("SELECT status FROM forge_developer_executions WHERE id = ?").get(executionId) as { status: string } | undefined)?.status;
         });
         if (terminalStatus === "cancelled" || terminalStatus === "interrupted") throw new AgentFailure("developer-cancelled", "Developer execution was cancelled before completion");
@@ -411,7 +405,6 @@ export class DeveloperService {
         registerArtifact(db, evidence);
         const finishedAt = this.now().toISOString();
         const updated = db.prepare("UPDATE forge_developer_executions SET status = CASE WHEN status IN ('starting', 'running') THEN 'failed' ELSE status END, session_ref = COALESCE(session_ref, ?), finished_at = COALESCE(finished_at, ?), heartbeat_at = ?, failure_code = CASE WHEN status IN ('starting', 'running') THEN ? ELSE failure_code END, failure_summary = CASE WHEN status IN ('starting', 'running') THEN ? ELSE failure_summary END, evidence_artifact_id = COALESCE(evidence_artifact_id, ?) WHERE id = ?").run(sessionRef ?? null, finishedAt, finishedAt, failure.code, failure.message, evidence.id, executionId);
-        if (updated.changes === 1) releaseDeveloperExecutionLease(db, executionId);
       });
       throw failure;
     } finally { await guard?.cleanup(); }
@@ -427,193 +420,6 @@ export class DeveloperService {
     });
   }
 
-  async reconcileStoredDelivery(input: { taskId: string; companyId: string; workflowId: string; developerExecutionId: string }): Promise<DeveloperExecutionResult | null> {
-    let row: StoredRecoveryRow | undefined;
-    try {
-      row = this.database.authQuery((db) => db.prepare(`SELECT e.status, e.failure_code AS failureCode, e.session_ref AS sessionRef, e.worktree_path AS worktreePath, e.branch_name AS branchName, e.target_base_sha AS targetBaseSha, e.delivery_artifact_id AS deliveryArtifactId, e.result_commit AS resultCommit, e.result_tree AS resultTree,
-          t.authorization_id AS authorizationId, t.worktree_lease_id AS worktreeLeaseId, t.manifest_artifact_id AS manifestArtifactId, t.manifest_sha256 AS manifestSha256,
-          t.before_provider_artifact_id AS beforeProviderArtifactId, t.before_provider_sha256 AS beforeProviderSha256, t.raw_report_artifact_id AS rawReportArtifactId, t.raw_report_sha256 AS rawReportSha256,
-          t.reconciliation_artifact_id AS reconciliationArtifactId, t.reconciliation_sha256 AS reconciliationSha256, t.starting_commit AS startingCommit, t.starting_tree AS startingTree, t.final_commit AS finalCommit, t.final_tree AS finalTree
-        FROM forge_developer_executions e
-        JOIN forge_developer_execution_truth t ON t.execution_id = e.id
-        WHERE e.id = ? AND e.task_id = ? AND e.company_id = ? AND e.workflow_id = ?
-          AND NOT EXISTS (SELECT 1 FROM forge_developer_executions successor WHERE successor.supersedes_execution_id = e.id)`).get(input.developerExecutionId, input.taskId, input.companyId, input.workflowId) as StoredRecoveryRow | undefined);
-    } catch (error) {
-      this.logRecoveryFault(input, "eligibility-query", error);
-      return null;
-    }
-    if (!row || !row.reconciliationArtifactId || !row.reconciliationSha256) return null;
-    const readArtifactJson = async (artifactId: string, sha256: string, kind: string): Promise<unknown> => {
-      const artifact = this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = ?").get(artifactId, input.companyId, kind) as { storagePath: string; sha256: string } | undefined);
-      if (!artifact || artifact.sha256 !== sha256) throw new Error("artifact identity mismatch");
-      return JSON.parse((await this.artifacts.read({ companyId: input.companyId, storagePath: artifact.storagePath, sha256: artifact.sha256 })).toString("utf8")) as unknown;
-    };
-    if (row.status === "completed") {
-      try {
-        const completed = DeveloperReconciliationArtifactSchema.parse(await readArtifactJson(row.reconciliationArtifactId, row.reconciliationSha256, "developer-reconciliation"));
-        const persistedManifest = EvidenceManifestSchema.parse(await readArtifactJson(row.manifestArtifactId, row.manifestSha256, "developer-evidence-manifest"));
-        const artifact = this.database.authQuery((db) => db.prepare("SELECT filename FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'developer-reconciliation' AND sha256 = ?").get(row.reconciliationArtifactId, input.companyId, row.reconciliationSha256) as { filename: string } | undefined);
-        const valid = completed.policyVersion === 2 && completed.outcome === "completed" && completed.executionId === input.developerExecutionId && completed.companyId === input.companyId
-          && completed.manifest.projectRevision.projectRevisionId === persistedManifest.projectRevision.projectRevisionId
-          && completed.git.head === row.finalCommit && completed.git.tree === row.finalTree && completed.git.head === row.resultCommit && completed.git.tree === row.resultTree
-          && row.deliveryArtifactId === row.reconciliationArtifactId && row.failureCode === null && artifact?.filename === `${input.developerExecutionId}-recovery.json`;
-        return valid ? this.storedAuthorizedResult(input.developerExecutionId) ?? null : null;
-      } catch (error) {
-        this.logRecoveryFault(input, "repeat-read", error);
-        return null;
-      }
-    }
-    return null;
-  }
-
-  private logRecoveryFault(input: { taskId: string; companyId: string; workflowId: string; developerExecutionId: string }, phase: string, error: unknown): void {
-    const redacted = String(redact(error instanceof Error ? error.message : String(error))).trim();
-    const summary = toSafeSummary(redacted || "unknown error");
-    new StructuredLogger().error("Developer stored-delivery recovery fault", { workflowId: input.workflowId, issueId: input.taskId, companyId: input.companyId }, { executionId: input.developerExecutionId, phase, error: summary });
-  }
-
-  private storedAuthorizedResult(executionId: string): DeveloperExecutionResult | undefined {
-    const row = this.database.authQuery((db) => db.prepare(`SELECT e.status, e.session_ref AS sessionRef, e.worktree_path AS worktreePath, e.branch_name AS branchName, e.target_base_sha AS targetBaseSha, e.current_step AS currentStep, e.result_commit AS resultCommit, e.result_tree AS resultTree, e.dirty_state AS dirtyState, e.delivery_artifact_id AS deliveryArtifactId, e.evidence_artifact_id AS evidenceArtifactId, e.failure_code AS failureCode, e.failure_summary AS failureSummary, t.reconciliation_artifact_id AS reconciliationArtifactId, t.before_provider_artifact_id AS providerObservationArtifactId
-      FROM forge_developer_executions e JOIN forge_developer_execution_truth t ON t.execution_id = e.id WHERE e.id = ?`).get(executionId) as { status: string; sessionRef: string | null; worktreePath: string; branchName: string; targetBaseSha: string; currentStep: number | null; resultCommit: string | null; resultTree: string | null; dirtyState: "clean" | "dirty" | null; deliveryArtifactId: string | null; evidenceArtifactId: string | null; failureCode: string | null; failureSummary: string | null; reconciliationArtifactId: string | null; providerObservationArtifactId: string | null } | undefined);
-    if (!row || !["completed", "blocked"].includes(row.status) || !row.sessionRef || !row.resultCommit || !row.resultTree || !row.dirtyState || !row.deliveryArtifactId || !row.evidenceArtifactId || !row.reconciliationArtifactId) return undefined;
-    return { developerExecutionId: executionId, developerSessionRef: row.sessionRef, worktreePath: row.worktreePath, branchName: row.branchName, targetBaseSha: row.targetBaseSha, currentStep: row.currentStep, resultCommit: row.resultCommit, resultTree: row.resultTree, dirtyState: row.dirtyState, deliveryArtifactId: row.deliveryArtifactId, evidenceArtifactId: row.evidenceArtifactId, deliverySummary: row.failureSummary ?? (row.status === "completed" ? "Developer delivery reconciled" : "Developer delivery was blocked by reconciliation"), outcome: row.status as "completed" | "blocked", failureCode: row.failureCode, reconciliationArtifactId: row.reconciliationArtifactId, ...(row.providerObservationArtifactId ? { providerObservationArtifactId: row.providerObservationArtifactId } : {}) };
-  }
-
-  private async observeProvider(input: { companyId: string; executionId: string; phase: "before" | "after"; cwd: string; repository: string }): Promise<{ observation: GithubMutationSurface | null; artifact: StoredArtifact }> {
-    let observation: GithubMutationSurface | null = null;
-    try {
-      if (!this.githubObservation.observeMutationSurface) throw new Error("Provider observation is unavailable");
-      observation = await this.githubObservation.observeMutationSurface({ cwd: input.cwd, nameWithOwner: input.repository });
-    } catch (error) {
-      const message = toSafeSummary(String(redact(error instanceof Error ? error.message : String(error))).trim() || "unknown error");
-      new StructuredLogger().warn("Developer provider observation failed", {}, { executionId: input.executionId, phase: input.phase, error: message });
-    }
-    const artifact = await this.artifacts.put(input.companyId, "developer-provider-observation", { filename: `${input.executionId}-${input.phase}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(observation ?? { available: false, reason: "provider-observation-unavailable" }), "utf8") });
-    return { observation, artifact };
-  }
-
-  private loadAcceptedVerificationRevision(input: { taskId: string; companyId: string; workflowId: string }, manifest: EvidenceManifest) {
-    const row = this.database.authQuery((db) => db.prepare(`SELECT r.id AS projectRevisionId, r.normalized_json AS normalizedJson
-      FROM forge_tasks t
-      JOIN forge_project_revisions r ON r.id = (SELECT current.id FROM forge_project_revisions current WHERE current.project_id = t.project_id AND current.state = 'accepted' ORDER BY current.revision DESC LIMIT 1)
-      WHERE t.id = ? AND t.company_id = ? AND t.workflow_id = ? AND t.project_id = ?`).get(input.taskId, input.companyId, input.workflowId, manifest.projectRevision.projectId) as { projectRevisionId: string; normalizedJson: string } | undefined);
-    if (!row) throw new AgentFailure("pinned-revision-missing", "The accepted project revision is unavailable for deterministic verification");
-    let revision;
-    try { revision = parseAcceptedProjectRevision(row.normalizedJson); } catch { throw new AgentFailure("pinned-revision-missing", "The accepted project revision does not contain valid pinned verification commands"); }
-    return { ...revision, projectRevisionId: row.projectRevisionId };
-  }
-
-  private async runAuthorized(input: DeveloperExecutionActivityInput & Partial<DeveloperSupervisorActivityIdentity> & { authorization: NonNullable<DeveloperExecutionActivityInput["authorization"]> }): Promise<DeveloperExecutionResult> {
-    const authorization = AuthorizedPlanSubjectSchema.parse(input.authorization);
-    if (authorization.taskId !== input.taskId || authorization.companyId !== input.companyId || authorization.projectId !== input.projectId || authorization.workflowId !== input.workflowId || authorization.planRevision !== input.planRevision || authorization.planArtifactId !== input.leadOutputArtifactId) throw new AgentFailure("plan-authorization-mismatch", "Developer authorization coordinates do not match the requested issue plan");
-    const profile = this.executionProfile(input, input.roleProfiles.builder);
-    if (!profile || profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
-    const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
-    const executionId = input.developerTurnExecutionId ?? input.executionId ?? `developer_${randomBytes(12).toString("hex")}`;
-    const stored = this.storedAuthorizedResult(executionId);
-    if (stored) return stored;
-    const evidenceBuilder = new DeveloperEvidenceBuilder(this.database, this.config);
-    const evidence = await evidenceBuilder.build({ subject: authorization, executionId });
-    const project = evidence.manifest.projectRevision;
-    const repositoryPath = await scopedRepository(this.config.repositoryRoot, project.repositoryPath);
-    const worktreeRoot = await scopedRepository(this.config.worktreeRoot, project.worktreeRoot);
-    const existingOwned = this.database.authQuery((db) => db.prepare("SELECT worktree_path AS worktreePath, branch_name AS branchName FROM forge_issue_worktrees WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND status <> 'released'").get(input.taskId, input.companyId, input.workflowId) as { worktreePath: string; branchName: string } | undefined);
-    const owned = reserveOwnedWorktree(this.database, { taskId: input.taskId, companyId: input.companyId, projectId: input.projectId, workflowId: input.workflowId, repositoryRoot: repositoryPath, worktreeRoot, worktreePath: existingOwned?.worktreePath ?? resolve(worktreeRoot, input.taskId), branchName: existingOwned?.branchName ?? buildGitBranchName({ branchSlug: evidence.gitPresentation.branchSlug, taskId: input.taskId }), startingSha: project.targetSha });
-    const inspection = input.reuseWorktree && owned.status === "active"
-      ? await this.worktrees.inspectOwned(owned)
-      : await this.worktrees.materialize(owned);
-    if (input.reuseWorktree && owned.status === "active") {
-      await this.worktrees.reuse({ repositoryPath, worktreeRoot, taskId: input.taskId, targetBaseSha: owned.startingSha, branchName: owned.branchName });
-    }
-    const activeWorktree = owned.status === "active" ? owned : activateOwnedWorktree(this.database, inspection);
-    const startingTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: activeWorktree.worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim();
-    const before = await this.observeProvider({ companyId: input.companyId, executionId, phase: "before", cwd: repositoryPath, repository: project.repositoryIdentity });
-    const beforeObservation = before.observation;
-    const registeredExecution = this.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_developer_executions WHERE id = ?").get(executionId));
-    if (!registeredExecution) await evidenceBuilder.cleanup(activeWorktree.worktreePath, executionId);
-    const staged = await evidenceBuilder.stage(evidence.manifest, activeWorktree.worktreePath, executionId);
-    const guard = await createGitCommandGuard(this.config.runtimeRoot);
-    const startedAt = this.now().toISOString();
-    const supervisorLeases = new DeveloperExecutionLeaseRepository(this.database, this.config.runtimeRoot);
-    const leaseToken = await supervisorLeases.ensureLeaseToken(executionId);
-    this.database.authTransaction((db) => {
-      registerArtifact(db, before.artifact);
-      db.prepare("INSERT OR IGNORE INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, started_at, heartbeat_at, current_step) VALUES (?, ?, ?, ?, ?, ?, 'starting', ?, ?, ?, ?, ?, ?, ?, ?, NULL)").run(executionId, input.taskId, input.companyId, input.workflowId, input.planRevision, attempt, activeWorktree.branchName, activeWorktree.worktreePath, activeWorktree.startingSha, `wrapper_${randomBytes(12).toString("hex")}`, guard.directory, input.supersedesExecutionId ?? null, startedAt, startedAt);
-      this.bindCapacityInTransaction(db, input, executionId, undefined, activeWorktree.worktreePath);
-      supervisorLeases.reserveInTransaction(db, { executionId, companyId: input.companyId, taskId: input.taskId, workflowId: input.workflowId, attempt, turnKind: "implementation", canonicalWorktreePath: activeWorktree.worktreePath, worktreeIdentityHash: createHash("sha256").update(`${input.companyId}\0${input.workflowId}\0${activeWorktree.worktreePath}`).digest("hex"), leaseToken });
-      db.prepare("INSERT OR IGNORE INTO forge_developer_execution_truth (execution_id, authorization_id, worktree_lease_id, manifest_artifact_id, manifest_sha256, boundary_mode, before_provider_artifact_id, before_provider_sha256, starting_commit, starting_tree) VALUES (?, ?, ?, ?, ?, 'owner_controlled_observed', ?, ?, ?, ?)").run(executionId, authorization.authorizationId, activeWorktree.leaseId, evidence.artifact.id, evidence.artifact.sha256, before.artifact.id, beforeObservation?.sha256 ?? null, inspection.head ?? activeWorktree.startingSha, startingTree);
-    });
-    const steps = evidence.manifest.verificationCommands.map((step) => `${step.stepNumber}: ${step.commands.join(" && ") || "(file/Git state verification)"}`).join("\n");
-    const prompt = buildDeveloperExecutionPrompt({ executionId, reuseWorktree: Boolean(input.reuseWorktree), startingSha: activeWorktree.startingSha, verificationSteps: steps });
-    const outputLines: string[] = [];
-    let sessionRef: string | undefined;
-    let rawSessionId: string | undefined;
-    let parserState: unknown;
-    const liveStatus = createDeveloperLiveStatusReporter((currentStep) => {
-      this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET current_step = ?, heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running')").run(currentStep, this.now().toISOString(), executionId));
-    });
-    try {
-      const result = await this.processRunner({
-        command: this.command,
-        args: this.provider.buildTurnArgs({ prompt, profile, imagePaths: staged.imagePaths }),
-        stdin: prompt,
-        cwd: activeWorktree.worktreePath,
-        env: withWorktreeMiseTrust(guard.env, activeWorktree.worktreePath),
-        detached: true,
-        onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); },
-        onLine: async (line) => {
-          outputLines.push(line);
-          liveStatus.report(line);
-          const incremental = this.provider.parseExecutionTranscript([line], { executionId, attempt, worktreePath: activeWorktree.worktreePath, ...(parserState ? { state: parserState } : {}) });
-          parserState = incremental.parserState;
-          this.persistDeveloperReceipts(executionId, incremental.receipts);
-          const event = this.provider.parseEvent(line);
-          if (event.threadId && rawSessionId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer returned a different session identity");
-          if (event.threadId && !rawSessionId) { rawSessionId = event.threadId; sessionRef = await this.sessionStore.create(rawSessionId); }
-          await this.heartbeat(executionId);
-        },
-      });
-      const parsed = this.provider.parseExecutionTranscript(outputLines, { executionId, attempt, worktreePath: activeWorktree.worktreePath });
-      if (parsed.threadId && rawSessionId && parsed.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer returned conflicting session identities");
-      rawSessionId ??= parsed.threadId;
-      sessionRef ??= rawSessionId ? await this.sessionStore.create(rawSessionId) : undefined;
-      const leadSessionId = await this.sessionStore.read(input.leadSessionRef).catch(() => undefined);
-      await evidenceBuilder.cleanup(activeWorktree.worktreePath, executionId).catch(() => undefined);
-      const acceptedRevision = this.loadAcceptedVerificationRevision(input, evidence.manifest);
-      liveStatus.set(`Verifying: ${acceptedRevision.verificationCommand}`);
-      const independentVerification = await runPinnedVerification({ worktreePath: activeWorktree.worktreePath, setupCommand: acceptedRevision.setupCommand, verificationCommand: acceptedRevision.verificationCommand }, { guard });
-      liveStatus.set("Reconciling delivery");
-      const git = await collectDeveloperGitObservation(activeWorktree.worktreePath, activeWorktree.startingSha);
-      const after = await this.observeProvider({ companyId: input.companyId, executionId, phase: "after", cwd: repositoryPath, repository: project.repositoryIdentity });
-      const rawReportArtifact = await this.artifacts.put(input.companyId, "developer-delivery-raw", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(parsed.finalReport ?? null), "utf8") });
-      const gitArtifact = await this.artifacts.put(input.companyId, "developer-git-snapshot", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(git), "utf8") });
-      const receipts = parsed.receipts.map((receipt) => ExecutionReceiptSchema.parse(receipt));
-      receipts.push(ExecutionReceiptSchema.parse({ eventId: `receipt_${createHash("sha256").update(`${executionId}:git-snapshot`).digest("hex").slice(0, 32)}`, executionId, attempt, sequence: Math.max(0, ...receipts.map((receipt) => receipt.sequence)) + 1, kind: "git_snapshot", stepNumber: null, sourceItemId: null, occurredAt: this.now().toISOString(), summary: "Final Git snapshot", exitCode: null, artifactId: gitArtifact.id, artifactSha256: gitArtifact.sha256, idempotencyKey: `git-snapshot:${gitArtifact.id}` }));
-      const reconciliation = reconcileDeveloperDelivery({ executionId, companyId: input.companyId, report: parsed.finalReport, independentVerification, git, startingSha: activeWorktree.startingSha, neutralBranch: activeWorktree.branchName, providerBeforeSha256: beforeObservation?.sha256 ?? null, providerAfterSha256: after.observation?.sha256 ?? null, processExitCode: result.exitCode, malformedLines: parsed.malformedLines, developerSessionId: rawSessionId ?? null, leadSessionId: leadSessionId ?? null, authorization, manifest: evidence.manifest, verificationProjectRevisionId: acceptedRevision.projectRevisionId, requiredChecks: acceptedRevision.requiredChecks });
-      const deliverySummary = developerReconciliationSummary(reconciliation);
-      const reconciliationArtifact = await this.artifacts.putIdempotent(input.companyId, "developer-reconciliation", `${executionId}:reconciliation:v3`, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(reconciliation), "utf8") });
-      this.database.authTransaction((db) => {
-        for (const artifact of [after.artifact, rawReportArtifact, gitArtifact, reconciliationArtifact]) registerArtifact(db, artifact);
-        for (const receipt of receipts) db.prepare("INSERT OR IGNORE INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(receipt.eventId, executionId, receipt.attempt, receipt.sequence, receipt.kind, receipt.stepNumber, receipt.sourceItemId, receipt.occurredAt, receipt.summary, receipt.exitCode, receipt.artifactId, receipt.artifactSha256, receipt.idempotencyKey);
-        db.prepare("UPDATE forge_developer_execution_truth SET after_provider_artifact_id = ?, after_provider_sha256 = ?, raw_report_artifact_id = ?, raw_report_sha256 = ?, reconciliation_artifact_id = ?, reconciliation_sha256 = ?, final_commit = ?, final_tree = ? WHERE execution_id = ?").run(after.artifact.id, after.observation?.sha256 ?? null, rawReportArtifact.id, rawReportArtifact.sha256, reconciliationArtifact.id, reconciliationArtifact.sha256, git.head, git.tree, executionId);
-        const execution = db.prepare("UPDATE forge_developer_executions SET status = ?, session_ref = ?, finished_at = ?, heartbeat_at = ?, current_step = NULL, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ?, failure_code = ?, failure_summary = ? WHERE id = ? AND status IN ('starting', 'running')").run(reconciliation.outcome, sessionRef ?? `unavailable_${executionId}`, this.now().toISOString(), this.now().toISOString(), git.head, git.tree, git.status ? "dirty" : "clean", reconciliationArtifact.id, evidence.artifact.id, reconciliation.failureCode, reconciliation.outcome === "blocked" ? deliverySummary : null, executionId);
-        if (execution.changes === 1) releaseDeveloperExecutionLease(db, executionId);
-      });
-      this.persistDeveloperReceipts(executionId, receipts);
-      return { developerExecutionId: executionId, developerSessionRef: sessionRef ?? `unavailable_${executionId}`, worktreePath: activeWorktree.worktreePath, branchName: activeWorktree.branchName, targetBaseSha: activeWorktree.startingSha, currentStep: null, resultCommit: git.head, resultTree: git.tree, dirtyState: git.status ? "dirty" : "clean", deliveryArtifactId: reconciliationArtifact.id, evidenceArtifactId: evidence.artifact.id, deliverySummary, outcome: reconciliation.outcome, failureCode: reconciliation.failureCode, reconciliationArtifactId: reconciliationArtifact.id, providerObservationArtifactId: before.artifact.id };
-    } catch (error) {
-      if (isSupervisorTerminalError(error)) throw error;
-      const failure = error instanceof AgentFailure ? error : new AgentFailure("developer-execution-failed", toSafeSummary(`Developer execution could not be reconciled: ${String(redact(error instanceof Error ? error.message : String(error)))}`));
-      this.database.authTransaction((db) => {
-        const execution = db.prepare("UPDATE forge_developer_executions SET status = CASE WHEN status IN ('starting', 'running') THEN 'blocked' ELSE status END, failure_code = ?, failure_summary = ?, finished_at = ? WHERE id = ?").run(failure.code, failure.message, this.now().toISOString(), executionId);
-        if (execution.changes === 1) releaseDeveloperExecutionLease(db, executionId);
-      });
-      throw failure;
-    } finally {
-      await evidenceBuilder.cleanup(activeWorktree.worktreePath, executionId).catch(() => undefined);
-      await guard.cleanup();
-    }
-  }
 
   async runMergeConflictResolution(rawInput: MergeConflictResolutionActivityInput & Partial<DeveloperSupervisorActivityIdentity>): Promise<MergeConflictResolutionActivityResult> {
     const input = rawInput;
@@ -700,7 +506,6 @@ export class DeveloperService {
         const artifacts = [evidence, resolutionArtifact, verificationArtifactRecord, deliveryArtifact];
         for (const artifact of artifacts) registerArtifact(db, artifact);
         db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = 'clean', delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(now, now, gitState.headSha, gitState.treeSha, deliveryArtifact.id, evidence.id, executionId);
-        releaseDeveloperExecutionLease(db, executionId);
         db.prepare("UPDATE forge_forward_merges SET status = 'merged', merge_commit = ?, tree = ?, result_head = ?, result_tree = ?, developer_execution_id = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, delivery_artifact_id = ?, delivery_artifact_sha256 = ?, updated_at = ? WHERE task_id = ? AND company_id = ? AND conflict_artifact_id = ?").run(gitState.headSha, gitState.treeSha, gitState.headSha, gitState.treeSha, executionId, verificationArtifactRecord.id, verificationArtifactRecord.sha256, deliveryArtifact.id, deliveryArtifact.sha256, now, input.taskId, input.companyId, input.conflictArtifact.id);
         db.prepare("UPDATE forge_merge_conflict_resolutions SET developer_execution_id = ?, developer_session_ref = ?, result_commit = ?, result_tree = ?, status = 'completed', updated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ?").run(executionId, input.developerSessionRef, gitState.headSha, gitState.treeSha, now, input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha);
       });
@@ -716,7 +521,6 @@ export class DeveloperService {
         this.database.authTransaction((db) => {
           for (const artifact of [evidence, blockedVerificationArtifact]) db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
           db.prepare("UPDATE forge_developer_executions SET status = 'blocked', finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = 'clean', failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(now, now, blockedMerge.headSha, blockedMerge.treeSha, failure.code, failure.message, evidence.id, executionId);
-          releaseDeveloperExecutionLease(db, executionId);
           db.prepare("UPDATE forge_forward_merges SET status = 'merged', merge_commit = ?, tree = ?, result_head = ?, result_tree = ?, developer_execution_id = ?, verification_artifact_id = ?, verification_artifact_sha256 = ?, failure_code = ?, failure_summary = ?, updated_at = ? WHERE task_id = ? AND company_id = ? AND conflict_artifact_id = ?").run(blockedMerge.headSha, blockedMerge.treeSha, blockedMerge.headSha, blockedMerge.treeSha, executionId, blockedVerificationArtifact.id, blockedVerificationArtifact.sha256, failure.code, failure.message, now, input.taskId, input.companyId, input.conflictArtifact.id);
           db.prepare("UPDATE forge_merge_conflict_resolutions SET developer_execution_id = ?, developer_session_ref = ?, result_commit = ?, result_tree = ?, status = 'blocked', updated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ?").run(executionId, input.developerSessionRef, blockedMerge.headSha, blockedMerge.treeSha, now, input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha);
         });
@@ -725,7 +529,6 @@ export class DeveloperService {
       this.database.authTransaction((db) => {
         registerArtifact(db, evidence);
         db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId);
-        releaseDeveloperExecutionLease(db, executionId);
         db.prepare("UPDATE forge_merge_conflict_resolutions SET developer_execution_id = ?, developer_session_ref = ?, status = 'blocked', updated_at = ? WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND prior_head = ? AND target_base_sha = ?").run(executionId, input.developerSessionRef, this.now().toISOString(), input.taskId, input.companyId, input.workflowId, input.priorHead, input.targetBaseSha);
       });
       throw failure;
@@ -818,7 +621,6 @@ export class DeveloperService {
           registerArtifact(db, evidence);
           registerArtifact(db, repairArtifact);
           db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = ?, delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(blocked ? "blocked" : "completed", this.now().toISOString(), this.now().toISOString(), gitState.headSha, gitState.treeSha, gitState.dirtyState, repairArtifact.id, evidence.id, executionId);
-          releaseDeveloperExecutionLease(db, executionId);
           db.prepare("UPDATE forge_delivery_repairs SET status = ?, result_commit = ?, result_tree = ?, delivery_artifact_id = ?, evidence_artifact_id = ?, failure_code = ?, failure_summary = ?, finished_at = ? WHERE id = ?").run(blocked ? "blocked" : "completed", gitState.headSha, gitState.treeSha, repairArtifact.id, evidence.id, failureCode, failureSummary, this.now().toISOString(), row?.id);
           return row?.id;
         });
@@ -844,7 +646,6 @@ export class DeveloperService {
       this.database.authTransaction((db) => {
         registerArtifact(db, evidence);
         db.prepare("UPDATE forge_developer_executions SET status = ?, finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, result_commit = ?, result_tree = ?, dirty_state = ?, evidence_artifact_id = ? WHERE id = ?").run(effectiveExpected ? "blocked" : "failed", this.now().toISOString(), this.now().toISOString(), effectiveCode, effectiveSummary, observed?.headSha ?? null, observed?.treeSha ?? null, observed?.dirtyState ?? null, evidence.id, executionId);
-        releaseDeveloperExecutionLease(db, executionId);
         if (repairRowCreated) db.prepare("UPDATE forge_delivery_repairs SET status = ?, result_commit = ?, result_tree = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ?, finished_at = ? WHERE developer_execution_id = ? AND cycle = ?").run(effectiveExpected ? "blocked" : "failed", observed?.headSha ?? null, observed?.treeSha ?? null, effectiveCode, effectiveSummary, evidence.id, this.now().toISOString(), executionId, input.cycle);
       });
       if (!effectiveExpected) throw error;
@@ -940,7 +741,6 @@ export class DeveloperService {
       this.database.authTransaction((db) => {
         db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(delivery.id, delivery.companyId, delivery.kind, delivery.filename, delivery.mimeType, delivery.byteSize, delivery.sha256, delivery.storagePath, delivery.createdAt, evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt);
         db.prepare("UPDATE forge_developer_executions SET status = 'completed', finished_at = ?, heartbeat_at = ?, result_commit = ?, result_tree = ?, dirty_state = 'clean', delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(now, now, gitState.headSha, gitState.treeSha, delivery.id, evidence.id, executionId);
-        releaseDeveloperExecutionLease(db, executionId);
         db.prepare("UPDATE forge_ci_repairs SET result_developer_execution_id = ?, result_developer_session_ref = ?, new_commit = ?, new_tree = ?, delivery_artifact_id = ?, evidence_artifact_id = ?, status = 'completed', summary = ?, completed_at = ? WHERE id = ?").run(executionId, input.priorDeveloperSessionRef, gitState.headSha, gitState.treeSha, delivery.id, evidence.id, report.summary, now, repairId);
         db.prepare("UPDATE forge_ci_repair_plans SET status = 'consumed', consumed_at = ?, updated_at = ? WHERE id = ?").run(now, now, input.repairPlanId);
         if (input.releaseId) {
@@ -954,7 +754,7 @@ export class DeveloperService {
       // Leave the worktree on the recorded failed head so the retry starts clean.
       await rollbackUnpushedRepairCommits(worktreePath, input.branchName, input.priorCommit);
       const evidence = await this.persistEvidence(input.companyId, evidenceLines);
-      this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); releaseDeveloperExecutionLease(db, executionId); db.prepare("UPDATE forge_ci_repairs SET status = 'failed', failure_code = ?, summary = ?, evidence_artifact_id = ?, completed_at = ? WHERE id = ?").run(failure.code, failure.message, evidence.id, this.now().toISOString(), repairId); });
+      this.database.authTransaction((db) => { db.prepare("INSERT OR IGNORE INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(evidence.id, evidence.companyId, evidence.kind, evidence.filename, evidence.mimeType, evidence.byteSize, evidence.sha256, evidence.storagePath, evidence.createdAt); db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = ?, heartbeat_at = ?, failure_code = ?, failure_summary = ?, evidence_artifact_id = ? WHERE id = ?").run(this.now().toISOString(), this.now().toISOString(), failure.code, failure.message, evidence.id, executionId); ; db.prepare("UPDATE forge_ci_repairs SET status = 'failed', failure_code = ?, summary = ?, evidence_artifact_id = ?, completed_at = ? WHERE id = ?").run(failure.code, failure.message, evidence.id, this.now().toISOString(), repairId); });
       throw failure;
     } finally { await guard.cleanup(); }
   }

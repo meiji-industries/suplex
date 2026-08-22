@@ -1,6 +1,4 @@
 import { createHash, randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
 
 import { ApplicationFailure, CancelledFailure, Context } from "@temporalio/activity";
 import { z } from "zod";
@@ -14,7 +12,6 @@ import { DeveloperService } from "../../codex-developer.js";
 import { cancelDeveloperExecution, reconcileDeveloperExecutions } from "../../developer-recovery.js";
 import { cancelAgentExecution, reconcileAgentExecutions } from "../../agent-recovery.js";
 import { runDeveloperTurn, type DeveloperTurnRunResult } from "../../developer-turn-runner.js";
-import { validateSupervisorResult } from "../../developer-supervisor-protocol.js";
 import { AcceptanceFailure, AcceptanceService } from "../../acceptance.js";
 import { CiFailure, CiProviderFailure, CiService, createGithubCiProvider, type CiProvider } from "../../ci.js";
 import { createGithubReleasePort, GithubReleaseFailure, ReleaseService, type GithubReleaseAdapter } from "../../github-release.js";
@@ -50,11 +47,7 @@ import {
   type DeveloperTurnActivityOutcome,
   type DeveloperRepairActivityResult,
   type DurableArtifactReference,
-  type MergeConflictResolutionActivityResult,
-  type SupervisedDeveloperRepairActivityInput,
   type TargetBaseBlockerCode,
-  type WorkflowDeveloperExecutionResult,
-  type WorkflowDeveloperRepairResult,
 } from "../issue-contracts.js";
 import { PlanGovernanceConflict, PlanGovernanceRepository } from "../../plan-governance-repository.js";
 import { StructuredLogger, activityLogContext } from "../../logging.js";
@@ -152,7 +145,7 @@ function normalizeRepairResult(raw: unknown, rawInput: unknown): DeveloperRepair
 async function durableArtifactReference(database: ForgeDatabase, store: ArtifactStore, companyId: string, artifactId: string, kind?: DurableArtifactReference["kind"]): Promise<DurableArtifactReference> {
   const row = database.authQuery((db) => db.prepare("SELECT id AS artifactId, company_id AS companyId, kind, sha256, byte_size AS byteSize, mime_type AS mimeType, storage_path AS storagePath FROM forge_artifacts WHERE id = ? AND company_id = ?").get(artifactId, companyId) as ({ artifactId: string; companyId: string; kind: string; sha256: string; byteSize: number; mimeType: string; storagePath: string } | undefined));
   if (!row || (kind && row.kind !== kind)) throw new Error("Scoped artifact reference is unavailable");
-  const reference = DurableArtifactReferenceSchema.parse({ artifactId: row.artifactId, companyId: row.companyId, kind: row.kind, sha256: row.sha256, byteSize: row.byteSize, mimeType: row.mimeType });
+  const reference = DurableArtifactReferenceSchema.parse({ artifactId: row.artifactId, companyId: row.companyId, kind: row.kind, byteSize: row.byteSize, mimeType: row.mimeType });
   const bytes = await store.read({ companyId: row.companyId, storagePath: row.storagePath, sha256: row.sha256 });
   if (bytes.byteLength !== reference.byteSize) throw new Error("Scoped artifact size verification failed");
   return reference;
@@ -160,16 +153,18 @@ async function durableArtifactReference(database: ForgeDatabase, store: Artifact
 
 async function verifiedArtifactBytes(database: ForgeDatabase, store: ArtifactStore, companyId: string, expected: DurableArtifactReference, kind: DurableArtifactReference["kind"]): Promise<Buffer> {
   const actual = await durableArtifactReference(database, store, companyId, expected.artifactId, kind);
-  for (const field of ["artifactId", "companyId", "kind", "sha256", "byteSize", "mimeType"] as const) {
+  for (const field of ["artifactId", "companyId", "kind", "byteSize", "mimeType"] as const) {
     if (actual[field] !== expected[field]) throw new Error("Scoped artifact metadata verification failed");
   }
   const row = database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = ?").get(actual.artifactId, companyId, kind) as { storagePath: string } | undefined);
   if (!row) throw new Error("Scoped artifact storage is unavailable");
-  return store.read({ companyId, storagePath: row.storagePath, sha256: actual.sha256 });
+  const stored = database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(actual.artifactId, companyId) as { sha256: string } | undefined);
+  if (!stored) throw new Error("Scoped artifact storage is unavailable");
+  return store.read({ companyId, storagePath: row.storagePath, sha256: stored.sha256 });
 }
 
-function artifactReference(artifact: Pick<StoredArtifact, "id" | "sha256" | "kind">) {
-  return ArtifactReferenceSchema.parse({ id: artifact.id, sha256: artifact.sha256, kind: artifact.kind });
+function artifactReference(artifact: Pick<StoredArtifact, "id" | "kind">) {
+  return ArtifactReferenceSchema.parse({ id: artifact.id, kind: artifact.kind });
 }
 
 function registerArtifact(database: ForgeDatabase, artifact: StoredArtifact): void {
@@ -210,18 +205,17 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
   capacity.reconcileFromLedgers();
   const agent = options.agent;
   const developer = options.developer ?? defaultDeveloper;
-  const putAttentionEvidence = async (input: { companyId: string }, category: AttentionCategory, code: string, summary: string): Promise<{ artifactId: string; sha256: string }> => {
+  const putAttentionEvidence = async (input: { companyId: string }, category: AttentionCategory, code: string, summary: string): Promise<{ artifactId: string }> => {
     const safeSummary = normalizeSafeSummary(redact(summary));
     const artifact = await artifacts.put(input.companyId, "attention-evidence", { filename: `attention-${randomBytes(8).toString("hex")}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ code, category, summary: safeSummary }), "utf8") });
     registerArtifact(database, artifact);
-    return { artifactId: artifact.id, sha256: artifact.sha256 };
+    return { artifactId: artifact.id };
   };
   const attentionFailure = async (input: { companyId: string }, category: AttentionCategory, code: string, summary: string): Promise<never> => {
     const evidence = await putAttentionEvidence(input, category, code, summary);
     const safeSummary = normalizeSafeSummary(redact(summary));
-    throw ApplicationFailure.nonRetryable(safeSummary, code, { code, category, summary: safeSummary, evidenceArtifactId: evidence.artifactId, evidenceSha256: evidence.sha256 });
+    throw ApplicationFailure.nonRetryable(safeSummary, code, { code, category, summary: safeSummary, evidenceArtifactId: evidence.artifactId });
   };
-  const artifactSha256 = (companyId: string, artifactId: string | null | undefined): string | undefined => artifactId ? database.authQuery((db) => db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ? AND company_id = ?").get(artifactId, companyId) as { sha256: string } | undefined)?.sha256 : undefined;
   const agentCategory = (error: AgentFailure): AttentionCategory => error.code === "login-expired" ? "provider_authentication" : error.code === "model-unavailable" ? "provider_ambiguity" : error.code === "rate-limited" ? "provider_connectivity_exhausted" : error.code === "malformed-output" || error.code === "invalid-output" ? "agent_contradiction" : "agent_exhausted";
   const invokeAgent = async <T>(input: { companyId: string }, operation: () => Promise<T>): Promise<T> => {
     let heartbeat: NodeJS.Timeout | undefined;
@@ -257,12 +251,11 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     if (capacityRequestId) capacity.bindExecution(capacityRequestId, owner);
     return result;
   };
-  const recoverFinalizedDeveloperResult = async <T>(_input: { taskId: string; companyId: string; workflowId: string; planRevision: number } & DeveloperSupervisorActivityIdentity): Promise<{ result: T; resultHash: string } | undefined> => undefined;
+  const recoverFinalizedDeveloperResult = async <T>(_input: { taskId: string; companyId: string; workflowId: string; planRevision: number } & DeveloperSupervisorActivityIdentity): Promise<{ result: T } | undefined> => undefined;
   const runSupervised = async <T extends { developerExecutionId: string; evidenceArtifactId: string | null; deliveryArtifactId?: string; verificationArtifact?: { id: string } }>(
     input: { taskId: string; companyId: string; workflowId: string; planRevision: number; capacityRequestId?: string } & DeveloperSupervisorActivityIdentity,
     operation: (service: Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">) => Promise<T>,
   ): Promise<DeveloperTurnActivityOutcome<T>> => {
-    const terminalRow = database.authQuery((db) => db.prepare("SELECT 1 FROM forge_developer_executions WHERE id = ? AND status IN ('blocked', 'completed', 'interrupted')").get(input.developerTurnExecutionId));
     let terminal: DeveloperTurnRunResult | undefined;
     const processRunner: LeadProcessRunner = async (invocation) => {
       const env = Object.fromEntries(Object.entries(invocation.env ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
@@ -292,12 +285,11 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     };
     try {
       const recovered = await recoverFinalizedDeveloperResult<T>(input);
-      if (recovered) return { status: "completed", result: recovered.result, resultHash: recovered.resultHash };
+      if (recovered) return { status: "completed", result: recovered.result };
       const service = options.developer ? developer as DeveloperService : new DeveloperService(database, config, { github: githubRelease, processRunner });
       const result = await operation(service);
       await bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId }, result);
-      if (!terminal) return { status: "completed", result, resultHash: createHash("sha256").update(JSON.stringify(result)).digest("hex") };
-      return { status: "completed", result, resultHash: terminal.resultHash };
+      return { status: "completed", result };
     } catch (error) {
       if (error instanceof SupervisedDeveloperTerminalError) {
         return { status: "interrupted", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-worker-lost", summary: "The Developer process ended before Forge could claim a result.", lastHeartbeatAt: error.result.lastHeartbeatAt };
@@ -408,7 +400,6 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     developer,
     putAttentionEvidence,
     attentionFailure,
-    artifactSha256,
     agentCategory,
     invokeAgent,
     bindCapacityExecution,

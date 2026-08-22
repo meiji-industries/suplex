@@ -14,6 +14,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { ApplicationFrame } from "../components/app/application-frame.js";
 import { getWorkerHealthFailure, useSystemHealth } from "../components/app/system-health.js";
 import { TaskActivity } from "../components/app/task-history.js";
+import { Markdown, type MarkdownImageSource } from "../components/app/markdown.js";
 import { CommandOutputBlock } from "../components/app/command-output.js";
 import { TellPlannerForm } from "../components/app/tell-planner-form.js";
 import DeveloperDiff from "../components/app/developer-diff.js";
@@ -498,7 +499,7 @@ function TaskAgentAssignments({ task, onRefresh }: { task: ApiTask; onRefresh: (
   return <section className="mb-6 space-y-3" aria-label="Task agents"><h3 className="text-xs font-semibold">Agents</h3>{(["planner", "reviewer", "builder", "integrator"] as const).map((role) => { const label = role.slice(0, 1).toUpperCase() + role.slice(1); const selected = agents.find((agent) => agent.id === task.roleAgents[role]); const options = agents.filter((agent) => agent.role === role); return <div className="space-y-1" key={role}><div className="text-xs text-muted-foreground">{label}</div><DropdownMenu><DropdownMenuTrigger render={<Button id={`task-agent-${role}`} type="button" variant="secondary" size="xs" disabled={savingRole === role} aria-busy={savingRole === role} aria-label={`${label} agent: ${selected?.name ?? "Unassigned"}`} />}>{selected ? <><ProfileAvatar name={selected.name} seed={selected.avatarSeed} size="xs" />{selected.name}</> : "Unassigned"}</DropdownMenuTrigger><DropdownMenuContent align="start">{options.map((agent) => <DropdownMenuItem key={agent.id} onClick={() => { if (agent.id !== selected?.id) void update(role, agent.id); }}><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><span className="min-w-0 flex-1 truncate">{agent.name}</span>{agent.id === selected?.id ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu></div>; })}{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}</section>;
 }
 
-function InlineTaskEditor({ field, value, onSave }: { field: "title" | "description"; value: string; onSave: (value: string) => Promise<void> }): ReactElement {
+function InlineTaskEditor({ field, value, onSave, imageSources }: { field: "title" | "description"; value: string; onSave: (value: string) => Promise<void>; imageSources?: MarkdownImageSource }): ReactElement {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const [saving, setSaving] = useState(false);
@@ -520,7 +521,7 @@ function InlineTaskEditor({ field, value, onSave }: { field: "title" | "descript
   }
   return field === "title"
     ? <button type="button" data-task-title-editor aria-label="Edit task title" onClick={start} className="block min-w-0 text-left text-xl font-semibold tracking-tight">{value}</button>
-    : <button type="button" data-task-description-editor aria-label="Edit task description" onClick={start} className="block w-full whitespace-pre-wrap text-left font-sans text-[13px] leading-5">{value || "No description."}</button>;
+    : <button type="button" data-task-description-editor aria-label="Edit task description" onClick={start} className="block w-full text-left font-sans"><Markdown source={value || "No description."} {...(imageSources ? { imageSources } : {})} /></button>;
 }
 
 export function TaskDetailsPage({ task, project, companyId: _companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady: _onMarkReady, onMerge: _onMerge, onDuplicate, onUpdateDetails, onRefresh, onRescue }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onMerge: () => Promise<void>; onDuplicate: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport> }): ReactElement {
@@ -619,7 +620,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
             </header>
             <div data-task-content className="min-w-0 px-4 pt-4 pb-6 sm:px-6 lg:px-10">
               <div data-task-content-inner className="mx-auto max-w-4xl space-y-7">
-                <InlineTaskEditor field="description" value={task.description} onSave={async (description) => onUpdateDetails({ description })} />
+                <InlineTaskEditor field="description" value={task.description} onSave={async (description) => onUpdateDetails({ description })} imageSources={Object.fromEntries(task.images.map((image) => [image.filename, `/api/tasks/${task.id}/images/${image.artifactId}`]))} />
                 {task.images.length ? <TaskMediaRow taskId={task.id} images={task.images} /> : null}
                 <div data-task-current className="-mx-4 border-y border-border/70 bg-background px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10">
                   <div className="mx-auto max-w-4xl space-y-4">

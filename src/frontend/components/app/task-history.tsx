@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type ReactElement } from "react";
 
 import { ProfileAvatar } from "./profile-avatar.js";
 import { CommandOutputBlock, type CommandOutput } from "./command-output.js";
+import { Markdown } from "./markdown.js";
 import { Badge } from "../ui/badge.js";
 import { relativeTime } from "../../lib/view-shared.js";
 import { readJson } from "../../lib/api.js";
@@ -130,7 +131,7 @@ function ActivityRow({ row, onViewChanges }: { row: FeedRow; onViewChanges?: () 
       <ProfileAvatar name={activityRoleLabel(row.role)} seed={row.role} size="xs" />
       <span className="shrink-0 font-medium">{activityRoleLabel(row.role)}</span>
       {row.automatic ? <Badge variant="secondary">auto</Badge> : null}
-      {row.command ? <div className="min-w-0 flex-1"><CommandOutputBlock output={row.command} /></div> : <span className="min-w-0 flex-1 text-muted-foreground">{row.text.replace(new RegExp(`^${activityRoleLabel(row.role)}\\s+`), "")}</span>}
+      {row.command ? <div className="min-w-0 flex-1"><CommandOutputBlock output={row.command} /></div> : <div className="min-w-0 flex-1 text-muted-foreground"><Markdown source={row.text.replace(new RegExp(`^${activityRoleLabel(row.role)}\\s+`), "")} /></div>}
       {row.commands?.length ? <button type="button" data-command-chip className={failed ? "shrink-0 rounded bg-red-500/15 px-1 py-0.5 text-[11px] text-red-600 dark:text-red-400" : "shrink-0 rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground"} aria-expanded={expanded} onClick={() => setExpanded((value) => !value)}>{row.commands.length} commands{failed ? ` · ${row.commands.filter((command) => command.exitCode !== null && command.exitCode !== 0).length} failed` : ""}</button> : null}
       {row.count ? <span className="shrink-0 rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground" aria-label={`${row.count} identical events`}>×{row.count}</span> : null}
       {row.link ? <a className="shrink-0 underline underline-offset-2" href={row.link.href} onClick={row.link.label === "View changes" && onViewChanges ? (event) => { event.preventDefault(); onViewChanges(); } : undefined} target={row.link.href.startsWith("http") ? "_blank" : undefined} rel={row.link.href.startsWith("http") ? "noreferrer" : undefined}>{row.link.label}</a> : null}

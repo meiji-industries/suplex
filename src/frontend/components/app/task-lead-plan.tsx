@@ -8,6 +8,7 @@ import { Button } from "../ui/button.js";
 import { Card, CardContent, CardFooter } from "../ui/card.js";
 import { Collapsible } from "../ui/collapsible.js";
 import { Timeline, TimelineContent, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator } from "../ui/timeline.js";
+import { Markdown } from "./markdown.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
 
 export type TaskLeadOutput = NonNullable<TaskResponse["leadOutput"]>;
@@ -51,7 +52,7 @@ export function TaskLeadPlan({
   const [openSteps, setOpenSteps] = useState<string[]>([]);
   const heading = <span className="font-semibold">Plan: {output.content.gitPresentation?.pullRequestTitle ?? "Planner plan"}</span>;
   const details = <>
-    <p className="whitespace-pre-wrap text-[13px] leading-5">{output.summary}</p>
+    <Markdown source={output.summary} />
         <Timeline orientation="vertical" value={0} data-plan-steps>
           {output.content.steps.map((step) => {
             return (
@@ -61,16 +62,16 @@ export function TaskLeadPlan({
                     <TimelineSeparator />
                     <TimelineIndicator className="flex size-6 items-center justify-center border-none bg-muted text-[11px] font-semibold text-muted-foreground">{step.number}</TimelineIndicator>
                     <Collapsible.Trigger className="group/plan-step flex w-full items-start justify-between gap-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring">
-                      <span className="min-w-0 text-[13px] leading-5">Step {step.number} — {step.instruction}</span>
+                      <div className="min-w-0 text-[13px] leading-5"><span>Step {step.number} — </span><Markdown source={step.instruction} /></div>
                       <ChevronDown className="mt-0.5 size-4 shrink-0 transition-transform group-data-[panel-open]/plan-step:rotate-180" />
                     </Collapsible.Trigger>
                   </TimelineHeader>
                   <Collapsible.Panel render={<TimelineContent />}>
                   <div className="grid gap-1 pl-1 text-[13px] sm:grid-cols-[76px_minmax(0,1fr)]">
-                    {step.entryPoint ? <><span className="font-medium text-muted-foreground">Entry</span><p className="whitespace-pre-wrap">{step.entryPoint}</p></> : null}
-                    {step.completionCriterion ? <><span className="font-medium text-muted-foreground">Complete</span><p className="whitespace-pre-wrap">{step.completionCriterion}</p></> : null}
+                    {step.entryPoint ? <><span className="font-medium text-muted-foreground">Entry</span><Markdown source={step.entryPoint} /></> : null}
+                    {step.completionCriterion ? <><span className="font-medium text-muted-foreground">Complete</span><Markdown source={step.completionCriterion} /></> : null}
                     <span className="font-medium text-muted-foreground">Verify</span>
-                    <p className="whitespace-pre-wrap">{step.verification}</p>
+                    <Markdown source={step.verification} />
                   </div>
                   </Collapsible.Panel>
                 </Collapsible.Root>
@@ -87,7 +88,7 @@ export function TaskLeadPlan({
                   {contextItems.map(([label, value]) => (
                     <div key={label} className="grid gap-1 sm:grid-cols-[132px_minmax(0,1fr)]">
                       <dt className="font-medium text-muted-foreground">{label}</dt>
-                      <dd className="whitespace-pre-wrap">{value}</dd>
+                      <dd><Markdown source={value} /></dd>
                     </div>
                   ))}
                   {output.content.unresolvedTechnicalQuestions.length ? (

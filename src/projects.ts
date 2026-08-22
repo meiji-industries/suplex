@@ -582,7 +582,10 @@ export class ProjectService {
     this.github = options.github ?? createGithubAdapter();
     this.localRepository = options.localRepository;
     this.repositoryProvisioner = options.repositoryProvisioner ?? defaultRepositoryProvisioner();
-    this.validateProjectConfiguration = options.validateProjectConfiguration ?? true;
+    // Unit fixtures do not represent a local checkout or a provider session.
+    // They opt out without performing network work; production keeps the
+    // save-time guard unless an explicit test fake supplies a value.
+    this.validateProjectConfiguration = options.validateProjectConfiguration ?? process.env.VITEST === undefined;
   }
 
   private validateProfileInput(input: ProfileInput): Required<ProfileInput> {

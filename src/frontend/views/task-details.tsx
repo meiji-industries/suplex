@@ -30,6 +30,7 @@ import { PlanDecisionForm } from "../components/app/plan-decision-form.js";
 import { SupplementalReviewPanel } from "../components/app/supplemental-review-panel.js";
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import { PullRequestCard as GithubPullRequestCard } from "../components/app/pull-request-card.js";
+import { CopyButton } from "../components/app/copy-button.js";
 import { DeveloperEvidence, type DeveloperExecutionEventView } from "../components/tasks/developer-evidence.js";
 import { adminDate, type ApiAgent, type ApiCi, type ApiProject, type ApiTask } from "../lib/view-shared.js";
 import { readJson, withCompany } from "../lib/api.js";
@@ -37,7 +38,7 @@ import type { IssueCommandSlug } from "../../commands/registry.js";
 import { BLOCKED_PHASES, TERMINAL_PHASES, phaseLabel } from "../../issue-phases.js";
 import { releaseFailureCopy } from "../../release-failures.js";
 import type { ActivityFeedRow } from "../lib/task-activity-feed.js";
-import { Check, Copy, Ellipsis, GitPullRequest, LoaderCircle, RefreshCw } from "lucide-react";
+import { Ellipsis, GitPullRequest, LoaderCircle, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 
 type DevelopmentExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; lastOutputAt?: string | null; currentStep: string | null };
@@ -220,7 +221,7 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
         </div>
         <dl className="grid min-w-0 gap-x-6 gap-y-3 border-t pt-3 text-[11px] sm:grid-cols-2">
           <div><dt className="text-muted-foreground">Branch</dt><dd className="break-all"><code>{task.developerExecution?.branchName ?? "Unavailable"}</code></dd></div>
-          <div className="sm:col-span-2"><dt className="text-muted-foreground">Worktree</dt><dd className="flex min-w-0 items-start gap-1"><code className="min-w-0 break-all">{worktreePath ?? "Unavailable"}</code>{worktreePath ? <CopyBranchButton value={`cd ${worktreePath}`} label="Copy worktree command" /> : null}</dd></div>
+          <div className="sm:col-span-2"><dt className="text-muted-foreground">Worktree</dt><dd className="flex min-w-0 items-start gap-1"><code className="min-w-0 break-all">{worktreePath ?? "Unavailable"}</code>{worktreePath ? <CopyButton value={`cd ${worktreePath}`} label="Copy worktree command" /> : null}</dd></div>
           {verificationResults.length ? <div className="sm:col-span-2"><dt className="text-muted-foreground">Checks</dt><dd className="mt-1 space-y-1">{verificationResults.map((result) => <span className="block" key={result}>{result}</span>)}</dd></div> : null}
         </dl>
       </CardContent> : null}
@@ -287,39 +288,6 @@ function ReleasePanel({ task }: { task: ApiTask }): ReactElement | null {
 }
 
 
-function CopyBranchButton({ value, label = "Copy branch comparison" }: { value: string; label?: string }): ReactElement {
-  const [copied, setCopied] = useState(false);
-  const copy = async (): Promise<void> => {
-    try {
-      const fallbackCopy = (): void => {
-        const input = document.createElement("textarea");
-        input.value = value;
-        input.setAttribute("readonly", "true");
-        input.style.position = "fixed";
-        input.style.opacity = "0";
-        document.body.appendChild(input);
-        input.select();
-        const copiedByFallback = document.execCommand("copy");
-        input.remove();
-        if (!copiedByFallback) throw new Error("Clipboard write failed");
-      };
-      if (navigator.clipboard?.writeText) {
-        try {
-          await navigator.clipboard.writeText(value);
-        } catch {
-          fallbackCopy();
-        }
-      } else {
-        fallbackCopy();
-      }
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1_600);
-    } catch {
-      setCopied(false);
-    }
-  };
-  return <span className="shrink-0"><Button variant="ghost" size="icon-xs" aria-label={label} title="Copy to clipboard" onClick={() => void copy()}>{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}</Button>{copied ? <span className="pointer-events-none fixed bottom-4 right-4 z-50 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-[11px] text-popover-foreground" role="status" aria-live="polite">Copied to Clipboard</span> : null}</span>;
-}
 
 function CiDiagnostics({ ci }: { ci: ApiCi }): ReactElement {
   const latestAttempt = ci.attempts[0];
@@ -690,7 +658,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
             <dl className="space-y-4 text-xs">
               <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary" data-status={task.phase}><TaskStatus phase={task.phase} presentationPhase={taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands })} processing={taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status })} /></Badge></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
-              {task.developerExecution?.worktreePath ? <div className="space-y-1"><dt className="text-muted-foreground">Worktree</dt><dd className="flex items-center gap-1 min-w-0"><CopyBranchButton value={task.developerExecution.worktreePath} label="Copy worktree path" /><span className="min-w-0 truncate font-mono" title={task.developerExecution.worktreePath}>{task.developerExecution.worktreePath.split("/").pop()}</span></dd></div> : null}
+              {task.developerExecution?.worktreePath ? <div className="space-y-1"><dt className="text-muted-foreground">Worktree</dt><dd className="flex items-center gap-1 min-w-0"><CopyButton value={task.developerExecution.worktreePath} label="Copy worktree path" /><span className="min-w-0 truncate font-mono" title={task.developerExecution.worktreePath}>{task.developerExecution.worktreePath.split("/").pop()}</span></dd></div> : null}
               <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd><NextAction value={task.pendingAction} /></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Sync</dt><dd className="flex items-center gap-1"><Button size="icon-xs" variant="ghost" aria-label="Sync with GitHub now" title="Sync with GitHub now" onClick={() => void syncNow()} disabled={busy || syncing}><RefreshCw aria-hidden="true" className={syncing ? "size-3 animate-spin" : "size-3"} /></Button>{syncing ? "In progress" : task.githubPullRequest?.observedAt ? `synced ${Math.max(0, Math.floor((Date.now() - Date.parse(task.githubPullRequest.observedAt)) / 1_000))}s ago` : "never"}</dd></div>

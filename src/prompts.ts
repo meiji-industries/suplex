@@ -1,10 +1,8 @@
-import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { dirname, join, resolve } from "node:path";
-import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
-const execFileAsync = promisify(execFile);
+import { runCommand } from "./command-runner.js";
 
 export const PROMPT_PATHS = [
   "developer/execution.md", "developer/repair.md", "developer/ci-repair.md", "developer/merge-resolution.md", "developer/integrator.md",
@@ -25,10 +23,8 @@ export function loadDefaultPrompts(): Map<PromptPath, string> {
 export async function resolveProjectPrompts(repositoryPath: string, baseSha: string): Promise<Map<PromptPath, string>> {
   const overrides = new Map<PromptPath, string>();
   await Promise.all(PROMPT_PATHS.map(async (path) => {
-    try {
-      const result = await execFileAsync("git", ["show", `${baseSha}:.forge/prompts/${path}`], { cwd: repositoryPath, maxBuffer: 1024 * 1024 });
-      overrides.set(path, result.stdout);
-    } catch { /* Missing project prompt overrides are expected. */ }
+    const result = await runCommand({ taskId: null, stepId: null, command: "git", args: ["show", `${baseSha}:.forge/prompts/${path}`], cwd: repositoryPath, timeout: 30_000 });
+    if (result.exitCode === 0 && !result.timedOut) overrides.set(path, result.stdout);
   }));
   return overrides;
 }

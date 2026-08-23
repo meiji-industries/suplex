@@ -51,6 +51,17 @@ lsof -nP -iTCP:$FP -iTCP:$TP -iTCP:$UI -sTCP:LISTEN || echo "dev stack not runni
 description = "Reminder: `mise run dev` has no hot reload — Ctrl-C and rerun it (or use dev:watch)"
 run = "echo 'mise run dev does not hot-reload: Ctrl-C and rerun it. Use `mise run dev:watch` for tsx watch.'"
 
+[tasks."dev:idle"]
+description = "Exit 0 if no open workflow has a pending activity (safe to restart the worker), else list what is running"
+run = '''
+TP=${CONDUCTOR_PORT:+$((CONDUCTOR_PORT+1))}; TP=${TP:-7233}
+busy=$(temporal workflow list --address "127.0.0.1:$TP" --namespace forge-dev --query 'ExecutionStatus="Running"' -o json | jq -r '.[].execution.workflowId' | while read -r w; do
+  temporal workflow describe --address "127.0.0.1:$TP" --namespace forge-dev -w "$w" -o json | jq -r --arg w "$w" '[.pendingActivities[]? | .activityType.name] | select(length > 0) | "\($w): \(join(", "))"'
+done)
+if [ -n "$busy" ]; then echo "BUSY — activities in flight:"; echo "$busy"; exit 1; fi
+echo "IDLE — safe to restart"
+'''
+
 [tasks."dev:recover"]
 description = "Force-kill anything still holding this checkout's dev ports"
 run = '''

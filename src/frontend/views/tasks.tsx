@@ -488,7 +488,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
                           <span className="truncate font-medium">{task.title}</span>
                           {project ? <><ChevronRight className="hidden size-3 shrink-0 text-muted-foreground/60 md:block" /><span className="hidden truncate text-xs text-muted-foreground md:block">{project.name}</span></> : null}
                         </span>
-                        <span className="hidden sm:inline-flex"><ReuiBadge variant={appearance.badge} size="sm" radius="full">{taskPhaseLabel(presentationPhase)}</ReuiBadge></span>
+                        <span className="hidden sm:inline-flex"><ReuiBadge variant={appearance.badge} size="sm" radius="full">{presentationPhase === "done" && task.deliveryTarget === "pull_request_draft" ? "Done · Draft PR" : presentationPhase === "done" && task.deliveryTarget === "pull_request_ready" ? "Done · PR ready" : taskPhaseLabel(presentationPhase)}</ReuiBadge></span>
                         <time dateTime={task.updatedAt} className="w-16 text-right text-[11px] text-muted-foreground">{taskListDate(task.updatedAt)}</time>
                       </a>
                     );

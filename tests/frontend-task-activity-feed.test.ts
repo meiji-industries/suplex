@@ -48,4 +48,6 @@ test("renders GitHub-adopted pull request changes as durable feed rows", () => {
   expect(activitySentence(entry("github_pr_closed"), activityRole(entry("github_pr_closed")))).toBe("PR #42 was closed on GitHub");
   expect(activitySentence(entry("github_pr_draft"), activityRole(entry("github_pr_draft")))).toBe("PR #42 was converted to draft on GitHub");
   expect(activitySentence(entry("github_pr_auto_merge_enabled"), activityRole(entry("github_pr_auto_merge_enabled")))).toBe("Auto-merge enabled on #42");
+  const done = entry("phase_done", { deliveryTarget: "pull_request_draft" });
+  expect(activitySentence(done, activityRole(done))).toBe("Integrator completed the task · Draft PR");
 });

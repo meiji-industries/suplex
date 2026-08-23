@@ -1,0 +1,5 @@
+import type { GithubPullRequestObservationResult } from "./temporal/contracts/activities/github-sync.js";
+
+export function githubPullRequestObservationFields(observed: GithubPullRequestObservationResult, observedAt: string) {
+  return { githubObservedAt: observedAt, githubPullRequestExists: observed.exists, githubPullRequestState: observed.state, githubPullRequestDraft: observed.isDraft, githubPullRequestChecks: observed.checks, githubPullRequestAuthor: observed.author ?? null, githubPullRequestChangedFiles: observed.changedFiles ?? null, githubPullRequestAdditions: observed.additions ?? null, githubPullRequestDeletions: observed.deletions ?? null, githubPullRequestMergeable: observed.mergeable, githubPullRequestReviewDecision: observed.reviewDecision, githubPullRequestAutoMergeEnabled: observed.autoMergeEnabled, ...(observed.number ? { pullRequestNumber: observed.number } : {}), ...(observed.url ? { pullRequestUrl: observed.url } : {}), ...(observed.headSha ? { expectedHeadSha: observed.headSha } : {}), ...(observed.baseSha ? { targetBaseSha: observed.baseSha } : {}) };
+}

@@ -5,6 +5,13 @@ import { ACTIVE_PHASES, BLOCKED_PHASES, phaseLabel, type IssuePhase } from "../.
 
 const ACTIVE_INVOCATION_STATUSES = new Set(["starting", "running", "cancelling"]);
 const BACKGROUND_PHASES = new Set<IssuePhase>(["releasing", "ci_waiting", "ready_reconciliation"]);
+type DeliveryTarget = "local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged";
+
+export function taskStatusLabel(phase: IssuePhase, deliveryTarget?: DeliveryTarget): string {
+  if (phase === "done" && deliveryTarget === "pull_request_draft") return "Done · Draft PR";
+  if (phase === "done" && deliveryTarget === "pull_request_ready") return "Done · PR ready";
+  return phaseLabel(phase);
+}
 
 export function taskPresentationPhase({ phase, releaseStatus, ciOutcome, allowedCommands = [] }: { phase: IssuePhase; releaseStatus?: string | null | undefined; ciOutcome?: string | null | undefined; allowedCommands?: readonly string[] }): IssuePhase {
   if (phase === "delivery_blocked" && allowedCommands.includes("review_delivery")) return "reviewing_delivery";
@@ -31,6 +38,6 @@ export function TaskStatusIcon({ phase, processing = false }: { phase: IssuePhas
   return <Icon aria-hidden="true" className={`size-3.5 shrink-0 ${appearance.iconClass}${processing ? " animate-spin" : ""}`} />;
 }
 
-export function TaskStatus({ phase, presentationPhase = phase, processing = false }: { phase: IssuePhase; presentationPhase?: IssuePhase; processing?: boolean }): ReactElement {
-  return <span data-task-status={phase} className="inline-flex items-center gap-1.5"><TaskStatusIcon phase={presentationPhase} processing={processing} /><span>{phaseLabel(presentationPhase)}</span></span>;
+export function TaskStatus({ phase, presentationPhase = phase, processing = false, deliveryTarget }: { phase: IssuePhase; presentationPhase?: IssuePhase; processing?: boolean; deliveryTarget?: DeliveryTarget }): ReactElement {
+  return <span data-task-status={phase} className="inline-flex items-center gap-1.5"><TaskStatusIcon phase={presentationPhase} processing={processing} /><span>{taskStatusLabel(presentationPhase, deliveryTarget)}</span></span>;
 }

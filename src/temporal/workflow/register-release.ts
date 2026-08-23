@@ -3,6 +3,7 @@ import * as contracts from "../issue-contracts.js";
 import * as activityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
 import { issueUpdates } from "../issue-updates.js";
+import { githubPullRequestObservationFields } from "../../github-pull-request-observation.js";
 import type { IssueWorkflowContext } from "./context.js";
 export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
   const runPublishTurn = async (): Promise<contracts.IssueWorkflowState> => {
@@ -68,7 +69,8 @@ export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
     if (result.outcome !== "completed" || !result.releaseId || result.pullRequestNumber === null || result.pullRequestUrl === null) throw new Error("Release completion result is incomplete");
     if (ctx.input.deliveryTarget === "pull_request_draft" || ctx.input.deliveryTarget === "pull_request_ready") {
       const ready = ctx.input.deliveryTarget === "pull_request_ready";
-      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "done", owner: "human", allowedCommands: [], pendingAction: ready ? "Done — pull request ready for review" : "Done — draft pull request created", releaseStatus: ready ? "ready" : "draft", releaseFailureCode: null, releaseFailureSummary: null, releaseRetryAt: null, releaseOperationAttempt: result.attempt, releaseId: result.releaseId, releaseRepository: result.repository, baseBranch: result.baseBranch, pullRequestNumber: result.pullRequestNumber, pullRequestUrl: result.pullRequestUrl, expectedHeadSha: result.headSha, expectedHeadTree: result.headTree, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+      const observed = ctx.patched("forge-observe-before-done-v1") ? await activityProxies.observeGithubPullRequest({ repository: result.repository, branch: result.branchName, pullRequestNumber: result.pullRequestNumber }) : null;
+      ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, ...(observed ? githubPullRequestObservationFields(observed, new Date().toISOString()) : {}), revision: ctx.state.revision + 1, phase: "done", owner: "human", allowedCommands: [], pendingAction: ready ? `Done — pull request #${result.pullRequestNumber} ready for review` : `Done — draft pull request #${result.pullRequestNumber} opened`, releaseStatus: ready ? "ready" : "draft", releaseFailureCode: null, releaseFailureSummary: null, releaseRetryAt: null, releaseOperationAttempt: result.attempt, releaseId: result.releaseId, releaseRepository: result.repository, baseBranch: result.baseBranch, pullRequestNumber: result.pullRequestNumber, pullRequestUrl: result.pullRequestUrl, expectedHeadSha: result.headSha, expectedHeadTree: result.headTree, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
       await ctx.project();
       return ctx.state;
     }

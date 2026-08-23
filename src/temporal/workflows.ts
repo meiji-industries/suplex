@@ -4,6 +4,7 @@ import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkfl
 import { assertContinuationStateWithinLimit, assertPayloadWithinLimit, WORKFLOW_HISTORY_EVENT_LIMIT } from "./policy.js";
 import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "./target-base.js";
 import { applyLegacyGithubObservation } from "./github-observation.js";
+import { githubPullRequestObservationFields } from "../github-pull-request-observation.js";
 import { reconcile, type PullRequestTarget } from "../pull-request-reconciler.js";
 import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, recordProbeStarted, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
 import { syncGithubPullRequestSignal } from "./issue-updates.js";
@@ -21,7 +22,6 @@ import { registerMergeHandlers, registerMergeReconciliationHandler } from "./wor
 import { registerReleaseHandlers } from "./workflow/register-release.js";
 import { registerTargetBaseHandlers } from "./workflow/register-target-base.js";
 import { applyLeadResult, applyLegacyLeadResult, autoChainedCommand, autoRetryDeliveryBlocker, canAutoRetryDeliveryBlocker, compactStateForContinuation, createAcquireExternalTurn, createGuarded, failureBlockCategory, isoEpochMillis, leadResultKind, permanentActivityFailure, rateLimitFailure, runAutoChainedCommand } from "./workflow/runtime.js";
-
 export * from "./issue-updates.js";
 export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
 async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: workflowInfo().runId, eventId: state.lastEventId, state })); }
@@ -231,7 +231,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     // GitHub is polled every 60s; a provider hiccup must never fail the workflow — the next poll retries.
     const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch(() => null);
     if (!observed) return;
-    const number = state.pullRequestNumber, wasDraft = state.githubPullRequestDraft, common = { githubObservedAt: new Date().toISOString(), githubPullRequestExists: observed.exists, githubPullRequestState: observed.state, githubPullRequestDraft: observed.isDraft, githubPullRequestChecks: observed.checks, githubPullRequestAuthor: observed.author ?? null, githubPullRequestChangedFiles: observed.changedFiles ?? null, githubPullRequestAdditions: observed.additions ?? null, githubPullRequestDeletions: observed.deletions ?? null, githubPullRequestMergeable: observed.mergeable, githubPullRequestReviewDecision: observed.reviewDecision, githubPullRequestAutoMergeEnabled: observed.autoMergeEnabled, ...(observed.number ? { pullRequestNumber: observed.number } : {}), ...(observed.url ? { pullRequestUrl: observed.url } : {}), ...(observed.headSha ? { expectedHeadSha: observed.headSha } : {}), ...(observed.baseSha ? { targetBaseSha: observed.baseSha } : {}) };
+    const number = state.pullRequestNumber, wasDraft = state.githubPullRequestDraft, common = githubPullRequestObservationFields(observed, new Date().toISOString());
     if (patched("forge-pr-reconciler-v1")) {
       const target: PullRequestTarget = validatedInput.deliveryTarget === "merged" ? "merged" : validatedInput.deliveryTarget === "pull_request_ready" ? "ready" : "draft";
       const checks = observed.checks.failing > 0 ? "failed" : observed.checks.pending > 0 ? "pending" : observed.checks.total > 0 && observed.checks.successful === observed.checks.total ? "success" : "none";

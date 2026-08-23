@@ -81,7 +81,7 @@ function useLiveActivity(taskId: string): ActivityFeed | null {
   return feed;
 }
 
-export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRows = [], githubPullRequest, onViewChanges }: {
+export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRows = [], githubPullRequest, onViewChanges, deliveryTarget }: {
   taskId?: string;
   timeline: TaskActivityEntry[];
   release?: { pullRequestUrl?: string | null; pullRequestNumber?: number | null } | null | undefined;
@@ -95,6 +95,7 @@ export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRow
   revisionContent?: unknown;
   optimisticRows?: ActivityFeedRow[];
   githubPullRequest?: { exists: boolean; number: number | null; state: "open" | "closed" | "merged" | null; isDraft: boolean | null; autoMergeEnabled: boolean | null; observedAt: string | null } | undefined;
+  deliveryTarget?: "pull_request_draft" | "pull_request_ready" | "local_worktree" | "remote_branch" | "merged";
   children?: unknown;
   onViewChanges?: (() => void) | undefined;
 }) {
@@ -104,7 +105,8 @@ export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRow
       const role = activityRole(entry);
       const link = timelineLink(entry, release, ci);
       const commands = feed?.commands.filter((command) => command.stepId === entry.id) ?? [];
-      return { id: entry.id, at: entry.createdAt, role, text: activitySentence(entry, role), revision: entry.revision, ...(commands.length ? { commands } : {}), ...(isAutomaticActivity(entry, role) ? { automatic: true } : {}), ...(link ? { link } : {}) };
+      const activity = entry.eventType === "phase_done" ? { ...entry, metadata: { ...entry.metadata, deliveryTarget: deliveryTarget ?? "" } } : entry;
+      return { id: entry.id, at: entry.createdAt, role, text: activitySentence(activity, role), revision: entry.revision, ...(commands.length ? { commands } : {}), ...(isAutomaticActivity(entry, role) ? { automatic: true } : {}), ...(link ? { link } : {}) };
     });
     const live = (feed?.events ?? []).map((event, index): FeedRow => {
       const command = commandOutput(event);
@@ -114,7 +116,7 @@ export function TaskActivity({ taskId = "", timeline, release, ci, optimisticRow
       ? [{ id: `github-${githubPullRequest.observedAt}`, at: githubPullRequest.observedAt, role: "forge" as const, text: activitySentence({ eventType: githubPullRequest.state === "merged" ? "github_pr_merged" : githubPullRequest.state === "closed" ? "github_pr_closed" : githubPullRequest.isDraft ? "github_pr_draft" : githubPullRequest.autoMergeEnabled ? "github_pr_auto_merge_enabled" : "github_pr_ready", metadata: { pullRequestNumber: githubPullRequest.number } }, "forge") }]
       : [];
     return compactActivityRows([...durable, ...githubRow, ...live, ...optimisticRows]);
-  }, [ci, feed, githubPullRequest, optimisticRows, release, timeline]);
+  }, [ci, deliveryTarget, feed, githubPullRequest, optimisticRows, release, timeline]);
   return <section data-task-activity-feed className="space-y-1" aria-label="Activity">
     <div data-task-activity className="divide-y">
       {rows.map((row) => <ActivityRow key={row.id} row={row} {...(onViewChanges ? { onViewChanges } : {})} />)}

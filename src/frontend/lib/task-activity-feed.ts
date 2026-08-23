@@ -98,6 +98,8 @@ export function activitySentence(entry: ActivityEntry, role: ActivityRole): stri
   if (entry.eventType === "phase_ci_waiting") return "Integrator is waiting for CI";
   if (entry.eventType === "phase_delivery_reviewed") return "Reviewer approved the delivery";
   if (entry.eventType === "phase_repair_required") return "Reviewer asked for fixes";
+  if (entry.eventType === "phase_done" && entry.metadata.deliveryTarget === "pull_request_draft") return "Integrator completed the task · Draft PR";
+  if (entry.eventType === "phase_done" && entry.metadata.deliveryTarget === "pull_request_ready") return "Integrator completed the task · PR ready";
   if (entry.eventType === "phase_done") return "Integrator completed the task";
   if (entry.eventType.startsWith("phase_")) return `${subject} moved the task to ${phaseLabel(entry.eventType.slice("phase_".length) as IssuePhase)}`;
   return `${subject} ${entry.eventType.replaceAll("_", " ")}`;

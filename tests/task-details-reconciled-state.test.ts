@@ -36,3 +36,17 @@ test("a GitHub-merged, green pull request does not render the retired acceptance
   expect(html).not.toContain("Accepted");
   expect(html).not.toContain("Needs your call");
 });
+
+test("properties show the plan mode", () => {
+  (globalThis as { window?: { location: { pathname: string; href: string } } }).window = { location: { pathname: "/tasks/task-1", href: "http://localhost/tasks/task-1" } };
+  const task = {
+    id: "task-1", title: "Mode task", description: "", images: [], roleAgents: {}, prompts: { overrides: [] }, supplementalReview: false, autoApprovePlan: false, deliveryTarget: "pull_request_draft", executionControls: { runProjectTests: true, visualEvidence: "off", supplementalReview: false }, deliveryReceipt: null, pullRequestMode: "draft",
+    workflowId: "workflow-1", projectRevisionId: "revision-1", phase: "done", revision: 1, owner: "human", allowedCommands: [], commands: [], governance: {}, pendingAction: null, createdAt: "2026-08-22T00:00:00.000Z", updatedAt: "2026-08-22T00:00:12.000Z", timeline: [], activity: [], agentInvocations: [], capacity: null,
+    planMaterial: true, materialCategories: ["user_visible_behavior"], planHistory: [], planDecisionHistory: [], revisionHistory: [], developerExecutionHistory: [], deliveryReviewHistory: [], projection: { authoritativeRevision: 1, projectedRevision: 1, projectedAt: "2026-08-22T00:00:12.000Z", status: "current" }, reviewLineage: { currentReview: null, priorReviews: [], reviewAttempts: [], repairAttempts: [] }, targetBaseReconciliation: { status: null }, githubPullRequest: { exists: true, number: 42, url: "https://github.com/acme/forge/pull/42", state: "merged", isDraft: false, checks: { total: 1, pending: 0, failing: 0, successful: 1 }, mergeable: "MERGEABLE", observedAt: "2026-08-22T00:00:12.000Z", reviewDecision: "APPROVED", autoMergeEnabled: true },
+  } as any;
+  const html = renderToStaticMarkup(createElement(TaskDetailsPage, { task, project: undefined, companyId: "company-1", busy: false, error: "", isAdmin: true, onStartPlanning: async () => undefined, onPlanAction: async () => undefined, onRevisePlan: async () => undefined, onContinueWork: async () => undefined, onResolveDecisionBlocker: async () => undefined, onMarkReady: async () => undefined, onMerge: async () => undefined, onDuplicate: async () => undefined, onUpdateDetails: async () => undefined, onRefresh: async () => undefined, onRescue: async () => ({ steps: [] }) }));
+  expect(html).toContain("Mode");
+  expect(html).toContain("Non-Trivial");
+  const trivialHtml = renderToStaticMarkup(createElement(TaskDetailsPage, { task: { ...task, planMaterial: false, materialCategories: [] }, project: undefined, companyId: "company-1", busy: false, error: "", isAdmin: true, onStartPlanning: async () => undefined, onPlanAction: async () => undefined, onRevisePlan: async () => undefined, onContinueWork: async () => undefined, onResolveDecisionBlocker: async () => undefined, onMarkReady: async () => undefined, onMerge: async () => undefined, onDuplicate: async () => undefined, onUpdateDetails: async () => undefined, onRefresh: async () => undefined, onRescue: async () => ({ steps: [] }) }));
+  expect(trivialHtml).toContain("Trivial");
+});

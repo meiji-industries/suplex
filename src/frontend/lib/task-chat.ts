@@ -1,4 +1,4 @@
-import { activitySentence, activityRole } from "./task-activity-feed.js";
+import { activitySentence, activityRole, withoutLegacyMaterialitySummary } from "./task-activity-feed.js";
 import type { ApiTask } from "./view-shared.js";
 
 export type ChatActor = { name: string; avatarSeed: string };
@@ -42,7 +42,10 @@ function systemItem(entry: ApiTask["activity"][number]): ChatItem | undefined {
 
 function turnSummary(task: ApiTask, invocation: ApiTask["agentInvocations"][number]): string | undefined {
   const matching = task.activity.filter((entry) => Date.parse(entry.createdAt) >= Date.parse(invocation.startedAt));
-  if (invocation.role === "planner") return matching.find((entry) => entry.eventType === "planner_note_revised")?.metadata.summary as string | undefined ?? task.leadOutput?.summary;
+  if (invocation.role === "planner") {
+    const summary = matching.find((entry) => entry.eventType === "planner_note_revised")?.metadata.summary as string | undefined ?? task.leadOutput?.summary;
+    return summary ? withoutLegacyMaterialitySummary(summary) : undefined;
+  }
   if (invocation.role === "builder") return task.developerExecution?.deliverySummary ?? task.developerExecution?.summary ?? undefined;
   if (invocation.role === "reviewer") return task.deliveryReview?.summary;
   return undefined;

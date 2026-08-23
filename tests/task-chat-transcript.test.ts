@@ -22,4 +22,9 @@ describe("buildChatTranscript", () => {
     expect(value.filter((item) => item.kind === "system").map((item) => item.text)).toEqual(["Plan approved automatically", "CI passed", "Merged"]);
     expect(value.find((item) => item.kind === "pull_request")).toMatchObject({ at: at(25) });
   });
+
+  it("removes legacy materiality suffixes from planner turn summaries", () => {
+    const value = buildChatTranscript(task({ activity: [{ id: "summary", revision: 1, eventType: "planner_note_revised", metadata: { summary: "Plan A (Routine plan)" }, createdAt: at(20), kind: "workflow" }], agentInvocations: [planner("one", at(10), at(20))] }));
+    expect(value.find((item) => item.kind === "agent_turn")).toMatchObject({ summary: "Plan A" });
+  });
 });

@@ -122,7 +122,7 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
       if (planningTurn === 1) {
         return { ...common, leadExecutionId: "lead-execution-blocker", leadOutputArtifactId: "artifact-happy-blocker", leadOutputKind: "decision_blocker" as const, leadSummary: "Which retention window applies?", materialCategories: [], material: false, blockedCategory: "human_decision" as const, unblockOwner: "human" as const, resumePhase: "planning" as const, blockerSubject };
       }
-      return { ...common, leadExecutionId: "lead-execution-plan", leadOutputArtifactId: "artifact-happy-plan", leadOutputKind: "plan" as const, leadSummary: "Material plan after the blocker answer", materialCategories: ["security_permissions" as const], material: true, planSubject, materialityEvidence: { categories: ["security_permissions" as const], artifactId: "artifact-happy-materiality", artifactSha256: sha256 } };
+      return { ...common, leadExecutionId: "lead-execution-plan", leadOutputArtifactId: "artifact-happy-plan", leadOutputKind: "plan" as const, leadSummary: "Plan after the blocker answer", materialCategories: ["security_permissions" as const], material: true, planSubject, materialityEvidence: { categories: ["security_permissions" as const], artifactId: "artifact-happy-materiality", artifactSha256: sha256 } };
     }),
     recordPlanBlockerResponse: counted("recordPlanBlockerResponse", async () => ({ responseId: "blocker-response-happy", subjectHash: sha256, answerArtifactId: "artifact-happy-answer", answerArtifactSha256: sha256 })),
     // The real activity writes a durable decision row; forge_issue_governance.decision_id points at it.

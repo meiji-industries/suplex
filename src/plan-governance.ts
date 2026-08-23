@@ -103,6 +103,7 @@ export function canonicalMaterialCategories(categories: readonly PlanMaterialCat
 
 function deterministicCategoriesForPath(path: string): PlanMaterialCategory[] {
   const normalized = path.replaceAll("\\", "/");
+  if (/\.(md|mdx|txt)$|^docs\//i.test(normalized)) return [];
   if (/^(?:package\.json|pnpm-lock\.yaml|mise\.toml|[^/]+(?:lock|manifest)\.(?:json|ya?ml|toml))$/i.test(normalized)) return ["architecture_dependencies"];
   if (/^(?:drizzle\/.*\.sql|migrations?\/.*)$/i.test(normalized)) return ["schema_data_migration"];
   if (/^(?:src\/auth[^/]*\.ts|src\/http\/session\.ts|.*(?:authorization|permission|policy).*\.(?:ts|tsx))$/i.test(normalized)) return ["security_permissions"];
@@ -143,11 +144,6 @@ export function validateMaterialityEvidence(input: {
 
 export function classifyPlanMateriality(_text: string, explicit: PlanMaterialCategory[] = [], affectedPaths: string[] = []): PlanMaterialCategory[] {
   return canonicalMaterialCategories([...explicit, ...deterministicMaterialCategories(affectedPaths)]);
-}
-
-export function materialitySummary(categories: PlanMaterialCategory[]): string {
-  const canonical = canonicalMaterialCategories(categories);
-  return canonical.length ? `Material plan: ${canonical.join(", ")}` : "Routine plan";
 }
 
 export function routeLeadResult(result: { kind: "plan" | "decision_blocker"; material: boolean }): { phase: "ready_for_development" | "approval" | "blocked"; owner: "lead" | "human"; allowedCommands: string[]; pendingAction: string } {

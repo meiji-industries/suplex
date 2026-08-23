@@ -16,6 +16,12 @@ test.each([
   ["user_visible_behavior", ["src/frontend/task.tsx"]],
 ] as const)("deterministic path materiality adds %s", (category, paths) => expect(deterministicMaterialCategories(paths)).toContain(category));
 
+test("documentation paths never imply end-user-visible behavior", () => {
+  expect(deterministicMaterialCategories(["README.md"])).toEqual([]);
+  expect(deterministicMaterialCategories(["docs/x.md"])).toEqual([]);
+  expect(deterministicMaterialCategories(["src/frontend/x.tsx"])).toEqual(["user_visible_behavior"]);
+});
+
 test("materiality ignores negated prose and uses explicit/path facts only", () => {
   expect(classifyPlanMateriality("No schema change is needed", [], ["README.md"])).toEqual([]);
   expect(classifyPlanMateriality("No schema change is needed", ["user_visible_behavior"], ["README.md"])).toEqual(["user_visible_behavior"]);

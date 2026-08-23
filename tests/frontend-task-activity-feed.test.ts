@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { activityRole, activitySentence, compactActivityRows } from "../src/frontend/lib/task-activity-feed.js";
+import { activityRole, activitySentence, compactActivityRows, withoutLegacyMaterialitySummary } from "../src/frontend/lib/task-activity-feed.js";
 
 test("compacts live heartbeats, duplicate activity, and command labels", () => {
   const rows = compactActivityRows([
@@ -15,6 +15,12 @@ test("compacts live heartbeats, duplicate activity, and command labels", () => {
     { id: "duplicate-1", count: 2 },
   ]);
   expect(activitySentence({ eventType: "member_action", metadata: { command: "retry_development" }, actor: { id: "user" } }, activityRole({ eventType: "member_action", metadata: { command: "retry_development" }, actor: { id: "user" } }))).toBe("You retried development");
+});
+
+test("removes legacy materiality suffixes from plan summaries", () => {
+  expect(withoutLegacyMaterialitySummary("Plan the update (Material plan: user_visible_behavior)")).toBe("Plan the update");
+  expect(withoutLegacyMaterialitySummary("Plan the update (Routine plan)")).toBe("Plan the update");
+  expect(activitySentence({ eventType: "planner_note_revised", metadata: { summary: "Plan the update (Material plan: user_visible_behavior)" } }, "planner")).toBe("Planner revised the plan: Plan the update");
 });
 
 test("keeps separate Tell-the-Planner rounds when planner lifecycle text repeats", () => {

@@ -18,7 +18,7 @@ import type { SessionStore } from "./session-store.js";
 import { ForgeDatabase } from "./database.js";
 import { redact } from "./logging.js";
 import { cleanupAgentWrapper } from "./agent-wrapper.js";
-import { classifyPlanMateriality, materialitySummary } from "./plan-governance.js";
+import { classifyPlanMateriality } from "./plan-governance.js";
 import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanResultSchema, DeliveryReviewActivityInputSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, MergeConflictPlanSchema, type CiRepairPlanActivityInput, type CiRepairPlanActivityResult, type DeliveryFinding, type DeliveryRepairPlanActivityInput, type DeliveryRepairPlanResult, type DeliveryReview, type DeliveryReviewActivityInput, type DeliveryReviewActivityResult, type ConsolidateLeadPlanActivityInput, type MergeConflictPlanActivityInput, type MergeConflictPlanActivityResult, type SupplementalReviewActivityInput, type SupplementalReviewResult } from "./temporal/issue-contracts.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
@@ -1606,7 +1606,7 @@ export class AgentService {
     const outputKind = output.kind === "plan" ? "lead-plan" : "decision-blocker";
     const outputArtifact = await this.artifacts.putArtifact(input.companyId, outputKind, { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(output, null, 2), "utf8") });
     const categories = output.kind === "plan" ? classifyPlanMateriality(`${output.summary}\n${output.steps.map((step) => step.instruction).join("\n")}`, output.materialCategories, output.affectedPaths) : [];
-    const summary = output.kind === "plan" ? `${output.summary} (${materialitySummary(categories)})` : output.summary;
+    const summary = output.summary;
     const outputId = `output_${randomBytes(12).toString("hex")}`;
     const materialityArtifact = output.kind === "plan" ? await this.artifacts.putArtifact(input.companyId, "materiality-evidence", { filename: `${executionId}-materiality.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, categories, affectedPaths: output.affectedPaths, evidence: output.materiality }), "utf8") }) : undefined;
     const finalVersion: 1 | 2 = options.finalVersion === 2 ? 2 : 1;

@@ -32,14 +32,16 @@ import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import { PullRequestCard as GithubPullRequestCard } from "../components/app/pull-request-card.js";
 import { TaskChat } from "../components/app/task-chat/task-chat.js";
 import { CopyButton } from "../components/app/copy-button.js";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip.js";
 import type { DeveloperExecutionEventResponse } from "../../http/contracts/tasks.js";
 import { adminDate, type ApiAgent, type ApiCi, type ApiProject, type ApiTask } from "../lib/view-shared.js";
 import { readJson, withCompany } from "../lib/api.js";
+import { materialityCriteria, materialityMode } from "../lib/plan-materiality.js";
 import type { IssueCommandSlug } from "../../commands/registry.js";
 import { BLOCKED_PHASES, TERMINAL_PHASES, phaseLabel } from "../../issue-phases.js";
 import { releaseFailureCopy } from "../../release-failures.js";
 import type { ActivityFeedRow } from "../lib/task-activity-feed.js";
-import { Ellipsis, GitPullRequest, LoaderCircle, RefreshCw } from "lucide-react";
+import { Check, Circle, Ellipsis, GitPullRequest, LoaderCircle, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 
 type DevelopmentExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; lastOutputAt?: string | null; currentStep: string | null };
@@ -680,6 +682,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
             <dl className="space-y-4 text-xs">
               <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary" data-status={task.phase}><TaskStatus phase={task.phase} presentationPhase={taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands })} processing={taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status })} deliveryTarget={task.deliveryTarget} /></Badge></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Mode</dt><dd><TooltipProvider><Tooltip><TooltipTrigger render={<span className="inline-flex cursor-help items-center" tabIndex={0}>{materialityMode(task.planMaterial)}</span>} /><TooltipContent><ul className="space-y-1" aria-label="Materiality criteria">{materialityCriteria(task.planMaterial ? task.materialCategories : []).map((criterion) => <li className="flex items-center gap-1.5" key={criterion.category}>{criterion.checked ? <Check aria-label="Present" className="size-3" /> : <Circle aria-label="Not present" className="size-3 text-muted-foreground" />}<span>{criterion.label}</span></li>)}</ul></TooltipContent></Tooltip></TooltipProvider></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Prompts</dt><dd title={task.prompts.overrides.join("\n") || undefined}><TaskPromptProvenanceRow taskId={task.id} overrides={task.prompts.overrides} /></dd></div>
               {task.developerExecution?.worktreePath ? <div className="space-y-1"><dt className="text-muted-foreground">Worktree</dt><dd className="flex items-center gap-1 min-w-0"><CopyButton value={task.developerExecution.worktreePath} label="Copy worktree path" /><span className="min-w-0 truncate font-mono" title={task.developerExecution.worktreePath}>{task.developerExecution.worktreePath.split("/").pop()}</span></dd></div> : null}
               <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div>

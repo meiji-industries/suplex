@@ -42,6 +42,12 @@ export type ActivityFeedRow = {
   }>;
 };
 
+const legacyMaterialitySummary = / \((?:Material plan: [^)]+|Routine plan)\)$/;
+
+export function withoutLegacyMaterialitySummary(summary: string): string {
+  return summary.replace(legacyMaterialitySummary, "");
+}
+
 export function activityRole(entry: ActivityEntry): ActivityRole {
   if (entry.eventType === "system_action") return "forge";
   if (entry.eventType.startsWith("github_pr_")) return "forge";
@@ -88,7 +94,7 @@ export function activitySentence(entry: ActivityEntry, role: ActivityRole): stri
   if (entry.eventType === "system_action") return "Forge resynced the task";
   if (entry.eventType === "member_action") return commandSentence(String(entry.metadata.command ?? entry.metadata.action ?? ""));
   if (entry.eventType === "planner_note") return `You told the Planner: ${String(entry.metadata.note ?? "")}`;
-  if (entry.eventType === "planner_note_revised") return `Planner revised the plan: ${String(entry.metadata.summary ?? "Plan updated")}`;
+  if (entry.eventType === "planner_note_revised") return `Planner revised the plan: ${withoutLegacyMaterialitySummary(String(entry.metadata.summary ?? "Plan updated"))}`;
   if (entry.eventType === "planning_started") {
     if (entry.metadata.planningStage === "completed") return "Planner finished the plan";
     if (entry.metadata.planningStage === "queued") return "Planner is waiting to start";

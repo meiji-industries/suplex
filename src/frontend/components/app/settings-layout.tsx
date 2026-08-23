@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, Building2, Cpu, KeyRound, Mail, Menu, Search, ShieldCheck, Terminal, UserRound, Users, type LucideIcon } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Building2, Cpu, KeyRound, Mail, Menu, MessageSquareText, Search, ShieldCheck, Terminal, UserRound, Users, type LucideIcon } from "lucide-react";
 import { useEffect, useId, useMemo, useState, type ReactElement, type ReactNode } from "react";
 
 import { Button } from "../ui/button.js";
@@ -28,6 +28,7 @@ function useSettingsGroups(companyId: string, user?: ApiUser): SettingsNavGroup[
         { label: "Profiles", href: withCompany("/admin/profiles", companyId), icon: Terminal },
         { label: "Agents", href: withCompany("/admin/agents", companyId), icon: Users },
         { label: "Models", href: withCompany("/admin/models", companyId), icon: Cpu },
+        { label: "Prompts", href: withCompany("/admin/prompts", companyId), icon: MessageSquareText },
       ]}] : []),
       { title: "System", items: [
         { label: "Host health", href: withCompany("/health", companyId), icon: ShieldCheck },

@@ -18,6 +18,7 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from "rea
 import { adminDate, type ApiAgent, type ApiCredential, type ApiHermesAgent, type ApiInvitation, type ApiModel, type ApiProfile, type ApiProject } from "../lib/view-shared.js";
 import { Archive, ArchiveRestore, Check, Copy, Ellipsis, Key, Pencil, RotateCw, Save, ShieldAlert } from "lucide-react";
 
+import { PromptSettings } from "./prompt-settings.js";
 const USER_COLUMNS: SettingsTableColumn[] = [
   { key: "indent", width: 60 },
   { key: "name", label: "Name ↓", width: 177 },
@@ -472,9 +473,11 @@ export function AdminView(): ReactElement {
   const isCompanies = window.location.pathname.endsWith("/companies");
   const isInvitations = window.location.pathname.endsWith("/invitations");
   const isPasskeys = window.location.pathname.endsWith("/passkeys");
-  const viewTitle = isProfiles ? "Profiles" : isAgents ? "Agents" : isModels ? "Models" : isCompanies ? "Companies" : isInvitations ? "Invitations" : isPasskeys ? "Passkeys" : "Users";
+  const isPrompts = window.location.pathname.endsWith("/prompts");
+  const viewTitle = isPrompts ? "Prompts" : isProfiles ? "Profiles" : isAgents ? "Agents" : isModels ? "Models" : isCompanies ? "Companies" : isInvitations ? "Invitations" : isPasskeys ? "Passkeys" : "Users";
   const activeHref = withCompany(window.location.pathname, currentCompany?.id);
   const backHref = withCompany("/projects", currentCompany?.id);
+  if (isPrompts) return <PromptSettings scope="global" />;
 
   if (loading) {
     return (

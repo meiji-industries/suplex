@@ -38,6 +38,10 @@ const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
     if (!(await requirePageSession(request, reply))) return reply;
     return sendHtml(request, reply, renderApplicationPage("admin", assetMode));
   });
+  app.get("/admin/prompts", async (request, reply) => {
+    if (!(await requirePageSession(request, reply))) return reply;
+    return sendHtml(request, reply, renderApplicationPage("admin", assetMode));
+  });
   app.get("/admin/profiles", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
     return sendHtml(request, reply, renderApplicationPage("admin", assetMode));

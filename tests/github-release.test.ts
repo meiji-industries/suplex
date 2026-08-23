@@ -99,6 +99,10 @@ test("maps GitHub's pull-request observation into Forge's provider truth", () =>
     mergeable: "MERGEABLE",
     autoMergeRequest: null,
     reviewDecision: "APPROVED",
+    author: { login: "acme", avatarUrl: "https://avatars.githubusercontent.com/acme" },
+    changedFiles: 31,
+    additions: 221,
+    deletions: 5,
     statusCheckRollup: [
       { status: "COMPLETED", conclusion: "SUCCESS" },
       { status: "IN_PROGRESS", conclusion: null },
@@ -106,9 +110,19 @@ test("maps GitHub's pull-request observation into Forge's provider truth", () =>
     ],
   })).toEqual({
     exists: true, number: 1484, url: "https://github.com/acme/forge/pull/1484", state: "open", isDraft: false,
-    headSha, baseSha, mergeable: "MERGEABLE", autoMergeEnabled: false, reviewDecision: "APPROVED",
+    headSha, baseSha, mergeable: "MERGEABLE", author: { login: "acme", avatarUrl: "https://avatars.githubusercontent.com/acme" }, changedFiles: 31, additions: 221, deletions: 5, autoMergeEnabled: false, reviewDecision: "APPROVED",
     checks: { total: 3, pending: 1, failing: 1, successful: 1 },
   });
+});
+
+test("maps nullable authors, avatar fallbacks, and change stats", () => {
+  const observation = {
+    number: 1484, url: "https://github.com/acme/forge/pull/1484", state: "OPEN" as const, isDraft: false,
+    headRefOid: headSha, baseRefOid: baseSha, mergeable: "MERGEABLE", autoMergeRequest: null, reviewDecision: null,
+    changedFiles: 4, additions: 12, deletions: 3, statusCheckRollup: null,
+  };
+  expect(mapGithubPullRequestObservation({ ...observation, author: null })).toMatchObject({ author: null, changedFiles: 4, additions: 12, deletions: 3 });
+  expect(mapGithubPullRequestObservation({ ...observation, author: { login: "octocat", avatarUrl: null } }).author).toEqual({ login: "octocat", avatarUrl: "https://avatars.githubusercontent.com/octocat" });
 });
 
 test("reconciles a manually advanced branch by rebasing before a normal push", async () => {

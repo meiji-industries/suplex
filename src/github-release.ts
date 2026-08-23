@@ -69,6 +69,10 @@ export interface GithubPullRequestObservation {
   baseSha: string | null;
   mergeable: string | null;
   checks: { total: number; pending: number; failing: number; successful: number };
+  author?: { login: string; avatarUrl: string } | null;
+  changedFiles?: number | null;
+  additions?: number | null;
+  deletions?: number | null;
   autoMergeEnabled: boolean | null;
   reviewDecision: string | null;
 }
@@ -170,6 +174,10 @@ const PullViewResponseSchema = z.object({
   mergeable: z.string().nullable(),
   autoMergeRequest: z.object({}).nullable(),
   reviewDecision: z.string().nullable(),
+  author: z.object({ login: z.string().min(1), avatarUrl: z.string().url().nullable() }).nullable(),
+  changedFiles: z.number().int().nonnegative(),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
   statusCheckRollup: z.array(z.object({
     status: z.string().nullable().optional(),
     conclusion: z.string().nullable().optional(),
@@ -243,6 +251,10 @@ export function mapGithubPullRequestObservation(value: unknown): GithubPullReque
     baseSha: pull.baseRefOid,
     mergeable: pull.mergeable,
     checks: summarizeChecks(pull.statusCheckRollup),
+    author: pull.author && { login: pull.author.login, avatarUrl: pull.author.avatarUrl ?? `https://avatars.githubusercontent.com/${pull.author.login}` },
+    changedFiles: pull.changedFiles,
+    additions: pull.additions,
+    deletions: pull.deletions,
     autoMergeEnabled: pull.autoMergeRequest !== null,
     reviewDecision: pull.reviewDecision,
   };
@@ -424,12 +436,12 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
         const candidates = await this.listPullRequests({ repository: input.repository, owner: input.repository.split("/")[0]!, headBranch: input.branch, baseBranch: "" });
         number = candidates[0]?.number ?? null;
       }
-      if (number === null) return { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, checks: { total: 0, pending: 0, failing: 0, successful: 0 }, autoMergeEnabled: null, reviewDecision: null };
+      if (number === null) return { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, checks: { total: 0, pending: 0, failing: 0, successful: 0 }, author: null, changedFiles: null, additions: null, deletions: null, autoMergeEnabled: null, reviewDecision: null };
       try {
-        const raw = parseJson((await runGh(["pr", "view", String(number), "--repo", input.repository, "--json", "number,url,state,isDraft,headRefOid,baseRefOid,mergeable,autoMergeRequest,reviewDecision,statusCheckRollup"])).stdout);
+        const raw = parseJson((await runGh(["pr", "view", String(number), "--repo", input.repository, "--json", "number,url,state,isDraft,headRefOid,baseRefOid,mergeable,autoMergeRequest,reviewDecision,author,changedFiles,additions,deletions,statusCheckRollup"])).stdout);
         return mapGithubPullRequestObservation(raw);
       } catch (error) {
-        if (error instanceof GithubCommandFailure && /not found/i.test(`${error.result.stdout}\n${error.result.stderr}`)) return { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, checks: { total: 0, pending: 0, failing: 0, successful: 0 }, autoMergeEnabled: null, reviewDecision: null };
+        if (error instanceof GithubCommandFailure && /not found/i.test(`${error.result.stdout}\n${error.result.stderr}`)) return { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, checks: { total: 0, pending: 0, failing: 0, successful: 0 }, author: null, changedFiles: null, additions: null, deletions: null, autoMergeEnabled: null, reviewDecision: null };
         throw error instanceof GithubReleaseFailure ? error : classifyCommandFailure(error, "pull request observation");
       }
     },

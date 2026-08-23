@@ -267,7 +267,7 @@ for (const faultPoint of ["after_artifact_finalized", "after_task_committed", "b
       expect(retried.created).toBe(faultPoint === "after_artifact_finalized");
       expect(retried.task).toMatchObject({ phase: "backlog", revision: 0 });
       expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE idempotency_key = ?").get(taskInput.idempotencyKey))).toEqual({ count: 1 });
-      expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts WHERE company_id = ?").get(value.companyId))).toEqual({ count: 2 });
+      expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts WHERE company_id = ?").get(value.companyId))).toEqual({ count: 3 });
       expect(value.database.authQuery((db) => db.prepare("SELECT revision FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all(retried.task.id))).toEqual([{ revision: 0 }]);
     } finally {
       value.database.close(); await rm(value.root, { recursive: true, force: true });

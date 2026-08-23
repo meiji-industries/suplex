@@ -1200,7 +1200,7 @@ export class TaskService {
       const ambiguousStart = error instanceof TaskFailure && error.findings.some((item) => item.code === "workflow-start-ambiguous");
       const durableCreationState = current.state === "workflow_starting" || current.state === "started";
       if (!ambiguousStart && !durableCreationState && (briefArtifact || configurationArtifact || imageArtifacts.length > 0)) {
-        await this.cleanupCreationArtifacts(current, [configurationArtifact, briefArtifact, ...imageArtifacts]);
+        await this.cleanupCreationArtifacts(current, [promptArtifact, configurationArtifact, briefArtifact, ...imageArtifacts]);
         try { this.updateCreationIntent(reserved.intent.id, { state: "failed_before_start", errorCode: error instanceof ArtifactFailure ? error.code : "creation-failed" }, reserved.intent.lease_token); } catch (leaseError) { if (!(leaseError instanceof CreationLeaseLost)) throw leaseError; }
       }
       if (durableCreationState && !(error instanceof TaskFailure)) {

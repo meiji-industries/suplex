@@ -24,9 +24,11 @@ export function registerTargetBaseHandlers(ctx: IssueWorkflowContext): void {
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, owner: "lead", allowedCommands: [], pendingAction: verificationOnly ? "Checking the merge again" : "Checking for updates", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();
     await ctx.runTargetBaseCheckpoint(checkpoint, verificationOnly);
+    if (checkpoint === "pre_acceptance" && ctx.input.deliveryTarget === "merged" && ctx.input.autoMergeActorUserId && ctx.state.phase === "accepted" && ctx.patched("forge-auto-accept-target-base-retry-v1")) return ctx.retryAcceptDelivery({ expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId, commandId: `${ctx.state.workflowId}:auto-accept-target-base:${ctx.state.revision}` });
     return ctx.state;
   };
   setHandler(issueUpdates.retry_target_base_reconciliation, ctx.guarded((rawInput) => retryTargetBase(rawInput, false), "retry_target_base_reconciliation"), { validator(rawInput) { validateRetryTargetBase(rawInput, false); } });
   setHandler(issueUpdates.retry_forward_merge_verification, ctx.guarded((rawInput) => retryTargetBase(rawInput, true), "retry_forward_merge_verification"), { validator(rawInput) { validateRetryTargetBase(rawInput, true); } });
+  ctx.retryTargetBaseReconciliation = (command) => retryTargetBase(command, false);
 
 }

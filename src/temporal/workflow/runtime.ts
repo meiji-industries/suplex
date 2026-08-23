@@ -280,7 +280,7 @@ const AUTO_CHAINED_COMMANDS = { delivery_ready: "review_delivery", delivery_revi
 // (plan conflict -> required -> resolve throws -> plan conflict ...) and each pass has a new revision.
 const haltedChains = new Set<string>();
 const AUTO_RETRY_BLOCKER_DELAYS = [30_000, 120_000, 300_000] as const;
-const AUTO_RETRY_BLOCKER_COMMANDS = new Set(["review_delivery", "final_review", "accept_delivery", "reconcile_acceptance", "reconcile_merge"]);
+const AUTO_RETRY_BLOCKER_COMMANDS = new Set(["review_delivery", "final_review", "accept_delivery", "reconcile_acceptance", "reconcile_merge", "retry_target_base_reconciliation"]);
 
 // Human decision gates: the member is choosing, not handing work to an agent, so a failure inside one of
 // these is retried in place by the guarded fallback below.
@@ -316,16 +316,17 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   }
 }
 
-function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | null {
+function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation" | null {
   if (ctx.state.phase !== "delivery_blocked") return null;
   const nonDestructive = ctx.state.allowedCommands.filter((command) => command !== "cancel_issue");
   const command = nonDestructive[0];
   if (nonDestructive.length !== 1 || !command || !AUTO_RETRY_BLOCKER_COMMANDS.has(command)) return null;
-  return command as "review_delivery" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge";
+  return command as "review_delivery" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation";
 }
 
 function retryScope(ctx: IssueWorkflowContext, command: string): string | null {
   if (command === "review_delivery") return ctx.state.resultCommit ?? null;
+  if (command === "retry_target_base_reconciliation") return ctx.state.targetBaseCheckId ?? null;
   return ctx.state.acceptanceId ?? ctx.state.releaseId ?? null;
 }
 
@@ -355,6 +356,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
   else if (command === "final_review") await ctx.runFinalReviewTurn();
   else if (command === "accept_delivery") await ctx.retryAcceptDelivery(input);
   else if (command === "reconcile_acceptance") await ctx.reconcileAcceptanceTurn();
+  else if (command === "retry_target_base_reconciliation") await ctx.retryTargetBaseReconciliation(input);
   else await ctx.reconcileMergeTurn();
   return true;
 }

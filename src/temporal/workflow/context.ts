@@ -98,6 +98,7 @@ export interface IssueWorkflowContext {
   reconcileMergeTurn: () => Promise<IssueWorkflowState>;
   reconcileAcceptanceTurn: () => Promise<IssueWorkflowState>;
   retryAcceptDelivery: (command: { expectedRevision: number; actorUserId: string; commandId: string }) => Promise<IssueWorkflowState>;
+  retryTargetBaseReconciliation: (command: { expectedRevision: number; actorUserId: string; commandId: string }) => Promise<IssueWorkflowState>;
   resumeCapacityOperation: (operation: CapacityOperation) => Promise<IssueWorkflowState>;
   runFinalReviewTurn: () => Promise<IssueWorkflowState>;
 }

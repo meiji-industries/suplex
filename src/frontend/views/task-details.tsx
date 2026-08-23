@@ -19,7 +19,7 @@ import { CommandOutputBlock } from "../components/app/command-output.js";
 import { TellPlannerForm } from "../components/app/tell-planner-form.js";
 import DeveloperDiff from "../components/app/developer-diff.js";
 import { TaskLeadPlan } from "../components/app/task-lead-plan.js";
-import { invocationActorLabel, workflowOwnerLabel } from "../components/app/task-invocations.js";
+import { invocationActorLabel } from "../components/app/task-invocations.js";
 import { TaskProgress } from "../components/app/task-progress.js";
 import { PhaseTimings } from "../components/app/phase-timings.js";
 import { taskIsProcessing, taskPresentationPhase, TaskStatus } from "../components/app/task-status.js";
@@ -675,7 +675,6 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
             <dl className="space-y-4 text-xs">
               <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary" data-status={task.phase}><TaskStatus phase={task.phase} presentationPhase={taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands })} processing={taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status })} /></Badge></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
-              <div className="space-y-1"><dt className="text-muted-foreground">Owner</dt><dd>{workflowOwnerLabel(task)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd><NextAction value={task.pendingAction} /></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Sync</dt><dd>{task.githubPullRequest?.observedAt ? `synced ${Math.max(0, Math.floor((Date.now() - Date.parse(task.githubPullRequest.observedAt)) / 1_000))}s ago` : "never"}</dd></div>

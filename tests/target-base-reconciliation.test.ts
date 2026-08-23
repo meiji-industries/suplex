@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { ForgeDatabase } from "../src/database.js";
+import { ArtifactStore } from "../src/artifacts.js";
+import { createTestConfig } from "../src/config.js";
+import { createActivities } from "../src/temporal/activities.js";
 import { ForwardMergeService } from "../src/forward-merge.js";
 import { AcceptedProjectRevisionSchema } from "../src/projects.js";
 import {
@@ -96,6 +99,30 @@ describe("target-base reconciliation contracts", () => {
       retryable: true,
       summary: "GitHub is temporarily unavailable",
     })).toMatchObject({ outcome: "blocked" });
+  });
+
+  test("reconciles a valid task configuration without reporting artifact_unavailable", async () => {
+    const root = await mkdtemp(join(tmpdir(), "forge-target-base-activity-"));
+    const config = createTestConfig(root, { artifactRoot: join(root, "artifacts") });
+    const database = new ForgeDatabase(config.databasePath);
+    const repository = await gitRepository(root);
+    const now = new Date().toISOString();
+    try {
+      database.authTransaction((db) => {
+        db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-1', 'Company', 'active', ?)").run(now);
+        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project-1', 'company-1', 'Project', ?, ?, 'main', 'main', 'true', 'true', '[]', '{}', 'active', ?, ?)").run(root, root, now, now);
+        db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-1', 'company-1', 'task-brief', 'brief.md', 'text/markdown', 1, ?, 'company-1/brief-1', ?)").run("a".repeat(64), now);
+        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-1', 'company-1', 'project-1', 'Task', 'brief-1', '[]', '{}', 0, 'workflow-1', 'revision-1', 'task-key', ?, ?)").run(now, now);
+        db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer-1', 'task-1', 'company-1', 'workflow-1', 1, 1, 'completed', 'issue/task-1', ?, ?, ?, ?, ?, ?, 'clean')").run(root, repository.base, now, now, repository.head, repository.head);
+      });
+      const configuration = await new ArtifactStore(config.artifactRoot, database).putArtifact("company-1", "task-project-configuration", { taskId: "task-1", filename: "configuration.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ projectId: "project-1", projectName: "Project", repositoryPath: root, worktreeRoot: root, repository: "acme/project", baseBranch: "main", targetBranch: "main", baseSha: repository.base, targetSha: repository.base, setupCommand: "true", verificationCommand: "true", requiredChecks: [], roleAgents: { builder: "builder" }, roleProfiles: { builder: "builder" }, capturedAt: now })) });
+      database.authQuery((db) => db.prepare("UPDATE forge_tasks SET project_configuration_artifact_id = ?, project_configuration_captured_at = ? WHERE id = 'task-1'").run(configuration.id, now));
+      const activities = createActivities(database, config, { githubRelease: { getRemoteRepository: async () => "acme/project", getBranchHead: async () => repository.base } as never });
+      await expect(activities.reconcileTargetBase({ taskId: "task-1", companyId: "company-1", workflowId: "workflow-1", projectRevisionId: "revision-1", checkpoint: "pre_acceptance", developerExecutionId: "developer-1", expectedBaseSha: repository.base, expectedHeadSha: repository.head, expectedHeadTree: repository.head })).resolves.not.toMatchObject({ outcome: "blocked", code: "artifact_unavailable" });
+    } finally {
+      database.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   test("allows a recorded forward merge to repair a stale workflow execution id", () => {

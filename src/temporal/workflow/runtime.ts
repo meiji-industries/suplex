@@ -349,7 +349,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
   const commandId = `${prefix}${attempt + 1}`;
   if (ctx.commandAlreadyProcessed(commandId)) return false;
   ctx.markCommandProcessed(commandId);
-  await sleep(AUTO_RETRY_BLOCKER_DELAYS[attempt]);
+  await sleep(AUTO_RETRY_BLOCKER_DELAYS[attempt]!);
   if (ctx.state.phase !== "delivery_blocked" || retryOnlyBlockerCommand(ctx) !== command || retryScope(ctx, command) !== scope) return true;
   const input = { expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId ?? ctx.input.autoApprovePlanActorUserId ?? "forge-auto-retry", commandId };
   if (command === "review_delivery") await reviewDelivery(ctx, input);

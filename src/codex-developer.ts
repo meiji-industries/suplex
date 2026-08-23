@@ -713,25 +713,15 @@ export class DeveloperService {
   }
 
   private mergeConflictResolutionPrompt(plan: string, input: MergeConflictResolutionInput, conflict: ForwardMergeConflictArtifact): string {
-    return [
-      "You are Forge's Integrator, continuing the same authenticated session in the exact owned issue worktree: your job is to get the Builder's branch merged against the current base. A guarded normal merge is already in progress. Resolve only the listed conflicts using the authored plan.",
-      "Do not abort the merge, rebase, amend, reset, clean, force-push, use GitHub/provider commands, or modify another checkout. Inspect both sides and the combined conflict markers, apply the bounded resolutions, run the complete relevant local verification suite from the approved plan, stage only the resolved worktree, and create exactly one ordinary merge commit with both parents. Leave the worktree clean.",
-      'Return exactly one JSON object with no markdown fences or commentary matching: {"kind":"merge_conflict_resolution","summary":"...","resolvedFiles":[],"commandsRun":[],"testResults":[],"resultCommit":"40+ hex","resultTree":"40+ hex","dirtyState":"clean","blocker":null}. Include every listed conflict file in resolvedFiles and report any blocker instead of claiming success.',
-      "Merge identity:\n" + JSON.stringify({ branchName: input.branchName, priorHead: input.priorHead, targetBaseSha: input.targetBaseSha, conflictFiles: conflict.conflictFiles }),
-      "Lead-authored resolution plan:\n" + plan,
-    ].join("\n\n");
+    return renderPrompt(this.prompts.get("developer/merge-resolution.md")!, { branch_name: input.branchName, target_base_sha: input.targetBaseSha, conflict_file: conflict.conflictFiles.join('","'), plan });
   }
 
   private ciRepairPrompt(plan: string, input: { branchName: string; worktreePath: string; priorCommit: string; priorTree: string }): string {
-    return `You are Forge's Integrator, continuing the same authenticated session in the same worktree and branch: your job is to get the Builder's branch merged, so fix what CI reported. Apply only the intended CI repair scope below. The plan describes intent and scope, not an exact file manifest; if the repository has changed, implement that intent against the current tree and note the deviation in the summary. Only report incomplete when the repair intent itself cannot be achieved. Do not create a PR, use provider commands, rerun CI, merge, rebase, amend, reset, clean, force-push, or rewrite history. Run the complete pinned local verification. Create one or more ordinary local commits as required; do not amend or rewrite commits that already exist on the branch. Leave the worktree clean, and return exactly one JSON object with no markdown fences or commentary matching: {"summary":"...","blocker":null}. Use no other keys.\n\nCoordinates: ${JSON.stringify(input)}\nCI repair plan:\n${plan}`;
+    return renderPrompt(this.prompts.get("developer/ci-repair.md")!, { branch_name: input.branchName, worktree_path: input.worktreePath, prior_commit: input.priorCommit, prior_tree: input.priorTree, plan });
   }
 
   private repairPrompt(findings: DeliveryFinding[], worktree: { branchName: string; worktreePath: string; targetBaseSha: string; subjectCommit: string; subjectTree: string }): string {
-    return [
-      'You are Forge\'s authenticated Developer continuing the same Developer session. Address the Lead\'s blocking findings below in the existing issue worktree. Do not redesign the authorized plan, modify another checkout, use GitHub or any provider, push, create a pull request, merge, rebase, amend, reset, clean, or rewrite history. Run relevant local verification and commit any changes you make. Return exactly one JSON object with no markdown fences or commentary matching: {"summary":"...","blocker":null}. Use blocker only when the repair cannot be completed.',
-      `Lead findings:\n${JSON.stringify(findings)}`,
-      `Worktree coordinates:\n${JSON.stringify(worktree)}`,
-    ].join("\n\n");
+    return renderPrompt(this.prompts.get("developer/repair.md")!, { findings: JSON.stringify(findings), branch_name: worktree.branchName, worktree_path: worktree.worktreePath, target_base_sha: worktree.targetBaseSha, subject_commit: worktree.subjectCommit, subject_tree: worktree.subjectTree });
   }
 
   private prompt(title: string, brief: string, plan: string, evidence: string, worktree: { branchName: string; worktreePath: string; targetBaseSha: string }, runProjectTests?: boolean, visualEvidence?: "off" | "capture" | "required", operatorNote?: string): string {

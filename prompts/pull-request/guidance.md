@@ -1,3 +1,12 @@
+---
+id: pull-request/guidance
+category: shared
+archetype: pull-request
+title: Pull request guidance
+editable: true
+variables: []
+renamed_from: []
+---
 When creating a pull request, write a concise description that gives the reviewer context the diff cannot provide.
 
 Use these sections when useful:
@@ -28,3 +37,5 @@ Users can currently submit the checkout form multiple times while a payment is p
 - When payment succeeds, then only one order is created
 
 Use the example only as a guide for tone, brevity, and level of detail.
+
+---contract---

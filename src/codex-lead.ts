@@ -1181,9 +1181,10 @@ export class AgentService {
       }
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const opinion = await this.artifacts.putArtifact(input.companyId, "delivery-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
-      // A repair that changed nothing yields the same subject commit as the review it answers; that fresh review must be
-      // a new row superseding the blocking one, never an in-place update that would make a review supersede itself.
-      const priorReview = isFinalReview ? undefined : this.database.authQuery((db) => db.prepare("SELECT id FROM forge_delivery_reviews WHERE workflow_id = ? AND subject_commit = ? AND id IS NOT ?").get(input.workflowId, subjectCommit, input.supersedesReviewId ?? null) as { id: string } | undefined);
+      // One review row per subject commit (UNIQUE workflow_id, subject_commit). A repair that changed nothing yields the
+      // same commit as the review it answers, so the fresh review refreshes that row — and must not supersede itself.
+      const priorReview = isFinalReview ? undefined : this.database.authQuery((db) => db.prepare("SELECT id FROM forge_delivery_reviews WHERE workflow_id = ? AND subject_commit = ?").get(input.workflowId, subjectCommit) as { id: string } | undefined);
+      const supersedesReviewId = priorReview && priorReview.id === input.supersedesReviewId ? null : input.supersedesReviewId ?? null;
       const reviewId = priorReview?.id ?? `delivery_review_${randomBytes(12).toString("hex")}`;
       this.database.authTransaction((db) => {
         if (isFinalReview) {
@@ -1191,7 +1192,7 @@ export class AgentService {
           for (const finding of review.findings) db.prepare("INSERT INTO forge_final_review_findings (id, review_id, task_id, company_id, severity, rationale, evidence_ref, disposition, repair_instruction) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(finding.findingId, reviewId, input.taskId, input.companyId, finding.severity, finding.rationale, finding.evidenceRef, finding.disposition, finding.repairInstruction);
         } else {
           if (priorReview) {
-            db.prepare("UPDATE forge_delivery_reviews SET lead_execution_id = ?, session_ref = ?, outcome = ?, summary = ?, opinion_artifact_id = ?, evidence_artifact_id = ?, repair_cycle = 0, supersedes_review_id = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(executionId, leadSessionRef, review.outcome, review.summary, opinion.id, evidence.id, input.supersedesReviewId, reviewId, input.taskId, input.companyId, input.workflowId);
+            db.prepare("UPDATE forge_delivery_reviews SET lead_execution_id = ?, session_ref = ?, outcome = ?, summary = ?, opinion_artifact_id = ?, evidence_artifact_id = ?, repair_cycle = 0, supersedes_review_id = ? WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").run(executionId, leadSessionRef, review.outcome, review.summary, opinion.id, evidence.id, supersedesReviewId, reviewId, input.taskId, input.companyId, input.workflowId);
             db.prepare("DELETE FROM forge_delivery_findings WHERE review_id = ? AND task_id = ? AND company_id = ?").run(reviewId, input.taskId, input.companyId);
           } else db.prepare("INSERT INTO forge_delivery_reviews (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, session_ref, outcome, summary, opinion_artifact_id, evidence_artifact_id, repair_cycle, supersedes_review_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)").run(reviewId, input.taskId, input.companyId, input.workflowId, input.planRevision, targetBaseSha, subjectCommit, subjectTree, executionId, leadSessionRef, review.outcome, review.summary, opinion.id, evidence.id, input.supersedesReviewId, this.now().toISOString());
           for (const finding of review.findings) db.prepare("INSERT INTO forge_delivery_findings (id, review_id, task_id, company_id, severity, rationale, evidence_ref, disposition, repair_instruction, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(`delivery_finding_${reviewId}_${finding.findingId}`, reviewId, input.taskId, input.companyId, finding.severity, finding.rationale, finding.evidenceRef, finding.disposition, finding.repairInstruction, this.now().toISOString());

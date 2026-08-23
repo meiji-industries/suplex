@@ -31,7 +31,7 @@ export function Dashboard(): ReactElement {
           {snapshot ? <a className="max-w-48 truncate text-[11px] text-muted-foreground hover:text-foreground" href={snapshot.reachableAddress}>{snapshot.reachableAddress.replace(/^https?:\/\//, "")}</a> : null}
           <span aria-live="polite" data-health-freshness={freshness} title={checked} className={freshness === "stale" ? "flex items-center gap-1.5 text-[11px] text-amber-700 sm:hidden" : "flex items-center gap-1.5 text-[11px] text-muted-foreground sm:hidden"}><Clock3 className="size-3" />{compactChecked}</span>
           <span aria-live="polite" data-health-freshness={freshness} className={freshness === "stale" ? "hidden items-center gap-1.5 text-[11px] text-amber-700 sm:flex" : "hidden items-center gap-1.5 text-[11px] text-muted-foreground sm:flex"}><Clock3 className="size-3" />{checked}</span>
-          <Button aria-label="Refresh health" title="Refresh health" variant="ghost" size="icon" onClick={() => void refresh()} disabled={refreshing}><RefreshCw className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /></Button>
+          <Button aria-label="Refresh" title="Refresh" variant="ghost" size="icon-xs" onClick={() => void refresh()} disabled={refreshing}><RefreshCw aria-hidden="true" className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /></Button>
         </div>
       </div>
       <HealthCheckSections snapshot={snapshot} />

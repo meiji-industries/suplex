@@ -186,7 +186,7 @@ export function SystemHealthIndicator({ sidebar = false }: { sidebar?: boolean }
         </DialogHeader>
         <div className="flex items-center justify-between gap-3 text-xs">
           <span className="text-muted-foreground">{healthyCount} of {checkCount} checks healthy</span>
-          <Button variant="outline" size="sm" onClick={() => void health.refresh()} disabled={health.refreshing}><RefreshCw className={health.refreshing ? "size-3.5 animate-spin" : "size-3.5"} />Refresh</Button>
+          <Button size="icon-xs" variant="ghost" aria-label="Refresh" title="Refresh" onClick={() => void health.refresh()} disabled={health.refreshing}><RefreshCw aria-hidden="true" className={health.refreshing ? "size-3.5 animate-spin" : "size-3.5"} /></Button>
         </div>
         <HealthCheckSections snapshot={health.snapshot} compact />
       </DialogContent>

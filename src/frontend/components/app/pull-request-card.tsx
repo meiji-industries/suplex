@@ -10,7 +10,7 @@ function syncedAgo(observedAt: string | null): string {
   return `synced ${Math.max(0, Math.floor((Date.now() - Date.parse(observedAt)) / 1_000))}s ago`;
 }
 
-export function PullRequestCard({ task, busy, onRefresh }: { task: ApiTask; busy: boolean; onRefresh: () => Promise<void> }): React.ReactElement | null {
+export function PullRequestCard({ task, busy, onRefresh, onMarkReady }: { task: ApiTask; busy: boolean; onRefresh: () => Promise<void>; onMarkReady: () => Promise<void> }): React.ReactElement | null {
   const pr = task.githubPullRequest;
   if (!pr?.exists || pr.number === null || !pr.url) return null;
   const title = task.release?.title ?? task.title;
@@ -43,6 +43,6 @@ export function PullRequestCard({ task, busy, onRefresh }: { task: ApiTask; busy
       </div> : null}
       <div className="text-[11px] text-muted-foreground">{details}</div>
     </CardContent>
-    <CardFooter><div className="flex w-full items-center justify-end gap-2"><Button size="sm" variant="outline" onClick={() => void onRefresh()} disabled={busy}><RefreshCw aria-hidden="true" className="size-3.5" />Refresh</Button><a className={buttonVariants({ variant: "outline", size: "sm" })} href={pr.url} target="_blank" rel="noreferrer">Open PR<ExternalLink aria-hidden="true" /></a></div></CardFooter>
+    <CardFooter><div className="flex w-full items-center justify-end gap-2"><Button size="icon-xs" variant="ghost" aria-label="Refresh" title="Refresh" onClick={() => void onRefresh()} disabled={busy}><RefreshCw aria-hidden="true" /></Button><a className={buttonVariants({ variant: "outline", size: "sm" })} href={pr.url} target="_blank" rel="noreferrer">Open PR<ExternalLink aria-hidden="true" /></a>{pr.state === "open" && pr.isDraft ? <Button size="sm" onClick={() => void onMarkReady()} disabled={busy}>{busy ? "Marking ready…" : "Ready for review"}</Button> : null}</div></CardFooter>
   </Card>;
 }

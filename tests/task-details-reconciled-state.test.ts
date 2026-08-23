@@ -3,6 +3,21 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 
 import { TaskDetailsPage } from "../src/frontend/views/task-details.js";
+import { PullRequestCard } from "../src/frontend/components/app/pull-request-card.js";
+
+test("draft pull requests render the primary ready action and icon-only refresh", () => {
+  const draftTask = {
+    id: "task-1", title: "Draft task", phase: "development", release: null,
+    githubPullRequest: { exists: true, number: 42, url: "https://github.com/acme/forge/pull/42", state: "open", isDraft: true, checks: { total: 0, pending: 0, failing: 0, successful: 0 }, mergeable: null, observedAt: null, autoMergeEnabled: false },
+  } as any;
+  const draftHtml = renderToStaticMarkup(createElement(PullRequestCard, { task: draftTask, busy: false, onRefresh: async () => undefined, onMarkReady: async () => undefined }));
+  expect(draftHtml).toContain("Ready for review");
+  expect(draftHtml).toContain('data-variant="default"');
+  expect(draftHtml).toContain('aria-label="Refresh"');
+  expect(draftHtml).not.toContain(">Refresh<");
+  const readyHtml = renderToStaticMarkup(createElement(PullRequestCard, { task: { ...draftTask, githubPullRequest: { ...draftTask.githubPullRequest, isDraft: false } }, busy: false, onRefresh: async () => undefined, onMarkReady: async () => undefined }));
+  expect(readyHtml).not.toContain("Ready for review");
+});
 
 test("a GitHub-merged, green pull request does not render the retired acceptance state", () => {
   (globalThis as { window?: { location: { pathname: string; href: string } } }).window = { location: { pathname: "/tasks/task-1", href: "http://localhost/tasks/task-1" } };

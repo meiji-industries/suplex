@@ -346,7 +346,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const markReady = async (): Promise<void> => {
     if (!selected) return;
     setBusy(true); setError("");
-    try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/mark-ready`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); selectedRef.current = updated; setSelected(updated); await reload(); }
+    try { const updated = await readJson<ApiTask>(`/api/tasks/${selected.id}/mark-ready`, { method: "POST", body: JSON.stringify({ expectedRevision: selected.revision }) }); selectedRef.current = updated; setSelected(updated); await refreshTask(); await reload(); }
     catch (reason) { if (await reconcileScopedNotFound(reason, reloadCompanies)) return; await reload(); setError(reason instanceof Error ? reason.message : "Unable to mark the pull request ready"); }
     finally { setBusy(false); }
   };

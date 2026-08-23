@@ -83,7 +83,7 @@ test("mobile health page shows separate healthy and unhealthy states", { timeout
       ],
     };
     const refreshResponse = page.waitForResponse((response) => response.url().endsWith("/api/health"));
-    await page.getByRole("button", { name: "Refresh health" }).click();
+    await page.getByRole("button", { name: "Refresh" }).click();
     expect((await refreshResponse).status()).toBe(200);
     const unavailable = page.getByRole("button", { name: "System health: Unavailable", exact: true });
     await unavailable.waitFor();
@@ -99,8 +99,8 @@ test("mobile health page shows separate healthy and unhealthy states", { timeout
     expect(await desktop.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     currentSnapshot = { ...snapshot, checks: snapshot.checks.map((check) => ({ ...check, status: "healthy" as const, summary: "Ready" })) };
-    await page.getByRole("button", { name: "Refresh health" }).click();
-    await desktop.getByRole("button", { name: "Refresh health" }).click();
+    await page.getByRole("button", { name: "Refresh" }).click();
+    await desktop.getByRole("button", { name: "Refresh" }).click();
     const healthy = page.getByRole("button", { name: "System health: Healthy", exact: true });
     await healthy.waitFor();
     expect(await healthy.getAttribute("data-status")).toBe("green");
@@ -149,7 +149,7 @@ test("health makes a failed refresh visibly stale while retaining the last succe
       await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ error: "Unavailable" }) });
     });
 
-    await page.getByRole("button", { name: "Refresh health" }).click();
+    await page.getByRole("button", { name: "Refresh" }).click();
     await page.locator('[data-health-freshness="stale"]').first().waitFor();
     expect(await page.locator('[data-health-freshness="stale"]').first().innerText()).toMatch(/^Stale · /);
     expect(await page.getByRole("button", { name: "System health: Degraded", exact: true }).getAttribute("data-status")).toBe("amber");

@@ -8,6 +8,7 @@ import { SettingsLayout } from ".././components/app/settings-layout.js";
 import { isApiError, readJson, withCompany } from ".././lib/api.js";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import { relativeTime, type ApiAttentionAction, type ApiAttentionCompany, type ApiAttentionItem } from "../lib/view-shared.js";
+import { RefreshCw } from "lucide-react";
 
 export function AttentionView(): ReactElement {
   const { currentCompany } = useCompanyContext();
@@ -48,7 +49,7 @@ export function AttentionView(): ReactElement {
   return (
     <SettingsLayout title="Tasks that need you" companyId={companyId} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/attention", companyId)} contentClassName="">
       <div>
-        <div className="flex h-9 items-center justify-between px-3 text-xs sm:px-4"><span className="font-medium">Tasks that need you</span><Button variant="ghost" size="sm" onClick={() => void reload()}>Refresh</Button></div>
+        <div className="flex h-9 items-center justify-between px-3 text-xs sm:px-4"><span className="font-medium">Tasks that need you</span><Button variant="ghost" size="icon-xs" aria-label="Refresh" title="Refresh" onClick={() => void reload()}><RefreshCw aria-hidden="true" /></Button></div>
         {visibleCompanies.map((company) => <section className="bg-background" key={company.companyId}>
           <div className="flex items-center justify-between border-y px-3 py-2 text-xs sm:px-4"><span className="font-medium">{company.companyName}</span><span className="text-muted-foreground">{company.attentionCount}</span></div>
           {company.attention.map((item) => <div className="grid gap-2 border-b px-3 py-2.5 text-xs sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-4" key={item.taskId}>

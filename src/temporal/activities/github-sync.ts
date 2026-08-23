@@ -1,16 +1,14 @@
 import type { GithubPullRequestObservationResult, GithubSyncActivities } from "../contracts/activities/github-sync.js";
 import type { ActivityContext } from "./context.js";
 import { Context } from "@temporalio/activity";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { runCommand } from "../../command-runner.js";
 import { json } from "../../task-utils.js";
-
-const execFileAsync = promisify(execFile);
 
 /** Author and change stats are presentation-only; a failure here never blocks the observation. */
 async function pullRequestPresentation(ctx: ActivityContext, repository: string, number: number): Promise<Pick<GithubPullRequestObservationResult, "author" | "changedFiles" | "additions" | "deletions">> {
   try {
-    const { stdout } = await execFileAsync("gh", ["pr", "view", String(number), "--repo", repository, "--json", "author,changedFiles,additions,deletions"], { timeout: 20_000 });
+    const { stdout, exitCode } = await runCommand({ taskId: null, stepId: null, command: "gh", args: ["pr", "view", String(number), "--repo", repository, "--json", "author,changedFiles,additions,deletions"], timeout: 20_000 });
+    if (exitCode !== 0) throw new Error(`gh exited with ${exitCode}`);
     const raw = json<{ author?: { login?: string; avatarUrl?: string | null } | null; changedFiles?: number; additions?: number; deletions?: number }>(stdout, {});
     const login = raw.author?.login;
     return {

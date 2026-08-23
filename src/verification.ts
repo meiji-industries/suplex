@@ -84,7 +84,7 @@ export interface VerificationDependencies {
 const defaultExecute: Execute = async (command, args, options) => {
   // Standalone callers (for example project validation) intentionally remain
   // usable without a task. Task execution always supplies these coordinates.
-  const result = await runCommand({ taskId: "system", stepId: "system", command, args, cwd: options.cwd, env: options.env, timeout: options.timeout });
+  const result = await runCommand({ taskId: null, stepId: null, command, args, cwd: options.cwd, env: options.env, timeout: options.timeout });
   if (result.exitCode === 0 && !result.timedOut) return result;
   throw Object.assign(new Error(`${command} exited with status ${result.exitCode ?? "unknown"}`), { code: result.exitCode, killed: result.timedOut, stdout: result.stdout, stderr: result.stderr });
 };

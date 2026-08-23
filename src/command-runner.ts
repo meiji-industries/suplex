@@ -22,8 +22,9 @@ export type CommandRunResult = {
 };
 
 export type RunCommandInput = {
-  taskId: string;
-  stepId: string;
+  /** Null is a worker-level observation: emit a structured log but no task activity row. */
+  taskId: string | null;
+  stepId: string | null;
   command: string;
   args: readonly string[];
   cwd?: string;
@@ -48,12 +49,12 @@ function display(command: string, args: readonly string[]): string {
 }
 
 function record(input: RunCommandInput, result: CommandRunResult): void {
-  if (!database) return;
+  if (!database || !input.taskId || !input.stepId) return;
   database.authQuery((db) => db.prepare(`INSERT INTO forge_task_command_activity
     (id, task_id, step_id, command, cwd, exit_code, duration_ms, stdout, stderr, entries_json, started_at, finished_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     randomUUID(), input.taskId, input.stepId, result.command, result.cwd ?? null, result.exitCode, result.durationMs,
-    result.stdout, result.stderr, JSON.stringify(result.entries), result.startedAt, result.finishedAt,
+    tail(result.stdout), tail(result.stderr), JSON.stringify(result.entries.map((entry) => ({ ...entry, text: tail(entry.text) }))), result.startedAt, result.finishedAt,
   ));
 }
 
@@ -84,12 +85,12 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
   if (timer) clearTimeout(timer);
   const result: CommandRunResult = {
     command: String(redact(command)), ...(input.cwd ? { cwd: String(redact(input.cwd)) } : {}), exitCode,
-    durationMs: Date.now() - started, stdout: tail(String(redact(stdout))), stderr: tail(String(redact(stderr))),
-    entries: entries.map((entry) => ({ stream: entry.stream, text: tail(String(redact(entry.text))) })), startedAt, finishedAt: new Date().toISOString(), timedOut,
+    durationMs: Date.now() - started, stdout: String(redact(stdout)), stderr: String(redact(stderr)),
+    entries: entries.map((entry) => ({ stream: entry.stream, text: String(redact(entry.text)) })), startedAt, finishedAt: new Date().toISOString(), timedOut,
   };
   record(input, result);
-  const context = { taskId: input.taskId, command: result.command, exitCode: result.exitCode, durationMs: result.durationMs };
+  const context = { ...(input.taskId ? { taskId: input.taskId } : {}), command: result.command, exitCode: result.exitCode, durationMs: result.durationMs };
   if (result.exitCode === 0 && !result.timedOut) logger.info(`Command completed: ${result.command}`, context);
-  else logger.error("Command failed", { taskId: input.taskId }, context);
+  else logger.error("Command failed", input.taskId ? { taskId: input.taskId } : {}, context);
   return result;
 }

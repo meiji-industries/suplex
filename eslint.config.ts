@@ -28,6 +28,10 @@ export default tseslint.config({
     },
   },
   rules: {
+    "no-restricted-imports": ["error", { paths: [
+      { name: "node:child_process", message: "Run external commands through runCommand in command-runner.ts." },
+      { name: "child_process", message: "Run external commands through runCommand in command-runner.ts." },
+    ] }],
     "@typescript-eslint/no-floating-promises": "error",
     "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", caughtErrors: "all" }],
     "@typescript-eslint/switch-exhaustiveness-check": "error",
@@ -41,6 +45,11 @@ export default tseslint.config({
         message: "Do not query a table removed by a migration.",
       },
     ],
+  },
+}, {
+  files: ["src/command-runner.ts", "src/developer-supervisor.ts", "src/codex-lead.ts", "src/codex-developer.ts"],
+  rules: {
+    "no-restricted-imports": "off",
   },
 }, {
   files: ["src/frontend/**/*.{ts,tsx}"],

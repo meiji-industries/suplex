@@ -1,6 +1,4 @@
 import { createHash, randomBytes } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 
 import { z } from "zod";
 
@@ -9,8 +7,8 @@ import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { redact } from "./logging.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { jsonRequired } from "./task-utils.js";
+import { runCommand } from "./command-runner.js";
 
-const execFileAsync = promisify(execFile);
 
 export const CI_POLL_INTERVAL_MS = 15_000;
 export const CI_PROPAGATION_WINDOW_MS = 5 * 60_000;
@@ -327,11 +325,15 @@ function parseChecks(value: unknown, expectedRepository: string): CheckObservati
   });
 }
 
-export function createGithubCiProvider(commandOrOptions: string | { command?: string; runner?: GithubCommandRunner; now?: () => Date } = process.env.FORGE_GH_COMMAND ?? "gh"): CiProvider {
+export function createGithubCiProvider(commandOrOptions: string | { command?: string; runner?: GithubCommandRunner; now?: () => Date; taskId?: string | null; stepId?: string | null } = process.env.FORGE_GH_COMMAND ?? "gh"): CiProvider {
   const options = typeof commandOrOptions === "string" ? { command: commandOrOptions } : commandOrOptions;
   const command = options.command ?? process.env.FORGE_GH_COMMAND ?? "gh";
   const now = options.now ?? (() => new Date());
-  const run: GithubCommandRunner = options.runner ?? (async (args) => execFileAsync(command, args, { timeout: 30_000, maxBuffer: 512 * 1024 }));
+  const run: GithubCommandRunner = options.runner ?? (async (args) => {
+    const result = await runCommand({ taskId: options.taskId ?? null, stepId: options.stepId ?? null, command, args, timeout: 30_000 });
+    if (result.exitCode === 0 && !result.timedOut) return result;
+    throw Object.assign(new Error(`${command} exited with status ${result.exitCode ?? "unknown"}`), { code: result.exitCode, killed: result.timedOut, stdout: result.stdout, stderr: result.stderr });
+  });
   const observe = async (args: string[]): Promise<{ stdout: string; stderr: string }> => {
     try { return await run(args); } catch (error) {
       const failure = providerError(error, now());

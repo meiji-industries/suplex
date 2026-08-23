@@ -1,6 +1,4 @@
-import { execFile } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { promisify } from "node:util";
 
 import { z } from "zod";
 
@@ -9,8 +7,8 @@ import type { ForgeDatabase } from "./database.js";
 import type { GitPresentation } from "./git-presentation.js";
 import type { ReleaseFailureCode } from "./release-failures.js";
 import { jsonRequired } from "./task-utils.js";
+import { runCommand } from "./command-runner.js";
 
-const execFileAsync = promisify(execFile);
 const shaPattern = /^[a-f0-9]{40,64}$/i;
 const repositoryPattern = /^[a-z0-9][a-z0-9_.-]{0,99}\/[a-z0-9][a-z0-9_.-]{0,99}$/i;
 const MAX_OUTPUT = 256 * 1024;
@@ -130,6 +128,9 @@ export interface GithubReleasePortOptions {
   ghCommand?: string;
   gitCommand?: string;
   runner?: GithubCommandRunner;
+  /** Optional Activity coordinates when the adapter is used directly by a task step. */
+  taskId?: string | null;
+  stepId?: string | null;
 }
 
 const BranchResponseSchema = z.object({ commit: z.object({ sha: z.string().regex(shaPattern) }) });
@@ -269,10 +270,11 @@ function classifyCommandFailure(error: unknown, operation: string): GithubReleas
   return new GithubReleaseFailure("provider-unavailable", error.result.stderr || error.result.stdout || operation);
 }
 
-const defaultRunner: GithubCommandRunner = async ({ command, args, cwd, timeout, maxBuffer }) => {
+const defaultRunner: GithubCommandRunner = async ({ command, args, cwd, timeout, maxBuffer: _maxBuffer }) => {
   try {
-    const result = await execFileAsync(command, args, { ...(cwd ? { cwd } : {}), timeout, maxBuffer });
-    return { stdout: bounded(result.stdout), stderr: bounded(result.stderr) };
+    const result = await runCommand({ taskId: null, stepId: null, command, args, ...(cwd ? { cwd } : {}), timeout });
+    if (result.exitCode === 0 && !result.timedOut) return { stdout: bounded(result.stdout), stderr: bounded(result.stderr) };
+    throw Object.assign(new Error(`${command} exited with status ${result.exitCode ?? "unknown"}`), { stdout: result.stdout, stderr: result.stderr, killed: result.timedOut, signal: result.timedOut ? "SIGTERM" : undefined });
   } catch (error) {
     const failure = error as { stdout?: string; stderr?: string; killed?: boolean; signal?: string };
     throw new GithubCommandFailure({ stdout: bounded(failure.stdout ?? ""), stderr: bounded(failure.stderr ?? "") }, Boolean(failure.killed || failure.signal === "SIGTERM"));
@@ -282,7 +284,13 @@ const defaultRunner: GithubCommandRunner = async ({ command, args, cwd, timeout,
 export function createGithubReleasePort(options: GithubReleasePortOptions = {}): GithubReleaseAdapter {
   const ghCommand = options.ghCommand ?? process.env.FORGE_GH_COMMAND ?? "gh";
   const gitCommand = options.gitCommand ?? "git";
-  const runner = options.runner ?? defaultRunner;
+  const runner = options.runner ?? (options.taskId && options.stepId
+    ? async ({ command, args, cwd, timeout, maxBuffer: _maxBuffer }) => {
+      const result = await runCommand({ taskId: options.taskId!, stepId: options.stepId!, command, args, ...(cwd ? { cwd } : {}), timeout });
+      if (result.exitCode === 0 && !result.timedOut) return { stdout: bounded(result.stdout), stderr: bounded(result.stderr) };
+      throw new GithubCommandFailure({ stdout: bounded(result.stdout), stderr: bounded(result.stderr) }, result.timedOut);
+    }
+    : defaultRunner);
   const run = async (command: string, args: string[], commandOptions: { cwd?: string; timeout?: number; maxBuffer?: number } = {}): Promise<GithubCommandResult> => {
     try {
       return await runner({ command, args, ...(commandOptions.cwd ? { cwd: commandOptions.cwd } : {}), timeout: commandOptions.timeout ?? 20_000, maxBuffer: commandOptions.maxBuffer ?? MAX_OUTPUT });

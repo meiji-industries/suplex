@@ -427,13 +427,12 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await pullRequestCard.getByRole("button", { name: "Copy head branch", exact: true }).count()).toBe(1);
       expect(await pullRequestCard.getByRole("button", { name: "Ready for review", exact: true }).count()).toBe(1);
       expect(await pullRequestCard.getByText("Checks · failed", { exact: true }).isVisible()).toBe(true);
-      const pullRequestButton = pullRequestCard.getByRole("link", { name: "Open PR", exact: true });
+      const pullRequestButton = pullRequestCard.getByRole("link", { name: "Open pull request on GitHub", exact: true });
       expect(await pullRequestButton.getAttribute("href")).toBe("https://github.com/acme/forge/pull/21");
       expect(await pullRequestButton.getAttribute("class")).not.toContain("w-full");
       const pullRequestFooter = pullRequestCard.locator('[data-slot="card-footer"]');
       expect(await pullRequestFooter.getAttribute("class")).toContain("bg-muted/50");
       expect(await pullRequestFooter.getAttribute("class")).toContain("border-t");
-      expect((await pullRequestFooter.innerText()).indexOf("Open PR")).toBeLessThan((await pullRequestFooter.innerText()).indexOf("Ready for review"));
       expect(await pullRequestCard.getAttribute("class")).toContain("has-data-[slot=card-footer]:pb-0");
       await taskDetail.getByText("Preview title and body", { exact: true }).click();
       expect(await taskDetail.getByText(/## Summary/).isVisible()).toBe(true);

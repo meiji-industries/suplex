@@ -15,6 +15,7 @@ import { redact } from "./logging.js";
 import { configureCommandActivityStore } from "./command-runner.js";
 import { ProjectFailure, ProjectService, resolveAgentProfiles, type Project, type ProjectRole, type RoleAssignments } from "./projects.js";
 import { TaskProjectConfigurationSchema } from "./task-project-configuration.js";
+import { composePrompt, loadDefaultPrompts, resolveProjectPrompts } from "./prompts.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
 import { acceptIssueDevelopment, acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, resyncIssueProjection, reviseIssuePlan, startIssueWorkflow } from "./temporal/service.js";
 import { issueCommands } from "./commands/registry.js";
@@ -1088,8 +1089,10 @@ export class TaskService {
     const roleAgents = this.resolveRoleAgents(project.roleDefaults, input.roleAgents ?? {});
     const roleProfiles = this.database.authQuery((db) => resolveAgentProfiles(db, roleAgents));
     const branchHeads = await this.projects.captureTaskConfiguration(project);
+    const projectPromptOverrides = await resolveProjectPrompts(project.repositoryPath, branchHeads.baseSha);
+    const resolvedPrompts = new Map([...loadDefaultPrompts()].map(([path, prompt]) => [path, composePrompt(prompt, projectPromptOverrides.get(path))]));
     const capturedAt = this.now().toISOString();
-    const taskConfiguration = TaskProjectConfigurationSchema.parse({ projectId: project.id, projectName: project.name, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot, repository: project.repository, baseBranch: project.baseBranch, targetBranch: project.targetBranch, baseSha: branchHeads.baseSha, targetSha: branchHeads.targetSha, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand, requiredChecks: project.requiredChecks, roleAgents, roleProfiles, capturedAt });
+    let taskConfiguration = TaskProjectConfigurationSchema.parse({ projectId: project.id, projectName: project.name, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot, repository: project.repository, baseBranch: project.baseBranch, targetBranch: project.targetBranch, baseSha: branchHeads.baseSha, targetSha: branchHeads.targetSha, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand, requiredChecks: project.requiredChecks, roleAgents, roleProfiles, capturedAt });
     // Capability decisions are made from the configuration captured for this
     // task, never from a project revision that may change while it is created.
     const hasProjectTests = taskConfiguration.verificationCommand.trim().length > 0;
@@ -1137,6 +1140,7 @@ export class TaskService {
     }
 
     const imageArtifacts: StoredArtifact[] = [];
+    let promptArtifact: StoredArtifact | undefined;
     let briefArtifact: StoredArtifact | undefined;
     let configurationArtifact: StoredArtifact | undefined;
     try {
@@ -1144,16 +1148,18 @@ export class TaskService {
       const workflowId = reserved.intent.workflow_id;
       this.updateCreationIntent(reserved.intent.id, { state: "staging", errorCode: null, attempt: reserved.intent.attempt + 1 }, reserved.intent.lease_token);
       const briefBytes = Buffer.from(normalizeText(input.description), "utf8");
+      promptArtifact = await this.artifacts.putArtifact(companyId, "task-prompt-set", { filename: `prompts-${taskId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(Object.fromEntries(resolvedPrompts)), "utf8"), taskId });
+      taskConfiguration = TaskProjectConfigurationSchema.parse({ ...taskConfiguration, prompts: { artifactId: promptArtifact.id, sha256: promptArtifact.sha256, overrides: [...projectPromptOverrides.keys()] } });
       configurationArtifact = await this.artifacts.putArtifact(companyId, "task-project-configuration", { filename: `project-configuration-${taskId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(taskConfiguration), "utf8"), taskId });
       await this.maybeFault("after_manifest_persisted", { intentId: reserved.intent.id, taskId });
       briefArtifact = await this.artifacts.putArtifact(companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: briefBytes, taskId });
       await this.maybeFault("after_artifact_finalized", { intentId: reserved.intent.id, taskId, artifactIndex: 0 });
-      this.updateCreationIntent(reserved.intent.id, { artifactIds: [configurationArtifact.id, briefArtifact.id] }, reserved.intent.lease_token);
+      this.updateCreationIntent(reserved.intent.id, { artifactIds: [promptArtifact.id, configurationArtifact.id, briefArtifact.id] }, reserved.intent.lease_token);
       for (const [imageIndex, { image, bytes }] of decodedImages.entries()) {
         const artifact = await this.artifacts.putArtifact(companyId, "task-image", { filename: image.filename, mimeType: image.mimeType, bytes, taskId });
         await this.maybeFault("after_artifact_finalized", { intentId: reserved.intent.id, taskId, artifactIndex: imageIndex + 1 });
         imageArtifacts.push(artifact);
-        this.updateCreationIntent(reserved.intent.id, { artifactIds: [configurationArtifact, briefArtifact, ...imageArtifacts].filter((entry): entry is StoredArtifact => Boolean(entry)).map((entry) => entry.id) }, reserved.intent.lease_token);
+        this.updateCreationIntent(reserved.intent.id, { artifactIds: [promptArtifact, configurationArtifact, briefArtifact, ...imageArtifacts].filter((entry): entry is StoredArtifact => Boolean(entry)).map((entry) => entry.id) }, reserved.intent.lease_token);
       }
       if (!briefArtifact) throw new ArtifactFailure("artifact-corrupt", "Task brief could not be stored");
       await this.maybeFault("after_artifact_staged", { intentId: reserved.intent.id, taskId });

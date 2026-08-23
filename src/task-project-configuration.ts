@@ -26,6 +26,11 @@ export const TaskProjectConfigurationSchema = z.object({
   roleAgents: RoleAssignmentsSchema,
   roleProfiles: RoleAssignmentsSchema,
   capturedAt: z.string().datetime(),
+  prompts: z.object({
+    artifactId: z.string().min(1),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/i),
+    overrides: z.array(z.string().min(1)),
+  }).strict().optional(),
 }).strict();
 
 export type TaskProjectConfiguration = z.infer<typeof TaskProjectConfigurationSchema>;

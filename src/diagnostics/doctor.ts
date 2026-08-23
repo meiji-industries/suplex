@@ -7,7 +7,7 @@ import type { ForgeDatabase } from "../database.js";
 import { buildProductionWorkflowBundle, temporalDataConverter, workflowBundleBuildId } from "../temporal/workflow-bundle.js";
 import { connectTemporal } from "../temporal/service.js";
 import { inspectTask } from "./task.js";
-import { loadDefaultPrompts, PROMPT_PATHS } from "../prompts.js";
+import { loadPromptCatalog, type PromptTemplate } from "../prompts.js";
 
 export type DoctorCheck = { status: "PASS" | "WARN" | "FAIL"; name: string; detail: string };
 
@@ -33,24 +33,33 @@ export async function runDoctor(config: ForgeConfig, database: ForgeDatabase, op
   const disk = await statfs(config.databasePath);
   const free = Number(disk.bavail) * Number(disk.bsize);
   checks.push({ status: free > 1024 ** 3 ? "PASS" : "WARN", name: "disk headroom", detail: `${Math.floor(free / 1024 / 1024)} MiB free` });
+  let catalog: ReadonlyMap<string, PromptTemplate> | undefined;
   try {
-    loadDefaultPrompts();
-    const projects = database.authQuery((db) => db.prepare("SELECT name, repository_path AS repositoryPath FROM forge_projects ORDER BY name").all() as Array<{ name: string; repositoryPath: string }>);
-    const unknownOverrides: string[] = [];
-    for (const project of projects) {
-      try {
-        const files = await readdir(`${project.repositoryPath}/.forge/prompts`, { recursive: true });
-        for (const file of files) {
-          if (typeof file !== "string" || !file.endsWith(".md")) continue;
-          if (!PROMPT_PATHS.includes(file as typeof PROMPT_PATHS[number])) unknownOverrides.push(`${project.name}: ${file}`);
-        }
-      } catch (error) {
-        if (!(error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT")) throw error;
-      }
-    }
-    checks.push({ status: unknownOverrides.length ? "WARN" : "PASS", name: "project prompts", detail: unknownOverrides.length ? `unknown overrides: ${unknownOverrides.join(", ")}` : "all overrides match defaults" });
+    catalog = loadPromptCatalog();
   } catch (error) {
-    checks.push({ status: "FAIL", name: "project prompts", detail: `default prompts invalid: ${error instanceof Error ? error.message : "unknown error"}` });
+    checks.push({ status: "FAIL", name: "project prompts", detail: `prompt catalog invalid: ${error instanceof Error ? error.message : "unknown error"}` });
+  }
+  if (catalog) {
+    try {
+      const projects = database.authQuery((db) => db.prepare("SELECT name, repository_path AS repositoryPath FROM forge_projects ORDER BY name").all() as Array<{ name: string; repositoryPath: string }>);
+      const retiredDirectories: string[] = [];
+      for (const project of projects) {
+        try {
+          await readdir(`${project.repositoryPath}/.forge/prompts`, { recursive: true });
+          retiredDirectories.push(project.name);
+        } catch (error) {
+          if (!(error instanceof Error && (error as NodeJS.ErrnoException).code === "ENOENT")) throw error;
+        }
+      }
+      const orphaned = database.authQuery((db) => db.prepare("SELECT scope_key AS scopeKey, template_id AS templateId FROM forge_prompt_overrides ORDER BY scope_key, template_id").all() as Array<{ scopeKey: string; templateId: string }>).filter((override) => !catalog.has(override.templateId));
+      const warnings = [
+        retiredDirectories.length ? `.forge/prompts/ no longer read — move to Project Settings: ${retiredDirectories.join(", ")}` : "",
+        orphaned.length ? `orphaned DB overrides: ${orphaned.map(({ scopeKey, templateId }) => `${scopeKey}/${templateId}`).join(", ")}` : "",
+      ].filter(Boolean);
+      checks.push({ status: warnings.length ? "WARN" : "PASS", name: "project prompts", detail: warnings.length ? warnings.join("; ") : "no retired repository overrides or orphaned DB overrides" });
+    } catch (error) {
+      checks.push({ status: "FAIL", name: "project prompts", detail: error instanceof Error ? error.message : "diagnostic unavailable" });
+    }
   }
   const open = database.authQuery((db) => db.prepare("SELECT id FROM forge_tasks WHERE id IN (SELECT task_id FROM forge_issue_projections WHERE phase NOT IN ('done', 'cancelled'))").all() as Array<{ id: string }>);
   try {

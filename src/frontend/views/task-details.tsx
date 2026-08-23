@@ -500,6 +500,32 @@ function InlineTaskEditor({ field, value, onSave, imageSources }: { field: "titl
     : <button type="button" data-task-description-editor aria-label="Edit task description" onClick={start} className="block w-full text-left font-sans"><Markdown source={value || "No description."} {...(imageSources ? { imageSources } : {})} /></button>;
 }
 
+type TaskPromptProvenance = { steps: Array<{ layer: string; mode: string; revision?: number }>; staleReplace: boolean; sha256: string };
+
+function TaskPromptProvenanceRow({ taskId, overrides }: { taskId: string; overrides: string[] }): ReactElement {
+  const [open, setOpen] = useState(false);
+  const [loadedTaskId, setLoadedTaskId] = useState<string | null>(null);
+  const [provenance, setProvenance] = useState<Record<string, TaskPromptProvenance>>({});
+  const [loadError, setLoadError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!open || loadedTaskId === taskId) return;
+    let cancelled = false;
+    setLoadedTaskId(taskId);
+    setLoadError(null);
+    void readJson<{ provenance: Record<string, TaskPromptProvenance> }>(`/api/tasks/${encodeURIComponent(taskId)}/prompts`)
+      .then((response) => { if (!cancelled) setProvenance(response.provenance); })
+      .catch((error: unknown) => { if (!cancelled) setLoadError(error instanceof Error ? error.message : "Prompt provenance could not be loaded"); });
+    return () => { cancelled = true; };
+  }, [loadedTaskId, open, taskId]);
+  const summary = overrides.length ? `${overrides.length} project override${overrides.length === 1 ? "" : "s"}` : "defaults";
+  return <Collapsible.Root open={open} onOpenChange={setOpen}>
+    <Collapsible.Trigger aria-label={`Show pinned prompt provenance (${summary})`}>{summary}</Collapsible.Trigger>
+    <Collapsible.Panel>
+      {loadError ? <span role="alert">{loadError}</span> : loadedTaskId !== taskId ? <span>Loading pinned provenance…</span> : Object.entries(provenance).length ? <ul>{Object.entries(provenance).map(([templateId, prompt]) => <li key={templateId}><code>{templateId}</code>: {prompt.steps.map((step) => `${step.layer} ${step.mode}${step.revision === undefined ? "" : ` r${step.revision}`}`).join(" → ")} · <code title={prompt.sha256}>{prompt.sha256.slice(0, 12)}</code> · {prompt.staleReplace ? "stale replacement" : "current"}</li>)}</ul> : <span>No pinned provenance.</span>}
+    </Collapsible.Panel>
+  </Collapsible.Root>;
+}
+
 export function TaskDetailsPage({ task, project, companyId: _companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady: _onMarkReady, onMerge: _onMerge, onDuplicate, onUpdateDetails, onRefresh, onRescue }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onMerge: () => Promise<void>; onDuplicate: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport> }): ReactElement {
   const [syncing, setSyncing] = useState(false);
   const observedAtRef = useRef(task.githubPullRequest?.observedAt ?? null);
@@ -658,7 +684,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
             <dl className="space-y-4 text-xs">
               <div className="space-y-1"><dt className="text-muted-foreground">Status</dt><dd><Badge variant="secondary" data-status={task.phase}><TaskStatus phase={task.phase} presentationPhase={taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands })} processing={taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status })} /></Badge></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
-              <div className="space-y-1"><dt className="text-muted-foreground">Prompts</dt><dd title={task.prompts.overrides.join("\n") || undefined}>{task.prompts.overrides.length ? `${task.prompts.overrides.length} project override${task.prompts.overrides.length === 1 ? "" : "s"}` : "defaults"}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Prompts</dt><dd title={task.prompts.overrides.join("\n") || undefined}><TaskPromptProvenanceRow taskId={task.id} overrides={task.prompts.overrides} /></dd></div>
               {task.developerExecution?.worktreePath ? <div className="space-y-1"><dt className="text-muted-foreground">Worktree</dt><dd className="flex items-center gap-1 min-w-0"><CopyButton value={task.developerExecution.worktreePath} label="Copy worktree path" /><span className="min-w-0 truncate font-mono" title={task.developerExecution.worktreePath}>{task.developerExecution.worktreePath.split("/").pop()}</span></dd></div> : null}
               <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd><NextAction value={task.pendingAction} /></dd></div>

@@ -6,6 +6,8 @@ import type { ApiTask } from "../src/frontend/lib/view-shared.js";
 const at = (second: number) => `2026-08-23T00:00:${String(second).padStart(2, "0")}.000Z`;
 const task = (overrides: Partial<ApiTask> = {}): ApiTask => ({ id: "task-chat", companyId: "company", projectId: "project", issueKey: null, title: "Chat", description: "Build **this**", briefArtifactId: "brief", images: [], roleAgents: {}, supplementalReview: false, autoApprovePlan: true, deliveryTarget: "pull_request", executionControls: { runProjectTests: true, visualEvidence: false, supplementalReview: false }, deliveryReceipt: null, pullRequestMode: "draft", workflowId: "workflow", projectRevisionId: "revision", prompts: { overrides: [] }, phase: "planning", revision: 1, owner: "human", allowedCommands: [], commands: [], governance: { blocker: null }, pendingAction: null, createdAt: at(1), updatedAt: at(50), projection: { authoritativeRevision: 1, projectedRevision: 1, projectedAt: at(1), status: "current", message: null }, timeline: [], activity: [{ id: "created", revision: 0, eventType: "task_created", metadata: {}, createdAt: at(1), kind: "member", actor: { id: "member", displayName: "Mara", username: "mara", avatarSeed: "mara" } }], agentInvocations: [], capacity: null, targetBaseReconciliation: { checkId: null, checkpoint: null, status: null, expectedBaseSha: null, observedBaseSha: null, priorHead: null, priorTree: null, resultHead: null, resultTree: null, conflictFileCount: null, conflictArtifact: null, verificationArtifact: null, deliveryArtifact: null, invalidatedDeliveryReviewId: null, invalidatedCiRunId: null, invalidatedFinalReviewId: null, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, blockerCode: null, blockerOwner: null, retryable: null, summary: null, actions: [] }, reviewLineage: { currentReview: null, priorReviews: [], reviewAttempts: [], repairAttempts: [] }, planHistory: [], planDecisionHistory: [], revisionHistory: [], developerExecutionHistory: [], deliveryReviewHistory: [], ...overrides } as ApiTask);
 const planner = (id: string, startedAt: string, finishedAt: string | null) => ({ id, role: "planner" as const, status: finishedAt ? "completed" : "running", attempt: 1, sessionPresent: true, sessionRef: null, startedAt, finishedAt, failureCode: null, failureSummary: null, evidenceArtifactId: null, agentName: "Planner", avatarSeed: "planner" });
+const reviewer = (id: string, startedAt: string, finishedAt: string | null) => ({ ...planner(id, startedAt, finishedAt), role: "reviewer" as const, agentName: "Reviewer", avatarSeed: "reviewer" });
+const deliveryReview = (id: string, leadExecutionId: string, outcome: "approved" | "blocking", summary: string, createdAt: string): ApiTask["deliveryReviewHistory"][number] => ({ id, leadExecutionId, outcome, summary, planRevision: 1, baseSha: "base", subjectCommit: "commit", subjectTree: "tree", opinionArtifactId: "opinion", evidenceArtifactId: "evidence", repairCycle: 0, createdAt });
 
 describe("buildChatTranscript", () => {
   it("keeps the brief first and retains planner-note rounds with their turns", () => {
@@ -49,5 +51,21 @@ describe("buildChatTranscript", () => {
     const turn = value.find((item) => item.kind === "agent_turn");
     expect(turn).toMatchObject({ intro: "I'll inspect the README", events: [{ kind: "command", text: "Inspecting Git state", exitCode: 0 }, { text: "Checking files", count: 4 }] });
     expect(turn && turn.kind === "agent_turn" ? turn.events.some((event) => event.id === "intro") : false).toBe(false);
+  });
+
+  it("shows the delivery review outcome from its matching lead execution", () => {
+    const value = buildChatTranscript(task({ agentInvocations: [reviewer("delivery-review", at(10), at(20))], deliveryReviewHistory: [deliveryReview("review", "delivery-review", "approved", "Ready to ship", at(19))] }));
+    expect(value.find((item) => item.kind === "agent_turn")).toMatchObject({ summary: "Approved. Ready to ship" });
+  });
+
+  it("shows blocking findings below the delivery review outcome", () => {
+    const review = deliveryReview("review", "delivery-review", "blocking", "Missing coverage", at(19));
+    const value = buildChatTranscript(task({ agentInvocations: [reviewer("delivery-review", at(10), at(20))], deliveryReviewHistory: [review], deliveryReview: { ...review, findings: [{ id: "finding", severity: "blocking", rationale: "Add an edge-case test", evidenceRef: "test", disposition: "open", repairInstruction: null }] } }));
+    expect(value.find((item) => item.kind === "agent_turn")).toMatchObject({ summary: "Blocking. Missing coverage\n- Add an edge-case test" });
+  });
+
+  it("does not repeat a previously rendered review summary", () => {
+    const value = buildChatTranscript(task({ agentInvocations: [reviewer("first", at(10), at(20)), reviewer("second", at(30), at(40))], deliveryReviewHistory: [deliveryReview("first-review", "first", "approved", "Ready to ship", at(19)), deliveryReview("second-review", "second", "approved", "Ready to ship", at(39))] }));
+    expect(value.filter((item) => item.kind === "agent_turn").map((item) => item.summary)).toEqual(["Approved. Ready to ship", undefined]);
   });
 });

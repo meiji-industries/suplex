@@ -36,14 +36,45 @@ function systemItem(entry: ApiTask["activity"][number]): ChatItem | undefined {
   return { kind: "system", id: `system-${entry.id}`, at: entry.createdAt, text, tone: /failed|blocked|cancelled/i.test(text) ? "warning" : /passed|approved|merged/i.test(text) ? "success" : "muted" };
 }
 
-function turnSummary(task: ApiTask, invocation: ApiTask["agentInvocations"][number]): string | undefined {
-  const matching = task.activity.filter((entry) => Date.parse(entry.createdAt) >= Date.parse(invocation.startedAt));
+function invocationEnd(invocation: ApiTask["agentInvocations"][number], invocations: ApiTask["agentInvocations"]): number {
+  const next = invocations.find((candidate) => Date.parse(candidate.startedAt) > Date.parse(invocation.startedAt));
+  return Math.min(next ? Date.parse(next.startedAt) : Infinity, invocation.finishedAt ? Date.parse(invocation.finishedAt) : Infinity);
+}
+
+function summaryForReview(review: { outcome: "approved" | "blocking"; summary: string; findings: Array<{ rationale: string }> }): string {
+  const outcome = `${review.outcome[0]!.toUpperCase()}${review.outcome.slice(1)}`;
+  const summary = review.summary.trim();
+  const prefixed = new RegExp(`^${outcome}\\b[.:]?\\s*`, "i").test(summary) ? summary : `${outcome}. ${summary}`;
+  const findings = review.outcome === "blocking" ? review.findings.map(({ rationale }) => rationale.trim()).filter(Boolean).map((rationale) => `- ${rationale}`).join("\n") : "";
+  return findings ? `${prefixed}\n${findings}` : prefixed;
+}
+
+function turnSummary(task: ApiTask, invocation: ApiTask["agentInvocations"][number], invocations: ApiTask["agentInvocations"]): string | undefined {
+  const startedAt = Date.parse(invocation.startedAt);
+  const endsAt = invocationEnd(invocation, invocations);
+  const matching = task.activity.filter((entry) => {
+    const createdAt = Date.parse(entry.createdAt);
+    return createdAt >= startedAt && createdAt <= endsAt;
+  });
   if (invocation.role === "planner") {
-    const summary = matching.find((entry) => entry.eventType === "planner_note_revised")?.metadata.summary as string | undefined ?? task.leadOutput?.summary;
+    if (!matching.some((entry) => entry.eventType === "planning_started" || entry.eventType === "planner_note_revised" || /(?:^|_)plan_approved$/.test(entry.eventType))) return undefined;
+    const summary = matching.find((entry) => entry.eventType === "planner_note_revised")?.metadata.summary as string | undefined
+      ?? (task.leadOutput?.executionId === invocation.id ? task.leadOutput.summary : undefined);
     return summary ? withoutLegacyMaterialitySummary(summary) : undefined;
   }
-  if (invocation.role === "builder") return task.developerExecution?.deliverySummary ?? task.developerExecution?.summary ?? undefined;
-  if (invocation.role === "reviewer") return task.deliveryReview?.summary;
+  if (invocation.role === "builder") {
+    if (task.developerExecution?.id === invocation.id) return task.developerExecution.deliverySummary ?? task.developerExecution.summary ?? undefined;
+    return undefined;
+  }
+  if (invocation.role !== "reviewer") return undefined;
+  const delivery = task.deliveryReviewHistory.find((review) => review.leadExecutionId === invocation.id)
+    ?? task.deliveryReviewHistory.find((review) => {
+      const createdAt = Date.parse(review.createdAt);
+      return createdAt >= startedAt && createdAt <= endsAt;
+    });
+  if (delivery) return summaryForReview({ ...delivery, findings: task.deliveryReview?.id === delivery.id ? task.deliveryReview.findings : [] });
+  const finalReview = task.deliveryGate?.finalReview;
+  if (finalReview && (finalReview.leadExecutionId === invocation.id || (Date.parse(finalReview.createdAt) >= startedAt && Date.parse(finalReview.createdAt) <= endsAt))) return summaryForReview(finalReview);
   return undefined;
 }
 
@@ -114,12 +145,16 @@ export function buildChatTranscript(task: ApiTask, liveEventsByExecution: Map<st
       if (system) items.push(system);
     }
   }
-  for (const invocation of task.agentInvocations) {
+  const renderedSummaries = new Set<string>();
+  const invocations = [...task.agentInvocations].sort((left, right) => Date.parse(left.startedAt) - Date.parse(right.startedAt) || left.id.localeCompare(right.id));
+  for (const invocation of invocations) {
     const events = liveEventsByExecution.get(invocation.id) ?? [];
     const introEvent = events.find((event) => event.kind === "agent_update");
     const intro = introEvent?.text;
     const status: Extract<ChatItem, { kind: "agent_turn" }>["status"] = invocation.finishedAt ? (terminalStatuses.has(invocation.status) ? invocation.status as "completed" | "failed" | "blocked" : "completed") : "running";
-    const summary = turnSummary(task, invocation);
+    const candidate = turnSummary(task, invocation, invocations);
+    const summary = candidate && !renderedSummaries.has(candidate) ? candidate : undefined;
+    if (summary) renderedSummaries.add(summary);
     const stats = turnStats(events);
     items.push({ kind: "agent_turn", id: `agent-${invocation.id}`, role: invocation.role, agent: { name: invocation.agentName ?? `${invocation.role[0]!.toUpperCase()}${invocation.role.slice(1)}`, avatarSeed: invocation.avatarSeed ?? invocation.role }, startedAt: invocation.startedAt, finishedAt: invocation.finishedAt, status, ...(intro ? { intro } : {}), events: compactChatEvents(events, introEvent), ...(summary ? { summary } : {}), ...(stats ? { stats } : {}) });
   }

@@ -345,16 +345,6 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await planSteps.count()).toBe(1);
       expect(await planSteps.locator("[data-completed]").count()).toBe(0);
       expect(await planSteps.locator("[aria-current]").count()).toBe(0);
-      const developerEvidence = current.locator("[data-developer-evidence]");
-      await developerEvidence.waitFor();
-      expect(await developerEvidence.isVisible()).toBe(true);
-      expect(await taskDetail.locator("[data-developer-evidence]").count()).toBe(1);
-      expect(await planSteps.locator("[data-developer-evidence]").count()).toBe(0);
-      expect(await developerEvidence.locator("[data-delivery-report]").count()).toBe(1);
-      for (const label of ["Manifest", "Raw delivery", "After provider", "Reconciliation"]) {
-        expect(await developerEvidence.getByRole("link", { name: label, exact: true }).count()).toBe(1);
-      }
-      expect(await developerEvidence.getByRole("link", { name: /provider/i }).count()).toBe(1);
       expect(await taskDetail.locator("[data-task-work-tabs]").getByRole("tab", { name: /^Activity \d+$/ }).isVisible()).toBe(true);
       const workTabs = taskDetail.locator("[data-task-work-tabs]");
       await workTabs.waitFor();
@@ -537,10 +527,6 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await narrowProgress.locator('[data-slot="timeline"][data-orientation="vertical"]').count()).toBe(1);
       const narrowCurrent = narrowDetail.locator("[data-task-current]");
       expect(await narrowCurrent.isVisible()).toBe(true);
-      const narrowDeveloperEvidence = narrowCurrent.locator("[data-developer-evidence]");
-      expect(await narrowDeveloperEvidence.isVisible()).toBe(true);
-      expect(await narrowDeveloperEvidence.locator("[data-delivery-report]").count()).toBe(1);
-      expect(await narrowDeveloperEvidence.getByRole("link", { name: /provider/i }).count()).toBe(1);
       const narrowHistory = narrowDetail.locator("[data-task-history]");
       const narrowHistoryTrigger = narrowHistory.getByRole("button", { name: /^History · \d+$/ });
       expect(await narrowHistoryTrigger.getAttribute("aria-expanded")).toBe("false");

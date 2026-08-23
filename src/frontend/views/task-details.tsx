@@ -31,7 +31,7 @@ import { SupplementalReviewPanel } from "../components/app/supplemental-review-p
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import { PullRequestCard as GithubPullRequestCard } from "../components/app/pull-request-card.js";
 import { CopyButton } from "../components/app/copy-button.js";
-import { DeveloperEvidence, type DeveloperExecutionEventView } from "../components/tasks/developer-evidence.js";
+import type { DeveloperExecutionEventResponse } from "../../http/contracts/tasks.js";
 import { adminDate, type ApiAgent, type ApiCi, type ApiProject, type ApiTask } from "../lib/view-shared.js";
 import { readJson, withCompany } from "../lib/api.js";
 import type { IssueCommandSlug } from "../../commands/registry.js";
@@ -43,6 +43,7 @@ import { useCallback, useEffect, useRef, useState, type ReactElement } from "rea
 
 type DevelopmentExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; lastOutputAt?: string | null; currentStep: string | null };
 type DevelopmentState = { status: string; execution: DevelopmentExecution | null };
+type DeveloperExecutionEventView = DeveloperExecutionEventResponse;
 type DeveloperEventState = { executionId: string | null; events: DeveloperExecutionEventView[]; terminalSteps: Record<number, "completed" | "blocked"> };
 const noopExecutionStatus = (): void => {};
 
@@ -617,9 +618,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                     <PlanningRunCard task={task} />
                     {task.phase === "planning" ? <LiveExecutionRun taskId={task.id} eventPath="planning-events" activityLabel="Planner" onRefresh={onRefresh} /> : null}
                     {pullRequestInMain ? <div data-active-pull-request><GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
-                    <RescueControls task={task} busy={busy} onRescue={onRescue} />
                     {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} developmentStatus={developerLiveness ? <DevelopmentStatus state={developerLiveness} now={developmentNow} inline /> : undefined} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} compact /></DeveloperRecoveryStatus> : <LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
-                    {task.developerExecution ? <DeveloperEvidence execution={task.developerExecution} onViewChanges={openDiff} /> : null}
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
                     {currentPlan ?? decisionControls}
                     {task.governance.blocker && blockerCommand ? <PlanBlockerResponseForm blocker={task.governance.blocker} expectedRevision={blockerCommand.expectedRevision} busy={busy} onSubmit={(payload) => onPlanAction(blockerCommand.endpoint as TaskPlanAction, undefined, { answer: payload.answer, idempotencyKey: payload.idempotencyKey, expectedWorkflowRevision: payload.expectedWorkflowRevision })} error={error} /> : task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">{task.governance.blocker.header}</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}
@@ -648,6 +647,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                 <FinalGatePanel task={task} />
                   </TabsContent>
                 </Tabs>
+                <RescueControls task={task} busy={busy} onRescue={onRescue} />
               </div>
             </div>
           </div>

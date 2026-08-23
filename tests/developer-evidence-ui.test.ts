@@ -4,7 +4,6 @@ import { expect, test } from "vitest";
 import { TaskLeadPlan } from "../src/frontend/components/app/task-lead-plan.js";
 import { activityRelativeDate, extractAgentTranscript, harnessSummary, TaskActivity } from "../src/frontend/components/app/task-history.js";
 import { invocationActorLabel, workflowOwnerLabel } from "../src/frontend/components/app/task-invocations.js";
-import { DeveloperEvidence, type DeveloperExecutionView } from "../src/frontend/components/tasks/developer-evidence.js";
 import type { TaskResponse } from "../src/http/contracts/tasks.js";
 
 test("labels an agent with its execution profile", () => {
@@ -44,27 +43,6 @@ test("renders the approved plan as static numbered instructions", () => {
   expect(html).toContain("Approve Plan");
 });
 
-test("shows the Builder's work without execution bookkeeping", () => {
-  const execution = {
-    id: "developer_1",
-    status: "completed",
-    attempt: 1,
-    branchName: "work/evidence",
-    startedAt: "2026-08-13T00:00:00.000Z",
-    finishedAt: "2026-08-13T00:01:30.000Z",
-    summary: "Added the requested evidence view.",
-    targetBaseSha: "a".repeat(40),
-  } as DeveloperExecutionView;
-  const html = renderToStaticMarkup(createElement(DeveloperEvidence, { execution, onViewChanges: () => {} }));
-
-  expect(html.match(/data-developer-evidence="true"/g)).toHaveLength(1);
-  expect(html).toContain("Attempt 1");
-  expect(html).toContain("1:30");
-  expect(html).toContain("Added the requested evidence view.");
-  expect(html).toContain("View changes");
-  expect(html).not.toContain("Boundary");
-  expect(html).not.toContain("Provider observation");
-});
 
 
 

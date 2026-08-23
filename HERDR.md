@@ -27,6 +27,9 @@ them with Forge.
   `<report-file>`.
 - `herdr-rebalance.py` takes no arguments. It equalizes widths in the current
   pane's row after a split or close.
+- `scripts/dev-restart.sh <dev-pane-id>` (in this repo) restarts `mise run dev`
+  in the dev-stack pane, but only after `mise run dev:idle` confirms no Temporal
+  activity is in flight. Exit 1 means busy and nothing was touched.
 
 ## Pane lifecycle
 
@@ -68,5 +71,14 @@ user's answer. Never answer that dialog on the user's behalf.
 Every brief names the other live panes and their owned files. Never edit a
 file with someone else's uncommitted change: poll `git status --short <file>`,
 wait until it is clean, re-read it, then edit. Prefer new files, commit only
-your own explicit paths, and never stash, reset, rebase, or restart the dev
-stack. If a backend edit needs a restart, report **restart needed** instead.
+your own explicit paths, and never stash, reset, or rebase.
+
+## Restarting the dev stack
+
+`mise run dev` has no hot reload, so backend edits need a restart. Sub-agents
+never restart it: they report **restart needed**. The orchestrator restarts it
+with `scripts/dev-restart.sh <dev-pane-id>`, which refuses while
+`mise run dev:idle` reports in-flight activities (agent turns, CI polls, GitHub
+operations all run as Temporal activities, so "no pending activities" means
+nothing is interrupted). When it reports busy, wait and retry; do not force it
+and do not ask the user to restart unless the stack is wedged.

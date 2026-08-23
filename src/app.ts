@@ -31,6 +31,8 @@ import health from "./http/routes/health.js";
 import pages from "./http/routes/pages.js";
 import hermesPairing from "./http/routes/hermes-pairing.js";
 import { registerHermesTaskRoutes } from "./http/routes/hermes-tasks.js";
+import prompts from "./http/routes/prompts.js";
+import taskPrompts from "./http/routes/task-prompts.js";
 
 export interface AppDependencies {
   fullApp?: boolean;
@@ -114,6 +116,8 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
     if (dependencies.hermes) void app.register(hermesPairing, { hermes: dependencies.hermes });
     if (dependencies.hermes && taskService) registerHermesTaskRoutes(app, { hermes: dependencies.hermes, tasks: taskService });
     void app.register(authenticated, { auth, config: dependencies.config, ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(releaseService ? { release: releaseService } : {}), ...(attentionService ? { attention: attentionService } : {}), ...(database ? { database } : {}), ...(rebuild ? { rebuild } : {}), ...(dependencies.capacity ? { capacity: dependencies.capacity } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
+    if (projectService && database) void app.register(prompts, { auth, config: dependencies.config, database, projects: projectService });
+    if (taskService && database) void app.register(taskPrompts, { auth, config: dependencies.config, database, tasks: taskService });
   }
   if (!dependencies.frontendDevelopment) void app.register(assets, { prefix: "/assets" });
 }

@@ -1181,7 +1181,9 @@ export class AgentService {
       }
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const opinion = await this.artifacts.putArtifact(input.companyId, "delivery-review", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(review, null, 2), "utf8") });
-      const priorReview = isFinalReview ? undefined : this.database.authQuery((db) => db.prepare("SELECT id FROM forge_delivery_reviews WHERE workflow_id = ? AND subject_commit = ?").get(input.workflowId, subjectCommit) as { id: string } | undefined);
+      // A repair that changed nothing yields the same subject commit as the review it answers; that fresh review must be
+      // a new row superseding the blocking one, never an in-place update that would make a review supersede itself.
+      const priorReview = isFinalReview ? undefined : this.database.authQuery((db) => db.prepare("SELECT id FROM forge_delivery_reviews WHERE workflow_id = ? AND subject_commit = ? AND id IS NOT ?").get(input.workflowId, subjectCommit, input.supersedesReviewId ?? null) as { id: string } | undefined);
       const reviewId = priorReview?.id ?? `delivery_review_${randomBytes(12).toString("hex")}`;
       this.database.authTransaction((db) => {
         if (isFinalReview) {

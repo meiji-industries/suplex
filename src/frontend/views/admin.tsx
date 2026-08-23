@@ -20,7 +20,6 @@ import { Archive, ArchiveRestore, Check, Copy, Ellipsis, Key, Pencil, RotateCw, 
 
 import { PromptSettings } from "./prompt-settings.js";
 const USER_COLUMNS: SettingsTableColumn[] = [
-  { key: "indent", width: 60 },
   { key: "name", label: "Name ↓", width: 177 },
   { key: "username", label: "Username", width: 118 },
   { key: "role", label: "Role", width: 140 },
@@ -32,7 +31,6 @@ const USER_COLUMNS: SettingsTableColumn[] = [
 ];
 
 const PROFILE_COLUMNS: SettingsTableColumn[] = [
-  { key: "indent", width: 60 },
   { key: "name", label: "Name ↓", width: 240 },
   { key: "model", label: "Model", width: 200 },
   { key: "reasoning", label: "Reasoning", width: 75 },
@@ -43,7 +41,6 @@ const PROFILE_COLUMNS: SettingsTableColumn[] = [
 ];
 
 const AGENT_COLUMNS: SettingsTableColumn[] = [
-  { key: "indent", width: 60 },
   { key: "name", label: "Name ↓", width: 240 },
   { key: "role", label: "Role", width: 140 },
   { key: "profile", label: "Profile", width: 220 },
@@ -52,7 +49,6 @@ const AGENT_COLUMNS: SettingsTableColumn[] = [
 ];
 
 const HERMES_AGENT_COLUMNS: SettingsTableColumn[] = [
-  { key: "indent", width: 60 },
   { key: "name", label: "Name ↓", width: 200 },
   { key: "status", label: "Status", width: 280 },
   { key: "projects", label: "Projects", width: 180 },
@@ -511,7 +507,6 @@ export function AdminView(): ReactElement {
                       const passkeyCount = credentials.filter((credential) => credential.userId === candidate.id && !credential.revokedAt).length;
                       return (
                         <SettingsTableRow key={candidate.id} size="member">
-                          <SettingsTableCell className="p-0" />
                           <SettingsTableCell><span className="flex min-w-0 items-center gap-2"><ProfileAvatar name={candidate.displayName} seed={candidate.avatarSeed} collection="pixel-art-neutral" /><span className="truncate">{candidate.displayName}</span></span></SettingsTableCell>
                           <SettingsTableCell className="truncate text-muted-foreground">@{candidate.username}</SettingsTableCell>
                           <SettingsTableCell><span className="rounded bg-primary/10 px-1.5 py-0.5 text-[11px] text-primary">{candidate.role}</span></SettingsTableCell>
@@ -544,7 +539,6 @@ export function AdminView(): ReactElement {
                     const formId = `capacity-${profile.id}`;
                     return (
                       <SettingsTableRow aria-label={`Edit ${profile.name}`} key={profile.id} onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input")) openEditProfile(profile); }} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); openEditProfile(profile); } }} tabIndex={0}>
-                        <SettingsTableCell className="p-0" />
                         <SettingsTableCell><span className="flex min-w-0 items-center gap-3"><span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{profile.name[0]?.toUpperCase()}</span><span className="min-w-0"><span className="block truncate">{profile.name}</span><span className="block truncate text-[10px] leading-3 text-muted-foreground">{profile.capacity === null ? `Default · ${profile.effectiveCapacity} slots effective` : `Override · ${profile.capacity} slots`} · {lane?.activeCount ?? 0} active / {lane?.queuedCount ?? 0} queued</span></span></span></SettingsTableCell>
                         <SettingsTableCell className="truncate">{profile.model}</SettingsTableCell>
                         <SettingsTableCell className="truncate text-muted-foreground">{profile.reasoningLevel}</SettingsTableCell>
@@ -595,7 +589,6 @@ export function AdminView(): ReactElement {
                 <tbody>
                   {visibleAgents.map((agent) => (
                     <SettingsTableRow aria-label={`Edit ${agent.name}`} key={agent.id} onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input, label, [data-base-ui-portal]")) openEditAgent(agent); }} tabIndex={0}>
-                      <SettingsTableCell className="p-0" />
                       <SettingsTableCell><span className="flex min-w-0 items-center gap-3"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><AgentNameEditor agent={agent} onSave={(name) => patchAgent(agent, { name }, "Unable to rename agent")} />{agent.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}</span></SettingsTableCell>
                       <SettingsTableCell className="capitalize">{agent.role}</SettingsTableCell>
                       <SettingsTableCell className="truncate">{profiles.find((profile) => profile.id === agent.profileId)?.name ?? agent.profileId}</SettingsTableCell>
@@ -644,7 +637,6 @@ export function AdminView(): ReactElement {
                     const action = `hermes:revoke:${agent.id}`;
                     return (
                       <SettingsTableRow aria-label={`Hermes agent ${agent.name}`} key={agent.id}>
-                        <SettingsTableCell className="p-0" />
                         <SettingsTableCell>
                           <span className="flex items-center gap-3">
                             <ProfileAvatar name={agent.name} seed={agent.avatarSeed} collection="bottts-neutral" />

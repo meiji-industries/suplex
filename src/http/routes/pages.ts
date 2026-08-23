@@ -31,7 +31,7 @@ const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
 
   app.get("/", async (request, reply) => {
     if (auth && !(await sessionUser(auth, request, reply, options.config))) return reply.redirect("/auth");
-    return reply.redirect("/health");
+    return reply.redirect("/tasks");
   });
   app.get("/auth", async (request, reply) => sendHtml(request, reply, renderApplicationPage("auth", assetMode)));
   app.get("/admin", async (request, reply) => {

@@ -189,6 +189,13 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
   const presentationPhase = taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands });
   const awaitingDeliveryReview = canReviewDelivery && presentationPhase === "reviewing_delivery";
   const canRetryFinalReview = task.phase === "delivery_blocked" && task.allowedCommands.includes("final_review");
+  if (task.projection.status === "stalled") return <Card data-task-actions data-task-status-card size="sm" role="alert">
+    <CardHeader>
+      <CardTitle><h3>Forge's workflow is stuck</h3></CardTitle>
+      <CardDescription>{task.projection.message ?? "Temporal reported a workflow failure."}</CardDescription>
+    </CardHeader>
+    <CardFooter className="justify-end"><Button size="sm" onClick={() => void onPlanAction("resync-projection")} disabled={busy}>Resync projection</Button></CardFooter>
+  </Card>;
   if (!hasVisibleActions && task.phase === "planning") return <div data-task-actions />;
   if (!hasVisibleActions) {
     return <Card data-task-actions data-task-status-card size="sm" aria-label={`${phaseLabel(presentationPhase)} status`}>

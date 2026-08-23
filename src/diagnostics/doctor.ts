@@ -27,6 +27,8 @@ export async function runDoctor(config: ForgeConfig, database: ForgeDatabase, op
   });
   const journal = database.authQuery((db) => String(db.pragma("journal_mode", { simple: true })));
   checks.push({ status: journal.toLowerCase() === "wal" ? "PASS" : "WARN", name: "sqlite WAL", detail: journal });
+  const stalled = database.authQuery((db) => db.prepare("SELECT task_id AS taskId, projection_status_message AS message FROM forge_issue_projections WHERE projection_status = 'stalled' ORDER BY task_id").all() as Array<{ taskId: string; message: string | null }>);
+  checks.push({ status: stalled.length ? "FAIL" : "PASS", name: "stalled workflows", detail: stalled.length ? stalled.map((task) => `${task.taskId}: ${task.message ?? "unknown failure"}`).join("; ") : "none" });
   const disk = await statfs(config.databasePath);
   const free = Number(disk.bavail) * Number(disk.bsize);
   checks.push({ status: free > 1024 ** 3 ? "PASS" : "WARN", name: "disk headroom", detail: `${Math.floor(free / 1024 / 1024)} MiB free` });

@@ -41,6 +41,30 @@ async function waitForWorkerPolling(worker: Worker, failure: { error?: unknown }
 
 const reconciliationTimeoutMs = 30_000;
 const taskCreationReconciliationIntervalMs = 60_000;
+const workflowStallReconciliationIntervalMs = 60_000;
+
+export async function reconcileWorkflowStalls(database: ForgeDatabase, connection: NativeConnection, config: ForgeConfig): Promise<{ inspected: number; stalled: number }> {
+  const tasks = database.authQuery((db) => db.prepare("SELECT task_id AS taskId, workflow_id AS workflowId FROM forge_issue_projections WHERE phase NOT IN ('done', 'cancelled') ORDER BY task_id").all() as Array<{ taskId: string; workflowId: string }>);
+  let stalled = 0;
+  for (const task of tasks) {
+    try {
+      const description = await connection.workflowService.describeWorkflowExecution({ namespace: config.temporalNamespace, execution: { workflowId: task.workflowId } });
+      const data = description as unknown as { workflowExecutionInfo?: { status?: number }; pendingWorkflowTask?: { attempt?: number } };
+      const failedTask = JSON.stringify(description).includes("WorkflowTaskFailed");
+      const closed = data.workflowExecutionInfo?.status !== undefined && data.workflowExecutionInfo.status !== 1;
+      const attempts = data.pendingWorkflowTask?.attempt ?? 0;
+      if (!closed && attempts <= 3 && !failedTask) continue;
+      const message = closed ? "Temporal workflow closed before the task completed" : failedTask ? "Temporal reported WorkflowTaskFailed" : `Workflow task failed ${attempts} times`;
+      database.authTransaction((db) => db.prepare("UPDATE forge_issue_projections SET projection_status = 'stalled', projection_status_message = ?, reconciled_at = ? WHERE task_id = ?").run(message, new Date().toISOString(), task.taskId));
+      stalled += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Temporal workflow could not be described";
+      database.authTransaction((db) => db.prepare("UPDATE forge_issue_projections SET projection_status = 'stalled', projection_status_message = ?, reconciled_at = ? WHERE task_id = ?").run(message, new Date().toISOString(), task.taskId));
+      stalled += 1;
+    }
+  }
+  return { inspected: tasks.length, stalled };
+}
 
 /**
  * Recovery inspects local processes, SQLite, and Temporal. None of those
@@ -87,11 +111,12 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   let worker: Worker | undefined;
   let heartbeat: NodeJS.Timeout | undefined;
   let creationReconciliationHeartbeat: NodeJS.Timeout | undefined;
+  let workflowStallReconciliationHeartbeat: NodeJS.Timeout | undefined;
   let workerRun: Promise<void> | undefined;
   let creationRecovery: Promise<void> | undefined;
+  let workflowStallRecovery: Promise<void> | undefined;
   let shutdown: (() => void) | undefined;
   try {
-    logger.info("Worker startup: connecting to Temporal");
     connection = await NativeConnection.connect(temporalConnectionOptions(config));
     logger.info("Worker startup: Temporal connection ready");
     logger.info("Worker startup: creating workflow bundle");
@@ -146,12 +171,25 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
     reconcileTaskCreation();
     void runReconciliation(logger, "agent-execution-reconciliation", () => reconcileAgentExecutions(database), (result) => result.filter((outcome) => outcome.status === "failed").length, (result) => ({ inspected: result.length, failed: result.filter((outcome) => outcome.status === "failed").length }));
     void runReconciliation(logger, "developer-execution-reconciliation", () => reconcileDeveloperExecutions(database), (result) => result.filter((outcome) => outcome.status === "failed").length, (result) => ({ inspected: result.length, failed: result.filter((outcome) => outcome.status === "failed").length }));
+    const reconcileWorkflowStall = (): void => {
+      if (workflowStallRecovery || !connection) return;
+      workflowStallRecovery = runReconciliation(
+        logger,
+        "workflow-stall-reconciliation",
+        () => reconcileWorkflowStalls(database, connection!, config),
+        (result) => result.stalled,
+        (result) => ({ inspected: result.inspected, stalled: result.stalled }),
+      ).then(() => undefined).finally(() => { workflowStallRecovery = undefined; });
+    };
     void runReconciliation(logger, "successor-intent-reconciliation", () => reconcileSuccessorIntents(database, config), (result) => result.linked, (result) => ({ inspected: result.inspected, linked: result.linked }));
     void runReconciliation(logger, "capacity-ledger-reconciliation", async () => new CapacityManager(database, config).reconcileFromLedgers(), (result) => result, (result) => ({ reconciled: result }));
     heartbeat = setInterval(refreshRegistration, 10_000);
     heartbeat.unref();
     creationReconciliationHeartbeat = setInterval(reconcileTaskCreation, taskCreationReconciliationIntervalMs);
     creationReconciliationHeartbeat.unref();
+    reconcileWorkflowStall();
+    workflowStallReconciliationHeartbeat = setInterval(reconcileWorkflowStall, workflowStallReconciliationIntervalMs);
+    workflowStallReconciliationHeartbeat.unref();
 
     let shuttingDown = false;
     shutdown = (): void => {
@@ -171,7 +209,11 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
     if (creationReconciliationHeartbeat) {
       clearInterval(creationReconciliationHeartbeat);
     }
+    if (workflowStallReconciliationHeartbeat) {
+      clearInterval(workflowStallReconciliationHeartbeat);
+    }
     await creationRecovery;
+    await workflowStallRecovery;
     database.unregisterWorker(workerId);
     if (shutdown) {
       process.removeListener("SIGTERM", shutdown);
@@ -186,7 +228,11 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
     if (creationReconciliationHeartbeat) {
       clearInterval(creationReconciliationHeartbeat);
     }
+    if (workflowStallReconciliationHeartbeat) {
+      clearInterval(workflowStallReconciliationHeartbeat);
+    }
     await creationRecovery;
+    await workflowStallRecovery;
     // Cleanup must never mask the original startup error: drain the worker
     // before closing the connection, and swallow secondary failures.
     try { worker?.shutdown(); } catch { /* worker already stopped */ }

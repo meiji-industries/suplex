@@ -66,7 +66,7 @@ function TaskMediaRow({ taskId, images }: { taskId: string; images: ApiTask["ima
   </>;
 }
 
-function NextAction({ value }: { value: string | null }): ReactElement {
+export function NextAction({ value }: { value: string | null }): ReactElement {
   if (value === "Lead delivery review" || value?.startsWith("Fresh Lead delivery review")) return <>Forge is checking the completed work against the approved plan.</>;
   if (value === "Developer repair of blocking findings") return <>Developer needs to address required review feedback</>;
   const match = value?.match(/^Required checks are (?:still )?missing: (.+)$/);
@@ -199,15 +199,8 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
     </CardHeader>
     <CardFooter className="justify-end"><Button size="sm" onClick={() => void onPlanAction("resync-projection")} disabled={busy}>Resync projection</Button></CardFooter>
   </Card>;
-  if (!hasVisibleActions && task.phase === "planning") return <div data-task-actions />;
-  if (!hasVisibleActions) {
-    return <Card data-task-actions data-task-status-card size="sm" aria-label={`${phaseLabel(presentationPhase)} status`}>
-      <CardHeader>
-        <CardTitle><h3><TaskStatus phase={task.phase} presentationPhase={presentationPhase} processing={taskIsProcessing({ phase: task.phase, agentInvocations: task.agentInvocations, capacityStatus: task.capacity?.status })} /></h3></CardTitle>
-        <CardDescription><NextAction value={task.pendingAction} /></CardDescription>
-      </CardHeader>
-    </Card>;
-  }
+  // Status-only phases render nothing here: the sidebar's "Next action" and the Chat already say what Forge is doing.
+  if (!hasVisibleActions) return <div data-task-actions />;
   if (task.phase === "development" || recoveryOwnsActions) return <div data-task-actions />;
   return (
     <Card data-task-actions data-task-blocked-card={isBlocked && !awaitingDeliveryReview || undefined} size="sm">

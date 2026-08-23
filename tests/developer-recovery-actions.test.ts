@@ -5,7 +5,7 @@ import { expect, test } from "vitest";
 import { DeveloperRecoveryActions } from "../src/frontend/components/app/developer-recovery-actions.js";
 import { DeveloperRecoveryStatus } from "../src/frontend/components/app/developer-recovery-status.js";
 import { SystemHealthProvider } from "../src/frontend/components/app/system-health.js";
-import { TaskActions } from "../src/frontend/views/task-details.js";
+import { NextAction, TaskActions } from "../src/frontend/views/task-details.js";
 import type { ApiTask } from "../src/frontend/lib/view-shared.js";
 
 test("only Developer cancellation remains available while another task command is pending", () => {
@@ -244,9 +244,8 @@ test("shows a status card when a background phase has no action", () => {
     onRevisePlan: async () => undefined,
     onContinueWork: async () => undefined,
   }) }));
-  expect(html).toContain('data-task-status-card="true"');
-  expect(html).toContain("Opening PR");
-  expect(html).toContain("Publishing draft pull request");
+  expect(html).toContain("data-task-actions");
+  expect(html).not.toContain('data-task-status-card="true"');
 });
 
 test("explains delivery review without internal role language", () => {
@@ -257,14 +256,7 @@ test("explains delivery review without internal role language", () => {
     pendingAction: "Lead delivery review",
     projection: { status: "current" },
   } as unknown as ApiTask;
-  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
-    task,
-    busy: false,
-    onStartPlanning: async () => undefined,
-    onPlanAction: async () => undefined,
-    onRevisePlan: async () => undefined,
-    onContinueWork: async () => undefined,
-  }) }));
+  const html = renderToStaticMarkup(createElement(NextAction, { value: task.pendingAction }));
   expect(html).toContain("Forge is checking the completed work against the approved plan.");
   expect(html).not.toContain("Lead delivery review");
 });

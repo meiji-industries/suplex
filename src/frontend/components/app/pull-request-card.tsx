@@ -43,6 +43,6 @@ export function PullRequestCard({ task, busy, onRefresh, onMarkReady }: { task: 
       </div> : null}
       <div className="text-[11px] text-muted-foreground">{details}</div>
     </CardContent>
-    <CardFooter><div className="flex w-full items-center justify-end gap-2"><Button size="icon-xs" variant="ghost" aria-label="Refresh" title="Refresh" onClick={() => void onRefresh()} disabled={busy}><RefreshCw aria-hidden="true" /></Button><a className={buttonVariants({ variant: "outline", size: "sm" })} href={pr.url} target="_blank" rel="noreferrer">Open PR<ExternalLink aria-hidden="true" /></a>{pr.state === "open" && pr.isDraft ? <Button size="sm" onClick={() => void onMarkReady()} disabled={busy}>{busy ? "Marking ready…" : "Ready for review"}</Button> : null}</div></CardFooter>
+    <CardFooter><div className="flex w-full items-center justify-end gap-2"><Button size="icon-xs" variant="ghost" aria-label="Refresh" title="Refresh" onClick={() => void onRefresh()} disabled={busy}><RefreshCw aria-hidden="true" /></Button><a className={buttonVariants({ variant: "ghost", size: "icon-xs" })} href={pr.url} target="_blank" rel="noreferrer" aria-label="Open pull request on GitHub" title="Open pull request on GitHub"><ExternalLink aria-hidden="true" /></a>{pr.state === "open" && pr.isDraft ? <Button size="sm" onClick={() => void onMarkReady()} disabled={busy}>{busy ? "Marking ready…" : "Ready for review"}</Button> : null}</div></CardFooter>
   </Card>;
 }

@@ -13,10 +13,7 @@ Pinned Project revision:
 {{revision}}
 
 Role profile settings:
-[]
+{{profiles}}
 
 Repository read evidence:
-{{repository_evidence}}
-
-Revision request:
-{"key":"{{revision_context}}"}
+{{repository_evidence}}{{revision_request}}

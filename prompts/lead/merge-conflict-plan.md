@@ -10,13 +10,13 @@ Approved plan:
 {{plan}}
 
 Forward-merge identity:
-{"branchName":"{{branch_name}}","priorHead":"{{prior_head}}","targetBaseSha":"{{target_base_sha}}"}
+{{forward_merge_identity}}
 
 Conflict files:
-{{conflict_file}}
+{{conflict_files}}
 
 Combined conflict evidence:
 {{combined_diff}}
 
 Pinned deterministic commands:
-{"setupCommand":"{{setup_command}}","verificationCommand":"{{verification_command}}"}
+{{pinned_commands}}

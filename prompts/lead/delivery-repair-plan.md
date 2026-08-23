@@ -4,6 +4,6 @@ Return exactly one JSON object with no markdown fences: {"kind":"delivery_repair
 
 Unresolved technical questions must be empty. Address every open blocking finding exactly once and preserve the exact task, project revision, branch, target base, subject commit, and subject tree.
 
-Exact context: {"taskId":"{{task_id}}","companyId":"{{company_id}}","workflowId":"{{workflow_id}}","projectId":"{{project_id}}","projectRevisionId":"{{project_revision_id}}","source":"delivery_review","leadSessionRef":"{{lead_session_ref}}","releaseId":null,"deliveryReviewId":null,"finalReviewId":null,"ciRunId":null,"acceptanceId":null,"branchName":"{{branch_name}}","worktreePath":"{{worktree_path}}","targetBaseSha":"{{target_base_sha}}","subjectCommit":"{{subject_commit}}","subjectTree":"{{subject_tree}}"}
+Exact context: {{context}}
 
-Open blocking findings: []
+Open blocking findings: {{findings}}

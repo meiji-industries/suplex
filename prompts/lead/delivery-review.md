@@ -16,9 +16,10 @@ Developer delivery report:
 
 Developer verification evidence:
 {{developer_evidence}}
+{{developer_session_note}}{{forward_merge_note}}
 
 Exact Git subject (base, branch, commit, tree, clean state):
-{"targetBaseSha":"{{target_base_sha}}","branch":"{{branch}}","subjectCommit":"{{subject_commit}}","subjectTree":"{{subject_tree}}","observedHead":"{{head}}","observedTree":"{{tree}}","dirtyState":"dirty"}
+{{git_subject}}
 
 Repository instructions:
 {{instructions}}

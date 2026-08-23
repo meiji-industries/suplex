@@ -532,6 +532,21 @@ function InlineTaskEditor({ field, value, onSave, imageSources }: { field: "titl
 }
 
 export function TaskDetailsPage({ task, project, companyId: _companyId, busy, error, isAdmin, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onResolveDecisionBlocker, onMarkReady: _onMarkReady, onMerge: _onMerge, onDuplicate, onUpdateDetails, onRefresh, onRescue }: { task: ApiTask; project: ApiProject | undefined; companyId: string; busy: boolean; error: string; isAdmin: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onResolveDecisionBlocker: (answer: string) => Promise<void>; onMarkReady: () => Promise<void>; onMerge: () => Promise<void>; onDuplicate: () => Promise<void>; onUpdateDetails: (input: { title?: string; description?: string }) => Promise<void>; onRefresh: () => Promise<void>; onRescue: () => Promise<RescueReport> }): ReactElement {
+  const [syncing, setSyncing] = useState(false);
+  const observedAtRef = useRef(task.githubPullRequest?.observedAt ?? null);
+  observedAtRef.current = task.githubPullRequest?.observedAt ?? null;
+  const syncNow = async (): Promise<void> => {
+    const before = observedAtRef.current;
+    setSyncing(true);
+    try {
+      // The refresh only queues the GitHub observation; poll until it lands (or give up after ~20s).
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        await onRefresh();
+        if (observedAtRef.current !== before) return;
+        await new Promise((resolve) => setTimeout(resolve, 2_000));
+      }
+    } finally { setSyncing(false); }
+  };
   const approveCommand = task.commands.find((command) => command.name === "approve_plan");
   const tellPlannerCommand = task.commands.find((command) => command.name === "send_planner_note");
   const blockerCommand = task.commands.find((command) => command.name === "respond_plan_blocker");
@@ -677,7 +692,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
               <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd><NextAction value={task.pendingAction} /></dd></div>
-              <div className="space-y-1"><dt className="text-muted-foreground">Sync</dt><dd className="flex items-center gap-1">{task.githubPullRequest?.observedAt ? `synced ${Math.max(0, Math.floor((Date.now() - Date.parse(task.githubPullRequest.observedAt)) / 1_000))}s ago` : "never"}<Button size="icon-xs" variant="ghost" aria-label="Sync with GitHub now" title="Sync with GitHub now" onClick={() => void onRefresh()} disabled={busy}><RefreshCw aria-hidden="true" className="size-3" /></Button></dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Sync</dt><dd className="flex items-center gap-1">{syncing ? "In progress" : task.githubPullRequest?.observedAt ? `synced ${Math.max(0, Math.floor((Date.now() - Date.parse(task.githubPullRequest.observedAt)) / 1_000))}s ago` : "never"}<Button size="icon-xs" variant="ghost" aria-label="Sync with GitHub now" title="Sync with GitHub now" onClick={() => void syncNow()} disabled={busy || syncing}><RefreshCw aria-hidden="true" className={syncing ? "size-3 animate-spin" : "size-3"} /></Button></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Updated</dt><dd>{adminDate(task.updatedAt)}</dd></div>
               {task.issueKey ? <div className="space-y-1"><dt className="text-muted-foreground">Issue key</dt><dd><code>{task.issueKey}</code></dd></div> : null}

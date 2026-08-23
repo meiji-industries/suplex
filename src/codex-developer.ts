@@ -20,6 +20,7 @@ import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact }
 import { runPinnedVerification } from "./verification.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { loadDefaultPrompts, renderPrompt } from "./prompts.js";
+import { isVersionedPromptSet } from "./prompt-resolution.js";
 import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
@@ -732,7 +733,8 @@ export class DeveloperService {
     if (!configuration.prompts) return loadDefaultPrompts();
     const artifact = this.database.authQuery((db) => db.prepare("SELECT storage_path FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-prompt-set'").get(configuration.prompts!.artifactId, companyId) as { storage_path: string } | undefined);
     if (!artifact) throw new AgentFailure("scoped-input-missing", "Pinned task prompts are unavailable");
-    return new Map(Object.entries(jsonRequired(this.artifacts.getArtifactSync({ companyId, storagePath: artifact.storage_path, sha256: configuration.prompts.sha256 }).toString("utf8")) as Record<string, string>));
+    const parsed = jsonRequired(this.artifacts.getArtifactSync({ companyId, storagePath: artifact.storage_path, sha256: configuration.prompts.sha256 }).toString("utf8")) as unknown;
+    return new Map(Object.entries(isVersionedPromptSet(parsed) ? parsed.prompts : parsed as Record<string, string>));
   }
 
 

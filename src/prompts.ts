@@ -56,16 +56,6 @@ export function parsePromptTemplate(path: PromptPath, text: string): PromptTempl
   return { id, path, category, archetype, title, editable: editable === "true", variables, renamedFrom, guidance, contract: contract || null, guidanceSha256: createHash("sha256").update(guidance).digest("hex") };
 }
 
-/** Legacy repository overrides; removed when database-backed layers land. */
-export async function resolveProjectPrompts(repositoryPath: string, baseSha: string): Promise<Map<PromptPath, string>> {
-  const { runCommand } = await import("./command-runner.js");
-  const overrides = new Map<PromptPath, string>();
-  await Promise.all(PROMPT_PATHS.map(async (path) => {
-    const result = await runCommand({ taskId: null, stepId: null, command: "git", args: ["show", `${baseSha}:.forge/prompts/${path}`], cwd: repositoryPath, timeout: 30_000 });
-    if (result.exitCode === 0 && !result.timedOut) overrides.set(path, result.stdout);
-  }));
-  return overrides;
-}
 
 export function loadPromptCatalog(): ReadonlyMap<string, PromptTemplate> {
   if (catalog) return catalog;

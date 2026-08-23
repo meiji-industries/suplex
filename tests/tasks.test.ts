@@ -586,3 +586,19 @@ test("continues terminal work as a new linked issue without rewriting the origin
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }
 });
+
+test("pins versioned resolved prompt artifacts at task creation", async () => {
+  const value = await fixture();
+  try {
+    const now = new Date().toISOString();
+    value.database.authTransaction((db) => {
+      db.prepare("INSERT INTO forge_prompt_overrides (id, scope, project_id, scope_key, template_id, mode, content, base_template_sha256, current_revision, updated_by_user_id, created_at, updated_at) VALUES ('prompt-override', 'project', ?, ?, 'lead/plan', 'append', 'project guidance', ?, 1, 'admin-1', ?, ?)").run(value.projectId, value.projectId, "x", now, now);
+    });
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Prompt snapshot", description: "body", idempotencyKey: "prompt-snapshot-task", images: [] });
+    const artifact = value.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE task_id = ? AND kind = 'task-prompt-set'").get(created.task.id) as { storage_path: string; sha256: string });
+    const promptSet = JSON.parse(new ArtifactStore(value.config.artifactRoot).getArtifactSync({ companyId: value.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 }).toString("utf8"));
+    expect(promptSet).toMatchObject({ version: 2, prompts: { "lead/plan.md": expect.stringContaining("project guidance") }, provenance: { "lead/plan": expect.any(Object) } });
+  } finally {
+    value.database.close(); await rm(value.root, { recursive: true, force: true });
+  }
+});

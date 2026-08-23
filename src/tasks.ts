@@ -15,7 +15,7 @@ import { redact } from "./logging.js";
 import { configureCommandActivityStore } from "./command-runner.js";
 import { ProjectFailure, ProjectService, resolveAgentProfiles, type Project, type ProjectRole, type RoleAssignments } from "./projects.js";
 import { loadTaskConfiguration, TaskProjectConfigurationSchema } from "./task-project-configuration.js";
-import { composePrompt, loadDefaultPrompts, resolveProjectPrompts } from "./prompts.js";
+import { PromptOverrideService, type ResolvedPromptSet } from "./prompt-overrides.js";
 import { ReleaseFailureCodeSchema, type ReleaseFailureCode } from "./release-failures.js";
 import { acceptIssueDevelopment, acceptIssuePlanning, continueIssueWork, executeIssueCommand, IssueWorkflowStartFailure, queryIssueWorkflow, recordIssueProgress, resolveIssueDecisionBlocker, resyncIssueProjection, reviseIssuePlan, startIssueWorkflow } from "./temporal/service.js";
 import { issueCommands } from "./commands/registry.js";
@@ -688,6 +688,7 @@ interface TaskServiceOptions {
   now?: () => Date;
   fault?: (point: TaskCreationFaultPoint, ids: { intentId: string; taskId: string; artifactIndex?: number }) => void | Promise<void>;
   capacity?: CapacityManager;
+  promptOverrides?: PromptOverrideService;
 }
 
 export type TaskCreationFaultPoint = "after_intent_reserved" | "after_manifest_persisted" | "after_artifact_staged" | "after_artifact_finalized" | "after_task_committed" | "before_workflow_start" | "after_workflow_accepted" | "after_projection_applied" | "before_response";
@@ -824,6 +825,7 @@ export class TaskService {
   private readonly workflow: IssueWorkflowPort;
   private readonly capacity: CapacityManager;
   private readonly eventListeners = new Set<{ afterCursor: number; send: (event: TaskEvent, cursor: number) => void }>();
+  private readonly promptOverrides: PromptOverrideService;
   private readonly eventVersions = new Map<string, string>();
   private eventCursor = 0;
   private eventPoller: NodeJS.Timeout | undefined;
@@ -840,6 +842,7 @@ export class TaskService {
     this.fault = options.fault;
     this.artifacts = options.artifactStore ?? new ArtifactStore(config.artifactRoot, database);
     this.capacity = options.capacity ?? new CapacityManager(database, config);
+    this.promptOverrides = options.promptOverrides ?? new PromptOverrideService(database, auth, projects);
     this.workflow = options.workflow ?? {
       start: (input) => startIssueWorkflow(config, input),
       execute: (command, workflowId, input) => executeIssueCommand(config, workflowId, command, input),
@@ -1090,8 +1093,12 @@ export class TaskService {
     const roleAgents = this.resolveRoleAgents(project.roleDefaults, input.roleAgents ?? {});
     const roleProfiles = this.database.authQuery((db) => resolveAgentProfiles(db, roleAgents));
     const branchHeads = await this.projects.captureTaskConfiguration(project);
-    const projectPromptOverrides = await resolveProjectPrompts(project.repositoryPath, branchHeads.baseSha);
-    const resolvedPrompts = new Map([...loadDefaultPrompts()].map(([path, prompt]) => [path, composePrompt(prompt, projectPromptOverrides.get(path))]));
+    let promptSet: ResolvedPromptSet;
+    try {
+      promptSet = this.promptOverrides.resolveForProject(project.id);
+    } catch {
+      throw new TaskFailure("Task creation failed", [finding("prompt_overrides_unavailable", "prompts", "Prompt overrides are unavailable")], 503);
+    }
     const capturedAt = this.now().toISOString();
     let taskConfiguration = TaskProjectConfigurationSchema.parse({ projectId: project.id, projectName: project.name, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot, repository: project.repository, baseBranch: project.baseBranch, targetBranch: project.targetBranch, baseSha: branchHeads.baseSha, targetSha: branchHeads.targetSha, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand, requiredChecks: project.requiredChecks, roleAgents, roleProfiles, capturedAt });
     // Capability decisions are made from the configuration captured for this
@@ -1149,8 +1156,8 @@ export class TaskService {
       const workflowId = reserved.intent.workflow_id;
       this.updateCreationIntent(reserved.intent.id, { state: "staging", errorCode: null, attempt: reserved.intent.attempt + 1 }, reserved.intent.lease_token);
       const briefBytes = Buffer.from(normalizeText(input.description), "utf8");
-      promptArtifact = await this.artifacts.putArtifact(companyId, "task-prompt-set", { filename: `prompts-${taskId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(Object.fromEntries(resolvedPrompts)), "utf8"), taskId });
-      taskConfiguration = TaskProjectConfigurationSchema.parse({ ...taskConfiguration, prompts: { artifactId: promptArtifact.id, sha256: promptArtifact.sha256, overrides: [...projectPromptOverrides.keys()] } });
+      promptArtifact = await this.artifacts.putArtifact(companyId, "task-prompt-set", { filename: `prompts-${taskId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 2, prompts: Object.fromEntries(promptSet.prompts), provenance: promptSet.provenance }), "utf8"), taskId });
+      taskConfiguration = TaskProjectConfigurationSchema.parse({ ...taskConfiguration, prompts: { artifactId: promptArtifact.id, sha256: promptArtifact.sha256, overrides: promptSet.overrides } });
       configurationArtifact = await this.artifacts.putArtifact(companyId, "task-project-configuration", { filename: `project-configuration-${taskId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify(taskConfiguration), "utf8"), taskId });
       await this.maybeFault("after_manifest_persisted", { intentId: reserved.intent.id, taskId });
       briefArtifact = await this.artifacts.putArtifact(companyId, "task-brief", { filename: "task.md", mimeType: "text/markdown", bytes: briefBytes, taskId });

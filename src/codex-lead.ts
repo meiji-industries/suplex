@@ -23,6 +23,7 @@ import { CiRepairPlanSchema, DeliveryRepairPlanInputSchema, DeliveryRepairPlanRe
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
 import { loadDefaultPrompts, renderPrompt } from "./prompts.js";
+import { isVersionedPromptSet } from "./prompt-resolution.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { defaultProcessController, type ProcessController, type ProcessInspection } from "./process-manager.js";
 import { jsonRequired } from "./task-utils.js";
@@ -425,7 +426,8 @@ export class AgentService {
     const pinned = configuration.prompts;
     const artifact = this.database.authQuery((db) => db.prepare("SELECT storage_path FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-prompt-set'").get(pinned.artifactId, input.companyId) as { storage_path: string } | undefined);
     if (!artifact) throw new AgentFailure("scoped-input-missing", "Pinned task prompts are unavailable");
-    const prompts = jsonRequired(this.artifacts.getArtifactSync({ companyId: input.companyId, storagePath: artifact.storage_path, sha256: pinned.sha256 }).toString("utf8")) as Record<string, string>;
+    const parsed = jsonRequired(this.artifacts.getArtifactSync({ companyId: input.companyId, storagePath: artifact.storage_path, sha256: pinned.sha256 }).toString("utf8")) as unknown;
+    const prompts = isVersionedPromptSet(parsed) ? parsed.prompts : parsed as Record<string, string>;
     const prompt = prompts[path];
     if (prompt === undefined) throw new AgentFailure("scoped-input-missing", `Pinned task prompt is unavailable: ${path}`);
     return renderPrompt(prompt, { pull_request_guidance: prompts[guidance] ?? loadDefaultPrompts().get(guidance)!, ...values });

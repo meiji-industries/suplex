@@ -30,9 +30,9 @@ export function createTargetBaseActivities(ctx: ActivityContext): TargetBaseActi
       if (!context || !["completed", "blocked"].includes(context.developerStatus) || !context.resultCommit || !context.resultTree) {
         return blocked("merge_state_ownership_mismatch", "human", false, "The current Developer delivery is unavailable for reconciliation");
       }
+      const artifacts = new ArtifactStore(config.artifactRoot, database);
       let pinned: ReturnType<typeof loadTaskConfiguration>;
       try { pinned = database.authQuery((db) => loadTaskConfiguration(db, artifacts, input)); } catch { return blocked("artifact_unavailable", "human", false, "The task project configuration is unavailable or incomplete"); }
-      const artifacts = new ArtifactStore(config.artifactRoot, database);
       const service = new ForwardMergeService(database, githubRelease, artifacts);
       let merge;
       try {

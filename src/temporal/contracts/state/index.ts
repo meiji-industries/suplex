@@ -63,16 +63,20 @@ export const IssueWorkflowStateSchema = z.preprocess((raw) => {
     }
     raw = state;
   }
-  // A human blocker is a human-owned wait. When a transition hands ownership back to an
-  // agent without clearing it, the blocker is stale, not an invariant violation.
-  if (raw && typeof raw === "object" && (raw as { owner?: unknown }).owner !== "human" && (raw as { blocker?: { unblockOwner?: unknown } | null }).blocker?.unblockOwner === "human") return { ...(raw as object), blocker: null };
+  // A blocker belongs to its original legal command set. Transitions can change
+  // ownership or commands independently, leaving that persisted blocker stale.
+  if (raw && typeof raw === "object") {
+    const state = raw as { owner?: unknown; allowedCommands?: unknown; blocker?: { unblockOwner?: unknown; actions?: Array<{ command?: unknown }> } | null };
+    const allowedCommands = Array.isArray(state.allowedCommands) ? state.allowedCommands : [];
+    if ((state.owner !== "human" && state.blocker?.unblockOwner === "human")
+      || state.blocker?.actions?.some((action) => typeof action.command !== "string" || !allowedCommands.includes(action.command))) return { ...state, blocker: null };
+  }
   return raw;
 }, z.object(orderedStateFields)).superRefine((state, context) => {
   if (state.blocker?.unblockOwner !== "human") return;
   if (state.owner !== "human") context.addIssue({ code: "custom", path: ["owner"], message: "Human blockers require human ownership" });
   if (state.blocker.retry && !state.blocker.retry.exhausted && state.blocker.retry.retryAt !== null) context.addIssue({ code: "custom", path: ["blocker", "retry"], message: "Retryable blockers cannot be surfaced as human attention" });
   for (const action of state.blocker.actions) {
-    if (!state.allowedCommands.includes(action.command)) context.addIssue({ code: "custom", path: ["allowedCommands"], message: "Blocker actions must be legal in the current state" });
     if (action.destructive !== (action.command === "cancel_issue")) context.addIssue({ code: "custom", path: ["blocker", "actions"], message: "Only issue cancellation is destructive" });
     if (["reject_plan", "record_delivery_decision", "request_delivery_changes"].includes(action.command) && !action.requiresNote) context.addIssue({ code: "custom", path: ["blocker", "actions"], message: "This action requires a note" });
   }

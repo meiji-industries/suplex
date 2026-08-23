@@ -143,6 +143,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     const summary = normalizeSafeSummary(result.summary, 200);
     state = IssueWorkflowStateSchema.parse({
       ...state,
+      blocker: null,
       revision: state.revision + 1,
       phase: "delivery_blocked",
       owner: result.owner === "lead" ? "lead" : "human",
@@ -348,6 +349,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     reconcileMergeTurn: async () => { throw new Error("Merge runtime is not initialized"); },
     reconcileAcceptanceTurn: async () => { throw new Error("Acceptance runtime is not initialized"); },
     retryAcceptDelivery: async () => { throw new Error("Acceptance runtime is not initialized"); },
+    retryTargetBaseReconciliation: async () => { throw new Error("Target-base runtime is not initialized"); },
     resumeCapacityOperation: async () => { throw new Error("Capacity runtime is not initialized"); },
     runFinalReviewTurn: async () => { throw new Error("Final-review runtime is not initialized"); },
   }, { get: () => state, set: (next) => { state = next; } });

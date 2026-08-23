@@ -196,6 +196,16 @@ describe("target-base reconciliation contracts", () => {
     expect(resumed).toMatchObject({ phase: "delivery_reviewed", owner: "lead", allowedCommands: ["publish_draft", "cancel_issue"], targetBaseBlockerCode: null });
   });
 
+  test("drops an accepted human blocker when reconciliation replaces its commands", () => {
+    const accepted = IssueWorkflowStateSchema.parse({
+      workflowId: "workflow-1", companyId: "company-1", projectId: "project-1", issueId: "task-1", projectRevisionId: "revision-1",
+      phase: "accepted", revision: 4, owner: "human", allowedCommands: ["accept_delivery", "request_delivery_changes", "cancel_issue"], pendingAction: "Member acceptance required", lastEventId: "workflow-1:4", continuationCount: 0, lastSummaryHash: null,
+      blocker: { category: "member_authorization", summary: "Member acceptance required", unblockOwner: "human", actions: [{ command: "accept_delivery", label: "Accept", requiresNote: false, destructive: false }], retry: null, evidence: { artifactId: "evidence-1", kind: "lead-plan" }, createdAt: "2026-08-22T00:00:00.000Z" },
+    });
+    const blocked = IssueWorkflowStateSchema.parse({ ...accepted, revision: 5, phase: "delivery_blocked", owner: "human", allowedCommands: ["retry_target_base_reconciliation", "cancel_issue"], pendingAction: "Configuration unavailable", lastEventId: "workflow-1:5" });
+    expect(blocked).toMatchObject({ phase: "delivery_blocked", blocker: null });
+  });
+
   test("installs reconciliation lineage columns without replacing legacy tables", async () => {
     const root = await mkdtemp(join(tmpdir(), "forge-target-base-migration-"));
     const database = new ForgeDatabase(join(root, "forge.sqlite"));

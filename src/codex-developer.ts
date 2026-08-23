@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { realpath } from "node:fs/promises";
 import { relative, sep } from "node:path";
 import { promisify } from "node:util";
@@ -13,7 +13,7 @@ import { AgentFailure } from "./agent-failure.js";
 import { resolveAgentProvider } from "./agent-providers/index.js";
 import type { AgentProvider, LeadProcessRunner, SessionStore } from "./agent-providers/provider.js";
 import { ForgeDatabase } from "./database.js";
-import { redact } from "./logging.js";
+import { redact, StructuredLogger } from "./logging.js";
 import type { GithubReleasePort } from "./github-release.js";
 import { createGitCommandGuard, withWorktreeMiseTrust, WorktreeFailure, WorktreeManager } from "./worktrees.js";
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
@@ -25,6 +25,7 @@ import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, Develo
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
 import { jsonRequired } from "./task-utils.js";
+import { ExecutionReceiptSchema, type ExecutionReceipt } from "./developer-contracts.js";
 
 
 const execFileAsync = promisify(execFile);
@@ -221,6 +222,7 @@ export class DeveloperService {
   private readonly worktrees: WorktreeManager;
   private readonly now: () => Date;
   private readonly github: Pick<GithubReleasePort, "getPullRequest"> | undefined;
+  private readonly logger = new StructuredLogger();
   private prompts: ReadonlyMap<string, string>;
 
 
@@ -319,6 +321,7 @@ export class DeveloperService {
     const outputLines: string[] = [];
     let sessionRef: string | undefined = existing?.sessionRef ?? undefined;
     let rawSessionId: string | undefined = sessionRef ? await this.sessionStore.read(sessionRef) : undefined;
+    let parserState: unknown;
     try {
       const heartbeat = setInterval(() => void this.heartbeat(executionId), 5_000);
       try {
@@ -334,6 +337,9 @@ export class DeveloperService {
             const sanitized = safeJsonLine(line);
             evidenceLines.push(sanitized);
             outputLines.push(line);
+            const incremental = this.provider.parseExecutionTranscript([line], { executionId, attempt, worktreePath: worktree.worktreePath, ...(parserState ? { state: parserState } : {}) });
+            parserState = incremental.parserState;
+            this.persistDeveloperReceipts(executionId, incremental.receipts);
             const event = this.provider.parseEvent(line);
             if (event.threadId && rawSessionId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer returned a different session identity for the same durable execution");
             if (event.threadId && !sessionRef) { rawSessionId = event.threadId; sessionRef = await this.sessionStore.create(rawSessionId); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET session_ref = ?, heartbeat_at = ? WHERE id = ?").run(sessionRef, this.now().toISOString(), executionId)); }
@@ -350,6 +356,9 @@ export class DeveloperService {
           await execFileAsync("git", ["-c", "user.name=Forge Builder", "-c", "user.email=builder@forge.invalid", "commit", "-m", "wip: builder"], { cwd: worktree.worktreePath, timeout: 30_000, maxBuffer: 256 * 1024 });
           gitState = await this.worktrees.inspectDelivery(worktree.worktreePath);
         }
+        const parsedTranscript = this.provider.parseExecutionTranscript(outputLines, { executionId, attempt, worktreePath: worktree.worktreePath });
+        this.persistDeveloperReceipts(executionId, parsedTranscript.receipts);
+        this.persistDeveloperReceipts(executionId, [this.gitSnapshotReceipt(executionId, attempt, parsedTranscript.receipts, gitState.headSha)]);
         const parsedReport = (() => {
           try { return parseDeliveryReport(evidenceLines, this.provider); }
           catch {
@@ -381,6 +390,30 @@ export class DeveloperService {
       });
       throw failure;
     } finally { await guard?.cleanup(); }
+  }
+
+
+  private persistDeveloperReceipts(executionId: string, receipts: ExecutionReceipt[]): void {
+    if (!receipts.length) return;
+    try {
+      this.database.authTransaction((db) => {
+        for (const receipt of receipts) {
+          db.prepare("INSERT OR IGNORE INTO forge_developer_execution_events (event_id, execution_id, attempt, sequence, kind, step_number, source_item_id, occurred_at, summary, exit_code, artifact_id, artifact_sha256, idempotency_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(receipt.eventId, executionId, receipt.attempt, receipt.sequence, receipt.kind, receipt.stepNumber, receipt.sourceItemId, receipt.occurredAt, receipt.summary, receipt.exitCode, receipt.artifactId, receipt.artifactSha256, receipt.idempotencyKey);
+        }
+        db.prepare("UPDATE forge_developer_executions SET heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running', 'cancelling')").run(this.now().toISOString(), executionId);
+      });
+    } catch (error) {
+      this.logger.error("Developer progress receipt persistence failed", { turnId: executionId }, { error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+
+  private gitSnapshotReceipt(executionId: string, attempt: number, receipts: ExecutionReceipt[], headSha: string): ExecutionReceipt {
+    return ExecutionReceiptSchema.parse({
+      eventId: `receipt_${createHash("sha256").update(`${executionId}:git-snapshot`).digest("hex").slice(0, 32)}`,
+      executionId, attempt, sequence: Math.max(0, ...receipts.map((receipt) => receipt.sequence)) + 1,
+      kind: "git_snapshot", stepNumber: null, sourceItemId: null, occurredAt: this.now().toISOString(), summary: `Final Git snapshot: ${headSha}`,
+      exitCode: null, artifactId: null, artifactSha256: null, idempotencyKey: `git-snapshot:${headSha}`,
+    });
   }
 
 
@@ -421,8 +454,10 @@ export class DeveloperService {
       this.bindCapacityInTransaction(db, input, executionId, input.developerSessionRef, input.worktreePath);
     });
     const evidenceLines: string[] = [];
+    const outputLines: string[] = [];
     const expectedRawSessionId = rawSessionId;
     const mergePrompt = this.mergeConflictResolutionPrompt(plan, input, conflict);
+    let parserState: unknown;
     let verificationArtifact: StoredArtifact | undefined;
     let completedMerge: { headSha: string; treeSha: string } | undefined;
     try {
@@ -438,14 +473,21 @@ export class DeveloperService {
           const event = this.provider.parseEvent(line);
           if (event.threadId && event.threadId !== expectedRawSessionId) throw new AgentFailure("session-identity-conflict", "Merge-conflict resolution returned a different Developer session identity");
           evidenceLines.push(safeJsonLine(line));
+          outputLines.push(line);
+          const incremental = this.provider.parseExecutionTranscript([line], { executionId, attempt, worktreePath: input.worktreePath, ...(parserState ? { state: parserState } : {}) });
+          parserState = incremental.parserState;
+          this.persistDeveloperReceipts(executionId, incremental.receipts);
           await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET heartbeat_at = ? WHERE id = ?").run(this.now().toISOString(), executionId));
         },
       });
       if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, evidenceLines);
+      const parsedTranscript = this.provider.parseExecutionTranscript(outputLines, { executionId, attempt, worktreePath: input.worktreePath });
+      this.persistDeveloperReceipts(executionId, parsedTranscript.receipts);
       const report = parseMergeConflictResolutionReport(evidenceLines, this.provider);
       const missingFiles = conflict.conflictFiles.filter((file) => !report.resolvedFiles.includes(file));
       if (missingFiles.length || report.blocker !== null) throw new AgentFailure("merge-resolution-incomplete", missingFiles.length ? `The Developer did not resolve: ${missingFiles.join(", ")}` : report.blocker ?? "Merge-conflict resolution is blocked");
       const gitState = await this.worktrees.inspectDelivery(input.worktreePath);
+      this.persistDeveloperReceipts(executionId, [this.gitSnapshotReceipt(executionId, attempt, parsedTranscript.receipts, gitState.headSha)]);
       completedMerge = { headSha: gitState.headSha, treeSha: gitState.treeSha };
       const parents = (await execFileAsync("git", ["rev-list", "--parents", "-n", "1", "HEAD"], { cwd: input.worktreePath, timeout: 8_000, maxBuffer: 4 * 1024 })).stdout.trim().split(/\s+/);
       if (gitState.branchName !== input.branchName || gitState.dirtyState !== "clean" || gitState.headSha.toLowerCase() !== report.resultCommit.toLowerCase() || gitState.treeSha.toLowerCase() !== report.resultTree.toLowerCase() || parents.length !== 3 || (parents[1] ?? "").toLowerCase() !== input.priorHead.toLowerCase() || (parents[2] ?? "").toLowerCase() !== input.targetBaseSha.toLowerCase()) {
@@ -527,6 +569,7 @@ export class DeveloperService {
     let rawSessionId = "";
     const evidenceLines: string[] = [];
     const outputLines: string[] = [];
+    let parserState: unknown;
     try {
       guard = await createGitCommandGuard(this.config.runtimeRoot);
       this.database.authTransaction((db) => {
@@ -559,6 +602,9 @@ export class DeveloperService {
             if (evidenceBytes > 6 * 1024 * 1024) throw new AgentFailure("evidence-too-large", "Developer repair evidence exceeded the local artifact limit");
             evidenceLines.push(sanitized);
             outputLines.push(line);
+            const incremental = this.provider.parseExecutionTranscript([line], { executionId, attempt, worktreePath, ...(parserState ? { state: parserState } : {}) });
+            parserState = incremental.parserState;
+            this.persistDeveloperReceipts(executionId, incremental.receipts);
             const event = this.provider.parseEvent(line);
             if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "Developer repair returned a different session identity");
             await this.heartbeat(executionId);
@@ -568,8 +614,11 @@ export class DeveloperService {
           evidenceLines.push(JSON.stringify({ type: "forge.process-failure", exitCode: result.exitCode, stderr: redact(result.stderr) }));
           throw this.provider.classifyProcessFailure(result, outputLines);
         }
+        const parsedTranscript = this.provider.parseExecutionTranscript(outputLines, { executionId, attempt, worktreePath });
+        this.persistDeveloperReceipts(executionId, parsedTranscript.receipts);
         const report = parseRepairReport(outputLines, this.provider);
         const gitState = await this.worktrees.inspectDelivery(worktreePath);
+        this.persistDeveloperReceipts(executionId, [this.gitSnapshotReceipt(executionId, attempt, parsedTranscript.receipts, gitState.headSha)]);
         const repairArtifact = await this.artifacts.putArtifact(input.companyId, "developer-repair", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, cycle: input.cycle, reviewId: input.reviewId, supersedesExecutionId: input.developerExecutionId }, null, 2), "utf8") });
         const evidence = await this.persistEvidence(input.companyId, evidenceLines, `${executionId}:evidence`);
         const blocked = report.blocker !== null;
@@ -682,14 +731,19 @@ export class DeveloperService {
       db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, wrapper_id, wrapper_path, supersedes_execution_id, session_ref, started_at, heartbeat_at) VALUES (?, ?, ?, ?, 0, (SELECT COALESCE(MAX(attempt), 0) + 1 FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = 0), 'starting', ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(executionId, input.taskId, input.companyId, input.workflowId, input.workflowId, input.branchName, worktreePath, plan.baseSha, `wrapper_${randomBytes(12).toString("hex")}`, guard.directory, input.priorDeveloperExecutionId, input.priorDeveloperSessionRef, startedAt, startedAt);
       db.prepare("INSERT INTO forge_ci_repairs (id, repair_plan_id, prior_developer_execution_id, prior_developer_session_ref, worktree_path, branch_name, prior_commit, prior_tree, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'starting', ?)").run(repairId, input.repairPlanId, input.priorDeveloperExecutionId, input.priorDeveloperSessionRef, worktreePath, input.branchName, input.priorCommit, input.priorTree, startedAt);
     });
+    const attempt = this.database.authQuery((db) => (db.prepare("SELECT attempt FROM forge_developer_executions WHERE id = ?").get(executionId) as { attempt: number }).attempt);
     const evidenceLines = [JSON.stringify({ type: "forge.ci-repair-context", ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, failedHeadSha: input.failedHeadSha, plan: redact(planText), evidence: redact(evidenceText) })];
     const outputLines: string[] = [];
+    let parserState: unknown;
     const ciRepairPrompt = this.ciRepairPrompt(planText, { branchName: input.branchName, worktreePath, priorCommit: input.priorCommit, priorTree: input.priorTree });
     try {
-      const result = await this.processRunner({ command: this.command, args: this.provider.buildTurnArgs({ prompt: ciRepairPrompt, resumeSessionId: rawSessionId }), stdin: ciRepairPrompt, cwd: worktreePath, env: withWorktreeMiseTrust(guard.env, worktreePath), detached: true, onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); }, onLine: async (line) => { const event = this.provider.parseEvent(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair returned a different Developer session identity"); evidenceLines.push(safeJsonLine(line)); outputLines.push(line); await this.heartbeat(executionId); } });
-      if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, outputLines);
+      const result = await this.processRunner({ command: this.command, args: this.provider.buildTurnArgs({ prompt: ciRepairPrompt, resumeSessionId: rawSessionId }), stdin: ciRepairPrompt, cwd: worktreePath, env: withWorktreeMiseTrust(guard.env, worktreePath), detached: true, onStart: async (pid, processStartedAt) => { const identity = await processStartIdentity(pid, processStartedAt); await this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'running', process_pid = ?, process_group_id = ?, process_start_identity = ?, heartbeat_at = ? WHERE id = ?").run(pid, pid, identity, this.now().toISOString(), executionId)); }, onLine: async (line) => { const event = this.provider.parseEvent(line); if (event.threadId && event.threadId !== rawSessionId) throw new AgentFailure("session-identity-conflict", "CI repair returned a different Developer session identity"); evidenceLines.push(safeJsonLine(line)); outputLines.push(line); const incremental = this.provider.parseExecutionTranscript([line], { executionId, attempt, worktreePath, ...(parserState ? { state: parserState } : {}) }); parserState = incremental.parserState; this.persistDeveloperReceipts(executionId, incremental.receipts); await this.heartbeat(executionId); } });
+        if (result.exitCode !== 0) throw this.provider.classifyProcessFailure(result, outputLines);
+        const parsedTranscript = this.provider.parseExecutionTranscript(outputLines, { executionId, attempt, worktreePath });
+        this.persistDeveloperReceipts(executionId, parsedTranscript.receipts);
       const report = parseRepairReport(outputLines, this.provider);
       const gitState = await this.worktrees.inspectDelivery(worktreePath);
+      this.persistDeveloperReceipts(executionId, [this.gitSnapshotReceipt(executionId, attempt, parsedTranscript.receipts, gitState.headSha)]);
       if (gitState.branchName !== input.branchName || gitState.dirtyState !== "clean" || report.blocker !== null) throw new AgentFailure("ci-repair-revision-invalid", "CI repair did not leave a clean task branch");
       const delivery = await this.artifacts.putArtifact(input.companyId, "developer-repair", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ ...report, ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, priorCommit: input.priorCommit, priorTree: input.priorTree }, null, 2), "utf8") });
       const evidence = await this.artifacts.putArtifact(input.companyId, "ci-repair-evidence", { filename: `${executionId}.jsonl`, mimeType: "application/x-ndjson", bytes: Buffer.from(`${evidenceLines.join("\n")}\n`, "utf8") });

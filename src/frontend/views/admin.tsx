@@ -58,6 +58,42 @@ const HERMES_AGENT_COLUMNS: SettingsTableColumn[] = [
   { key: "end", width: 32 },
 ];
 
+const COMPANY_COLUMNS: SettingsTableColumn[] = [
+  { key: "name", label: "Name ↓", width: 220 },
+  { key: "issueCode", label: "Issue code", width: 120 },
+  { key: "status", label: "Status", width: 110 },
+  { key: "created", label: "Created", width: 170 },
+  { key: "menu", width: 28 },
+  { key: "end", width: 32 },
+];
+
+const INVITATION_COLUMNS: SettingsTableColumn[] = [
+  { key: "invitee", label: "Invitee / token", width: 220 },
+  { key: "role", label: "Role", width: 100 },
+  { key: "company", label: "Company", width: 140 },
+  { key: "expires", label: "Expires", width: 170 },
+  { key: "status", label: "Status", width: 100 },
+];
+
+const PASSKEY_COLUMNS: SettingsTableColumn[] = [
+  { key: "label", label: "Name / label", width: 200 },
+  { key: "owner", label: "Owner", width: 160 },
+  { key: "created", label: "Created", width: 160 },
+  { key: "lastUsed", label: "Last used", width: 160 },
+  { key: "status", label: "Status", width: 100 },
+  { key: "menu", width: 28 },
+  { key: "end", width: 32 },
+];
+
+const MODEL_COLUMNS: SettingsTableColumn[] = [
+  { key: "model", label: "Model ↓", width: 220 },
+  { key: "displayName", label: "Display name", width: 200 },
+  { key: "status", label: "Status", width: 100 },
+  { key: "sort", label: "Sort", width: 80 },
+  { key: "menu", width: 28 },
+  { key: "end", width: 32 },
+];
+
 const USER_GROUPS: Array<{ label: string; status: ApiUser["status"] }> = [
   { label: "Active", status: "active" },
   { label: "Pending", status: "pending" },
@@ -850,8 +886,22 @@ export function AdminView(): ReactElement {
 
         {isCompanies ? (
           <section>
-            <div className="flex h-8 items-center justify-between gap-3"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Companies</h2><span className="text-[11px] text-muted-foreground">{companies.length}</span></div></div>
-            <div className="mt-5">{companies.map((company) => <div className="rounded-lg px-1 py-2.5 text-xs hover:bg-black/[0.025]" key={company.id}><div className="mb-2 flex flex-wrap items-center justify-between gap-2"><span className="min-w-0 truncate"><span className="font-medium">{company.name}</span> <span className="text-muted-foreground">· {company.status}</span></span><a className="flex h-7 items-center px-2 text-xs text-muted-foreground hover:text-foreground" href={withCompany(`/companies/${encodeURIComponent(company.id)}/settings`, company.id)}>Settings</a></div><div className="flex flex-wrap gap-1.5">{users.filter((candidate) => candidate.role === "member" && candidate.status === "active").map((candidate) => { const assigned = candidate.companyIds.includes(company.id); const action = `membership:${company.id}:${candidate.id}`; return <span className="flex items-center gap-1" key={candidate.id}><Button variant={assigned ? "secondary" : "outline"} size="sm" onClick={() => void changeMembership(company.id, candidate.id, !assigned)}>{assigned ? "− " : "+ "}{candidate.displayName}</Button>{pendingAction === action ? <><span className="text-[11px] text-muted-foreground">Confirm remove</span><Button variant="outline" size="sm" onClick={() => setPendingAction("")}>Cancel</Button></> : null}</span>; })}</div></div>)}</div>
+            <SettingsToolbar searchLabel="Search companies" searchPlaceholder="Search companies…" filterLabel="All" searchWidth="compact" actions={null} />
+            <SettingsDataTable label="Companies" columns={COMPANY_COLUMNS} className="mt-5">
+              <SettingsTableGroup columnCount={COMPANY_COLUMNS.length} count={companies.length} label="Companies">
+                {companies.map((company) => (
+                  <SettingsTableRow key={company.id} size="member">
+                    <SettingsTableCell className="truncate font-medium">{company.name}</SettingsTableCell>
+                    <SettingsTableCell className="truncate text-muted-foreground">{company.issueCode ?? "—"}</SettingsTableCell>
+                    <SettingsTableCell><span className="flex items-center gap-1.5 text-muted-foreground"><span className={company.status === "active" ? "size-1.5 rounded-full bg-emerald-500" : company.status === "paused" ? "size-1.5 rounded-full bg-amber-500" : "size-1.5 rounded-full bg-muted-foreground"} />{company.status}</span></SettingsTableCell>
+                    <SettingsTableCell className="truncate text-muted-foreground">{adminDate(company.createdAt)}</SettingsTableCell>
+                    <SettingsTableCell className="p-0"><DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${company.name} actions`} title={`${company.name} actions`} />}><Ellipsis /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem onClick={() => window.location.assign(withCompany(`/companies/${encodeURIComponent(company.id)}/settings`, company.id))}>Settings</DropdownMenuItem>{users.filter((candidate) => candidate.role === "member" && candidate.status === "active").map((candidate) => { const assigned = candidate.companyIds.includes(company.id); const action = `membership:${company.id}:${candidate.id}`; return <DropdownMenuItem key={candidate.id} onClick={() => void changeMembership(company.id, candidate.id, !assigned)}>{pendingAction === action ? `Confirm remove ${candidate.displayName}` : `${assigned ? "Remove" : "Add"} ${candidate.displayName}`}</DropdownMenuItem>; })}{pendingAction.startsWith(`membership:${company.id}:`) ? <DropdownMenuItem onClick={() => setPendingAction("")}>Cancel membership change</DropdownMenuItem> : null}</DropdownMenuContent></DropdownMenu></SettingsTableCell>
+                    <SettingsTableCell className="p-0" />
+                  </SettingsTableRow>
+                ))}
+              </SettingsTableGroup>
+              {companies.length === 0 ? <SettingsTableEmpty columnCount={COMPANY_COLUMNS.length}>No companies configured.</SettingsTableEmpty> : null}
+            </SettingsDataTable>
           </section>
         ) : null}
 
@@ -859,7 +909,20 @@ export function AdminView(): ReactElement {
           <>
             <section>
               <SettingsToolbar searchLabel="Search invitations" searchPlaceholder="Search invitations…" filterLabel="All" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={() => { setInviteToken(""); setCopied(false); setInviteOpen(true); }}>Invite</SettingsToolbarAction>} />
-              <div className="mt-10"><div className="flex h-8 items-center justify-between"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Invitations</h2><span className="text-[11px] text-muted-foreground">{invitations.length}</span></div></div><div className="mt-5">{invitations.map((invitation) => <div className="rounded-lg px-1 py-2.5 text-xs hover:bg-black/[0.025]" key={invitation.id}><div className="flex items-center justify-between gap-2"><span className="min-w-0 truncate font-medium">{invitation.displayName}</span><span className="shrink-0 text-muted-foreground">{invitation.status}</span></div><div className="mt-1 text-[11px] text-muted-foreground">{invitation.kind} · expires {adminDate(invitation.expiresAt)}</div></div>)}</div></div>
+              <SettingsDataTable label="Invitations" columns={INVITATION_COLUMNS} className="mt-5">
+                <SettingsTableGroup columnCount={INVITATION_COLUMNS.length} count={invitations.length} label="Invitations">
+                  {invitations.map((invitation) => (
+                    <SettingsTableRow key={invitation.id} size="member">
+                      <SettingsTableCell className="truncate font-medium">{invitation.displayName}</SettingsTableCell>
+                      <SettingsTableCell className="capitalize text-muted-foreground">{invitation.kind}</SettingsTableCell>
+                      <SettingsTableCell className="text-muted-foreground">—</SettingsTableCell>
+                      <SettingsTableCell className="truncate text-muted-foreground">{adminDate(invitation.expiresAt)}</SettingsTableCell>
+                      <SettingsTableCell className="capitalize text-muted-foreground">{invitation.status}</SettingsTableCell>
+                    </SettingsTableRow>
+                  ))}
+                </SettingsTableGroup>
+                {invitations.length === 0 ? <SettingsTableEmpty columnCount={INVITATION_COLUMNS.length}>No invitations configured.</SettingsTableEmpty> : null}
+              </SettingsDataTable>
             </section>
             <Dialog open={inviteOpen} onOpenChange={(open) => { setInviteOpen(open); if (!open) { setInviteToken(""); setCopied(false); } }}><DialogContent><DialogHeader><DialogTitle>{inviteToken ? "Invitation ready" : "Invite user"}</DialogTitle><DialogDescription>{inviteToken ? `Shown once · expires ${adminDate(inviteExpiresAt)}` : "Create an invitation for a Forge user."}</DialogDescription></DialogHeader>{inviteToken ? <><code className="break-all text-xs">{inviteToken}</code><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Close</DialogClose><Button type="button" size="sm" onClick={() => void copyInvitation()}>{copied ? "Copied" : "Copy invitation"}</Button></DialogFooter></> : <form onSubmit={(event) => { event.preventDefault(); void invite(); }}><FieldGroup><Field><FieldLabel htmlFor="invite-display-name">Display name</FieldLabel><Input id="invite-display-name" autoFocus placeholder="Forge user" value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm">Invite</Button></DialogFooter></FieldGroup></form>}</DialogContent></Dialog>
           </>
@@ -868,15 +931,48 @@ export function AdminView(): ReactElement {
         {isPasskeys ? (
           <section>
             <SettingsToolbar searchLabel="Search passkeys" searchPlaceholder="Search passkeys…" filterLabel="All" searchWidth="compact" actions={null} />
-            <div className="mt-10"><div className="flex h-8 items-center justify-between"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Passkeys</h2><span className="text-[11px] text-muted-foreground">{credentials.filter((credential) => !credential.revokedAt).length} active</span></div></div><div className="mt-5">{credentials.map((credential) => { const candidate = users.find((entry) => entry.id === credential.userId); const action = `credential:${credential.id}`; return <div className="flex min-h-11 items-center justify-between gap-2 rounded-lg px-1 text-xs hover:bg-black/[0.025]" key={credential.id}><span className="min-w-0 truncate">{candidate?.displayName ?? "User"}<span className="ml-2 text-muted-foreground">{credential.revokedAt ? "revoked" : `created ${adminDate(credential.createdAt)}`}</span></span>{!credential.revokedAt && credential.userId !== user.id ? <span className="flex shrink-0 items-center gap-1">{pendingAction === action ? <span className="text-[11px] text-muted-foreground">Confirm</span> : null}<Button variant="ghost" size="sm" onClick={() => void revokeCredential(credential)}>{pendingAction === action ? "Confirm revoke" : "Revoke"}</Button>{pendingAction === action ? <Button variant="outline" size="sm" onClick={() => setPendingAction("")}>Cancel</Button> : null}</span> : null}</div>; })}</div></div>
+            <SettingsDataTable label="Passkeys" columns={PASSKEY_COLUMNS} className="mt-5">
+              <SettingsTableGroup columnCount={PASSKEY_COLUMNS.length} count={credentials.filter((credential) => !credential.revokedAt).length} label="Passkeys">
+                {credentials.map((credential) => {
+                  const candidate = users.find((entry) => entry.id === credential.userId);
+                  const action = `credential:${credential.id}`;
+                  return (
+                    <SettingsTableRow key={credential.id} size="member">
+                      <SettingsTableCell className="truncate font-medium">{credential.credentialId}</SettingsTableCell>
+                      <SettingsTableCell className="truncate text-muted-foreground">{candidate?.displayName ?? "User"}</SettingsTableCell>
+                      <SettingsTableCell className="truncate text-muted-foreground">{adminDate(credential.createdAt)}</SettingsTableCell>
+                      <SettingsTableCell className="text-muted-foreground">—</SettingsTableCell>
+                      <SettingsTableCell className="text-muted-foreground">{credential.revokedAt ? "revoked" : "active"}</SettingsTableCell>
+                      <SettingsTableCell className="p-0">{!credential.revokedAt && credential.userId !== user.id ? <DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${credential.credentialId} actions`} title={`${credential.credentialId} actions`} />}><Ellipsis /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem variant="destructive" onClick={() => void revokeCredential(credential)}>{pendingAction === action ? "Confirm revoke" : "Revoke passkey"}</DropdownMenuItem>{pendingAction === action ? <DropdownMenuItem onClick={() => setPendingAction("")}>Cancel</DropdownMenuItem> : null}</DropdownMenuContent></DropdownMenu> : null}</SettingsTableCell>
+                      <SettingsTableCell className="p-0" />
+                    </SettingsTableRow>
+                  );
+                })}
+              </SettingsTableGroup>
+              {credentials.length === 0 ? <SettingsTableEmpty columnCount={PASSKEY_COLUMNS.length}>No passkeys configured.</SettingsTableEmpty> : null}
+            </SettingsDataTable>
           </section>
         ) : null}
 
         {isModels ? (
           <>
             <section>
-              <div className="flex h-8 items-center justify-between gap-3"><div className="flex items-baseline gap-2"><h2 className="text-base font-medium">Model catalog</h2><span className="text-[11px] text-muted-foreground">{models.filter((model) => model.status === "active").length} active</span></div><Button variant="outline" size="sm" onClick={() => setModelOpen(true)}>Add model</Button></div>
-              <div className="mt-5">{models.map((model) => <div className="flex h-11 items-center justify-between gap-3 rounded-lg px-1 text-[13px] hover:bg-black/[0.025]" key={model.id}><div className="min-w-0"><div className="truncate">{model.displayName} <code className="ml-1 text-[11px] text-muted-foreground">{model.id}</code></div><div className="truncate text-[10px] leading-3 text-muted-foreground">{model.status}{model.description ? ` · ${model.description}` : ""}</div></div><Button variant="ghost" size="sm" onClick={() => void toggleModel(model)}>{model.status === "active" ? "Retire" : "Restore"}</Button></div>)}</div>
+              <SettingsToolbar searchLabel="Search models" searchPlaceholder="Search models…" filterLabel="All" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={() => setModelOpen(true)}>Add model</SettingsToolbarAction>} />
+              <SettingsDataTable label="Models" columns={MODEL_COLUMNS} className="mt-5">
+                <SettingsTableGroup columnCount={MODEL_COLUMNS.length} count={models.filter((model) => model.status === "active").length} label="Model catalog">
+                  {models.map((model) => (
+                    <SettingsTableRow key={model.id} size="member">
+                      <SettingsTableCell className="truncate"><code className="text-[11px] text-muted-foreground">{model.id}</code></SettingsTableCell>
+                      <SettingsTableCell className="truncate">{model.displayName}{model.description ? <span className="ml-1 text-muted-foreground">· {model.description}</span> : null}</SettingsTableCell>
+                      <SettingsTableCell className="text-muted-foreground">{model.status}</SettingsTableCell>
+                      <SettingsTableCell className="text-muted-foreground">{model.sortOrder}</SettingsTableCell>
+                      <SettingsTableCell className="p-0"><DropdownMenu><DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${model.displayName} actions`} title={`${model.displayName} actions`} />}><Ellipsis /></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuItem variant={model.status === "active" ? "destructive" : "default"} onClick={() => void toggleModel(model)}>{model.status === "active" ? "Retire model" : "Restore model"}</DropdownMenuItem></DropdownMenuContent></DropdownMenu></SettingsTableCell>
+                      <SettingsTableCell className="p-0" />
+                    </SettingsTableRow>
+                  ))}
+                </SettingsTableGroup>
+                {models.length === 0 ? <SettingsTableEmpty columnCount={MODEL_COLUMNS.length}>No models configured.</SettingsTableEmpty> : null}
+              </SettingsDataTable>
             </section>
             <Dialog open={modelOpen} onOpenChange={setModelOpen}><DialogContent><DialogHeader><DialogTitle>Add model</DialogTitle><DialogDescription>Make a model available to new profiles.</DialogDescription></DialogHeader><form onSubmit={(event) => { event.preventDefault(); void createModel(); }}><FieldGroup><Field><FieldLabel htmlFor="model-id">Model ID</FieldLabel><Input id="model-id" autoFocus placeholder="gpt-5-codex" value={modelId} onChange={(event) => setModelId(event.target.value)} /></Field><Field><FieldLabel htmlFor="model-display-name">Display name</FieldLabel><Input id="model-display-name" value={modelName} onChange={(event) => setModelName(event.target.value)} /></Field><DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm" />}>Cancel</DialogClose><Button type="submit" size="sm" disabled={!modelId.trim() || !modelName.trim()}>Add model</Button></DialogFooter></FieldGroup></form></DialogContent></Dialog>
           </>

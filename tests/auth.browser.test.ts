@@ -122,11 +122,18 @@ test("browser enrollment, sign-in/out, administration, membership, and recovery 
 
       await adminPage.reload();
       expect(await adminPage.locator("body").innerText()).not.toContain(invitationToken);
-      await adminPage.getByRole("heading", { name: "Passkeys", exact: true }).waitFor();
-      await adminPage.getByRole("button", { name: /\+ Browser Member/ }).first().click();
-      await adminPage.getByRole("button", { name: /− Browser Member/ }).first().waitFor();
-      await adminPage.getByRole("button", { name: /− Browser Member/ }).first().click();
-      await adminPage.getByRole("button", { name: /\+ Browser Member/ }).first().waitFor();
+      await adminPage.goto(`${baseUrl}/admin/passkeys${new URL(adminPage.url()).search}`);
+      await adminPage.getByRole("table", { name: "Passkeys", exact: true }).waitFor();
+      await adminPage.goto(`${baseUrl}/admin/companies${new URL(adminPage.url()).search}`);
+      const companyActions = adminPage.getByRole("button", { name: /actions$/ }).first();
+      await companyActions.click();
+      await adminPage.getByRole("menuitem", { name: "Add Browser Member", exact: true }).click();
+      await companyActions.click();
+      await adminPage.getByRole("menuitem", { name: "Remove Browser Member", exact: true }).click();
+      await companyActions.click();
+      await adminPage.getByRole("menuitem", { name: "Confirm remove Browser Member", exact: true }).click();
+      await companyActions.click();
+      await adminPage.getByRole("menuitem", { name: "Add Browser Member", exact: true }).waitFor();
 
       await adminPage.getByRole("button", { name: "Switch company" }).click();
       await adminPage.getByRole("menuitem", { name: "Sign out", exact: true }).click();

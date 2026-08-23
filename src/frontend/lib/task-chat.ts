@@ -21,7 +21,8 @@ function eventFiles(summary: string): string[] | undefined {
 }
 
 export function chatEventFromDeveloperEvent(event: { eventId: string; occurredAt: string; kind: string; summary: string; exitCode: number | null }): ChatEvent {
-  return { id: event.eventId, at: event.occurredAt, kind: event.kind, text: event.summary, ...(eventFiles(event.summary) ? { files: eventFiles(event.summary) } : {}), exitCode: event.exitCode };
+  const files = eventFiles(event.summary);
+  return { id: event.eventId, at: event.occurredAt, kind: event.kind, text: event.summary, ...(files ? { files } : {}), exitCode: event.exitCode };
 }
 
 function systemItem(entry: ApiTask["activity"][number]): ChatItem | undefined {
@@ -71,9 +72,11 @@ export function buildChatTranscript(task: ApiTask, liveEventsByExecution: Map<st
   for (const invocation of task.agentInvocations) {
     const events = liveEventsByExecution.get(invocation.id) ?? [];
     const intro = events.find((event) => event.kind === "agent_update")?.text;
-    const status = invocation.finishedAt ? (terminalStatuses.has(invocation.status) ? invocation.status : "completed") : "running";
-    items.push({ kind: "agent_turn", id: `agent-${invocation.id}`, role: invocation.role, agent: { name: invocation.agentName ?? `${invocation.role[0]!.toUpperCase()}${invocation.role.slice(1)}`, avatarSeed: invocation.avatarSeed ?? invocation.role }, startedAt: invocation.startedAt, finishedAt: invocation.finishedAt, status, ...(intro ? { intro } : {}), events, ...(turnSummary(task, invocation) ? { summary: turnSummary(task, invocation) } : {}), ...(turnStats(events) ? { stats: turnStats(events) } : {}) });
+    const status: Extract<ChatItem, { kind: "agent_turn" }>["status"] = invocation.finishedAt ? (terminalStatuses.has(invocation.status) ? invocation.status as "completed" | "failed" | "blocked" : "completed") : "running";
+    const summary = turnSummary(task, invocation);
+    const stats = turnStats(events);
+    items.push({ kind: "agent_turn", id: `agent-${invocation.id}`, role: invocation.role, agent: { name: invocation.agentName ?? `${invocation.role[0]!.toUpperCase()}${invocation.role.slice(1)}`, avatarSeed: invocation.avatarSeed ?? invocation.role }, startedAt: invocation.startedAt, finishedAt: invocation.finishedAt, status, ...(intro ? { intro } : {}), events, ...(summary ? { summary } : {}), ...(stats ? { stats } : {}) });
   }
-  if (task.githubPullRequest?.exists && task.release?.createdAt) items.push({ kind: "pull_request", id: `pr-${task.release.createdAt}`, at: task.release.createdAt });
+  if (task.githubPullRequest?.exists && task.githubPullRequest.observedAt) items.push({ kind: "pull_request", id: `pr-${task.githubPullRequest.observedAt}`, at: task.githubPullRequest.observedAt });
   return items.sort((left, right) => Date.parse(left.kind === "agent_turn" ? left.startedAt : left.at) - Date.parse(right.kind === "agent_turn" ? right.startedAt : right.at) || left.id.localeCompare(right.id));
 }

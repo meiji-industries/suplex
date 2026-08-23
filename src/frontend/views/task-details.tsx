@@ -30,6 +30,7 @@ import { PlanDecisionForm } from "../components/app/plan-decision-form.js";
 import { SupplementalReviewPanel } from "../components/app/supplemental-review-panel.js";
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import { PullRequestCard as GithubPullRequestCard } from "../components/app/pull-request-card.js";
+import { TaskChat } from "../components/app/task-chat/task-chat.js";
 import { CopyButton } from "../components/app/copy-button.js";
 import type { DeveloperExecutionEventResponse } from "../../http/contracts/tasks.js";
 import { adminDate, type ApiAgent, type ApiCi, type ApiProject, type ApiTask } from "../lib/view-shared.js";
@@ -577,7 +578,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   useEffect(() => { setAnswer(""); }, [task.id, task.revision]);
   const [changesFileCount, setChangesFileCount] = useState<number | undefined>(undefined);
   useEffect(() => { setChangesFileCount(undefined); }, [task.id, task.developerExecution?.id]);
-  const [activeWorkTab, setActiveWorkTab] = useState("activity");
+  const [activeWorkTab, setActiveWorkTab] = useState("chat");
   const [diffScrollRequest, setDiffScrollRequest] = useState(0);
   const diffPanelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -613,6 +614,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   const pullRequestInMain = Boolean(task.githubPullRequest?.exists && task.githubPullRequest.number !== null && task.githubPullRequest.url);
   const workContent = <>
     <TabsList variant="line" className="mb-4 w-full justify-start rounded-none border-b border-border p-0">
+      <TabsTrigger value="chat">Chat</TabsTrigger>
       <TabsTrigger value="activity">Activity <Badge variant="secondary" className="size-5 rounded-full px-0 text-[10px]">{activityCount}</Badge></TabsTrigger>
       <TabsTrigger value="diffs" disabled={!hasChanges} aria-label="Diffs">
         Diffs
@@ -621,6 +623,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
       <TabsTrigger value="checks" disabled={!hasChecks}>Checks</TabsTrigger>
       <TabsTrigger value="other">Other</TabsTrigger>
     </TabsList>
+    <TabsContent value="chat"><TaskChat task={task} busy={busy || !tellPlannerCommand} onRefresh={onRefresh} onOpenDiff={openDiff} composerDisabledReason={plannerFeedbackDisabledReason} onSendPlannerNote={async (note, commandId) => onPlanAction("tell-planner", note, { commandId })} /></TabsContent>
     <TabsContent value="activity" className="space-y-7">{activityContent}</TabsContent>
     {hasChanges ? <TabsContent value="diffs" keepMounted><div ref={diffPanelRef} data-task-diff-panel className="scroll-mt-24"><DeveloperDiff taskId={task.id} executionId={task.developerExecution!.id} poll={pollDeveloperDiff} onFileCount={setChangesFileCount} /></div></TabsContent> : null}
     {hasChecks ? <TabsContent value="checks"><CiPanel ci={task.ci!} /></TabsContent> : null}

@@ -24,7 +24,9 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
     try {
       const subject = { planRevision: ctx.state.planRevision ?? ctx.state.revision, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, developerExecutionId: ctx.state.developerExecutionId!, deliveryArtifactId: ctx.state.deliveryArtifactId!, developerEvidenceArtifactId: ctx.state.developerEvidenceArtifactId!, leadSessionRef: ctx.state.leadSessionRef!, developerSessionRef: ctx.state.developerSessionRef! };
       const common = { taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, planRevision: ctx.state.planRevision ?? ctx.state.revision, roleProfiles: ctx.input.roleProfiles, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, branchName: ctx.state.branchName! };
-      const supersedesReviewId = ctx.state.targetBaseOutcome === "revalidated" ? null : ctx.state.deliveryReviewSupersedesId ?? null;
+      const supersedesReviewId = ctx.state.targetBaseOutcome === "revalidated" || ctx.state.developerTurnKind === "implementation" || !ctx.state.deliveryRepairAttemptId
+        ? null
+        : ctx.state.deliveryReviewSupersedesId ?? null;
       result = await ctx.acquireExternalTurn<contracts.DeliveryReviewActivityResult | LegacyReviewResult>(
         { operation: "delivery_review", role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
         (capacityRequestId) => activityProxies.reviewDelivery({ ...common, subject, worktreePath: ctx.state.worktreePath!, supersedesReviewId, ...(ctx.input.visualEvidence !== undefined ? { visualEvidence: ctx.input.visualEvidence } : {}), ...(capacityRequestId ? { capacityRequestId } : {}) }) as unknown as Promise<contracts.DeliveryReviewActivityResult | LegacyReviewResult>,

@@ -3,7 +3,7 @@ import { expect, test } from "vitest";
 import { DeliveryReviewActivityResultSchema, DeveloperRepairActivityResultSchema, IssueWorkflowStateSchema, SafeSummarySchema, normalizeSafeSummary, toSafeSummary } from "../src/temporal/issue-contracts.js";
 import { ISSUE_PHASES, TERMINAL_PHASES } from "../src/issue-phases.js";
 import { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "../src/temporal/workflows.js";
-import { finalReviewerTurn } from "../src/temporal/workflow/state-transitions.js";
+import { finalReviewerTurn, freshDeliveryLineage } from "../src/temporal/workflow/state-transitions.js";
 import { assignWorkflowState, type IssueWorkflowContext } from "../src/temporal/workflow/context.js";
 
 const subject = { planRevision: 1, targetBaseSha: "a".repeat(40), subjectCommit: "b".repeat(40), subjectTree: "c".repeat(40), developerExecutionId: "developer_1", deliveryArtifactId: "artifact_delivery", developerEvidenceArtifactId: "artifact_evidence", leadSessionRef: "session_lead", developerSessionRef: "session_developer" };
@@ -95,4 +95,36 @@ test("delivery workflow constructors keep blockers retryable and approvals exact
   const approved = DeliveryReviewActivityResultSchema.parse({ outcome: "completed", attemptId: "review_attempt_3", correctionAttempts: 0, subject: { ...subject, subjectCommit: repaired.resultCommit, subjectTree: repaired.resultTree, developerExecutionId: repaired.developerExecutionId, deliveryArtifactId: repaired.deliveryArtifactId, developerEvidenceArtifactId: repaired.evidenceArtifactId }, review: { reviewId: "review_2", leadExecutionId: "agent_review_2", leadSessionRef: subject.leadSessionRef, opinionArtifactId: "artifact_opinion_2", evidenceArtifactId: "artifact_review_evidence_2", opinion: "approved", summary: "The repaired delivery is approved.", repairPlan: null, findings: [], supersedesReviewId: "review_1" } });
   if (approved.outcome !== "completed") throw new Error("Expected a completed approval fixture");
   expect(reviewApprovedState(awaitingReview, approved)).toMatchObject({ phase: "delivery_reviewed", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], deliveryReviewId: "review_2", deliveryReviewSupersedesId: "review_1" });
+});
+
+test("a new implementation starts a fresh delivery-review lineage without changing repair lineage", () => {
+  const repaired = IssueWorkflowStateSchema.parse({
+    ...state(),
+    developerTurnKind: "repair",
+    deliveryReviewSupersedesId: "review_blocking",
+    deliveryRepairAttemptId: "repair_completed",
+    repairCycle: 1,
+    deliveryReviewId: "review_current",
+    deliveryReviewOutcome: "blocking",
+    deliveryReviewSummary: "Repair this finding.",
+    deliveryBlockingFindings: [blockingFinding],
+    deliveryRepairPlan: "Fix it.",
+    deliveryRepairPlanArtifactId: "artifact_repair_plan",
+    deliveryRepairAuthority: "delivery_review",
+  });
+
+  expect(repaired).toMatchObject({ developerTurnKind: "repair", deliveryReviewSupersedesId: "review_blocking", deliveryRepairAttemptId: "repair_completed", repairCycle: 1 });
+  expect(IssueWorkflowStateSchema.parse({ ...repaired, ...freshDeliveryLineage(), developerTurnKind: "implementation" })).toMatchObject({
+    developerTurnKind: "implementation",
+    deliveryReviewSupersedesId: null,
+    deliveryRepairAttemptId: null,
+    repairCycle: 0,
+    deliveryReviewId: null,
+    deliveryReviewOutcome: null,
+    deliveryReviewSummary: null,
+    deliveryBlockingFindings: [],
+    deliveryRepairPlan: null,
+    deliveryRepairPlanArtifactId: null,
+    deliveryRepairAuthority: null,
+  });
 });

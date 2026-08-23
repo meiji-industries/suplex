@@ -32,6 +32,21 @@ export function revisioned(state: IssueWorkflowState, phase: IssueWorkflowState[
   return IssueWorkflowStateSchema.parse({ ...state, revision, phase, owner, allowedCommands, pendingAction, blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${revision}` });
 }
 
+export function freshDeliveryLineage(): Pick<IssueWorkflowState, "deliveryReviewSupersedesId" | "deliveryRepairAttemptId" | "repairCycle" | "deliveryReviewId" | "deliveryReviewOutcome" | "deliveryReviewSummary" | "deliveryBlockingFindings" | "deliveryRepairPlan" | "deliveryRepairPlanArtifactId" | "deliveryRepairAuthority"> {
+  return {
+    deliveryReviewSupersedesId: null,
+    deliveryRepairAttemptId: null,
+    repairCycle: 0,
+    deliveryReviewId: null,
+    deliveryReviewOutcome: null,
+    deliveryReviewSummary: null,
+    deliveryBlockingFindings: [],
+    deliveryRepairPlan: null,
+    deliveryRepairPlanArtifactId: null,
+    deliveryRepairAuthority: null,
+  };
+}
+
 export function reviewingDeliveryState(state: IssueWorkflowState): IssueWorkflowState {
   return revisioned(state, "reviewing_delivery", "lead", [], "Lead delivery review");
 }

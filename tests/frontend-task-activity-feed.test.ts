@@ -17,6 +17,30 @@ test("compacts live heartbeats, duplicate activity, and command labels", () => {
   expect(activitySentence({ eventType: "member_action", metadata: { command: "retry_development" }, actor: { id: "user" } }, activityRole({ eventType: "member_action", metadata: { command: "retry_development" }, actor: { id: "user" } }))).toBe("You retried development");
 });
 
+test("keeps separate Tell-the-Planner rounds when planner lifecycle text repeats", () => {
+  const rows = compactActivityRows([
+    { id: "planner-note-1", at: "2026-08-23T03:32:26.513Z", role: "you", text: "You told the Planner: Update the pack terms" },
+    { id: "planner-start-1", at: "2026-08-23T03:32:26.537Z", role: "planner", text: "Planner started the plan" },
+    { id: "planner-revised-execution-1", at: "2026-08-23T03:34:06.677Z", role: "planner", text: "Planner revised the plan: First summary" },
+    { id: "planner-note-2", at: "2026-08-23T04:01:54.446Z", role: "you", text: "You told the Planner: Update the pack terms" },
+    { id: "planner-start-2", at: "2026-08-23T04:01:54.464Z", role: "planner", text: "Planner started the plan" },
+    { id: "planner-revised-execution-2", at: "2026-08-23T04:03:01.061Z", role: "planner", text: "Planner revised the plan: Second summary" },
+  ]);
+
+  expect(rows.map((row) => row.id)).toEqual([
+    "planner-note-1",
+    "planner-start-1",
+    "planner-revised-execution-1",
+    "planner-note-2",
+    "planner-start-2",
+    "planner-revised-execution-2",
+  ]);
+  expect(compactActivityRows([
+    { id: "planner-start-1", at: "2026-08-23T03:32:26.537Z", role: "planner", text: "Planner started the plan" },
+    { id: "planner-start-2", at: "2026-08-23T04:01:54.464Z", role: "planner", text: "Planner started the plan" },
+  ]).map((row) => row.id)).toEqual(["planner-start-1", "planner-start-2"]);
+});
+
 test("renders GitHub-adopted pull request changes as durable feed rows", () => {
   const entry = (eventType: string, metadata: Record<string, string | number | boolean> = { pullRequestNumber: 42 }) => ({ eventType, metadata });
   expect(activitySentence(entry("github_pr_ready"), activityRole(entry("github_pr_ready")))).toBe("PR #42 was marked ready on GitHub");

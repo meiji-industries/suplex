@@ -112,7 +112,7 @@ export function compactActivityRows(rows: ActivityFeedRow[]): ActivityFeedRow[] 
       previous.role = row.role;
       return compact;
     }
-    if (previous && !row.live && !previous.live && previous.role === row.role && previous.text === row.text) {
+    if (previous && !row.live && !previous.live && previous.role !== "planner" && previous.role === row.role && previous.text === row.text) {
       previous.at = row.at;
       previous.count = (previous.count ?? 1) + (row.count ?? 1);
       return compact;

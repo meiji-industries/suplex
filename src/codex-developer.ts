@@ -19,6 +19,7 @@ import { createGitCommandGuard, withWorktreeMiseTrust, WorktreeFailure, Worktree
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { runPinnedVerification } from "./verification.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
+import { loadDefaultPrompts, renderPrompt } from "./prompts.js";
 import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
@@ -138,6 +139,7 @@ export interface DeveloperServiceOptions {
   now?: () => Date;
   github?: Pick<GithubReleasePort, "getPullRequest">;
   githubObservation?: unknown;
+  prompts?: ReadonlyMap<string, string>;
 }
 
 function safeJsonLine(line: string): string {
@@ -218,6 +220,7 @@ export class DeveloperService {
   private readonly worktrees: WorktreeManager;
   private readonly now: () => Date;
   private readonly github: Pick<GithubReleasePort, "getPullRequest"> | undefined;
+  private prompts: ReadonlyMap<string, string>;
 
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: DeveloperServiceOptions = {}) {
@@ -229,6 +232,7 @@ export class DeveloperService {
     this.worktrees = options.worktrees ?? new WorktreeManager();
     this.now = options.now ?? (() => new Date());
     this.github = options.github;
+    this.prompts = options.prompts ?? loadDefaultPrompts();
   }
 
   private bindCapacityInTransaction(_db: Database.Database, _input: { capacityRequestId?: string | undefined }, _executionId: string, _sessionRef?: string, _worktreePath?: string): void {}
@@ -247,8 +251,10 @@ export class DeveloperService {
       LEFT JOIN forge_artifacts em ON em.id = e.evidence_manifest_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ?`).get(input.leadOutputArtifactId, input.taskId, input.companyId, input.projectId) as DeveloperContext & { outputId?: string; originalPlanRevision?: number; outputRevision?: number; finalVersion?: number; artifactId?: string; artifactSha256?: string; leadSessionRef?: string; leadExecutionId?: string; evidenceManifestArtifactId?: string; evidenceManifestSha256?: string } | undefined);
     if (!context) throw new AgentFailure("scoped-input-missing", "Authorized Lead delivery evidence is unavailable");
-    const projectRevision = ProjectRevisionSchema.safeParse(this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input)));
+    const taskConfiguration = this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input));
+    const projectRevision = ProjectRevisionSchema.safeParse(taskConfiguration);
     if (!projectRevision.success) throw new AgentFailure("scoped-input-missing", "Pinned project execution configuration is unavailable");
+    this.prompts = this.pinnedPrompts(taskConfiguration, input.companyId);
     const repositoryPath = await scopedRepository(this.config.repositoryRoot, projectRevision.data.repositoryPath);
     const [brief, planText, leadEvidence] = await Promise.all([
       this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
@@ -730,21 +736,15 @@ export class DeveloperService {
 
   private prompt(title: string, brief: string, plan: string, evidence: string, worktree: { branchName: string; worktreePath: string; targetBaseSha: string }, runProjectTests?: boolean, visualEvidence?: "off" | "capture" | "required", operatorNote?: string): string {
     const controls = [runProjectTests === false ? "Do not run the project's configured verification suite; it was intentionally skipped for this task. You may run focused checks when useful." : "Run appropriate local verification, including the configured project suite when it applies.", visualEvidence === "required" ? "Visual evidence is required: capture relevant visual evidence and report its paths in visualEvidence. Missing evidence will block delivery review." : visualEvidence === "capture" ? "Capture visual evidence when it helps demonstrate the change, and report any paths in visualEvidence." : "Do not spend time capturing visual evidence unless the work itself needs it."].join(" ");
-    return `You are Forge's authenticated Developer. Execute the authorized Lead plan prescriptively in the isolated worktree only. Current target base SHA: ${worktree.targetBaseSha}. The plan describes intent and scope, not a file manifest. If the repository has changed (files moved/renamed/deleted, migrations regenerated), implement the intent against the current tree and note the deviation in the step notes. Only report incomplete when the intent itself cannot be achieved. Do not redesign the plan, expand scope, modify the target repository, use GitHub or any provider, push, create a pull request, merge, rebase, amend, reset, clean, or rewrite history. You may edit files in this worktree, run safe local verification, and create one or more ordinary local commits; do not amend or rewrite commits that already exist on the branch. ${controls} During execution, post concise public progress updates before each substantive action and after notable results: say what you are inspecting, changing, or verifying and why, without exposing private chain-of-thought. Before finishing, ensure the worktree is clean and return exactly one JSON object with no markdown fences or commentary matching: {"kind":"delivery","summary":"...","steps":[{"number":1,"status":"completed|incomplete|not_completed|blocked","filesChanged":[],"commandsRun":[],"testResults":[],"notes":"..."}],"authorizedStepsNotCompleted":[],"resultCommit":"40+ hex","resultTree":"40+ hex","dirtyState":"clean","blocker":null,"visualEvidence":{"captured":false,"paths":[]}}. Include every approved step number, concrete files, commands, test outcomes, resulting commit/tree, and any incomplete authorized step. For any incomplete, not_completed, or blocked step, list its number in authorizedStepsNotCompleted and provide a non-null blocker.
-
-Task: ${title}
-Brief:
-${brief}
-
-Authorized final Lead plan:
-${plan}
-
-Prior scoped Lead evidence:
-${evidence}
-
-Execution coordinates:
-${JSON.stringify(worktree)}${operatorNote ? `\n\nOperator note (verbatim):\n${operatorNote}` : ""}`;
+    return renderPrompt(this.prompts.get("developer/execution.md")!, { title, brief, plan, lead_evidence: evidence, branch_name: worktree.branchName, worktree_path: worktree.worktreePath, target_base_sha: worktree.targetBaseSha, controls, operator_note_section: operatorNote ? `\n\nOperator note (verbatim):\n${operatorNote}` : "" });
   }
+  private pinnedPrompts(configuration: { prompts?: { artifactId: string; sha256: string } | undefined }, companyId: string): ReadonlyMap<string, string> {
+    if (!configuration.prompts) return loadDefaultPrompts();
+    const artifact = this.database.authQuery((db) => db.prepare("SELECT storage_path FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-prompt-set'").get(configuration.prompts!.artifactId, companyId) as { storage_path: string } | undefined);
+    if (!artifact) throw new AgentFailure("scoped-input-missing", "Pinned task prompts are unavailable");
+    return new Map(Object.entries(jsonRequired(this.artifacts.getArtifactSync({ companyId, storagePath: artifact.storage_path, sha256: configuration.prompts.sha256 }).toString("utf8")) as Record<string, string>));
+  }
+
 
   private async heartbeat(executionId: string): Promise<void> {
     this.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET heartbeat_at = ? WHERE id = ? AND status IN ('starting', 'running')").run(this.now().toISOString(), executionId));

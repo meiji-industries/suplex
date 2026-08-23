@@ -18,7 +18,7 @@ describe("buildChatTranscript", () => {
   it("keeps running events, PR placement, and only meaningful system lines", () => {
     const events: ChatEvent[] = [{ id: "event", at: at(12), kind: "agent_update", text: "Working" }];
     const value = buildChatTranscript(task({ activity: [{ id: "created", revision: 0, eventType: "task_created", metadata: {}, createdAt: at(1), kind: "member" }, { id: "approved", revision: 1, eventType: "phase_plan_approved", metadata: {}, createdAt: at(5), kind: "workflow" }, { id: "noise", revision: 2, eventType: "phase_development", metadata: {}, createdAt: at(6), kind: "workflow" }, { id: "ci", revision: 3, eventType: "phase_ci_passed", metadata: {}, createdAt: at(7), kind: "workflow" }, { id: "merged", revision: 4, eventType: "github_pr_merged", metadata: {}, createdAt: at(30), kind: "workflow" }], agentInvocations: [planner("running", at(10), null)], githubPullRequest: { exists: true, number: 1, url: "https://example.com/pr/1", state: "open", isDraft: false, autoMergeEnabled: false, observedAt: at(25), changedFiles: null, additions: null, deletions: null, checks: { total: 0, pending: 0, failing: 0, successful: 0 }, mergeable: null, reviewDecision: null } }), new Map([["running", events]]));
-    expect(value.find((item) => item.kind === "agent_turn")).toMatchObject({ finishedAt: null, events });
+    expect(value.find((item) => item.kind === "agent_turn")).toMatchObject({ finishedAt: null, intro: "Working", events: [] });
     expect(value.filter((item) => item.kind === "system").map((item) => item.text)).toEqual(["Plan approved automatically", "CI passed", "Merged"]);
     expect(value.find((item) => item.kind === "pull_request")).toMatchObject({ at: at(25) });
   });
@@ -26,5 +26,28 @@ describe("buildChatTranscript", () => {
   it("removes legacy materiality suffixes from planner turn summaries", () => {
     const value = buildChatTranscript(task({ activity: [{ id: "summary", revision: 1, eventType: "planner_note_revised", metadata: { summary: "Plan A (Routine plan)" }, createdAt: at(20), kind: "workflow" }], agentInvocations: [planner("one", at(10), at(20))] }));
     expect(value.find((item) => item.kind === "agent_turn")).toMatchObject({ summary: "Plan A" });
+  });
+
+  it("orders equal timestamps as member, turn, then system", () => {
+    const value = buildChatTranscript(task({ activity: [{ id: "created", revision: 0, eventType: "task_created", metadata: {}, createdAt: at(1), kind: "member" }, { id: "note", revision: 1, eventType: "planner_note", metadata: { note: "Revise" }, createdAt: at(10), kind: "member" }, { id: "ci", revision: 2, eventType: "ci_passed", metadata: {}, createdAt: at(10), kind: "workflow" }], agentInvocations: [planner("one", at(10), at(20))] }));
+    expect(value.slice(1).map((item) => item.kind)).toEqual(["member", "agent_turn", "system"]);
+  });
+
+  it("hides lifecycle command echoes but keeps a member decision", () => {
+    const value = buildChatTranscript(task({ activity: [{ id: "created", revision: 0, eventType: "task_created", metadata: {}, createdAt: at(1), kind: "member" }, { id: "start", revision: 1, eventType: "member_action", metadata: { command: "start_planning" }, createdAt: at(2), kind: "member", actor: { id: "member", displayName: "Mara", username: "mara", avatarSeed: "mara" } }, { id: "approve", revision: 2, eventType: "member_action", metadata: { command: "approve_plan", note: "Ship it" }, createdAt: at(3), kind: "member", actor: { id: "member", displayName: "Mara", username: "mara", avatarSeed: "mara" } }] }));
+    expect(value.filter((item) => item.kind === "member").map((item) => item.id)).toEqual(["task-brief", "approve"]);
+  });
+
+  it("uses the intro once and collapses command pairs and repeats", () => {
+    const events: ChatEvent[] = [
+      { id: "intro", at: at(10), kind: "agent_update", text: "I'll inspect the README" },
+      { id: "start-1", at: at(11), kind: "command_started", stepNumber: 1, text: "Running: Inspecting Git state" },
+      { id: "finish-1", at: at(12), kind: "command_finished", stepNumber: 1, text: "Ran (exit 0): Inspecting Git state", exitCode: 0 },
+      ...[1, 2, 3, 4].map((number) => ({ id: `update-${number}`, at: at(12 + number), kind: "agent_update", text: "Checking files" })),
+    ];
+    const value = buildChatTranscript(task({ agentInvocations: [planner("one", at(10), at(20))] }), new Map([["one", events]]));
+    const turn = value.find((item) => item.kind === "agent_turn");
+    expect(turn).toMatchObject({ intro: "I'll inspect the README", events: [{ kind: "command", text: "Inspecting Git state", exitCode: 0 }, { text: "Checking files", count: 4 }] });
+    expect(turn && turn.kind === "agent_turn" ? turn.events.some((event) => event.id === "intro") : false).toBe(false);
   });
 });

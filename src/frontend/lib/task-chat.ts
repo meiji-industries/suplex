@@ -2,7 +2,7 @@ import { activitySentence, activityRole, withoutLegacyMaterialitySummary } from 
 import type { ApiTask } from "./view-shared.js";
 
 export type ChatActor = { name: string; avatarSeed: string };
-export type ChatEvent = { id: string; at: string; kind: string; text: string; files?: string[]; exitCode?: number | null };
+export type ChatEvent = { id: string; at: string; kind: string; text: string; files?: string[]; exitCode?: number | null; stepNumber?: number | null; status?: "running" | "completed"; count?: number };
 export type ChatItem =
   | { kind: "member"; id: string; at: string; actor: ChatActor; markdown: string }
   | { kind: "agent_turn"; id: string; role: ApiTask["agentInvocations"][number]["role"]; agent: ChatActor; startedAt: string; finishedAt: string | null; status: "running" | "completed" | "failed" | "blocked"; intro?: string; events: ChatEvent[]; summary?: string; stats?: { filesChanged: number; additions: number; deletions: number } }
@@ -20,22 +20,18 @@ function eventFiles(summary: string): string[] | undefined {
   return files.length ? [...new Set(files)] : undefined;
 }
 
-export function chatEventFromDeveloperEvent(event: { eventId: string; occurredAt: string; kind: string; summary: string; exitCode: number | null }): ChatEvent {
+export function chatEventFromDeveloperEvent(event: { eventId: string; occurredAt: string; kind: string; stepNumber: number | null; summary: string; exitCode: number | null }): ChatEvent {
   const files = eventFiles(event.summary);
-  return { id: event.eventId, at: event.occurredAt, kind: event.kind, text: event.summary, ...(files ? { files } : {}), exitCode: event.exitCode };
+  return { id: event.eventId, at: event.occurredAt, kind: event.kind, text: event.summary, ...(files ? { files } : {}), stepNumber: event.stepNumber, exitCode: event.exitCode };
 }
 
 function systemItem(entry: ApiTask["activity"][number]): ChatItem | undefined {
   const summary = String(entry.metadata.summary ?? entry.metadata.blockerSummary ?? "");
   const text = entry.eventType === "phase_plan_approved" || entry.eventType === "plan_approved" ? "Plan approved automatically"
-    : entry.eventType === "phase_delivery_reviewed" ? "Delivery reviewed"
-      : entry.eventType === "phase_ci_passed" || entry.eventType === "ci_passed" ? "CI passed"
-        : entry.eventType === "phase_ci_failed" || entry.eventType === "ci_failed" ? "CI failed"
-          : entry.eventType === "github_pr_merged" || entry.eventType === "phase_merged" ? "Merged"
-            : entry.eventType === "phase_cancelled" || entry.eventType === "cancelled" ? "Cancelled"
-              : entry.eventType === "delivery_blocked" || entry.eventType === "phase_delivery_blocked" ? (summary || "Delivery blocked")
-                : entry.eventType === "planning_started" && entry.metadata.planningStage === "completed" ? "Planner has finished"
-                  : undefined;
+    : entry.eventType === "phase_ci_passed" || entry.eventType === "ci_passed" ? "CI passed"
+      : entry.eventType === "github_pr_merged" || entry.eventType === "phase_merged" ? "Merged"
+        : entry.eventType === "delivery_blocked" || entry.eventType === "phase_delivery_blocked" ? (summary || "Delivery blocked")
+          : undefined;
   if (!text) return undefined;
   return { kind: "system", id: `system-${entry.id}`, at: entry.createdAt, text, tone: /failed|blocked|cancelled/i.test(text) ? "warning" : /passed|approved|merged/i.test(text) ? "success" : "muted" };
 }
@@ -60,13 +56,59 @@ function turnStats(events: ChatEvent[]): { filesChanged: number; additions: numb
   return filesChanged || additions || deletions ? { filesChanged, additions, deletions } : undefined;
 }
 
+function commandLabel(event: ChatEvent): string {
+  return event.text.split("\n")[0]!.replace(/^(?:Running|Ran \(exit \d+\)|Command finished(?: \(exit \d+\)?)): /, "");
+}
+
+function matchingCommand(started: ChatEvent, finished: ChatEvent): boolean {
+  return started.kind === "command_started" && finished.kind === "command_finished"
+    && started.stepNumber === finished.stepNumber && commandLabel(started) === commandLabel(finished);
+}
+
+export function compactChatEvents(events: ChatEvent[], intro?: ChatEvent): ChatEvent[] {
+  const paired: ChatEvent[] = [];
+  for (let index = 0; index < events.length; index += 1) {
+    const event = events[index]!;
+    const next = events[index + 1];
+    if (next && matchingCommand(event, next)) {
+      paired.push({ ...event, kind: "command", text: commandLabel(event), exitCode: next.exitCode ?? null, status: "completed" });
+      index += 1;
+    } else if (event.kind === "command_started") paired.push({ ...event, kind: "command", text: commandLabel(event), status: "running" });
+    else if (event.kind === "command_finished") paired.push({ ...event, kind: "command", text: commandLabel(event), status: "completed" });
+    else paired.push(event);
+  }
+  const visible = intro ? paired.filter((event) => event.id !== intro.id) : paired;
+  return visible.reduce<ChatEvent[]>((compacted, event) => {
+    const previous = compacted.at(-1);
+    if (previous && previous.kind === event.kind && previous.text === event.text && previous.status === event.status && previous.exitCode === event.exitCode) {
+      previous.count = (previous.count ?? 1) + 1;
+    } else compacted.push({ ...event });
+    return compacted;
+  }, []);
+}
+
+function shouldShowMemberAction(entry: ApiTask["activity"][number]): boolean {
+  if (entry.eventType !== "member_action") return true;
+  const command = String(entry.metadata.command ?? entry.metadata.action ?? "");
+  const commandId = String(entry.metadata.commandId ?? entry.metadata.command_id ?? "");
+  return Boolean(entry.actor) && !["start_planning", "start_development", "resync_projection"].includes(command)
+    && !command.startsWith("retry_") && !command.startsWith("auto") && !commandId.includes(":auto-")
+    && entry.metadata.automatic !== true && entry.metadata.automatic !== "true";
+}
+
+function itemTime(item: ChatItem): number { return Date.parse(item.kind === "agent_turn" ? item.startedAt : item.at); }
+function itemTieBreak(item: ChatItem): number { return item.kind === "member" ? 0 : item.kind === "agent_turn" ? 1 : item.kind === "system" ? 2 : 3; }
+export function sortChatItems(items: ChatItem[]): ChatItem[] {
+  return items.sort((left, right) => itemTime(left) - itemTime(right) || itemTieBreak(left) - itemTieBreak(right) || left.id.localeCompare(right.id));
+}
+
 export function buildChatTranscript(task: ApiTask, liveEventsByExecution: Map<string, ChatEvent[]> = new Map()): ChatItem[] {
   const created = task.activity.find((entry) => entry.eventType === "task_created");
   const items: ChatItem[] = [{ kind: "member", id: "task-brief", at: task.createdAt, actor: actorFor(created), markdown: task.description }];
   for (const entry of task.activity) {
     if (entry.eventType === "task_created") continue;
     if (entry.eventType === "planner_note") items.push({ kind: "member", id: entry.id, at: entry.createdAt, actor: actorFor(entry), markdown: String(entry.metadata.note ?? "") });
-    else if (entry.eventType === "member_action" || entry.eventType.includes("decision")) items.push({ kind: "member", id: entry.id, at: entry.createdAt, actor: actorFor(entry), markdown: activitySentence(entry, activityRole(entry)) });
+    else if ((entry.eventType === "member_action" && shouldShowMemberAction(entry)) || entry.eventType.includes("decision")) items.push({ kind: "member", id: entry.id, at: entry.createdAt, actor: actorFor(entry), markdown: activitySentence(entry, activityRole(entry)) });
     else {
       const system = systemItem(entry);
       if (system) items.push(system);
@@ -74,12 +116,13 @@ export function buildChatTranscript(task: ApiTask, liveEventsByExecution: Map<st
   }
   for (const invocation of task.agentInvocations) {
     const events = liveEventsByExecution.get(invocation.id) ?? [];
-    const intro = events.find((event) => event.kind === "agent_update")?.text;
+    const introEvent = events.find((event) => event.kind === "agent_update");
+    const intro = introEvent?.text;
     const status: Extract<ChatItem, { kind: "agent_turn" }>["status"] = invocation.finishedAt ? (terminalStatuses.has(invocation.status) ? invocation.status as "completed" | "failed" | "blocked" : "completed") : "running";
     const summary = turnSummary(task, invocation);
     const stats = turnStats(events);
-    items.push({ kind: "agent_turn", id: `agent-${invocation.id}`, role: invocation.role, agent: { name: invocation.agentName ?? `${invocation.role[0]!.toUpperCase()}${invocation.role.slice(1)}`, avatarSeed: invocation.avatarSeed ?? invocation.role }, startedAt: invocation.startedAt, finishedAt: invocation.finishedAt, status, ...(intro ? { intro } : {}), events, ...(summary ? { summary } : {}), ...(stats ? { stats } : {}) });
+    items.push({ kind: "agent_turn", id: `agent-${invocation.id}`, role: invocation.role, agent: { name: invocation.agentName ?? `${invocation.role[0]!.toUpperCase()}${invocation.role.slice(1)}`, avatarSeed: invocation.avatarSeed ?? invocation.role }, startedAt: invocation.startedAt, finishedAt: invocation.finishedAt, status, ...(intro ? { intro } : {}), events: compactChatEvents(events, introEvent), ...(summary ? { summary } : {}), ...(stats ? { stats } : {}) });
   }
   if (task.githubPullRequest?.exists && task.githubPullRequest.observedAt) items.push({ kind: "pull_request", id: `pr-${task.githubPullRequest.observedAt}`, at: task.githubPullRequest.observedAt });
-  return items.sort((left, right) => Date.parse(left.kind === "agent_turn" ? left.startedAt : left.at) - Date.parse(right.kind === "agent_turn" ? right.startedAt : right.at) || left.id.localeCompare(right.id));
+  return sortChatItems(items);
 }

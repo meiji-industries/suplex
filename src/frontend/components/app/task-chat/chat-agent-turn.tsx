@@ -8,8 +8,9 @@ import type { ChatEvent, ChatItem } from "../../../lib/task-chat.js";
 
 function duration(startedAt: string, finishedAt: string | null, now: number): string { return `${Math.max(0, Math.floor(((finishedAt ? Date.parse(finishedAt) : now) - Date.parse(startedAt)) / 1_000))}s`; }
 function EventLine({ event, onOpenDiff }: { event: ChatEvent; onOpenDiff: () => void }) {
-  const text = event.kind === "file_change" ? "Edited" : event.kind === "test_result" ? "Tests:" : event.kind === "tool_call" ? "Tool:" : "";
-  return <li className="break-words text-[12px] text-muted-foreground">{text ? <span className="font-medium text-foreground">{text} </span> : null}{event.files?.length ? <>{event.files.map((file) => <button type="button" className="underline underline-offset-2" onClick={onOpenDiff} key={file}>{file}</button>)} {event.text}</> : event.text}</li>;
+  const label = event.kind === "file_change" ? "Edited" : event.kind === "test_result" ? "Tests:" : event.kind === "tool_call" ? "Tool:" : "";
+  const status = event.kind === "command" ? event.status === "running" ? "…" : event.exitCode === 0 ? "✓" : event.exitCode === null || event.exitCode === undefined ? "" : `exit ${event.exitCode}` : "";
+  return <li className="break-words text-[12px] text-muted-foreground">{label ? <span className="font-medium text-foreground">{label} </span> : null}{event.files?.length ? <>{event.files.map((file) => <button type="button" className="underline underline-offset-2" onClick={onOpenDiff} key={file}>{file}</button>)} {event.text}</> : event.text}{event.count && event.count > 1 ? ` ×${event.count}` : ""}{status ? <span className="ml-1">{status}</span> : null}</li>;
 }
 export function ChatAgentTurn({ item, onOpenDiff, onLoadEvents }: { item: Extract<ChatItem, { kind: "agent_turn" }>; onOpenDiff: () => void; onLoadEvents: () => Promise<void> }) {
   const [now, setNow] = useState(Date.now());

@@ -23,4 +23,12 @@ describe("task chat UI", () => {
     expect(renderToStaticMarkup(createElement(ChatComposer, { disabled: true, disabledReason: "Planner feedback is unavailable.", onSubmit: async () => undefined }))).toContain("Planner feedback is unavailable.");
     expect(renderToStaticMarkup(createElement(ChatMemberMessage, { item: { kind: "member", id: "message", at: "2026-08-23T00:00:00.000Z", actor: { name: "Mara", avatarSeed: "mara" }, markdown: "**Hello**" } }))).toContain("<strong>Hello</strong>");
   });
+
+  it("shows collapsed command results and repeated event counts", () => {
+    const item = { ...completed, finishedAt: null, status: "running" as const, events: [{ id: "command", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "Inspecting Git state", exitCode: 0, status: "completed" as const }, { id: "repeat", at: "2026-08-23T00:00:11.000Z", kind: "agent_update", text: "Checking files", count: 4 }] };
+    const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    expect(html).toContain("Inspecting Git state");
+    expect(html).toContain("✓");
+    expect(html).toContain("×4");
+  });
 });

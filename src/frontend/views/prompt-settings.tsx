@@ -20,11 +20,11 @@ type Template = { id: string; category: "agent" | "shared"; archetype: string; t
 const COLUMNS: SettingsTableColumn[] = [{ key: "title", label: "Title", width: 260 }, { key: "id", label: "Template id", width: 220 }, { key: "mode", label: "Mode", width: 100 }, { key: "status", label: "Status", width: 130 }, { key: "updated", label: "Updated", width: 160 }];
 const FILTERS = ["All", "Agent", "Shared", "Overridden", "Warnings"] as const;
 
-function templateUrl(id: string): string { return `/api/prompts/templates/${encodeURIComponent(id)}?scope=global`; }
+function templateUrl(id: string, scope: "global" | "project", projectId?: string): string { return `/api/prompts/templates/${encodeURIComponent(id)}?scope=${scope}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}`; }
 
 function modeFor(template: Template): Mode { return template.override?.mode ?? "inherit"; }
 
-export function PromptSettings({ scope = "global" }: { scope?: "global" }): ReactElement {
+export function PromptSettings({ scope = "global", projectId }: { scope?: "global" | "project"; projectId?: string }): ReactElement {
   const { currentCompany } = useCompanyContext();
   const [templates, setTemplates] = useState<Template[]>([]);
   const [selected, setSelected] = useState<string>();
@@ -35,7 +35,7 @@ export function PromptSettings({ scope = "global" }: { scope?: "global" }): Reac
   const [error, setError] = useState("");
   const active = templates.find((template) => template.id === selected);
   const reload = async (): Promise<void> => {
-    const response = await readJson<{ templates: Template[] }>(`/api/prompts/templates?scope=${scope}`);
+    const response = await readJson<{ templates: Template[] }>(`/api/prompts/templates?scope=${scope}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ""}`);
     setTemplates(response.templates);
   };
   useEffect(() => { void reload().catch(() => setError("Prompt templates are unavailable.")); }, []);
@@ -49,17 +49,17 @@ export function PromptSettings({ scope = "global" }: { scope?: "global" }): Reac
     if (!active) return;
     setError("");
     try {
-      await readJson(templateUrl(active.id).replace("?scope=global", "/override?scope=global"), { method: "PUT", body: JSON.stringify(draft) });
+      await readJson(templateUrl(active.id, scope, projectId).replace(`?scope=${scope}`, `/override?scope=${scope}`), { method: "PUT", body: JSON.stringify(draft) });
       await reload(); setSaved(true); window.setTimeout(() => setSaved(false), 1600);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to save prompt override."); }
   };
   const rollback = async (revision: number): Promise<void> => {
     if (!active) return;
-    await readJson(templateUrl(active.id).replace("?scope=global", "/rollback?scope=global"), { method: "POST", body: JSON.stringify({ revision }) });
+    await readJson(templateUrl(active.id, scope, projectId).replace(`?scope=${scope}`, `/rollback?scope=${scope}`), { method: "POST", body: JSON.stringify({ revision }) });
     await reload();
   };
   const backHref = withCompany("/projects", currentCompany?.id);
-  return <SettingsLayout title="Prompts" companyId={currentCompany?.id ?? ""} backHref={backHref} activeHref={withCompany("/admin/prompts", currentCompany?.id)}>
+  return <SettingsLayout title={scope === "project" ? "Project prompts" : "Prompts"} companyId={currentCompany?.id ?? ""} backHref={backHref} activeHref={scope === "project" && projectId ? withCompany(`/projects/${encodeURIComponent(projectId)}/prompts`, currentCompany?.id) : withCompany("/admin/prompts", currentCompany?.id)}>
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2"><label className="relative w-72"><Search className="pointer-events-none absolute left-2 top-2 size-4 text-muted-foreground" /><Input aria-label="Search prompts" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search prompts" /></label><div className="flex flex-wrap gap-1">{FILTERS.map((name) => <Button aria-pressed={filter === name} key={name} onClick={() => setFilter(name)} size="sm" type="button" variant={filter === name ? "default" : "outline"}>{name}</Button>)}</div></div>
       {error ? <Alert variant="destructive"><AlertTitle>Prompt settings</AlertTitle><AlertDescription>{error}</AlertDescription></Alert> : null}

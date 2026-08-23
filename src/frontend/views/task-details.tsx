@@ -37,7 +37,7 @@ import type { IssueCommandSlug } from "../../commands/registry.js";
 import { BLOCKED_PHASES, TERMINAL_PHASES, phaseLabel } from "../../issue-phases.js";
 import { releaseFailureCopy } from "../../release-failures.js";
 import type { ActivityFeedRow } from "../lib/task-activity-feed.js";
-import { Check, Copy, Ellipsis, GitPullRequest, LoaderCircle } from "lucide-react";
+import { Check, Copy, Ellipsis, GitPullRequest, LoaderCircle, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 
 type DevelopmentExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; lastOutputAt?: string | null; currentStep: string | null };
@@ -677,7 +677,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
               <div className="space-y-1"><dt className="text-muted-foreground">Project</dt><dd>{project?.name ?? "Unknown project"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd><NextAction value={task.pendingAction} /></dd></div>
-              <div className="space-y-1"><dt className="text-muted-foreground">Sync</dt><dd>{task.githubPullRequest?.observedAt ? `synced ${Math.max(0, Math.floor((Date.now() - Date.parse(task.githubPullRequest.observedAt)) / 1_000))}s ago` : "never"}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Sync</dt><dd className="flex items-center gap-1">{task.githubPullRequest?.observedAt ? `synced ${Math.max(0, Math.floor((Date.now() - Date.parse(task.githubPullRequest.observedAt)) / 1_000))}s ago` : "never"}<Button size="icon-xs" variant="ghost" aria-label="Sync with GitHub now" title="Sync with GitHub now" onClick={() => void onRefresh()} disabled={busy}><RefreshCw aria-hidden="true" className="size-3" /></Button></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Updated</dt><dd>{adminDate(task.updatedAt)}</dd></div>
               {task.issueKey ? <div className="space-y-1"><dt className="text-muted-foreground">Issue key</dt><dd><code>{task.issueKey}</code></dd></div> : null}

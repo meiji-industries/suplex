@@ -123,6 +123,8 @@ beforeEach(async () => {
   const planner = projects.createAgent(adminId, { name: "Planner", role: "planner", profileId: profile.id });
   const builder = projects.createAgent(adminId, { name: "Builder", role: "builder", profileId: profile.id });
   const reviewer = projects.createAgent(adminId, { name: "Reviewer", role: "reviewer", profileId: profile.id });
+  const archived = projects.createAgent(adminId, { name: "Archived planner", role: "planner", profileId: profile.id });
+  projects.updateAgent(adminId, archived.id, { archived: true });
 
   const project = await projects.createProject(adminId, companyId, {
     name: "Proof Project",
@@ -205,9 +207,14 @@ test("Hermes external agent full browser lifecycle at desktop and narrow viewpor
     await page.goto(`${baseUrl}/admin/agents?company=${encodeURIComponent(companyId)}`);
     await page.waitForLoadState("networkidle");
 
-    const hermesHeading = page.getByRole("heading", { name: "Hermes agents" });
-    await hermesHeading.waitFor();
-    expect(await hermesHeading.isVisible()).toBe(true);
+    const internalTable = page.getByRole("table", { name: "Internal Agents" });
+    expect(await internalTable.getByText("Internal agents", { exact: true }).isVisible()).toBe(true);
+    const internalRows = await internalTable.locator("tbody tr").allTextContents();
+    expect(internalRows.findIndex((text) => text.includes("Planner"))).toBeLessThan(internalRows.findIndex((text) => text.includes("Archived planner")));
+    expect(await internalTable.getByRole("row", { name: /Edit Planner/i }).getByText("active", { exact: true }).isVisible()).toBe(true);
+    expect(await internalTable.getByRole("row", { name: /Edit Archived planner/i }).getByText("archived", { exact: true }).isVisible()).toBe(true);
+    const hermesTable = page.getByRole("table", { name: "Hermes Agents" });
+    expect(await hermesTable.getByText("Hermes agents", { exact: true }).isVisible()).toBe(true);
     expect(await page.getByRole("row", { name: /Hermes agent SRE Hermes Bot/i }).count()).toBe(0);
     await page.screenshot({ path: join(receiptsDir, "01-agents-admin-desktop.png") });
 
@@ -294,7 +301,6 @@ test("Hermes external agent full browser lifecycle at desktop and narrow viewpor
     expect(await agentRow.getByText("pending", { exact: true }).count()).toBe(0);
 
     await page.setViewportSize({ width: 390, height: 844 });
-    const hermesTable = page.getByRole("table", { name: "Hermes Agents" });
     expect(await hermesTable.evaluate((element) => element.parentElement!.scrollWidth > element.parentElement!.clientWidth)).toBe(true);
     expect(await pendingStatus.evaluate((element) => getComputedStyle(element.parentElement!).whiteSpace)).toBe("nowrap");
     await pendingStatus.scrollIntoViewIfNeeded();

@@ -44,6 +44,7 @@ const AGENT_COLUMNS: SettingsTableColumn[] = [
   { key: "name", label: "Name ↓", width: 240 },
   { key: "role", label: "Role", width: 140 },
   { key: "profile", label: "Profile", width: 220 },
+  { key: "status", label: "Status", width: 100 },
   { key: "menu", width: 28 },
   { key: "end", width: 32 },
 ];
@@ -145,7 +146,6 @@ export function AdminView(): ReactElement {
   const [agentProfileId, setAgentProfileId] = useState("");
   const [agentOpen, setAgentOpen] = useState(false);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
-  const [showArchivedAgents, setShowArchivedAgents] = useState(false);
   const [archiveTarget, setArchiveTarget] = useState<ApiAgent | null>(null);
   const [capacityLanes, setCapacityLanes] = useState<Array<{ profileId: string; activeCount: number; queuedCount: number }>>([]);
   const [capacityEdits, setCapacityEdits] = useState<Record<string, string>>({});
@@ -500,7 +500,7 @@ export function AdminView(): ReactElement {
 
   const isProfiles = window.location.pathname.endsWith("/profiles");
   const isAgents = window.location.pathname.endsWith("/agents");
-  const visibleAgents = showArchivedAgents ? agents : agents.filter((agent) => !agent.archivedAt);
+  const sortedAgents = [...agents].sort((left, right) => Number(Boolean(left.archivedAt)) - Number(Boolean(right.archivedAt)));
   const isModels = window.location.pathname.endsWith("/models");
   const isCompanies = window.location.pathname.endsWith("/companies");
   const isInvitations = window.location.pathname.endsWith("/invitations");
@@ -611,23 +611,14 @@ export function AdminView(): ReactElement {
           <div className="space-y-12">
             <section>
               <SettingsToolbar searchLabel="Filter internal agents by name" searchPlaceholder="Filter by name…" filterLabel="All roles" searchWidth="compact" actions={<SettingsToolbarAction tone="primary" onClick={openNewAgent}>New internal agent</SettingsToolbarAction>} />
-              <div className="mt-4 flex h-8 items-center justify-between">
-                <div className="flex items-baseline gap-2">
-                  <h2 className="text-base font-medium">Internal agents</h2>
-                  <span className="text-[11px] text-muted-foreground">{visibleAgents.length}</span>
-                </div>
-                <label className="flex items-center gap-2 text-[11px] text-muted-foreground" htmlFor="show-archived-agents">
-                  <Checkbox id="show-archived-agents" checked={showArchivedAgents} onCheckedChange={(checked) => setShowArchivedAgents(checked === true)} />
-                  Show archived
-                </label>
-              </div>
-              <SettingsDataTable label="Internal Agents" columns={AGENT_COLUMNS} className="mt-3">
-                <tbody>
-                  {visibleAgents.map((agent) => (
+              <SettingsDataTable label="Internal Agents" columns={AGENT_COLUMNS} className="mt-4">
+                <SettingsTableGroup label="Internal agents" count={agents.length} columnCount={AGENT_COLUMNS.length}>
+                  {sortedAgents.map((agent) => (
                     <SettingsTableRow aria-label={`Edit ${agent.name}`} key={agent.id} onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input, label, [data-base-ui-portal]")) openEditAgent(agent); }} tabIndex={0}>
                       <SettingsTableCell><span className="flex min-w-0 items-center gap-3"><ProfileAvatar name={agent.name} seed={agent.avatarSeed} /><AgentNameEditor agent={agent} onSave={(name) => patchAgent(agent, { name }, "Unable to rename agent")} />{agent.archivedAt ? <Badge variant="secondary">Archived</Badge> : null}</span></SettingsTableCell>
                       <SettingsTableCell className="capitalize">{agent.role}</SettingsTableCell>
                       <SettingsTableCell className="truncate">{profiles.find((profile) => profile.id === agent.profileId)?.name ?? agent.profileId}</SettingsTableCell>
+                      <SettingsTableCell><span className="flex items-center gap-1.5 text-muted-foreground"><span className={agent.archivedAt ? "size-1.5 rounded-full bg-muted-foreground" : "size-1.5 rounded-full bg-emerald-500"} />{agent.archivedAt ? "archived" : "active"}</span></SettingsTableCell>
                       <SettingsTableCell className="p-0">
                         <DropdownMenu>
                           <DropdownMenuTrigger render={<Button variant="ghost" size="icon-xs" aria-label={`${agent.name} actions`} title={`${agent.name} actions`} />}><Ellipsis /></DropdownMenuTrigger>
@@ -642,8 +633,8 @@ export function AdminView(): ReactElement {
                       <SettingsTableCell className="p-0"><Button variant="ghost" size="icon-xs" aria-label={`Edit ${agent.name}`} title={`Edit ${agent.name}`} onClick={() => openEditAgent(agent)}><Pencil /></Button></SettingsTableCell>
                     </SettingsTableRow>
                   ))}
-                </tbody>
-                {visibleAgents.length === 0 ? <SettingsTableEmpty columnCount={AGENT_COLUMNS.length}>No internal agents configured.</SettingsTableEmpty> : null}
+                </SettingsTableGroup>
+                {agents.length === 0 ? <SettingsTableEmpty columnCount={AGENT_COLUMNS.length}>No internal agents configured.</SettingsTableEmpty> : null}
               </SettingsDataTable>
               <AlertDialog open={archiveTarget !== null} onOpenChange={(open) => { if (!open) setArchiveTarget(null); }}>
                 <AlertDialogContent>
@@ -660,15 +651,9 @@ export function AdminView(): ReactElement {
             </section>
 
             <section>
-              <div className="flex h-8 items-center justify-between">
-                <div className="flex items-baseline gap-2">
-                  <h2 className="text-base font-medium">Hermes agents</h2>
-                  <span className="text-[11px] text-muted-foreground">{hermesAgents.length}</span>
-                </div>
-                <Button size="sm" onClick={openNewHermesAgent}>New Hermes agent</Button>
-              </div>
-              <SettingsDataTable label="Hermes Agents" columns={HERMES_AGENT_COLUMNS} className="mt-3">
-                <tbody>
+              <div className="flex justify-end"><Button size="sm" onClick={openNewHermesAgent}>New Hermes agent</Button></div>
+              <SettingsDataTable label="Hermes Agents" columns={HERMES_AGENT_COLUMNS} className="mt-4">
+                <SettingsTableGroup label="Hermes agents" count={hermesAgents.length} columnCount={HERMES_AGENT_COLUMNS.length}>
                   {hermesAgents.map((agent) => {
                     const action = `hermes:revoke:${agent.id}`;
                     return (
@@ -727,7 +712,7 @@ export function AdminView(): ReactElement {
                       </SettingsTableRow>
                     );
                   })}
-                </tbody>
+                </SettingsTableGroup>
                 {hermesAgents.length === 0 ? <SettingsTableEmpty columnCount={HERMES_AGENT_COLUMNS.length}>No Hermes agents configured.</SettingsTableEmpty> : null}
               </SettingsDataTable>
             </section>

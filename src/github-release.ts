@@ -174,7 +174,7 @@ const PullViewResponseSchema = z.object({
   mergeable: z.string().nullable(),
   autoMergeRequest: z.object({}).nullable(),
   reviewDecision: z.string().nullable(),
-  author: z.object({ login: z.string().min(1), avatarUrl: z.string().url().nullable() }).nullable(),
+  author: z.object({ login: z.string().min(1), avatarUrl: z.string().url().nullable().optional() }).nullable(),
   changedFiles: z.number().int().nonnegative(),
   additions: z.number().int().nonnegative(),
   deletions: z.number().int().nonnegative(),

@@ -13,3 +13,10 @@ test("every default prompt is catalogued and the derived defaults are its guidan
   }
   expect(catalog.get("pull-request/body")?.editable).toBe(false);
 });
+
+test("declared variables match the placeholders each template actually uses", () => {
+  for (const template of loadPromptCatalog().values()) {
+    const used = new Set([...`${template.guidance}\n${template.contract ?? ""}`.matchAll(/\{\{(\w+)\}\}/g)].map((match) => match[1]));
+    expect([...template.variables].sort(), template.id).toEqual([...used].sort());
+  }
+});

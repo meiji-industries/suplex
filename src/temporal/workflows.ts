@@ -3,6 +3,7 @@ import { ProbeWorkflowInputSchema, type ProbeWorkflowInput, type ProbeWorkflowSt
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowInputSchema, IssueWorkflowStateSchema, normalizeSafeSummary, type IssueBlocker, type IssueBlockerAction, type IssueCommand, type IssueWorkflowInput, type IssueWorkflowState, type LeadPlanningResult, type ReconcileTargetBaseActivityResult, type TargetBaseCheckpoint } from "./issue-contracts.js";
 import { assertContinuationStateWithinLimit, assertPayloadWithinLimit, WORKFLOW_HISTORY_EVENT_LIMIT } from "./policy.js";
 import { applyTargetBaseNoDrift, applyTargetBaseRevalidation } from "./target-base.js";
+import { applyLegacyGithubObservation } from "./github-observation.js";
 import { reconcile, type PullRequestTarget } from "../pull-request-reconciler.js";
 import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, recordProbeStarted, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
 import { syncGithubPullRequestSignal } from "./issue-updates.js";
@@ -25,9 +26,7 @@ export * from "./issue-updates.js";
 export { repairBlockedState, repairRequiredState, repairedDeliveryAwaitingFreshReviewState, reviewApprovedState, reviewBlockedState, reviewingDeliveryState } from "./workflow/state-transitions.js";
 async function projectIssueState(state: IssueWorkflowState): Promise<IssueWorkflowState> { return projectIssueStateActivity(IssueProjectionEventSchema.parse({ schemaVersion: 1, runId: workflowInfo().runId, eventId: state.lastEventId, state })); }
 const MAX_RECONCILIATION_ATTEMPTS = 20;
-
 function sleepUntil(retryAt: string | null | undefined): Promise<void> { return retryAt ? sleep(Math.max(1, Date.parse(retryAt) - Date.now())) : sleep("1 second"); }
-
 export const probeStateQuery = defineQuery<ProbeWorkflowState>("probeState");
 
 export async function probeWorkflow(input: ProbeWorkflowInput): Promise<ProbeWorkflowState> {
@@ -229,9 +228,9 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(syncGithubPullRequestSignal, () => { githubSyncRequested = true; });
   const syncGithubPullRequest = async (): Promise<void> => {
     if (!state.releaseRepository || !state.branchName) return;
-    // GitHub is polled every 60s in manual_merge/ci_waiting; a provider hiccup must never fail the workflow.
-    let observed: Awaited<ReturnType<typeof observeGithubPullRequest>>;
-    try { observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }); } catch { return; }
+    // GitHub is polled every 60s; a provider hiccup must never fail the workflow — the next poll retries.
+    const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch(() => null);
+    if (!observed) return;
     const number = state.pullRequestNumber, wasDraft = state.githubPullRequestDraft, common = { githubObservedAt: new Date().toISOString(), githubPullRequestExists: observed.exists, githubPullRequestState: observed.state, githubPullRequestDraft: observed.isDraft, githubPullRequestChecks: observed.checks, githubPullRequestAuthor: observed.author ?? null, githubPullRequestChangedFiles: observed.changedFiles ?? null, githubPullRequestAdditions: observed.additions ?? null, githubPullRequestDeletions: observed.deletions ?? null, githubPullRequestMergeable: observed.mergeable, githubPullRequestReviewDecision: observed.reviewDecision, githubPullRequestAutoMergeEnabled: observed.autoMergeEnabled, ...(observed.number ? { pullRequestNumber: observed.number } : {}), ...(observed.url ? { pullRequestUrl: observed.url } : {}), ...(observed.headSha ? { expectedHeadSha: observed.headSha } : {}), ...(observed.baseSha ? { targetBaseSha: observed.baseSha } : {}) };
     if (patched("forge-pr-reconciler-v1")) {
       const target: PullRequestTarget = validatedInput.deliveryTarget === "merged" ? "merged" : validatedInput.deliveryTarget === "pull_request_ready" ? "ready" : "draft";
@@ -242,21 +241,15 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       await projectIssueState(state);
       for (const action of reconciliation.actions) {
         if ((action.kind === "enable_auto_merge" || action.kind === "merge" || action.kind === "mark_ready") && state.releaseRepository) {
-          try { await applyGithubPullRequestAction({ repository: state.releaseRepository, number: action.number, headSha: "headSha" in action ? action.headSha : observed.headSha ?? "", action: action.kind }); } catch (error) {
-            const message = error instanceof Error ? (error as { cause?: { message?: string } }).cause?.message ?? error.message : "GitHub action failed";
-            state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, pendingAction: `GitHub ${action.kind.replaceAll("_", " ")} failed: ${message} — retrying`, lastEventId: `${state.workflowId}:${state.revision + 1}` });
-            await projectIssueState(state);
-          }
+          const failure = await applyGithubPullRequestAction({ repository: state.releaseRepository, number: action.number, headSha: "headSha" in action ? action.headSha : observed.headSha ?? "", action: action.kind }).then(() => null, (error: Error & { cause?: { message?: string } }) => error.cause?.message ?? error.message);
+          if (failure !== null) { state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, pendingAction: `GitHub ${action.kind.replaceAll("_", " ")} failed: ${failure} — retrying`, lastEventId: `${state.workflowId}:${state.revision + 1}` }); await projectIssueState(state); }
         }
         else if ((action.kind === "push_open_draft" || action.kind === "push_open_ready") && state.phase === "releasing") await workflowContext.runPublishTurn();
         else if (action.kind === "repair_ci" && state.phase === "ci_waiting") await workflowContext.reconcileCiTurn();
       }
       return;
     }
-    const revision = state.revision + 1, event = `${state.workflowId}:${revision}`, changedAt = new Date().toISOString();
-    if (observed.state === "merged") state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, phase: "done", owner: "human", allowedCommands: [], pendingAction: "Merged on GitHub", mergeOutcome: "merged", resultCommit: observed.headSha ?? state.resultCommit, stateChangedAt: changedAt, lastEventId: event });
-    else if (observed.state === "closed" || (!observed.exists && number != null)) { const summary = observed.state === "closed" ? `Pull request #${number} was closed on GitHub` : "Branch no longer on GitHub"; state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, phase: "delivery_blocked", owner: "human", allowedCommands: ["publish_draft", "cancel_issue"], pendingAction: summary, blocker: humanBlocker("target_drift", summary, [{ command: "publish_draft", label: "Reopen or re-publish", requiresNote: false, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], undefined), stateChangedAt: changedAt, lastEventId: event }); }
-    else state = IssueWorkflowStateSchema.parse({ ...state, ...common, revision, ...(observed.exists && observed.isDraft === false && wasDraft === true ? { releaseStatus: "ready" as const, pendingAction: `PR #${observed.number} was marked ready on GitHub` } : {}), stateChangedAt: changedAt, lastEventId: event });
+    state = applyLegacyGithubObservation(state, observed, common, number, wasDraft);
     await projectIssueState(state);
   };
   const captureInitialProjectionState = patched(captureInitialProjectionStatePatch);
@@ -380,10 +373,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   registerCapacityHandlers(workflowContext);
   void patched("forge-capacity-ownership-clear-v1");
   assertPayloadWithinLimit("Issue Workflow result", state);
-  // Continue-As-New carries the last business revision into a fresh run. The
-  // previous run already projected that revision, so emitting it again with a
-  // different continuationCount would correctly look like conflicting
-  // authoritative history to the projection boundary.
+  // Continue-As-New carries the last business revision into a fresh run; the previous run already projected it,
+  // so re-emitting it with a new continuationCount would read as conflicting authoritative history.
   try {
     if (workflowContext.exactPlanAuthorityEnabled) await workflowContext.initialProjection;
     else {
@@ -446,10 +437,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     }
   } catch (error) {
     if (!isCancellation(error)) throw error;
-    // An external `temporal workflow cancel` lands here as a CancelledFailure from
-    // whatever the loop was awaiting. Project the same cancelled phase the
-    // cancel_issue update produces, in a non-cancellable scope since the ambient
-    // cancellation would otherwise abort the projection activity itself.
+    // External `temporal workflow cancel` surfaces as a CancelledFailure from whatever the loop awaited. Project the same
+    // cancelled phase cancel_issue produces, in a non-cancellable scope so the ambient cancellation can't abort the projection.
     await CancellationScope.nonCancellable(async () => {
       if (state.phase === "cancelled" || state.phase === "done") return;
       state = IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, phase: "cancelled", owner: "human", allowedCommands: [], pendingAction: "Issue cancelled externally", blocker: null, stateChangedAt: new Date().toISOString(), lastEventId: `${state.workflowId}:${state.revision + 1}` });

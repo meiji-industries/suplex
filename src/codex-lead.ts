@@ -420,14 +420,15 @@ export class AgentService {
 
   private renderTaskPrompt(input: { taskId: string; companyId: string }, path: string, values: Record<string, string>): string {
     const configuration = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input);
-    if (!configuration.prompts) return renderPrompt(loadDefaultPrompts().get(path as import("./prompts.js").PromptPath)!, values);
+    const guidance = "pull-request/guidance.md";
+    if (!configuration.prompts) { const defaults = loadDefaultPrompts(); return renderPrompt(defaults.get(path as import("./prompts.js").PromptPath)!, { pull_request_guidance: defaults.get(guidance)!, ...values }); }
     const pinned = configuration.prompts;
     const artifact = this.database.authQuery((db) => db.prepare("SELECT storage_path FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'task-prompt-set'").get(pinned.artifactId, input.companyId) as { storage_path: string } | undefined);
     if (!artifact) throw new AgentFailure("scoped-input-missing", "Pinned task prompts are unavailable");
     const prompts = jsonRequired(this.artifacts.getArtifactSync({ companyId: input.companyId, storagePath: artifact.storage_path, sha256: pinned.sha256 }).toString("utf8")) as Record<string, string>;
     const prompt = prompts[path];
     if (prompt === undefined) throw new AgentFailure("scoped-input-missing", `Pinned task prompt is unavailable: ${path}`);
-    return renderPrompt(prompt, values);
+    return renderPrompt(prompt, { pull_request_guidance: prompts[guidance] ?? loadDefaultPrompts().get(guidance)!, ...values });
   }
 
   async planDeliveryRepair(rawInput: DeliveryRepairPlanActivityInput): Promise<DeliveryRepairPlanResult> {

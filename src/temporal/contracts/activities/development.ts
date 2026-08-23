@@ -28,7 +28,7 @@ export const DeveloperRepairActivityInputSchema = z.object({
   subjectCommit: z.string().regex(/^[a-f0-9]{40,64}$/i),
   subjectTree: z.string().regex(/^[a-f0-9]{40,64}$/i),
   blockingFindings: z.array(DeliveryFindingSchema),
-  repairPlan: z.string().min(1).optional(),
+  repairPlan: z.string().min(1).nullable().optional(),
   repairPlanArtifactId: durableId.optional(),
   capacityRequestId: durableId.optional(),
 });
@@ -174,7 +174,7 @@ export interface DeveloperRepairActivityInput {
   subjectCommit: string;
   subjectTree: string;
   blockingFindings: DeliveryFinding[];
-  repairPlan?: string;
+  repairPlan?: string | null;
   repairPlanArtifactId?: string;
   capacityRequestId?: string;
 }
@@ -205,7 +205,7 @@ export type WorkflowDeveloperRepairResult =
 export type WorkflowDeveloperRepairActivityInput = Omit<DeveloperRepairActivityInput, "worktreePath" | "blockingFindings" | "repairPlan"> & {
   worktreePath?: string;
   blockingFindings?: DeliveryFinding[];
-  repairPlan?: string;
+  repairPlan?: string | null;
 };
 
 export interface DevelopmentActivities {

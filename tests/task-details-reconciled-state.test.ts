@@ -7,7 +7,7 @@ import { TaskDetailsPage } from "../src/frontend/views/task-details.js";
 test("a GitHub-merged, green pull request does not render the retired acceptance state", () => {
   (globalThis as { window?: { location: { pathname: string; href: string } } }).window = { location: { pathname: "/tasks/task-1", href: "http://localhost/tasks/task-1" } };
   const task = {
-    id: "task-1", title: "Merged task", description: "", images: [], roleAgents: {}, supplementalReview: false, autoApprovePlan: false,
+    id: "task-1", title: "Merged task", description: "", images: [], roleAgents: {}, prompts: { overrides: [] }, supplementalReview: false, autoApprovePlan: false,
     deliveryTarget: "merged", executionControls: { runProjectTests: true, visualEvidence: "off", supplementalReview: false }, deliveryReceipt: null, pullRequestMode: "auto_merge",
     workflowId: "workflow-1", projectRevisionId: "revision-1", phase: "done", revision: 4, owner: "lead", allowedCommands: [], commands: [], governance: {}, pendingAction: "Merged",
     createdAt: "2026-08-22T00:00:00.000Z", updatedAt: "2026-08-22T00:00:12.000Z", timeline: [], activity: [], agentInvocations: [], capacity: undefined,

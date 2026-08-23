@@ -14,6 +14,10 @@ export interface GithubPullRequestObservationResult {
   baseSha: string | null;
   mergeable: string | null;
   checks: { total: number; pending: number; failing: number; successful: number };
+  author?: { login: string; avatarUrl: string } | null;
+  changedFiles?: number | null;
+  additions?: number | null;
+  deletions?: number | null;
   autoMergeEnabled: boolean | null;
   reviewDecision: string | null;
 }

@@ -31,4 +31,8 @@ export const releaseObservationStateFields = {
   githubPullRequestAutoMergeEnabled: z.boolean().nullable().optional(),
   githubPullRequestObservationKey: z.string().max(512).nullable().optional(),
   githubPullRequestMergeable: z.string().max(128).nullable().optional(),
+  githubPullRequestAuthor: z.object({ login: z.string().max(256), avatarUrl: z.string().url().max(2_000) }).nullable().optional(),
+  githubPullRequestChangedFiles: z.number().int().nonnegative().nullable().optional(),
+  githubPullRequestAdditions: z.number().int().nonnegative().nullable().optional(),
+  githubPullRequestDeletions: z.number().int().nonnegative().nullable().optional(),
 };

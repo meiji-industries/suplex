@@ -1205,7 +1205,7 @@ export class AgentService {
       const cancelled = runtime.signal?.aborted === true;
       const expectedFailure = error instanceof AgentFailure && !cancelled;
       const failure = cancelled ? new AgentFailure("cancelled", "The Codex Lead turn was cancelled.", { nonRetryable: true }) : error instanceof AgentFailure ? error : new AgentFailure("delivery-review-failed", "Codex Lead delivery review failed");
-      evidenceLines.push(JSON.stringify({ type: "forge.review-turn-failed", code: failure.code }));
+      evidenceLines.push(JSON.stringify({ type: "forge.review-turn-failed", code: failure.code, message: redact(error instanceof Error ? error.message : String(error)) }));
       const evidence = await this.persistEvidence(input.companyId, executionId, evidenceLines);
       const code = failure.code === "cancelled" ? "cancelled" : failure.code === "correction-exhausted" ? "correction-exhausted" : deliveryBlockCode(failure);
       const summary = code === "cancelled" ? failure.message : safeBlockSummary(code, code === "correction-exhausted", failure.message);

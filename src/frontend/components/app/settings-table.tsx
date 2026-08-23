@@ -3,18 +3,19 @@ import { type ComponentProps, type ReactElement, type ReactNode, type TdHTMLAttr
 
 import { cn } from "../../lib/utils.js";
 import { Button } from "../ui/button.js";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.js";
 
 export type SettingsTableColumn = { key: string; label?: ReactNode; width: number };
 
-export function SettingsToolbar({ searchLabel, searchPlaceholder, filterLabel, searchWidth = "default", actions }: { searchLabel: string; searchPlaceholder: string; filterLabel: string; searchWidth?: "default" | "compact"; actions: ReactNode }): ReactElement {
+export function SettingsToolbar({ searchLabel, searchPlaceholder, filterLabel, searchWidth = "default", actions, searchValue, onSearchChange, filters }: { searchLabel: string; searchPlaceholder: string; filterLabel: string; searchWidth?: "default" | "compact"; actions: ReactNode; searchValue?: string; onSearchChange?: (value: string) => void; filters?: { options: readonly string[]; value: string; onChange: (value: string) => void } }): ReactElement {
   return (
     <div className="flex min-h-[34px] flex-wrap items-center justify-between gap-x-6 gap-y-2">
       <div className="flex min-w-0 flex-1 basis-[239px] gap-1.5">
         <label className={cn("relative block max-w-full", searchWidth === "compact" ? "w-[286px]" : "w-[300px]")}>
           <Search className="pointer-events-none absolute left-3 top-2 size-4 text-muted-foreground" />
-          <input aria-label={searchLabel} className="h-8 w-full rounded-lg border-[0.5px] border-[lch(84.44%_0_282)] bg-[lch(99.997%_0.5_282)] py-1.5 pl-8 pr-6 text-[13px] font-medium outline-none placeholder:text-muted-foreground disabled:cursor-default disabled:opacity-100" disabled placeholder={searchPlaceholder} />
+          {searchValue !== undefined && onSearchChange ? <input aria-label={searchLabel} className="h-8 w-full rounded-lg border-[0.5px] border-[lch(84.44%_0_282)] bg-[lch(99.997%_0.5_282)] py-1.5 pl-8 pr-6 text-[13px] font-medium outline-none placeholder:text-muted-foreground disabled:cursor-default disabled:opacity-100" onChange={(event) => onSearchChange(event.target.value)} placeholder={searchPlaceholder} value={searchValue} /> : <input aria-label={searchLabel} className="h-8 w-full rounded-lg border-[0.5px] border-[lch(84.44%_0_282)] bg-[lch(99.997%_0.5_282)] py-1.5 pl-8 pr-6 text-[13px] font-medium outline-none placeholder:text-muted-foreground disabled:cursor-default disabled:opacity-100" disabled placeholder={searchPlaceholder} />}
         </label>
-        <button className="hidden h-8 items-center gap-2 rounded-lg border-[0.5px] border-[lch(84.44%_0_282)] bg-[lch(99.997%_0.5_282)] px-2.5 text-[13px] font-medium shadow-[0_1px_1px_rgb(0_0_0_/_0.03)] disabled:cursor-default disabled:opacity-100 sm:inline-flex" disabled type="button">{filterLabel}<ChevronDown className="size-3.5 text-muted-foreground" /></button>
+        {filters ? <Select value={filters.value} onValueChange={(value) => { if (value !== null) filters.onChange(value); }}><SelectTrigger size="sm"><SelectValue /></SelectTrigger><SelectContent>{filters.options.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select> : <button className="hidden h-8 items-center gap-2 rounded-lg border-[0.5px] border-[lch(84.44%_0_282)] bg-[lch(99.997%_0.5_282)] px-2.5 text-[13px] font-medium shadow-[0_1px_1px_rgb(0_0_0_/_0.03)] disabled:cursor-default disabled:opacity-100 sm:inline-flex" disabled type="button">{filterLabel}<ChevronDown className="size-3.5 text-muted-foreground" /></button>}
       </div>
       <div className="flex shrink-0 items-center gap-2">{actions}</div>
     </div>

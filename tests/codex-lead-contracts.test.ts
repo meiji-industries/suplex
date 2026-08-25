@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 
-import { LeadOutputJsonSchema, LeadOutputSchema, PersistedLeadOutputSchema } from "../src/codex-lead-contracts.js";
+import { LeadOutputSchema, PersistedLeadOutputSchema } from "../src/codex-lead-contracts.js";
 import { SafeSummarySchema, toSafeSummary } from "../src/temporal/issue-contracts.js";
 
 const gitPresentation = {
@@ -43,9 +43,6 @@ test("Lead contracts are strict and step numbering is contiguous", () => {
   expect(LeadOutputSchema.safeParse(blocker).success).toBe(true);
   expect(LeadOutputSchema.safeParse({ ...blocker, extra: true }).success).toBe(false);
   expect(LeadOutputSchema.safeParse({ ...blocker, askUserQuestion: { ...askUserQuestion, options: askUserQuestion.options.slice(0, 2) } }).success).toBe(false);
-  const branches = (LeadOutputJsonSchema as { oneOf?: Array<{ additionalProperties?: boolean }> }).oneOf ?? [];
-  expect(branches).toHaveLength(2);
-  expect(branches.every((branch) => branch.additionalProperties === false)).toBe(true);
 });
 
 test("persisted Lead plans from before materiality evidence remain readable", () => {

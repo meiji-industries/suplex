@@ -1,7 +1,7 @@
 import { ApplicationFailure, setHandler } from "@temporalio/workflow";
 import { assertPayloadWithinLimit } from "../policy.js";
 import * as contracts from "../issue-contracts.js";
-import * as activityProxies from "./activity-proxies.js";
+import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
 import { developerExecutionId } from "../deterministic-id.js";
 import { issueUpdates } from "../issue-updates.js";
@@ -17,6 +17,7 @@ type LegacyReviewResult = {
 };
 
 export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
     const reviewing = stateTransitions.reviewingDeliveryState(ctx.state);
     ctx.state = reviewing;
     await ctx.project();
@@ -87,6 +88,7 @@ export async function reviewDelivery(ctx: IssueWorkflowContext, command: ReturnT
 }
 
 export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void {
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
   setHandler(issueUpdates.review_delivery, ctx.guarded(async (rawInput) => {
     assertPayloadWithinLimit("delivery review command", rawInput);
     return reviewDelivery(ctx, contracts.StartPlanningInputSchema.parse(rawInput));
@@ -127,6 +129,7 @@ export function registerDeliveryReviewHandlers(ctx: IssueWorkflowContext): void 
 }
 
 export async function repairDelivery(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
     const cycle = ctx.state.targetBaseOutcome === "revalidated" ? 1 : (ctx.state.repairCycle ?? 0) + 1;
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;
     const developerAttempt = (ctx.state.developerAttempt ?? 0) + 1;

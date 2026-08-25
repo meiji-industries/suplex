@@ -28,6 +28,7 @@ export interface HostHealthDependencies {
   artifactRoot: () => Promise<HealthCheck>;
   worker: () => Promise<HealthCheck>;
   codexAuth: () => Promise<HealthCheck>;
+  herdrReadiness?: () => Promise<HealthCheck>;
   ghAuth: () => Promise<HealthCheck>;
   backup?: () => Promise<HealthCheck>;
 }
@@ -53,6 +54,7 @@ export async function inspectHostHealth(config: ForgeConfig, dependencies: HostH
     safelyCheck("artifact-root", "Artifact root", dependencies.artifactRoot),
     safelyCheck("worker", "Worker and task queue", dependencies.worker),
     safelyCheck("codex-auth", "Codex authentication", dependencies.codexAuth),
+    ...(dependencies.herdrReadiness ? [safelyCheck("herdr-readiness", "Herdr readiness", dependencies.herdrReadiness)] : []),
     safelyCheck("gh-auth", "GitHub CLI authentication", dependencies.ghAuth),
     ...(dependencies.backup ? [safelyCheck("backup", "Backup verification", dependencies.backup)] : []),
   ]);

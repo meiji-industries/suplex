@@ -16,7 +16,7 @@ const ReviewResponseSchema = z.object({
   opinionArtifactId: z.string(), evidenceArtifactId: z.string(), correctionAttempts: z.number().int().min(0).max(1).nullable(), supersedesReviewId: z.string().nullable(), successorReviewId: z.string().nullable(), leadSessionContinued: z.boolean(), developerSessionContinued: z.boolean(), createdAt: z.string(), findings: z.array(ReviewFindingResponseSchema),
 });
 const ReviewAttemptResponseSchema = z.object({
-  id: z.string(), status: z.string(), code: DeliveryOperationBlockCodeSchema.nullable(), summary: z.string().nullable(), correctionAttempts: z.number().int().min(0).max(1).nullable(), planRevision: z.number(),
+  id: z.string(), status: z.string(), code: z.union([DeliveryOperationBlockCodeSchema, z.literal("cancelled")]).nullable(), summary: z.string().nullable(), correctionAttempts: z.number().int().min(0).max(1).nullable(), planRevision: z.number(),
   baseSha: HashSchema, baseShaAbbrev: z.string().length(8), subjectCommit: HashSchema, subjectCommitAbbrev: z.string().length(8), subjectTree: HashSchema, subjectTreeAbbrev: z.string().length(8),
   developerExecutionId: z.string().nullable(), deliveryArtifactId: z.string().nullable(), developerEvidenceArtifactId: z.string().nullable(), evidenceArtifactId: z.string().nullable(), completedReviewId: z.string().nullable(), supersedesReviewId: z.string().nullable(), createdAt: z.string(), finishedAt: z.string().nullable(),
 });
@@ -116,7 +116,16 @@ export const TaskResponseSchema = TaskResponseBaseSchema.extend({
   githubPullRequest: z.object({ exists: z.boolean(), number: z.number().nullable(), url: z.string().url().nullable(), state: z.enum(["open", "closed", "merged"]).nullable(), isDraft: z.boolean().nullable(), checks: z.object({ total: z.number(), pending: z.number(), failing: z.number(), successful: z.number() }), author: z.object({ login: z.string(), avatarUrl: z.string().url() }).nullable().optional(), changedFiles: z.number().nullable().optional(), additions: z.number().nullable().optional(), deletions: z.number().nullable().optional(), mergeable: z.string().nullable(), observedAt: z.string().nullable(), reviewDecision: z.string().nullable(), autoMergeEnabled: z.boolean().nullable() }).optional(),
 });
 export type TaskResponse = z.infer<typeof TaskResponseSchema>;
-export const TaskListResponseSchema = z.object({ tasks: z.array(TaskResponseSchema) });
+export const TaskListTaskSchema = z.object({
+  id: z.string(), companyId: z.string(), projectId: z.string(), issueKey: z.string().nullable(), title: z.string(), deliveryTarget: DeliveryTargetSchema, phase: TaskPhaseSchema, revision: z.number(), owner: z.enum(["human", "lead"]), allowedCommands: z.array(IssueCommandSchema), pendingAction: z.string().nullable(), createdAt: z.string(), updatedAt: z.string(),
+  agentInvocations: z.array(AgentInvocationResponseSchema.pick({ id: true, role: true, status: true, attempt: true, startedAt: true, finishedAt: true, agentId: true, agentName: true, avatarSeed: true })),
+  capacity: z.object({ status: z.enum(["queued", "active", "rate_limited", "exhausted"]) }).nullable(),
+  release: TaskReleaseResponseSchema.pick({ status: true, pullRequestNumber: true, isDraft: true }).nullable().optional(),
+  ci: z.object({ outcome: CiOutcomeSchema.nullable() }).optional(),
+  deliveryGate: z.object({ release: z.object({ state: z.enum(["draft", "ready", "merged", "closed"]) }) }).optional(),
+});
+export type TaskListTask = z.infer<typeof TaskListTaskSchema>;
+export const TaskListResponseSchema = z.object({ tasks: z.array(TaskListTaskSchema) });
 export const ContinueWorkResponseSchema = z.object({ original: TaskResponseSchema, successor: TaskResponseSchema });
 export const ImageResponseSchema = z.object({ artifactId: z.string(), filename: z.string(), mimeType: z.string(), byteSize: z.number() });
 export const TaskDeveloperDiffResponseSchema = z.object({ patch: z.string(), branchName: z.string(), repository: z.string().optional(), baseSha: z.string(), headSha: z.string() });

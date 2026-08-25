@@ -24,6 +24,26 @@ test("state parsing always offers cancellation outside terminal phases", () => {
   }
 });
 
+test("accepts a sha-less plan blocker response receipt", () => {
+  const parsed = IssueWorkflowStateSchema.parse({
+    ...state(),
+    phase: "planning",
+    owner: "lead",
+    allowedCommands: ["start_planning"],
+    pendingAction: "Lead plan revision after blocker response",
+    revision: 11,
+    lastEventId: "workflow_1:11",
+    planBlockerSubject: null,
+    planBlockerResponseReceipt: {
+      idempotencyKey: "blocker-response-1",
+      responseId: "response_1",
+      blockerSubjectHash: null,
+    },
+  });
+
+  expect(parsed.planBlockerResponseReceipt?.blockerSubjectHash).toBeNull();
+});
+
 test("assigns final review to the Reviewer, with Planner fallback", () => {
   const context = { input: { roleProfiles: { planner: "planner-profile", reviewer: "reviewer-profile" } } } as IssueWorkflowContext;
   expect(finalReviewerTurn(context)).toEqual({ role: "reviewer", profileId: "reviewer-profile" });

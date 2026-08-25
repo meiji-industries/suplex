@@ -1,0 +1,4 @@
+{"timestamp":"2026-08-23T18:55:47.195Z","ordinal":0,"type":"session_meta","payload":{"session_id":"session-example","cwd":"/work/example","originator":"codex-tui","cli_version":"0.149.0"}}
+{"timestamp":"2026-08-23T18:55:47.196Z","ordinal":1,"type":"event_msg","payload":{"type":"user_message","message":"Legacy prompt.","images":[]}}
+{"timestamp":"2026-08-23T18:55:47.197Z","ordinal":2,"type":"event_msg","payload":{"type":"task_started","turn_id":"turn-example","started_at":1787511347}}
+{"timestamp":"2026-08-23T18:58:06.246Z","ordinal":3,"type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-example","duration_ms":12}}

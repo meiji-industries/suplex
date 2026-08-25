@@ -11,6 +11,16 @@ import { checkBackupHealth } from "./backup.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
 import { TemporalHealthProbe } from "./temporal/service.js";
 import { buildProductionWorkflowBundle, workflowBundleBuildId } from "./temporal/workflow-bundle.js";
+import { CliHerdrClient } from "./herdr-client.js";
+
+async function checkHerdrReadiness(): Promise<HealthCheck> {
+  try {
+    await new CliHerdrClient().listWorkspaces();
+    return { id: "herdr-readiness", label: "Herdr readiness", status: "healthy", summary: "Herdr API is reachable", details: {} };
+  } catch {
+    return { id: "herdr-readiness", label: "Herdr readiness", status: "unhealthy", summary: "Herdr API is unavailable", details: {} };
+  }
+}
 
 const minimumFreeBytes = 100 * 1024 * 1024;
 const workerHeartbeatMaxAgeMs = 30_000;
@@ -123,6 +133,7 @@ export function createHostHealthDependencies(config: ForgeConfig, database: Forg
     artifactRoot: () => checkArtifactRoot(config.artifactRoot),
     worker: async () => checkWorker(database, config.taskQueue, config.installationId, workflowBundleBuildId(config.installationId, await buildProductionWorkflowBundle())),
     codexAuth: () => agent.check(),
+    herdrReadiness: () => checkHerdrReadiness(),
     ghAuth: checkGithubAuthentication(process.env.FORGE_GH_COMMAND ?? "gh"),
     backup: () => checkBackupHealth(config),
   };

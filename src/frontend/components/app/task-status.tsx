@@ -7,6 +7,15 @@ const ACTIVE_INVOCATION_STATUSES = new Set(["starting", "running", "cancelling"]
 const BACKGROUND_PHASES = new Set<IssuePhase>(["releasing", "ci_waiting", "ready_reconciliation"]);
 type DeliveryTarget = "local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged";
 
+export function deliveryTargetLabel(deliveryTarget?: DeliveryTarget): string {
+  if (deliveryTarget === "local_worktree") return "Keep in worktree";
+  if (deliveryTarget === "remote_branch") return "Push branch";
+  if (deliveryTarget === "pull_request_draft") return "Draft pull request";
+  if (deliveryTarget === "pull_request_ready") return "Ready for review";
+  if (deliveryTarget === "merged") return "Fully merged";
+  return "Not specified";
+}
+
 export function taskStatusLabel(phase: IssuePhase, deliveryTarget?: DeliveryTarget): string {
   if (phase === "done" && deliveryTarget === "pull_request_draft") return "Done · Draft PR";
   if (phase === "done" && deliveryTarget === "pull_request_ready") return "Done · PR ready";

@@ -1,21 +1,20 @@
-import { execFile } from "node:child_process";
-import { chmod, mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
-import { promisify } from "node:util";
+import { join } from "node:path";
 
+import Database from "better-sqlite3";
 import { expect, test } from "vitest";
 import { ApplicationFailure } from "@temporalio/activity";
 
 import { ArtifactStore } from "../src/artifacts.js";
-import { AgentFailure, AgentService, LeadOutputSchema, parseLeadOutput, parseMergeConflictPlan, resolveAgentCommand, runCodexProcess, type LeadProcessRunner, type SessionStore } from "../src/codex-lead.js";
-import { CodexLeadOutputJsonSchema } from "../src/codex-lead-contracts.js";
-import { DeveloperService } from "../src/codex-developer.js";
+import { AgentFailure, AgentService, deliveryBlockCode, isAgentExecutionActiveLeaseCollision, LeadOutputSchema } from "../src/codex-lead.js";
+import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
+import { isDeveloperExecutionActiveLeaseCollision } from "../src/codex-developer.js";
 import { ForgeDatabase } from "../src/database.js";
-import { asNonRetryableApplicationFailure, createActivities } from "../src/temporal/activities.js";
+import type { HerdrTurnInput, HerdrTurnOutput } from "../src/herdr-turn-runner.js";
+import { asNonRetryableApplicationFailure } from "../src/temporal/activities.js";
 import { DeliveryOperationBlockCodeSchema, DeliveryReviewActivityResultSchema, DeliveryReviewSchema, DeveloperRepairActivityResultSchema } from "../src/temporal/issue-contracts.js";
-import { jsonRequired } from "../src/task-utils.js";
 
 const gitPresentation = {
   branchSlug: "improve-fixture-planning",
@@ -23,72 +22,52 @@ const gitPresentation = {
   pullRequestDescription: "Make the fixture planning path deterministic and easier to review.",
 };
 
-const execFileAsync = promisify(execFile);
-
-test("Codex command resolution bypasses a mise shim that depends on target trust", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-command-resolution-test-"));
-  const shimDirectory = join(root, "shims");
-  const binaryDirectory = join(root, "bin");
-  await mkdir(shimDirectory);
-  await mkdir(binaryDirectory);
-  const mise = join(root, "mise");
-  const codex = join(binaryDirectory, "codex");
-  await writeFile(mise, "#!/bin/sh\nexit 1\n");
-  await writeFile(codex, "#!/bin/sh\nexit 0\n");
-  await chmod(mise, 0o700);
-  await chmod(codex, 0o700);
-  await symlink(mise, join(shimDirectory, "codex"));
+test("recognizes the real SQLite error for an active agent execution lease", () => {
+  const database = new Database(":memory:");
   try {
-    expect(resolveAgentCommand("codex", `${shimDirectory}${delimiter}${binaryDirectory}`)).toBe(codex);
-    expect(resolveAgentCommand("custom-agent", `${shimDirectory}${delimiter}${binaryDirectory}`)).toBe("custom-agent");
+    database.exec("CREATE TABLE forge_agent_executions (id text PRIMARY KEY, task_id text NOT NULL, role text NOT NULL, status text NOT NULL); CREATE UNIQUE INDEX forge_agent_active_lease_idx ON forge_agent_executions (task_id, role) WHERE status IN ('starting', 'running', 'cancelling');");
+    database.prepare("INSERT INTO forge_agent_executions (id, task_id, role, status) VALUES ('first', 'task', 'planner', 'starting')").run();
+    let collision: unknown;
+    try {
+      database.prepare("INSERT INTO forge_agent_executions (id, task_id, role, status) VALUES ('second', 'task', 'planner', 'starting')").run();
+    } catch (error) {
+      collision = error;
+    }
+    expect(collision).toMatchObject({ code: "SQLITE_CONSTRAINT_UNIQUE", message: "UNIQUE constraint failed: forge_agent_executions.task_id, forge_agent_executions.role" });
+    expect(isAgentExecutionActiveLeaseCollision(collision)).toBe(true);
   } finally {
-    await rm(root, { recursive: true, force: true });
+    database.close();
   }
 });
 
-test("Lead normalizes an explicitly recommended one-file conflict decision into a plan", () => {
-  const output = parseMergeConflictPlan([JSON.stringify({
-    kind: "decision_blocker",
-    gitPresentation: null,
-    reproduction: null,
-    rootCauseAnalysis: null,
-    steps: null,
-    compatibilityAnalysis: null,
-    operationalAnalysis: null,
-    verificationStrategy: null,
-    unresolvedTechnicalQuestions: null,
-    materialCategories: null,
-    preservedWorktreeCompatibility: null,
-    affectedPaths: null,
-    materiality: null,
-    developerContext: null,
-    category: "human_decision",
-    summary: "Keep both sidebar behaviors in the merged stylesheet.",
-    evidence: "The only conflict is the shared stylesheet; both changes are required.",
-    owner: "human",
-    nextAction: "Combine both sides and keep the target layout behavior.",
-    resumePhase: "planning",
-    askUserQuestion: {
-      header: "Conflict",
-      id: "merge_choice",
-      question: "Which version should win?",
-      options: [
-        { label: "Combine both (Recommended)", description: "Keep both required behaviors." },
-        { label: "Use issue", description: "Discard the target behavior." },
-        { label: "Use target", description: "Discard the issue behavior." },
-      ],
-      isOther: true,
-      isSecret: false,
-    },
-  })], { agentMessages: (lines) => lines }, ["server/assets/studio.css"]);
-
-  expect(output).toMatchObject({
-    kind: "merge_conflict_plan",
-    summary: "Keep both sidebar behaviors in the merged stylesheet.",
-    resolutions: [{ number: 1, file: "server/assets/studio.css", resolution: "Combine both sides and keep the target layout behavior." }],
-    unresolvedQuestions: [],
-  });
+test("delivery failure codes identify malformed output and failed turns", () => {
+  expect(deliveryBlockCode(new AgentFailure("invalid-output-schema", "invalid"))).toBe("invalid-output");
+  expect(deliveryBlockCode(new AgentFailure("turn-failed", "failed"))).toBe("process-failed");
 });
+
+test("recognizes the real SQLite error for an active developer execution lease", () => {
+  const database = new Database(":memory:");
+  try {
+    database.exec("CREATE TABLE forge_developer_executions (id text PRIMARY KEY, task_id text NOT NULL, status text NOT NULL); CREATE UNIQUE INDEX forge_developer_active_lease_idx ON forge_developer_executions (task_id) WHERE status IN ('starting', 'running', 'cancelling');");
+    database.prepare("INSERT INTO forge_developer_executions (id, task_id, status) VALUES ('first', 'task', 'starting')").run();
+    let collision: unknown;
+    try {
+      database.prepare("INSERT INTO forge_developer_executions (id, task_id, status) VALUES ('second', 'task', 'starting')").run();
+    } catch (error) {
+      collision = error;
+    }
+    expect(collision).toMatchObject({ code: "SQLITE_CONSTRAINT_UNIQUE", message: "UNIQUE constraint failed: forge_developer_executions.task_id" });
+    expect(isDeveloperExecutionActiveLeaseCollision(collision)).toBe(true);
+  } finally {
+    database.close();
+  }
+});
+
+async function execFileAsync(command: string, args: string[], options: { cwd?: string } = {}) {
+  const result = await runCommand({ taskId: null, stepId: null, command, args, ...options });
+  if (result.exitCode !== 0) throw new Error(result.stderr || `${command} exited with ${result.exitCode}`);
+  return result;
+}
 
 async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixture repository."): Promise<{ root: string; database: ForgeDatabase; config: ReturnType<typeof createTestConfig>; briefId: string }> {
   const root = await mkdtemp(join(tmpdir(), "forge-codex-lead-test-"));
@@ -135,119 +114,186 @@ async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixtu
   return { root, database, config, briefId: brief.id };
 }
 
-function verifyRoutinePlanOutput(database: ForgeDatabase, input: { outputId: string; plan: { id: string; sha256: string }; evidence: { id: string; sha256: string }; leadExecutionId: string }) {
-  database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET original_plan_revision = 1, final_version = 1, evidence_manifest_artifact_id = ? WHERE id = ?").run(input.evidence.id, input.leadExecutionId));
+function routinePlan(summary = "A bounded fixture plan") {
   return {
-    companyId: "company_1",
-    issueId: "task_1",
-    workflowId: "workflow-test-issue-task_1",
-    originalPlanRevision: 1,
-    outputId: input.outputId,
-    outputRevision: 1,
-    finalVersion: 1 as const,
-    artifactId: input.plan.id,
-    artifactSha256: input.plan.sha256,
-    leadSessionRef: "session_lead",
-    leadExecutionId: input.leadExecutionId,
-    evidenceManifestArtifactId: input.evidence.id,
-    evidenceManifestSha256: input.evidence.sha256,
+    kind: "plan" as const,
+    gitPresentation,
+    summary,
+    reproduction: null,
+    rootCauseAnalysis: "The fixture was incomplete.",
+    steps: [{ number: 1, instruction: "Inspect the fixture", entryPoint: null, completionCriterion: "The fixture is understood", verification: "The fixture test passes", verificationCommands: [] }],
+    compatibilityAnalysis: "No compatibility change is required.",
+    operationalAnalysis: "The change is local.",
+    verificationStrategy: "Run the focused suite.",
+    unresolvedTechnicalQuestions: [],
+    materialCategories: [],
+    affectedPaths: ["README.md"],
+    materiality: [],
   };
 }
 
-
-test("Lead planning resumes the same opaque session after malformed JSON and stores only sanitized evidence", async () => {
-  const value = await fixture();
-  const sessions = new Map<string, string>();
-  const sessionStore: SessionStore = { async create(raw) { sessions.set("session_opaque", raw); return "session_opaque"; }, async read(ref) { return sessions.get(ref) ?? ""; } };
-  const calls: string[][] = [];
-  let planningPrompt = "";
-  let resumedSessionRef: string | undefined;
-  let resumedModel: string | undefined;
-  const runner: LeadProcessRunner = async (invocation) => {
-    await invocation.onStart(4321, "2026-08-11T00:00:00.000Z");
-    calls.push(invocation.args);
-    if (calls.length === 1) {
-      const request = jsonRequired(await readFile(invocation.args.at(-1)!, "utf8")) as { promptPath: string };
-      planningPrompt = await readFile(request.promptPath, "utf8");
-    }
-    if (calls.length >= 2) {
-      const request = jsonRequired(await readFile(invocation.args.at(-1)!, "utf8")) as { resumeSessionRef?: string; model?: string };
-      resumedSessionRef = request.resumeSessionRef;
-      resumedModel = request.model;
-    }
-    if (calls.length === 1) {
-      await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-session-1" }));
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "not json Bearer gho_secret" } }));
-    } else {
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "plan", gitPresentation, summary: "A bounded fixture plan", reproduction: null, rootCauseAnalysis: "The fixture was incomplete.", steps: [{ number: 1, instruction: "Inspect the fixture", entryPoint: null, completionCriterion: "The fixture is understood", verification: "The fixture test passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change is required.", operationalAnalysis: "The change is local.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] }) } }));
-    }
-    return { exitCode: 0, stderr: "" };
+function decisionBlocker() {
+  return {
+    kind: "decision_blocker" as const,
+    summary: "Choose the fixture retention policy.",
+    evidence: "The repository contains both short and long retention defaults.",
+    owner: "human" as const,
+    askUserQuestion: {
+      header: "Retention policy",
+      id: "retention_policy",
+      question: "Which retention policy should the plan implement?",
+      options: [
+        { label: "Short retention (Recommended)", description: "Keep the lower existing default." },
+        { label: "Long retention", description: "Adopt the longer compatibility default." },
+        { label: "No change", description: "Defer this decision outside the plan." },
+      ],
+      isOther: true as const,
+      isSecret: false as const,
+    },
+    nextAction: "Choose one policy so the Lead can produce the implementation plan.",
   };
+}
+
+function fakeTurnRunner(handlers: Partial<Record<string, (input: HerdrTurnInput<unknown>) => unknown>>) {
+  const calls: HerdrTurnInput<unknown>[] = [];
+  return {
+    calls,
+    turnRunner: {
+      async run<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T>> {
+        calls.push(input as HerdrTurnInput<unknown>);
+        const handler = handlers[input.promptKind];
+        if (!handler) throw new Error(`Missing fake result for ${input.promptKind}`);
+        const result = handler(input as HerdrTurnInput<unknown>);
+        if (result instanceof Error) throw result;
+        return {
+          turnId: `turn_${calls.length}`,
+          sessionId: "codex-session-id",
+          roleSessionId: "session_0123456789abcdef01234567",
+          result: result as T,
+          resultHash: `hash_${calls.length}`,
+        };
+      },
+    },
+  };
+}
+
+test("Lead planning persists a fake turn result and reuses the Lead role session", async () => {
+  const value = await fixture();
+  const fake = fakeTurnRunner({ "lead-plan": () => routinePlan(), "lead-plan-revision": () => routinePlan("A revised fixture plan") });
   try {
-    const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore });
+    const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
     const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
-    expect(result.leadSessionRef).toBe("session_opaque");
-    expect(calls).toHaveLength(2);
-    expect(planningPrompt).toContain("Plan only work that can be completed and verified inside an isolated git worktree. Do not add steps for deployment, rollout, physical device checks or production verification — mention them in a 'Follow-up outside Forge' note instead.");
-    expect(resumedSessionRef).toBe("session_opaque");
-    expect(sessions.get("session_opaque")).toBe("raw-session-1");
+    expect(result.leadSessionRef).toBe("session_0123456789abcdef01234567");
+    expect(fake.calls).toHaveLength(1);
+    expect(fake.calls[0]).toMatchObject({ promptKind: "lead-plan", sessionRole: "lead", executionRole: "planner" });
+    expect(fake.calls[0]?.prompt).toContain("Plan only work that can be completed and verified inside an isolated git worktree.");
     const briefSha = value.database.authQuery((db) => (db.prepare("SELECT sha256 FROM forge_artifacts WHERE id = ?").get(value.briefId) as { sha256: string }).sha256);
     value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET model = 'changed-after-task-creation' WHERE id = 'profile_1'").run());
     const resumed = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 2, resume: { leadSessionRef: result.leadSessionRef, reason: "member_revision", instructionArtifactId: value.briefId, instructionSha256: briefSha } });
     expect(resumed.leadSessionRef).toBe(result.leadSessionRef);
-    expect(resumedModel).toBe("gpt-5-codex");
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, session_ref, process_start_identity FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ status: "completed", session_ref: "session_opaque", process_start_identity: "4321:2026-08-11T00:00:00.000Z" });
+    expect(fake.calls[1]).toMatchObject({ promptKind: "lead-plan", profile: { model: "gpt-5-codex" } });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, session_ref, process_pid, process_group_id FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ status: "completed", session_ref: result.leadSessionRef, process_pid: null, process_group_id: null });
     const evidence = value.database.authQuery((db) => db.prepare("SELECT a.storage_path, a.sha256 FROM forge_artifacts a WHERE a.id = ?").get(result.leadEvidenceArtifactId) as { storage_path: string; sha256: string });
     const evidenceText = await new ArtifactStore(value.config.artifactRoot).read({ companyId: "company_1", storagePath: evidence.storage_path, sha256: evidence.sha256 });
-    expect(evidenceText.toString("utf8")).not.toContain("gho_secret");
-    expect(evidenceText.toString("utf8")).not.toContain("raw-session-1");
-    expect(value.database.authQuery((db) => db.prepare("SELECT output_kind AS kind, output_revision AS revision, session_ref FROM forge_agent_executions WHERE task_id = 'task_1' AND output_artifact_id IS NOT NULL").get())).toEqual({ kind: "plan", revision: 1, session_ref: "session_opaque" });
-    const replayed = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
-    expect(replayed.leadExecutionId).toBe(result.leadExecutionId);
-    expect(calls).toHaveLength(3);
+    expect(evidenceText).toEqual(Buffer.from("\n"));
+    expect(value.database.authQuery((db) => db.prepare("SELECT output_kind AS kind, output_revision AS revision, session_ref FROM forge_agent_executions WHERE task_id = 'task_1' AND output_artifact_id IS NOT NULL").get())).toEqual({ kind: "plan", revision: 1, session_ref: result.leadSessionRef });
+    expect(fake.calls).toHaveLength(2);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
   }
 });
 
-test("Lead planning fails promptly when the provider stops emitting output", async () => {
+test("Lead planning omits test-suite commands when project tests are disabled", async () => {
   const value = await fixture();
-  const runner: LeadProcessRunner = async (invocation) => {
-    await invocation.onStart(4322, "2026-08-11T00:00:00.000Z");
-    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-silent-session" }));
-    return await new Promise((resolve) => invocation.signal?.addEventListener("abort", () => resolve({ exitCode: 1, stderr: "stream disconnected" }), { once: true }));
-  };
+  const fake = fakeTurnRunner({ "lead-plan": () => routinePlan() });
   try {
-    const service = new AgentService(value.database, value.config, { processRunner: runner, leadOutputIdleTimeoutMs: 10, sessionStore: { async create() { return "session_silent"; }, async read() { return "raw-silent-session"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "provider-silent" });
+    value.database.authQuery((db) => db.prepare("UPDATE forge_tasks SET run_project_tests = 0 WHERE id = 'task_1'").run());
+    const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
+    await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
+    expect(fake.calls[0]?.prompt).toContain("Do not include test-suite commands in verificationCommands");
+    expect(fake.calls[0]?.prompt).toContain("type checking, linting, builds, and git status");
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("Lead decision blockers retain the immutable output artifact SHA-256", async () => {
+  const value = await fixture();
+  const fake = fakeTurnRunner({ "lead-plan": () => decisionBlocker() });
+  try {
+    const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
+    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
+    expect(result.blockerSubject).toMatchObject({
+      artifactId: result.leadOutputArtifactId,
+      artifactSha256: result.leadOutputSha256,
+    });
+    expect(result.blockerSubject?.artifactSha256).toMatch(/^[a-f0-9]{64}$/);
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
   }
 });
 
-test("Lead planning reuses a failed execution on activity retry", async () => {
+test("Lead planning carries a member blocker answer in a revision prompt", async () => {
+  const value = await fixture("gpt-5-codex", "Initial brief that must not be repeated.");
+  const answerStore = new ArtifactStore(value.config.artifactRoot);
+  const answer = await answerStore.put("company_1", "plan-blocker-response", { filename: "answer.md", mimeType: "text/markdown", bytes: Buffer.from("Use the 30-day retention policy.") });
+  value.database.authQuery((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, 'company_1', 'task_1', ?, ?, ?, ?, ?, ?, ?)").run(answer.id, answer.kind, answer.filename, answer.mimeType, answer.byteSize, answer.sha256, answer.storagePath, answer.createdAt));
+  const fake = fakeTurnRunner({ "lead-plan-revision": () => routinePlan("Plan revised after the blocker answer") });
+  try {
+    const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
+    await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 2, leadSessionRef: "session_0123456789abcdef01234567", memberResponseArtifactId: answer.id });
+    expect(fake.calls[0]).toMatchObject({ promptKind: "lead-plan-revision" });
+    expect(fake.calls[0]?.prompt).toContain("Human blocker answer:\nUse the 30-day retention policy.");
+    expect(fake.calls[0]?.prompt).not.toContain("Initial brief that must not be repeated.");
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("a failed planning turn is reclaimed by its deterministic turn key with its cause", async () => {
   const value = await fixture();
   let calls = 0;
-  const runner: LeadProcessRunner = async (invocation) => {
-    calls += 1;
-    await invocation.onStart(4322, "2026-08-11T00:00:00.000Z");
-    if (calls === 1) await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-retry-session" }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: calls < 3 ? "{}" : JSON.stringify({ kind: "plan", gitPresentation, summary: "A retried fixture plan", reproduction: null, rootCauseAnalysis: "The prior output was invalid.", steps: [{ number: 1, instruction: "Inspect the fixture", entryPoint: null, completionCriterion: "The fixture is understood", verification: "The fixture test passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change is required.", operationalAnalysis: "The change is local.", verificationStrategy: "Run the focused suite.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] }) } }));
-    return { exitCode: 0, stderr: "" };
+  const fake = fakeTurnRunner({
+    "lead-plan": () => {
+      calls += 1;
+      return calls === 1 ? new Error("workspace w2E not found") : routinePlan();
+    },
+  });
+  const input = {
+    taskId: "task_1",
+    companyId: "company_1",
+    workflowId: "workflow-test-issue-task_1",
+    projectId: "project_1",
+    projectRevisionId: "revision_1",
+    briefArtifactId: value.briefId,
+    imageArtifactIds: [],
+    roleProfiles: { planner: "profile_1" },
+    revision: 1,
   };
-  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 };
   try {
-    const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_retry"; }, async read() { return "raw-retry-session"; } } });
-    await expect(service.runLeadPlanning(input)).rejects.toMatchObject({ code: "invalid-output-schema" });
-    const failed = value.database.authQuery((db) => db.prepare("SELECT id, status, attempt FROM forge_agent_executions WHERE turn_key = 'workflow-test-issue-task_1:lead-planning:1'").get()) as { id: string; status: string; attempt: number };
-    expect(failed).toMatchObject({ status: "failed", attempt: 1 });
+    const service = new AgentService(value.database, value.config, {
+      turnRunner: fake.turnRunner,
+    });
+    await expect(service.runLeadPlanning(input)).rejects.toMatchObject({
+      code: "lead-failed",
+      message: "Codex Lead execution failed: workspace w2E not found",
+    });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, attempt, failure_summary FROM forge_agent_executions WHERE turn_key = ?").get(`${input.workflowId}:lead-planning:${input.revision}`))).toEqual({
+      status: "failed",
+      attempt: 1,
+      failure_summary: "Codex Lead execution failed: workspace w2E not found",
+    });
 
-    const result = await service.runLeadPlanning(input);
-    expect(result.leadExecutionId).toBe(failed.id);
-    expect(calls).toBe(3);
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, attempt FROM forge_agent_executions WHERE id = ?").get(failed.id))).toEqual({ status: "completed", attempt: 2 });
+    await expect(service.runLeadPlanning(input)).resolves.toMatchObject({
+      leadSessionRef: "session_0123456789abcdef01234567",
+    });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, attempt, failure_code, failure_summary FROM forge_agent_executions WHERE turn_key = ?").get(`${input.workflowId}:lead-planning:${input.revision}`))).toEqual({
+      status: "completed",
+      attempt: 2,
+      failure_code: null,
+      failure_summary: null,
+    });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
@@ -258,154 +304,6 @@ test("Lead planning reuses a failed execution on activity retry", async () => {
 test("Lead output schema rejects unresolved technical questions and malformed blockers", () => {
   expect(LeadOutputSchema.safeParse({ kind: "plan", gitPresentation, summary: "x", reproduction: null, rootCauseAnalysis: null, steps: [], compatibilityAnalysis: "x", operationalAnalysis: "x", verificationStrategy: "x", unresolvedTechnicalQuestions: ["choose"] }).success).toBe(false);
   expect(LeadOutputSchema.safeParse({ kind: "decision_blocker", summary: "x", evidence: "x", owner: "developer", askUserQuestion: { header: "Decision", id: "decision", question: "Which?", options: [{ label: "First (Recommended)", description: "First" }, { label: "Second", description: "Second" }, { label: "Third", description: "Third" }], isOther: true, isSecret: false }, nextAction: "x" }).success).toBe(false);
-});
-
-test("Lead output parsing rejects unknown null fields", () => {
-  const output = { kind: "plan", gitPresentation, summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect", entryPoint: null, completionCriterion: "Inspected", verification: "Check" }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], unexpected: null };
-  expect(() => parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })])).toThrow(/required schema/);
-});
-
-test("Codex Lead schema uses provider-compatible artifact step mappings", () => {
-  expect(JSON.stringify(CodexLeadOutputJsonSchema)).not.toContain("propertyNames");
-  const developerContextProperty = CodexLeadOutputJsonSchema.properties.developerContext as { anyOf?: Array<{ properties?: Record<string, { type?: string }> }> };
-  const developerContext = developerContextProperty.anyOf?.find((candidate) => candidate.properties);
-  expect(developerContext?.properties?.artifactStepNumbers?.type).toBe("array");
-});
-
-test("Lead output parsing canonicalizes provider artifact step mappings", () => {
-  const output = { kind: "plan", gitPresentation, summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Inspect", entryPoint: null, completionCriterion: "Inspected", verification: "Check", verificationCommands: [] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: ["user_visible_behavior"], preservedWorktreeCompatibility: null, affectedPaths: ["README.md"], materiality: [{ category: "user_visible_behavior", rationale: "The README changes.", evidenceRefs: ["README.md"] }], developerContext: { includeTaskBrief: false, evidenceArtifactIds: ["artifact_1"], imageArtifactIds: [], repositoryInstructionPaths: ["docs/verify.md"], artifactStepNumbers: [{ artifactIdOrPath: "artifact_1", stepNumbers: [1] }, { artifactIdOrPath: "docs/verify.md", stepNumbers: [1] }] } };
-  const parsed = parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })]);
-  expect(parsed.kind === "plan" && parsed.developerContext.artifactStepNumbers).toEqual({ artifact_1: [1], "docs/verify.md": [1] });
-  expect(parsed.kind === "plan" && parsed.materiality[0]?.evidenceRefs).toEqual(["path:README.md"]);
-});
-
-test("Lead output parsing accepts line-qualified materiality evidence", () => {
-  const output = { kind: "plan", gitPresentation, summary: "Plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Edit the README title", entryPoint: "README.md:1", completionCriterion: "The title is corrected", verification: "Check the one-line diff", verificationCommands: ["git diff -- README.md"] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: ["user_visible_behavior"], preservedWorktreeCompatibility: null, affectedPaths: ["README.md"], materiality: [{ category: "user_visible_behavior", rationale: "The README title is user-visible.", evidenceRefs: ["README.md:1", "docs/agents/branding-and-ui.md:10-15", "step:1"] }], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: ["docs/agents/branding-and-ui.md"], artifactStepNumbers: [] } };
-  expect(parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })])).toMatchObject({ kind: "plan", materiality: [{ evidenceRefs: output.materiality[0]!.evidenceRefs }] });
-});
-
-test("Lead output parsing removes inactive plan placeholders from blockers", () => {
-  const output = { kind: "decision_blocker", category: "human_decision", summary: "A choice is required", evidence: "The brief does not specify the intended text", owner: "human", askUserQuestion: { header: "README", id: "readme_edit", question: "What text should change?", options: [{ label: "Overview (Recommended)", description: "Improve the introductory overview." }, { label: "Features", description: "Improve a feature description." }, { label: "Install", description: "Improve installation guidance." }], isOther: true, isSecret: false }, nextAction: "Provide the intended edit", resumePhase: "planning", reproduction: "Inactive provider field", rootCauseAnalysis: null, steps: null, compatibilityAnalysis: null, operationalAnalysis: null, verificationStrategy: null, unresolvedTechnicalQuestions: null, materialCategories: null, preservedWorktreeCompatibility: null, affectedPaths: ["README.md"], materiality: null, developerContext: null };
-  expect(parseLeadOutput([JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })])).toMatchObject({ kind: "decision_blocker", owner: "human" });
-});
-
-test.each(["live", "exited"] as const)("Lead planning finalizes stored completion when the wrapper is %s", async (wrapperState) => {
-  const value = await fixture();
-  const executionId = "agent_attached";
-  const runtimeDir = join(value.config.runtimeRoot, "agent-turns", executionId);
-  await mkdir(runtimeDir, { recursive: true });
-  const output = { kind: "plan", gitPresentation, summary: "An attached plan", reproduction: null, rootCauseAnalysis: "The worker restarted.", steps: [{ number: 1, instruction: "Inspect the stored turn", entryPoint: null, completionCriterion: "The turn is finalized", verification: "The attached result is returned" }], compatibilityAnalysis: "No compatibility change is required.", operationalAnalysis: "The wrapper owns the process.", verificationStrategy: "Run the focused test.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] };
-  await writeFile(join(runtimeDir, "spool.ndjson"), `${JSON.stringify({ type: "forge.session_bound", sessionRef: "session_opaque" })}\n${JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } })}\n`);
-  await writeFile(join(runtimeDir, "status.json"), JSON.stringify({ state: "completed", eventOffset: 1 }));
-  const manifest = await new ArtifactStore(value.config.artifactRoot).put("company_1", "lead-input-manifest", { filename: `${executionId}.json`, mimeType: "application/json", bytes: Buffer.from("{}") });
-  const now = new Date().toISOString();
-  value.database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(manifest.id, manifest.companyId, manifest.kind, manifest.filename, manifest.mimeType, manifest.byteSize, manifest.sha256, manifest.storagePath, manifest.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES (?, 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:started', ?, ?, ?, 0)").run(executionId, `agent-turns/${executionId}/spool.ndjson`, `agent-turns/${executionId}/status.json`, now);
-  });
-  let calls = 0;
-  const controller = {
-    async inspect() { return wrapperState === "live" ? { pid: 4101, command: "wrapper", executable: "node", argv: ["node", "wrapper"], processGroup: 5101, startTime: "started" } : undefined; },
-    async signal() {},
-    async isProcessGroupAlive() { return false; },
-  };
-  try {
-    const service = new AgentService(value.database, value.config, {
-      processRunner: async () => { calls += 1; throw new Error("attached turns must not spawn"); },
-      processController: controller,
-      sessionStore: { async create() { return "session_opaque"; }, async read() { return "raw-session"; } },
-    });
-    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
-    expect(result.leadExecutionId).toBe(executionId);
-    expect(calls).toBe(0);
-    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_agent_executions WHERE id = ?").get(executionId))).toEqual({ status: "completed" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("Lead stale-child reconciliation signals through the injected process controller", async () => {
-  const value = await fixture();
-  const now = new Date().toISOString();
-  value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, process_pid, process_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES ('agent_stale', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:wrapper-start', 4201, '4201:child-start', 'agent-turns/agent_stale/spool.ndjson', 'agent-turns/agent_stale/status.json', ?, 0)").run(now));
-  let groupAlive = true;
-  const signals: string[] = [];
-  const child = { pid: 4201, command: "codex", executable: "codex", argv: ["codex", "exec"], processGroup: 5101, startTime: "child-start" };
-  const controller = {
-    async inspect(pid: number) { return pid === 4201 && groupAlive ? child : undefined; },
-    async signal() {},
-    async signalGroup(_group: number, signal: "SIGTERM" | "SIGKILL") { signals.push(signal); groupAlive = false; },
-    async isProcessGroupAlive() { return groupAlive; },
-  };
-  const output = { kind: "plan", gitPresentation, summary: "Recovered plan", reproduction: null, rootCauseAnalysis: "The worker restarted.", steps: [{ number: 1, instruction: "Recover", entryPoint: null, completionCriterion: "Recovered", verification: "Check" }], compatibilityAnalysis: "Compatible", operationalAnalysis: "Bounded", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] };
-  try {
-    const service = new AgentService(value.database, value.config, {
-      processController: controller,
-      sessionStore: { async create() { return "session_opaque"; }, async read() { return "raw-session"; } },
-      processRunner: async (invocation) => {
-        await invocation.onStart(4301, "new-wrapper-start");
-        await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(output) } }));
-        return { exitCode: 0, stderr: "" };
-      },
-    });
-    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
-    expect(result.leadExecutionId).toBe("agent_stale");
-    expect(signals).toEqual(["SIGTERM"]);
-    expect(value.database.authQuery((db) => db.prepare("SELECT attempt, status FROM forge_agent_executions WHERE id = 'agent_stale'").get())).toEqual({ attempt: 2, status: "completed" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("Lead retry continues when restart reconciliation observes a gone process", async () => {
-  const value = await fixture();
-  const now = new Date().toISOString();
-  value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, event_offset) VALUES ('agent_reconciled', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:wrapper-start', 'agent-turns/agent_reconciled/spool.ndjson', 'agent-turns/agent_reconciled/status.json', ?, 0)").run(now));
-  const controller = {
-    async inspect() {
-      return undefined;
-    },
-    async signal() {},
-    async isProcessGroupAlive() { return false; },
-  };
-  try {
-    const service = new AgentService(value.database, value.config, { processController: controller, processRunner: async () => { throw new Error("reconciled turns must not spawn"); }, sessionStore: { async create() { return "session_opaque"; }, async read() { return "raw-session"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "lead-failed" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("Lead live-wrapper attachment honors Activity cancellation", async () => {
-  const value = await fixture();
-  const executionId = "agent_cancel_attach";
-  const runtimeDir = join(value.config.runtimeRoot, "agent-turns", executionId);
-  await mkdir(runtimeDir, { recursive: true });
-  await writeFile(join(runtimeDir, "spool.ndjson"), "");
-  await writeFile(join(runtimeDir, "status.json"), JSON.stringify({ state: "running", eventOffset: 0 }));
-  const now = new Date().toISOString();
-  value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, turn_key, workflow_revision, purpose, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority, session_ref, wrapper_pid, wrapper_process_group, wrapper_start_identity, spool_relative_path, status_relative_path, started_at, heartbeat_at, event_offset) VALUES (?, 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'running', 1, 'workflow-test-issue-task_1:lead-planning:1', 1, 'planning', 'profile_1', 'gpt-5-codex', 'medium', 'standard', 'session_opaque', 4101, 5101, '4101:started', ?, ?, ?, ?, 0)").run(executionId, `agent-turns/${executionId}/spool.ndjson`, `agent-turns/${executionId}/status.json`, now, now));
-  let groupAlive = true;
-  const wrapper = { pid: 4101, command: "wrapper", executable: "node", argv: ["node", "wrapper"], processGroup: 5101, startTime: "started" };
-  const controller = {
-    async inspect() { return groupAlive ? wrapper : undefined; },
-    async signal() {},
-    async signalGroup() { groupAlive = false; },
-    async isProcessGroupAlive() { return groupAlive; },
-  };
-  const abort = new AbortController();
-  abort.abort();
-  try {
-    const service = new AgentService(value.database, value.config, { processController: controller, processRunner: async () => { throw new Error("cancelled attachment must not spawn"); }, sessionStore: { async create() { return "session_opaque"; }, async read() { return "raw-session"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 }, { signal: abort.signal })).rejects.toMatchObject({ code: "cancelled" });
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_agent_executions WHERE id = ?").get(executionId))).toEqual({ status: "cancelled", failure_code: "cancelled" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
 });
 
 test("delivery review schema separates advisory approval from blocking repair", () => {
@@ -439,7 +337,7 @@ test("delivery activity result schemas reject unsafe or incomplete branches", ()
 test("delivery review preflight failures finalize a typed attempt without launching Codex", async () => {
   const value = await fixture();
   try {
-    const service = new AgentService(value.database, value.config, { processRunner: async () => { throw new Error("runner must not be called"); } });
+    const service = new AgentService(value.database, value.config);
     const invalidInput = {
       taskId: "task_1",
       companyId: "company_1",
@@ -503,18 +401,16 @@ test("Lead authors a complete conflict-resolution plan from both merge sides", a
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_conflict_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
     db.prepare("UPDATE forge_agent_executions SET output_kind = 'plan', output_revision = 1, output_artifact_id = ?, output_summary = 'Approved plan' WHERE id = 'agent_conflict_lead'").run(plan.id);
   });
-  const runner: LeadProcessRunner = async (invocation) => {
-    await invocation.onStart(4801, "2026-08-11T00:00:00.000Z");
-    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-lead" }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "merge_conflict_plan", summary: "Resolve the shared file from both sides.", resolutions: [{ number: 1, file: "shared.txt", resolution: "Preserve the issue behavior and incorporate the target-base validation.", intendedResult: "The merged file preserves both required behaviors.", issueInvariant: "The issue behavior remains intact.", baseInvariant: "The target-base behavior remains intact.", compatibilityConcern: "The merged file keeps its existing format." }], verificationStrategy: "Run the complete local verification suite after creating the merge commit.", unresolvedQuestions: [] }) } }));
-    return { exitCode: 0, stderr: "" };
-  };
+  const fake = fakeTurnRunner({
+    "merge-conflict-plan": () => ({ kind: "merge_conflict_plan", summary: "Resolve the shared file from both sides.", resolutions: [{ number: 1, file: "shared.txt", resolution: "Preserve the issue behavior and incorporate the target-base validation.", intendedResult: "The merged file preserves both required behaviors.", issueInvariant: "The issue behavior remains intact.", baseInvariant: "The target-base behavior remains intact.", compatibilityConcern: "The merged file keeps its existing format." }], verificationStrategy: "Run the complete local verification suite after creating the merge commit.", unresolvedQuestions: [] }),
+  });
   try {
-    const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_lead"; }, async read() { return "raw-lead"; } } });
+    const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
     const result = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, forwardMergeId: "merge-lead-1", roleProfiles: { planner: "profile_1", integrator: "profile_integrator" }, executionRole: "integrator", leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictArtifact: { id: conflictArtifact.id, kind: "forward-merge-conflict" }, conflictFileCount: 1 });
-    expect(result).toMatchObject({ leadSessionRef: "session_lead", summary: "Resolve the shared file from both sides." });
+    expect(result).toMatchObject({ leadSessionRef: "session_0123456789abcdef01234567", summary: "Resolve the shared file from both sides." });
+    expect(fake.calls[0]).toMatchObject({ promptKind: "merge-conflict-plan", sessionRole: "lead", executionRole: "integrator" });
     expect(value.database.authQuery((db) => db.prepare("SELECT role, profile_id, resolved_model, resolved_reasoning_level, resolved_service_priority FROM forge_agent_executions WHERE id = ?").get(result.leadExecutionId))).toEqual({ role: "integrator", profile_id: "profile_integrator", resolved_model: "gpt-5.6-luna", resolved_reasoning_level: "low", resolved_service_priority: "fast" });
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, lead_session_ref FROM forge_merge_conflict_resolutions WHERE id = ?").get(result.planId))).toEqual({ status: "planned", lead_session_ref: "session_lead" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, lead_session_ref FROM forge_merge_conflict_resolutions WHERE id = ?").get(result.planId))).toEqual({ status: "planned", lead_session_ref: "session_0123456789abcdef01234567" });
     const second = await service.planMergeConflict({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, forwardMergeId: "merge-lead-1", leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, worktreePath, branchName: "forge/issue/task_1", priorHead: "a".repeat(40), targetBaseSha: "b".repeat(40), conflictArtifact: { id: conflictArtifact.id, kind: "forward-merge-conflict" }, conflictFileCount: 1 });
     expect(second.planId).toBe(result.planId);
     const count = value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_merge_conflict_resolutions WHERE workflow_id = 'workflow-test-issue-task_1' AND prior_head = ? AND target_base_sha = ?").get("a".repeat(40), "b".repeat(40))) as { count: number };
@@ -525,79 +421,6 @@ test("Lead authors a complete conflict-resolution plan from both merge sides", a
   }
 });
 
-test("Integrator turns fall back to the Planner profile when no Integrator is configured", async () => {
-  const value = await fixture();
-  const service = new AgentService(value.database, value.config, { processRunner: async () => ({ exitCode: 0, stderr: "" }), sessionStore: { async create() { return "session"; }, async read() { return "missing"; } } });
-  try {
-    await expect((service as unknown as { resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string, role: "planner" | "integrator"): Promise<{ id: string }> }).resolveTurnProfile("profile_1", undefined, "Integrator", "integrator")).resolves.toEqual({ id: "profile_1", model: "gpt-5-codex", reasoningLevel: "medium", servicePriority: "standard" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("Lead planning classifies a successful process without schema output", async () => {
-  const value = await fixture();
-  const runner: LeadProcessRunner = async (invocation) => {
-    await invocation.onStart(4323, "2026-08-11T00:00:00.000Z");
-    return { exitCode: 0, stderr: "" };
-  };
-  try {
-    const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_missing"; }, async read() { return "raw-missing-session"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code: "missing-output" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test.each([
-  ["login-expired", "OAuth authorization required", "Agent provider authentication is unavailable. Sign in again, then retry."],
-  ["rate-limited", "HTTP 429: rate limit exceeded", "Agent provider rate limiting prevented this invocation from completing."],
-  ["process-exited", "worker crashed", "The agent invocation did not complete."],
-])("Lead process failures are typed without exposing provider stderr (%s)", async (code, stderr, summary) => {
-  const value = await fixture();
-  const runner: LeadProcessRunner = async (invocation) => {
-    await invocation.onStart(4322, "2026-08-11T00:00:00.000Z");
-    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-failure-session" }));
-    return { exitCode: 1, stderr };
-  };
-  try {
-    const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_failure"; }, async read() { return "raw-failure-session"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 })).rejects.toMatchObject({ code });
-    const failure = value.database.authQuery((db) => db.prepare("SELECT failure_code, failure_summary FROM forge_agent_executions WHERE task_id = 'task_1'").get() as { failure_code: string; failure_summary: string });
-    expect(failure).toEqual({ failure_code: code, failure_summary: summary });
-    expect(failure.failure_summary).not.toContain(stderr);
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("Lead planning treats a structured unsupported-model response as a permanent actionable failure", async () => {
-  const value = await fixture("gpt-5-codex");
-  const runner: LeadProcessRunner = async (invocation) => {
-    await invocation.onStart(4324, "2026-08-11T00:00:00.000Z");
-    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-model-failure" }));
-    await invocation.onLine(JSON.stringify({ type: "error", message: JSON.stringify({ status: 400, error: { type: "invalid_request_error", message: "The 'gpt-5-codex' model is not supported when using Codex with a ChatGPT account." } }) }));
-    return { exitCode: 1, stderr: "" };
-  };
-  try {
-    const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_model_failure"; }, async read() { return "raw-model-failure"; } } });
-    await expect(service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 })).rejects.toMatchObject({
-      code: "model-unavailable",
-      nonRetryable: true,
-      message: "The configured model “gpt-5-codex” is unavailable for the active provider account. Select a supported model, then retry.",
-    });
-    expect(value.database.authQuery((db) => db.prepare("SELECT failure_code, failure_summary FROM forge_agent_executions WHERE task_id = 'task_1'").get())).toEqual({
-      failure_code: "model-unavailable",
-      failure_summary: "The configured model “gpt-5-codex” is unavailable for the active provider account. Select a supported model, then retry.",
-    });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
 
 test("permanent agent failures become non-retryable Temporal application failures", () => {
   expect(asNonRetryableApplicationFailure(new AgentFailure("process-exited", "Codex exited"))).toBeUndefined();
@@ -605,31 +428,9 @@ test("permanent agent failures become non-retryable Temporal application failure
   expect(actual).toBeInstanceOf(ApplicationFailure);
   expect(actual).toMatchObject({ type: "model-unavailable", nonRetryable: true, message: "Choose a supported model", details: [{ code: "model-unavailable", summary: "Choose a supported model" }] });
 });
-
-test("Developer activities preserve the configured service receiver", async () => {
-  const value = await fixture();
-  const developer = {
-    calls: 0,
-    async run() {
-      this.calls += 1;
-      return { developerExecutionId: "developer_bound", developerSessionRef: "session_bound", worktreePath: join(value.root, "worktrees", "task_1"), branchName: "forge/issue/task_1", targetBaseSha: "a".repeat(40), currentStep: 1, resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" as const, deliveryArtifactId: "artifact_delivery", evidenceArtifactId: "artifact_evidence", deliverySummary: "Bound Developer call", outcome: "completed" as const };
-    },
-  };
-  try {
-    const activities = createActivities(value.database, value.config, { developer });
-    await activities.runDeveloperExecution({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: "artifact_plan" });
-    expect(developer.calls).toBe(1);
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
 test("supplemental review uses a fresh session and primary Lead consolidation resumes its session", async () => {
   const value = await fixture();
   const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const sessions = new Map([["session_primary", "raw-primary"]]);
-  const sessionStore: SessionStore = { async create(raw) { sessions.set("session_review", raw); return "session_review"; }, async read(ref) { return sessions.get(ref) ?? ""; } };
   const draft = await artifactStore.put("company_1", "lead-plan", { filename: "draft.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Draft plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
   const priorEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "prior.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"turn.completed\"}\n") });
   value.database.authTransaction((db) => {
@@ -639,790 +440,31 @@ test("supplemental review uses a fresh session and primary Lead consolidation re
     db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_primary', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_primary', ?, ?, ?)").run(now, now, priorEvidence.id);
     db.prepare("UPDATE forge_agent_executions SET output_kind = 'plan', output_revision = 1, output_artifact_id = ?, output_summary = 'Draft plan' WHERE id = 'agent_primary'").run(draft.id);
   });
-  let calls = 0;
   let reviewArtifactId = "";
-  const runner: LeadProcessRunner = async (invocation) => {
-    calls += 1;
-    await invocation.onStart(4500 + calls, `2026-08-11T00:00:0${calls}.000Z`);
-    if (calls === 1) {
-      await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-review" }));
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "review", summary: "Review is independent", opinion: "approve", concerns: [], requiredChanges: [] }) } }));
-    } else {
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ version: 1, originalPlanRevision: 2, reviewArtifactId, reviewResponse: "The independent review is addressed by the consolidated plan.", result: { kind: "plan", gitPresentation, summary: "Consolidated plan", reproduction: null, rootCauseAnalysis: "Fixture root cause", steps: [{ number: 1, instruction: "Inspect repository", entryPoint: null, completionCriterion: "The repository is understood", verification: "The check passes", verificationCommands: [] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run tests.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] } }) } }));
-    }
-    return { exitCode: 0, stderr: "" };
-  };
+  const fake = fakeTurnRunner({
+    "supplemental-review": () => ({ verdict: "approve", summary: "Review is independent", concerns: [] }),
+    "lead-consolidation": () => ({
+      version: 1,
+      originalPlanRevision: 2,
+      reviewArtifactId,
+      reviewResponse: "The independent review is addressed by the consolidated plan.",
+      result: routinePlan("Consolidated plan"),
+    }),
+  });
   try {
-    const service = new AgentService(value.database, value.config, { processRunner: runner, sessionStore });
+    const service = new AgentService(value.database, value.config, { turnRunner: fake.turnRunner });
     const review = await service.runSupplementalReview({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1", reviewer: "profile_2" }, revision: 1, leadOutputArtifactId: draft.id, leadEvidenceArtifactId: priorEvidence.id });
     reviewArtifactId = review.reviewArtifactId;
     const consolidated = await service.consolidateLeadPlan({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1", reviewer: "profile_2" }, revision: 2, leadSessionRef: "session_primary", leadOutputArtifactId: draft.id, supplementalReviewArtifactId: review.reviewArtifactId });
-    expect(review.sessionRef).toBe("session_review");
-    expect(consolidated.leadSessionRef).toBe("session_primary");
-    expect(calls).toBe(2);
-    expect(value.database.authQuery((db) => db.prepare("SELECT profile_id, session_ref, summary FROM forge_plan_reviews WHERE id = ?").get(review.reviewId))).toEqual({ profile_id: "profile_2", session_ref: "session_review", summary: "Review is independent" });
+    expect(review.sessionRef).toBe("session_0123456789abcdef01234567");
+    expect(consolidated.leadSessionRef).toBe("session_0123456789abcdef01234567");
+    expect(fake.calls).toHaveLength(2);
+    expect(fake.calls[0]).toMatchObject({ promptKind: "supplemental-review", sessionRole: "reviewer", executionRole: "reviewer" });
+    expect(fake.calls[1]).toMatchObject({ promptKind: "lead-consolidation", sessionRole: "lead" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT profile_id, session_ref, summary FROM forge_plan_reviews WHERE id = ?").get(review.reviewId))).toEqual({ profile_id: "profile_2", session_ref: "session_0123456789abcdef01234567", summary: "Review is independent" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT planner_response_artifact_id FROM forge_plan_reviews WHERE id = ?").get(review.reviewId))).toEqual({ planner_response_artifact_id: consolidated.leadReviewResponseArtifactId });
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });
   }
 });
-
-async function preparedDeveloper() {
-  const value = await fixture();
-  const artifacts = new ArtifactStore(value.config.artifactRoot);
-  const plan = await artifacts.put("company_1", "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Builder fixture", reproduction: null, rootCauseAnalysis: "Fixture", steps: [{ number: 1, instruction: "Write a marker", verification: "Marker exists" }], compatibilityAnalysis: "None", operationalAnalysis: "None", verificationStrategy: "Inspect the marker", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["MARKER.md"], materiality: [] })) });
-  const evidence = await artifacts.put("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") });
-  value.database.authTransaction((db) => {
-    const now = new Date().toISOString();
-    for (const artifact of [plan, evidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_builder_fixture', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, evidence.id);
-    db.prepare("UPDATE forge_agent_executions SET output_kind = 'plan', output_revision = 1, output_artifact_id = ?, output_summary = 'Builder fixture' WHERE id = 'agent_builder_fixture'").run(plan.id);
-  });
-  return { value, input: { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id } };
-}
-
-test("Developer execution keeps a Builder delivery commit and summary", async () => {
-  const value = await fixture();
-  const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const sessions = new Map<string, string>();
-  const sessionStore: SessionStore = { async create(raw) { sessions.set("session_developer", raw); return "session_developer"; }, async read(ref) { return sessions.get(ref) ?? ""; } };
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "approved.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "A bounded developer fixture", reproduction: null, rootCauseAnalysis: "The fixture needs a marker.", steps: [{ number: 1, instruction: "Add the fixture marker", verification: "The marker is present" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the marker and commit.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
-  const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
-  value.database.authTransaction((db) => {
-    const now = new Date().toISOString();
-    for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_lead_for_developer', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
-    db.prepare("UPDATE forge_agent_executions SET output_kind = 'plan', output_revision = 1, output_artifact_id = ?, output_summary = 'A bounded developer fixture' WHERE id = 'agent_lead_for_developer'").run(plan.id);
-  });
-  const runner: LeadProcessRunner = async (invocation) => {
-    expect(invocation.args).toEqual(expect.arrayContaining([
-      "--dangerously-bypass-approvals-and-sandbox",
-    ]));
-    await invocation.onStart(4601, "2026-08-11T00:00:00.000Z");
-    await writeFile(join(invocation.cwd, "MARKER.md"), "developer delivery\n");
-    await execFileAsync("git", ["add", "MARKER.md"], { cwd: invocation.cwd });
-    await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Deliver fixture marker"], { cwd: invocation.cwd });
-    const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
-    const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
-    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer-session" }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery", summary: "Marker delivered", steps: [{ number: 1, status: "completed", filesChanged: ["MARKER.md"], commandsRun: ["git add MARKER.md", "git commit"], testResults: ["Marker inspected"], notes: "Committed locally." }], authorizedStepsNotCompleted: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
-    return { exitCode: 0, stderr: "" };
-  };
-  try {
-    const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore });
-    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id })).resolves.toMatchObject({ outcome: "completed", deliverySummary: "Marker delivered" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-test("Builder commit without a report completes with the fallback summary", async () => {
-  const { value, input } = await preparedDeveloper();
-  const service = new DeveloperService(value.database, value.config, { processRunner: async (invocation) => {
-    await invocation.onStart(4602, "2026-08-11T00:00:00.000Z");
-    await writeFile(join(invocation.cwd, "NO_REPORT.md"), "committed\n");
-    await execFileAsync("git", ["add", "NO_REPORT.md"], { cwd: invocation.cwd });
-    await execFileAsync("git", ["commit", "-m", "Builder change"], { cwd: invocation.cwd });
-    return { exitCode: 0, stderr: "" };
-  }, sessionStore: { async create() { return "session_no_report"; }, async read() { return "raw-no-report"; } } });
-  try {
-    await expect(service.run(input)).resolves.toMatchObject({ outcome: "completed", deliverySummary: "Builder left no report" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("Builder without a report or commit fails with its output tail", async () => {
-  const { value, input } = await preparedDeveloper();
-  const service = new DeveloperService(value.database, value.config, { processRunner: async (invocation) => {
-    await invocation.onStart(4603, "2026-08-11T00:00:00.000Z");
-    await invocation.onLine("Builder stopped before changing files");
-    return { exitCode: 0, stderr: "" };
-  }, sessionStore: { async create() { return "session_empty"; }, async read() { return "raw-empty"; } } });
-  try {
-    await expect(service.run(input)).rejects.toMatchObject({ code: "developer-failed", message: "Builder stopped before changing files" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("Builder dirty worktree is committed before completion", async () => {
-  const { value, input } = await preparedDeveloper();
-  const service = new DeveloperService(value.database, value.config, { processRunner: async (invocation) => {
-    await invocation.onStart(4604, "2026-08-11T00:00:00.000Z");
-    await writeFile(join(invocation.cwd, "DIRTY.md"), "uncommitted\n");
-    return { exitCode: 0, stderr: "" };
-  }, sessionStore: { async create() { return "session_dirty"; }, async read() { return "raw-dirty"; } } });
-  try {
-    const result = await service.run(input);
-    expect(result).toMatchObject({ outcome: "completed", deliverySummary: "Builder left no report", dirtyState: "clean" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-
-test("Developer execution safely resumes an owned worktree after its result was lost", async () => {
-  const value = await fixture();
-  const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "retry.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Retry the bounded developer fixture", reproduction: null, rootCauseAnalysis: "The fixture needs a marker.", steps: [{ number: 1, instruction: "Add the retry marker", verification: "The marker is present" }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the marker and commit.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
-  const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead-retry.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
-  value.database.authTransaction((db) => {
-    const now = new Date().toISOString();
-    for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_lead_for_retry', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
-    db.prepare("UPDATE forge_agent_executions SET output_kind = 'plan', output_revision = 1, output_artifact_id = ?, output_summary = 'Retry the bounded developer fixture' WHERE id = 'agent_lead_for_retry'").run(plan.id);
-  });
-  const finalPlanSubject = verifyRoutinePlanOutput(value.database, { outputId: "output_lead_for_retry", plan, evidence: leadEvidence, leadExecutionId: "agent_lead_for_retry" });
-  let calls = 0;
-  const runner: LeadProcessRunner = async (invocation) => {
-    calls += 1;
-    await invocation.onStart(4650 + calls, `2026-08-11T00:00:0${calls}.000Z`);
-    if (calls === 1) return { exitCode: 2, stderr: "provider transport closed" };
-    await writeFile(join(invocation.cwd, "RETRY.md"), "recovered delivery\n");
-    await execFileAsync("git", ["add", "RETRY.md"], { cwd: invocation.cwd });
-    await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Deliver retry marker"], { cwd: invocation.cwd });
-    const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
-    const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
-    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-retry-session" }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery", summary: "Retry marker delivered", steps: [{ number: 1, status: "completed", filesChanged: ["RETRY.md"], commandsRun: ["git add RETRY.md", "git commit"], testResults: ["Marker inspected"], notes: "Committed locally." }], authorizedStepsNotCompleted: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
-    return { exitCode: 0, stderr: "" };
-  };
-  const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_retry"; }, async read() { return "raw-retry-session"; } } });
-  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, finalPlanSubject };
-  try {
-    await expect(service.run(input)).rejects.toMatchObject({ code: "process-exited" });
-    const failed = value.database.authQuery((db) => db.prepare("SELECT id, evidence_artifact_id FROM forge_developer_executions WHERE task_id = 'task_1' AND attempt = 1").get() as { id: string; evidence_artifact_id: string });
-    const evidence = value.database.authQuery((db) => db.prepare("SELECT storage_path FROM forge_artifacts WHERE id = ?").get(failed.evidence_artifact_id) as { storage_path: string });
-    expect(await readFile(join(value.config.artifactRoot, evidence.storage_path), "utf8")).toContain("provider transport closed");
-    const result = await service.run(input);
-    expect(result).toMatchObject({ outcome: "completed", developerSessionRef: "session_retry", branchName: expect.stringMatching(/^work\/fixture-task-[a-f0-9]{8}$/) });
-    expect(value.database.authQuery((db) => db.prepare("SELECT attempt, supersedes_execution_id FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toEqual({ attempt: 2, supersedes_execution_id: failed.id });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-/* Removed with the minimum viable repair loop: the pinned-verifier and
- * preserved-worktree retry governance paths no longer exist. */
-/*
-test("Developer report claims cannot override a failed pinned verifier", async () => {
-  const value = await fixture();
-  const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "verifier-authority.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Prove verifier authority", reproduction: null, rootCauseAnalysis: "The pinned verifier is authoritative.", steps: [{ number: 1, instruction: "Create the marker", verification: "The pinned test decides acceptance", verificationCommands: ["pnpm test"] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Run the accepted pinned verifier.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["VERIFIER.md", "package.json"], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: {} } })) });
-  const now = new Date().toISOString();
-  value.database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(plan.id, plan.companyId, plan.kind, plan.filename, plan.mimeType, plan.byteSize, plan.sha256, plan.storagePath, plan.createdAt);
-    db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES ('authorization_verifier', 'task_1', 'company_1', 'project_1', 'workflow-test-issue-task_1', 1, ?, ?, 'routine_auto', NULL, ?)").run(plan.id, plan.sha256, now);
-  });
-  const authorization = { authorizationId: "authorization_verifier", taskId: "task_1", companyId: "company_1", projectId: "project_1", workflowId: "workflow-test-issue-task_1", planRevision: 1, planArtifactId: plan.id, planSha256: plan.sha256, authorizationKind: "routine_auto" as const, approvalDecisionId: null, authorizedAt: now };
-  const runner: LeadProcessRunner = async (invocation) => {
-    await invocation.onStart(4750, "2026-08-11T00:00:00.000Z");
-    const packagePath = join(invocation.cwd, "package.json");
-    const packageJson = jsonRequired(await readFile(packagePath, "utf8")) as { scripts: { test: string } };
-    packageJson.scripts.test = "node -e 'process.exit(1)'";
-    await writeFile(packagePath, JSON.stringify(packageJson));
-    await writeFile(join(invocation.cwd, "VERIFIER.md"), "claimed passing delivery\n");
-    await execFileAsync("git", ["add", "package.json", "VERIFIER.md"], { cwd: invocation.cwd });
-    await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Create verifier failure fixture"], { cwd: invocation.cwd });
-    const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
-    const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
-    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-verifier-fail" }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { id: "claimed-test", type: "command_execution", command: "pnpm test", exit_code: 0, aggregated_output: "all tests passed" } }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery", summary: "Everything passed", steps: [{ number: 1, status: "completed", filesChanged: ["package.json", "VERIFIER.md"], commandsRun: ["pnpm test"], testResults: ["all tests passed"], notes: "Reported success." }], authorizedStepsNotCompleted: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
-    return { exitCode: 0, stderr: "" };
-  };
-  const service = new DeveloperService(value.database, value.config, {
-    processRunner: runner,
-    githubObservation: { async checkAuthentication() {}, async getRepository() { return { nameWithOwner: "acme/forge", url: "https://github.com/acme/forge" }; }, async observeMutationSurface() { return { repository: "acme/forge", observedAt: now, branches: [], pullRequests: [], sha256: "f".repeat(64) }; } },
-    sessionStore: { async create() { return "session_verifier_fail"; }, async read(ref) { return ref === "session_lead" ? "raw-lead" : "raw-verifier-fail"; } },
-  });
-  try {
-    const result = await service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, authorization, developerTurnExecutionId: "developer_verifier_fail" });
-    expect(result).toMatchObject({ outcome: "blocked", failureCode: "required-local-tests-failed" });
-    const reconciliationRow = value.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(result.reconciliationArtifactId) as { storagePath: string; sha256: string });
-    const reconciliation = DeveloperReconciliationArtifactSchema.parse(jsonRequired((await artifactStore.read({ companyId: "company_1", ...reconciliationRow })).toString("utf8")));
-    expect(reconciliation).toMatchObject({ outcome: "blocked", failureCode: "required-local-tests-failed", independentVerification: { outcome: "failed" } });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("authorized Developer retry resumes a dirty preserved worktree", async () => {
-  const value = await fixture();
-  const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "authorized-retry.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Resume partial Developer work", reproduction: null, rootCauseAnalysis: "The first turn may stop after editing.", steps: [{ number: 1, instruction: "Finish the retry marker", verification: "The marker is committed", verificationCommands: ["git status --porcelain"] }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the preserved worktree.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["RETRY.md"], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: {} } })) });
-  const now = new Date().toISOString();
-  value.database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(plan.id, plan.companyId, plan.kind, plan.filename, plan.mimeType, plan.byteSize, plan.sha256, plan.storagePath, plan.createdAt);
-    db.prepare("INSERT INTO forge_plan_authorizations (id, task_id, company_id, project_id, workflow_id, plan_revision, plan_artifact_id, plan_sha256, authorization_kind, approval_decision_id, authorized_at) VALUES ('authorization_retry', 'task_1', 'company_1', 'project_1', 'workflow-test-issue-task_1', 1, ?, ?, 'routine_auto', NULL, ?)").run(plan.id, plan.sha256, now);
-  });
-  const authorization = { authorizationId: "authorization_retry", taskId: "task_1", companyId: "company_1", projectId: "project_1", workflowId: "workflow-test-issue-task_1", planRevision: 1, planArtifactId: plan.id, planSha256: plan.sha256, authorizationKind: "routine_auto" as const, approvalDecisionId: null, authorizedAt: now };
-  let calls = 0;
-  const prompts: string[] = [];
-  const service = new DeveloperService(value.database, value.config, {
-    processRunner: async (invocation) => {
-      calls += 1;
-      prompts.push(invocation.args.join(" "));
-      await invocation.onStart(4700 + calls, `2026-08-11T00:00:0${calls}.000Z`);
-      if (calls === 1) {
-        await writeFile(join(invocation.cwd, "RETRY.md"), "partial delivery\n");
-        const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
-        const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
-        await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-authorized-retry" }));
-        for (const [id, command] of [["inspect_1", "git status --porcelain"]]) {
-          await invocation.onLine(JSON.stringify({ type: "item.started", item: { id, type: "command_execution", command } }));
-          await invocation.onLine(JSON.stringify({ type: "item.completed", item: { id, type: "command_execution", command, exit_code: 0, aggregated_output: "" } }));
-        }
-        await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery", summary: "Partial work looks successful", steps: [{ number: 1, status: "completed", filesChanged: [], commandsRun: ["git status --porcelain"], testResults: ["Worktree inspected"], notes: "The process stopped after reporting success." }], authorizedStepsNotCompleted: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
-        return { exitCode: 2, stderr: "provider transport closed" };
-      }
-      expect(await readFile(join(invocation.cwd, "RETRY.md"), "utf8")).toBe("partial delivery\n");
-      await writeFile(join(invocation.cwd, "RETRY.md"), "recovered delivery\n");
-      await execFileAsync("git", ["add", "RETRY.md"], { cwd: invocation.cwd });
-      await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Recover retry marker"], { cwd: invocation.cwd });
-      const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
-      const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
-      await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-authorized-retry" }));
-      for (const [id, command] of [["inspect_1", "git status --porcelain"]]) {
-        await invocation.onLine(JSON.stringify({ type: "item.started", item: { id, type: "command_execution", command } }));
-        await invocation.onLine(JSON.stringify({ type: "item.completed", item: { id, type: "command_execution", command, exit_code: 0, aggregated_output: "" } }));
-      }
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { id: "exploratory-failure", type: "command_execution", command: "false", exit_code: 1, aggregated_output: "exploratory failure" } }));
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery", summary: "Recovered partial delivery", steps: [{ number: 1, status: "completed", filesChanged: ["RETRY.md"], commandsRun: ["git status --porcelain"], testResults: ["Worktree clean"], notes: "Committed the preserved partial change." }], authorizedStepsNotCompleted: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
-      return { exitCode: 0, stderr: "" };
-    },
-    githubObservation: {
-      async checkAuthentication() {},
-      async getRepository() { return { nameWithOwner: "acme/forge", url: "https://github.com/acme/forge" }; },
-      async observeMutationSurface() { return { repository: "acme/forge", observedAt: now, branches: [], pullRequests: [], sha256: "f".repeat(64) }; },
-    },
-    sessionStore: { async create() { return "session_authorized_retry"; }, async read(ref) { return ref === "session_lead" ? "raw-lead" : "raw-authorized-retry"; } },
-  });
-  const input = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, authorization };
-  try {
-    const blocked = await service.run({ ...input, developerTurnExecutionId: "developer_retry_1", developerAttempt: 1 });
-    expect(blocked).toMatchObject({ outcome: "blocked", dirtyState: "dirty" });
-    expect.soft(blocked.deliverySummary).toContain("dirty-final-tree");
-    expect.soft(blocked.deliverySummary).not.toContain("Partial work looks successful");
-    const recovered = await service.run({ ...input, developerTurnExecutionId: "developer_retry_2", developerAttempt: 2, supersedesExecutionId: "developer_retry_1", reuseWorktree: true });
-    expect(recovered).toMatchObject({ outcome: "completed", dirtyState: "clean", developerSessionRef: "session_authorized_retry" });
-    const reconciliationRow = value.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(recovered.reconciliationArtifactId) as { storagePath: string; sha256: string });
-    const reconciliation = DeveloperReconciliationArtifactSchema.parse(jsonRequired((await artifactStore.read({ companyId: "company_1", ...reconciliationRow })).toString("utf8")));
-    expect(reconciliation).toMatchObject({ outcome: "completed", independentVerification: { outcome: "passed" } });
-    expect(calls).toBe(2);
-    expect(prompts[0]).toContain("--dangerously-bypass-approvals-and-sandbox");
-    expect(prompts[1]).toContain("--dangerously-bypass-approvals-and-sandbox");
-    for (const prompt of prompts) {
-      expect.soft(prompt).toContain("Forge will run the accepted pinned setup and final verification independently after the Developer process exits.");
-    }
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-*/
-
-test("a late Developer failure cannot overwrite a cancellation", async () => {
-  const value = await fixture();
-  const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "cancel-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Cancellation plan", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Wait for cancellation.", verification: "The execution remains cancelled." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect execution state.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
-  const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "cancel-lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
-  value.database.authTransaction((db) => {
-    const now = new Date().toISOString();
-    for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_cancel_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
-    db.prepare("UPDATE forge_agent_executions SET output_kind = 'plan', output_revision = 1, output_artifact_id = ?, output_summary = 'Cancellation plan' WHERE id = 'agent_cancel_lead'").run(plan.id);
-  });
-  const finalPlanSubject = verifyRoutinePlanOutput(value.database, { outputId: "output_cancel_plan", plan, evidence: leadEvidence, leadExecutionId: "agent_cancel_lead" });
-  const runner: LeadProcessRunner = async (invocation) => {
-    await invocation.onStart(4611, "2026-08-11T00:00:00.000Z");
-    const executionId = (value.database.authQuery((db) => db.prepare("SELECT id FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get() as { id: string })).id;
-    value.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ?, failure_code = NULL, failure_summary = NULL WHERE id = ?").run(new Date().toISOString(), executionId));
-    return { exitCode: 143, stderr: "terminated" };
-  };
-  try {
-    const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_developer"; }, async read() { return "raw-developer"; } } });
-    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, finalPlanSubject })).rejects.toBeInstanceOf(AgentFailure);
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, evidence_artifact_id FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get())).toMatchObject({ status: "cancelled", failure_code: null, evidence_artifact_id: expect.any(String) });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("a late Developer success cannot overwrite a cancellation", async () => {
-  const value = await fixture();
-  const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "cancel-success-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Cancellation success race", reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Create the marker.", verification: "The marker exists." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the marker.", unresolvedTechnicalQuestions: [], materialCategories: [] })) });
-  const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "cancel-success-lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
-  value.database.authTransaction((db) => {
-    const now = new Date().toISOString();
-    for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_cancel_success_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
-    db.prepare("UPDATE forge_agent_executions SET output_kind = 'plan', output_revision = 1, output_artifact_id = ?, output_summary = 'Cancellation success race' WHERE id = 'agent_cancel_success_lead'").run(plan.id);
-  });
-  const finalPlanSubject = verifyRoutinePlanOutput(value.database, { outputId: "output_cancel_success_plan", plan, evidence: leadEvidence, leadExecutionId: "agent_cancel_success_lead" });
-  const runner: LeadProcessRunner = async (invocation) => {
-    await invocation.onStart(4612, "2026-08-11T00:00:00.000Z");
-    await writeFile(join(invocation.cwd, "CANCELLED_MARKER.md"), "cancelled delivery\n");
-    await execFileAsync("git", ["add", "CANCELLED_MARKER.md"], { cwd: invocation.cwd });
-    await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Create cancelled marker"], { cwd: invocation.cwd });
-    const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
-    const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
-    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-cancelled-developer" }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "delivery", summary: "Late delivery", steps: [{ number: 1, status: "completed", filesChanged: ["CANCELLED_MARKER.md"], commandsRun: ["git commit"], testResults: ["Marker inspected"], notes: "Late success." }], authorizedStepsNotCompleted: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
-    const executionId = (value.database.authQuery((db) => db.prepare("SELECT id FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get() as { id: string })).id;
-    value.database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ? WHERE id = ?").run(new Date().toISOString(), executionId));
-    return { exitCode: 0, stderr: "" };
-  };
-  try {
-    const service = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_developer"; }, async read() { return "raw-developer"; } } });
-    await expect(service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id, finalPlanSubject })).rejects.toMatchObject({ code: "developer-cancelled" });
-    expect(value.database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions ORDER BY started_at DESC LIMIT 1").get())).toEqual({ status: "cancelled" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-/* Removed with the minimum viable repair loop: repair-plan authority and
- * exact Git-shape validation are no longer part of Developer repair. */
-/*
-test("Lead reviews the exact Developer delivery and the same Developer session performs bounded repair", async () => {
-  const value = await fixture();
-  const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const worktreePath = join(value.root, "worktrees", "task-1");
-  await execFileAsync("git", ["worktree", "add", "-b", "forge/issue/task_1", worktreePath, "HEAD"], { cwd: join(value.root, "repo") });
-  const targetBaseSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).stdout.trim();
-  await writeFile(join(worktreePath, "DELIVERED.md"), "delivery\n");
-  await execFileAsync("git", ["add", "DELIVERED.md"], { cwd: worktreePath });
-  await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Deliver exact fixture"], { cwd: worktreePath });
-  const subjectCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).stdout.trim();
-  const subjectTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: worktreePath })).stdout.trim();
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "review-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Exact fixture plan", reproduction: null, rootCauseAnalysis: "The fixture needs a delivery marker.", steps: [{ number: 1, instruction: "Create the delivery marker.", verification: "The marker exists." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No operational change.", verificationStrategy: "Inspect the exact commit.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["README.md"], materiality: [] })) });
-  const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead-review.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\"}\n") });
-  const delivery = await artifactStore.put("company_1", "developer-delivery", { filename: "delivery.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "delivery", report: "x".repeat(250_000), exactTail: "preserved-tail" })) });
-  const developerEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "developer.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"developer\"}\n") });
-  const now = new Date().toISOString();
-  value.database.authTransaction((db) => {
-    for (const artifact of [plan, leadEvidence, delivery, developerEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_lead_review', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
-    db.prepare("UPDATE forge_agent_executions SET output_kind = 'plan', output_revision = 1, output_artifact_id = ?, output_summary = 'Exact fixture plan' WHERE id = 'agent_lead_review'").run(plan.id);
-    db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, current_step, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_prior_delivery', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'completed', 'forge/issue/task_1', ?, ?, 'session_developer', 1, ?, ?, ?, ?, 'clean', ?, ?)").run(worktreePath, targetBaseSha, now, now, targetBaseSha, targetBaseSha, delivery.id, developerEvidence.id);
-    db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, current_step, started_at, finished_at, result_commit, result_tree, dirty_state) VALUES ('developer_review_subject', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 2, 'completed', 'forge/issue/task_1', ?, ?, 'session_developer', 1, ?, ?, ?, ?, 'clean')").run(worktreePath, targetBaseSha, now, now, subjectCommit, subjectTree);
-    db.prepare("INSERT INTO forge_project_revisions (id, project_id, revision, identity, normalized_json, base_sha, target_sha, actor_user_id, created_at) SELECT 'revision_2', project_id, 2, 'identity_2', normalized_json, base_sha, target_sha, actor_user_id, created_at FROM forge_project_revisions WHERE id = 'revision_1'").run();
-    db.prepare("UPDATE forge_tasks SET project_revision_id = 'revision_2' WHERE id = 'task_1'").run();
-  });
-  const sessions = new Map([["session_lead", "raw-lead"], ["session_developer", "raw-developer"]]);
-  const sessionStore: SessionStore = { async create(raw) { const ref = `session_${raw}`; sessions.set(ref, raw); return ref; }, async read(ref) { return sessions.get(ref) ?? ""; } };
-  let reviewRequestPrompt = "";
-  let reviewOutputSchema: unknown;
-  let reviewCalls = 0;
-  const reviewRunner: LeadProcessRunner = async (invocation) => {
-    await invocation.onStart(4701, "2026-08-11T00:00:00.000Z");
-    const request = jsonRequired(await readFile(invocation.args.at(-1)!, "utf8")) as { promptPath: string; outputSchemaPath: string; statusPath: string };
-    if (reviewCalls === 0) {
-      reviewRequestPrompt = await readFile(request.promptPath, "utf8");
-      reviewOutputSchema = jsonRequired(await readFile(request.outputSchemaPath, "utf8"));
-    }
-    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-lead" }));
-    reviewCalls += 1;
-    const reviewOutput = reviewCalls === 1
-      ? "not machine-readable"
-      : JSON.stringify({ kind: "delivery_review", summary: "One required repair remains.", outcome: "blocking", findings: [{ findingId: "finding_blocking", severity: "blocking", rationale: "The proof marker is incomplete.", evidenceRef: "DELIVERED.md", disposition: "open", repairInstruction: "Complete the proof marker." }, { findingId: "finding_advisory", severity: "advisory", rationale: "The report could be more detailed.", evidenceRef: "delivery report", disposition: "open", repairInstruction: null }], repairPlan: "Complete DELIVERED.md with the required proof text." });
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: reviewOutput } }));
-    if (reviewCalls === 2) {
-      await writeFile(request.statusPath, JSON.stringify({ state: "completed", exitCode: 0 }));
-      return { exitCode: 1, stderr: "Lost parent process result" };
-    }
-    return { exitCode: 0, stderr: "" };
-  };
-  try {
-    const lead = new AgentService(value.database, value.config, { processRunner: reviewRunner, sessionStore });
-    value.database.authTransaction((db) => db.prepare("UPDATE forge_developer_executions SET session_ref = NULL WHERE id = 'developer_review_subject'").run());
-    const reviewInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadOutputArtifactId: plan.id, subject: { planRevision: 1, targetBaseSha, subjectCommit: "d".repeat(40), subjectTree: "e".repeat(40), developerExecutionId: "developer_review_subject", deliveryArtifactId: "stale_delivery_artifact", developerEvidenceArtifactId: "stale_verification_artifact", leadSessionRef: "session_lead", developerSessionRef: "session_developer" }, worktreePath, branchName: "forge/issue/task_1", supersedesReviewId: null };
-    const review = await lead.reviewDelivery(reviewInput);
-    expect(review).toMatchObject({ outcome: "completed", subject: { subjectCommit, subjectTree, deliveryArtifactId: delivery.id, developerEvidenceArtifactId: developerEvidence.id }, review: { opinion: "blocking", leadSessionRef: "session_lead" } });
-    if (review.outcome !== "completed") throw new Error("Fixture review did not complete");
-    const completedReview = review;
-    expect(review.correctionAttempts).toBe(1);
-    expect(reviewCalls).toBe(2);
-    expect(reviewRequestPrompt).toContain(targetBaseSha);
-    expect(reviewRequestPrompt).toContain(subjectCommit);
-    expect(reviewRequestPrompt).toContain(subjectTree);
-    expect(reviewRequestPrompt).toContain("Treat `not_applicable_locally` steps as acceptable when their note is reasonable.");
-    expect(reviewRequestPrompt.length).toBeLessThan(200_000);
-    expect(reviewRequestPrompt).toContain("[truncated ");
-    expect(reviewRequestPrompt).toContain("preserved-tail");
-    expect(reviewOutputSchema).toMatchObject({ properties: { kind: { const: "delivery_review" } } });
-    expect(value.database.authQuery((db) => db.prepare("SELECT outcome, session_ref, subject_commit FROM forge_delivery_reviews WHERE id = ?").get(completedReview.review.reviewId))).toEqual({ outcome: "blocking", session_ref: "session_lead", subject_commit: subjectCommit });
-    value.database.authTransaction((db) => db.prepare("UPDATE forge_developer_executions SET session_ref = 'session_developer', delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = 'developer_review_subject'").run(delivery.id, developerEvidence.id));
-    const reviewEvidenceRow = value.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_delivery_review_attempts attempt ON attempt.evidence_artifact_id = a.id WHERE attempt.completed_review_id = ?").get(completedReview.review.reviewId) as { storagePath: string; sha256: string });
-    const reviewEvidenceText = (await new ArtifactStore(value.config.artifactRoot).read({ companyId: "company_1", storagePath: reviewEvidenceRow.storagePath, sha256: reviewEvidenceRow.sha256 })).toString("utf8");
-    expect(reviewEvidenceText).toContain("forge.review-turn-start");
-    expect(reviewEvidenceText).toContain('"turn":1');
-    expect(reviewEvidenceText).toContain('"turn":2');
-    expect(reviewEvidenceText).not.toContain("raw-lead");
-    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_delivery_review_attempts WHERE completed_review_id = ?").get(completedReview.review.reviewId))).toEqual({ count: 1 });
-
-    let correctionFailureCalls = 0;
-    const correctionFailure = await new AgentService(value.database, value.config, { processRunner: async (invocation) => {
-      await invocation.onStart(4710 + correctionFailureCalls, "2026-08-11T00:00:30.000Z");
-      await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-lead" }));
-      correctionFailureCalls += 1;
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "not machine-readable" } }));
-      return { exitCode: 0, stderr: "" };
-    }, sessionStore }).reviewDelivery(reviewInput);
-    expect(correctionFailure).toMatchObject({ outcome: "blocked", code: "correction-exhausted", correctionAttempts: 1 });
-    expect(correctionFailureCalls).toBe(2);
-
-    const blockedReviewCases: Array<[string, LeadProcessRunner]> = [
-      ["session-conflict", async (invocation) => { await invocation.onStart(4720, "2026-08-11T00:00:40.000Z"); await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "different-lead" })); return { exitCode: 0, stderr: "" }; }],
-      ["authentication-required", async (invocation) => { await invocation.onStart(4719, "2026-08-11T00:00:35.000Z"); await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-lead" })); return { exitCode: 1, stderr: "OAuth authorization required" }; }],
-      ["rate-limited", async (invocation) => { await invocation.onStart(4721, "2026-08-11T00:00:50.000Z"); await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-lead" })); return { exitCode: 1, stderr: "HTTP 429: rate limit exceeded" }; }],
-      ["process-failed", async (invocation) => { await invocation.onStart(4722, "2026-08-11T00:01:00.000Z"); await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-lead" })); return { exitCode: 1, stderr: "worker crashed" }; }],
-      ["evidence-too-large", async (invocation) => { await invocation.onStart(4723, "2026-08-11T00:01:10.000Z"); await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-lead" })); await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "x".repeat(7 * 1024 * 1024) } })); return { exitCode: 0, stderr: "" }; }],
-    ];
-    for (const [code, runner] of blockedReviewCases) {
-      const blocked = await new AgentService(value.database, value.config, { processRunner: runner, sessionStore }).reviewDelivery(reviewInput);
-      expect(blocked).toMatchObject({ outcome: "blocked", code, subject: { subjectCommit, subjectTree } });
-      if (blocked.outcome !== "blocked") throw new Error("Expected a blocked review fixture");
-      expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, finished_at FROM forge_delivery_review_attempts WHERE id = ?").get(blocked.attemptId))).toMatchObject({ status: "blocked", failure_code: code, finished_at: expect.any(String) });
-      if (code === "process-failed") {
-        const artifact = value.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ?").get(blocked.evidenceArtifactId)) as { storagePath: string; sha256: string };
-        const evidence = (await new ArtifactStore(value.config.artifactRoot).read({ companyId: "company_1", ...artifact })).toString("utf8");
-        expect(evidence).toContain("forge.review-wrapper-stderr");
-        expect(evidence).toContain("worker crashed");
-        expect(evidence).toContain('{"type":"forge.review-turn-failed","code":"process-exited"}');
-      }
-    }
-    const oversizedRepairRunner: LeadProcessRunner = async (invocation) => {
-      await invocation.onStart(4702, "2026-08-11T00:01:00.000Z");
-      await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer" }));
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "x".repeat(7 * 1024 * 1024) } }));
-      return { exitCode: 0, stderr: "" };
-    };
-    const oversizedDeveloper = new DeveloperService(value.database, value.config, { processRunner: oversizedRepairRunner, sessionStore });
-    const repairInput = { taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", developerSessionRef: "session_developer", developerExecutionId: "developer_review_subject", reviewId: completedReview.review.reviewId, repairCycleLimit: 5, worktreePath, branchName: "forge/issue/task_1", targetBaseSha, subjectCommit, subjectTree, blockingFindings: completedReview.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open"), repairPlan: completedReview.review.repairPlan! };
-    const oversized = await oversizedDeveloper.runRepair({ ...repairInput, cycle: 1 });
-    expect(oversized).toMatchObject({ outcome: "blocked", code: "evidence-too-large", cycle: 1, subject: { developerExecutionId: "developer_review_subject", subjectCommit, subjectTree } });
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, evidence_artifact_id, finished_at FROM forge_delivery_repairs WHERE id = ?").get(oversized.repairAttemptId))).toMatchObject({ status: "blocked", failure_code: "evidence-too-large", evidence_artifact_id: oversized.evidenceArtifactId, finished_at: expect.any(String) });
-
-    const blockedRepairCases: Array<[number, string, LeadProcessRunner]> = [
-      [2, "invalid-output", async (invocation) => { await invocation.onStart(4730, "2026-08-11T00:01:20.000Z"); await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer" })); await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: "not repair JSON" } })); return { exitCode: 0, stderr: "" }; }],
-      [3, "session-conflict", async (invocation) => { await invocation.onStart(4731, "2026-08-11T00:01:30.000Z"); await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "different-developer" })); return { exitCode: 0, stderr: "" }; }],
-      [4, "rate-limited", async (invocation) => { await invocation.onStart(4732, "2026-08-11T00:01:40.000Z"); await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer" })); return { exitCode: 1, stderr: "HTTP 429: rate limit exceeded" }; }],
-    ];
-    for (const [cycle, code, runner] of blockedRepairCases) {
-      const blocked = await new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore }).runRepair({ ...repairInput, cycle });
-      expect(blocked).toMatchObject({ outcome: "blocked", code, cycle, subject: { developerExecutionId: "developer_review_subject", subjectCommit, subjectTree } });
-      expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, finished_at FROM forge_delivery_repairs WHERE id = ?").get(blocked.repairAttemptId))).toMatchObject({ status: "blocked", failure_code: code, finished_at: expect.any(String) });
-    }
-    const repairRunner: LeadProcessRunner = async (invocation) => {
-      await invocation.onStart(4703, "2026-08-11T00:02:00.000Z");
-      await writeFile(join(invocation.cwd, "DELIVERED.md"), "forge developer proof\n");
-      await execFileAsync("git", ["add", "DELIVERED.md"], { cwd: invocation.cwd });
-      await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Repair exact fixture"], { cwd: invocation.cwd });
-      const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
-      const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
-      await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer" }));
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "repair", summary: "Proof marker repaired.", addressedFindingIds: ["finding_blocking"], commandsRun: ["git add DELIVERED.md", "git commit"], testResults: ["Marker inspected"], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
-      return { exitCode: 0, stderr: "" };
-    };
-    const filenameOnlyPlan = await artifactStore.put("company_1", "delivery-repair-plan", { filename: "final_review_blocking-1.md", mimeType: "text/markdown", bytes: Buffer.from("This filename is not durable repair authority.") });
-    value.database.authTransaction((db) => db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(filenameOnlyPlan.id, filenameOnlyPlan.companyId, filenameOnlyPlan.kind, filenameOnlyPlan.filename, filenameOnlyPlan.mimeType, filenameOnlyPlan.byteSize, filenameOnlyPlan.sha256, filenameOnlyPlan.storagePath, filenameOnlyPlan.createdAt));
-    const guardedDeveloper = new DeveloperService(value.database, value.config, { processRunner: async () => { throw new Error("A filename-only repair plan reached execution"); }, sessionStore });
-    await expect(guardedDeveloper.runRepair({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_lead", developerSessionRef: "session_developer", developerExecutionId: "developer_review_subject", reviewId: completedReview.review.reviewId, repairAuthority: "final_review", cycle: 1, repairCycleLimit: 2, worktreePath, branchName: "forge/issue/task_1", targetBaseSha, subjectCommit, subjectTree, blockingFindings: completedReview.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open"), repairPlanArtifactId: filenameOnlyPlan.id, repairPlanSha256: filenameOnlyPlan.sha256 })).rejects.toMatchObject({ code: "repair-authority-mismatch" });
-    const developer = new DeveloperService(value.database, value.config, { processRunner: repairRunner, sessionStore });
-    const repaired = await developer.runRepair({ ...repairInput, cycle: 5 });
-    expect(repaired).toMatchObject({ outcome: "completed", developerSessionRef: "session_developer", repairAttemptId: expect.any(String), reviewId: completedReview.review.reviewId, cycle: 5, subject: { subjectCommit, subjectTree } });
-    expect(repaired.resultCommit).not.toBe(subjectCommit);
-    expect(value.database.authQuery((db) => db.prepare("SELECT cycle, status, result_commit FROM forge_delivery_repairs WHERE id = ?").get(repaired.repairAttemptId))).toMatchObject({ cycle: 5, status: "completed", result_commit: repaired.resultCommit });
-    expect((await execFileAsync("git", ["rev-parse", "HEAD^"], { cwd: worktreePath })).stdout.trim()).toBe(subjectCommit);
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("Developer repair expected failures are typed, durable, and consume bounded cycles", async () => {
-  const value = await repairFixture();
-  const reportRunner = (pid: number, report: Record<string, unknown>): LeadProcessRunner => async (invocation) => {
-    await invocation.onStart(pid, "2026-08-11T00:03:00.000Z");
-    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer" }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify(report) } }));
-    return { exitCode: 0, stderr: "" };
-  };
-  const baseReport = { kind: "repair", summary: "Repair fixture result.", addressedFindingIds: ["finding_blocking"], commandsRun: [], testResults: [], resultCommit: value.subjectCommit, resultTree: value.subjectTree, dirtyState: "clean", blocker: null };
-  const cases: Array<[number, string, LeadProcessRunner]> = [
-    [1, "authentication-required", async (invocation) => { await invocation.onStart(4741, "2026-08-11T00:03:01.000Z"); await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer" })); return { exitCode: 1, stderr: "OAuth authorization required" }; }],
-    [2, "process-failed", async (invocation) => { await invocation.onStart(4742, "2026-08-11T00:03:02.000Z"); await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer" })); return { exitCode: 1, stderr: "worker crashed" }; }],
-    [3, "repair-incomplete", reportRunner(4743, { ...baseReport, addressedFindingIds: [] })],
-    [4, "repair-scope", reportRunner(4744, { ...baseReport, addressedFindingIds: [], blocker: "A required dependency is unavailable." })],
-  ];
-  try {
-    for (const [cycle, code, runner] of cases) {
-      const blocked = await new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: value.sessionStore }).runRepair({ ...value.repairInput, cycle });
-      expect(blocked).toMatchObject({ outcome: "blocked", code, cycle, subject: { subjectCommit: value.subjectCommit, subjectTree: value.subjectTree } });
-      expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, evidence_artifact_id, finished_at FROM forge_delivery_repairs WHERE id = ?").get(blocked.repairAttemptId))).toMatchObject({ status: "blocked", failure_code: code, evidence_artifact_id: blocked.evidenceArtifactId, finished_at: expect.any(String) });
-    }
-    let capRunnerCalled = false;
-    const capExhausted = await new DeveloperService(value.database, value.config, { processRunner: async () => { capRunnerCalled = true; return { exitCode: 0, stderr: "" }; }, sessionStore: value.sessionStore }).runRepair({ ...value.repairInput, cycle: 5, repairCycleLimit: 4 });
-    expect(capExhausted).toMatchObject({ outcome: "blocked", code: "repair-cap-exhausted", cycle: 5 });
-    expect(capRunnerCalled).toBe(false);
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test("Developer repair rejects dirty and non-child revisions with durable observed coordinates", async () => {
-  const value = await repairFixture();
-  try {
-    const dirty = await new DeveloperService(value.database, value.config, { processRunner: async (invocation) => {
-      await invocation.onStart(4751, "2026-08-11T00:04:01.000Z");
-      await writeFile(join(invocation.cwd, "DELIVERED.md"), "dirty repair\n");
-      await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer" }));
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "repair", summary: "Repair left the worktree dirty.", addressedFindingIds: ["finding_blocking"], commandsRun: [], testResults: [], resultCommit: value.subjectCommit, resultTree: value.subjectTree, dirtyState: "dirty", blocker: null }) } }));
-      return { exitCode: 0, stderr: "" };
-    }, sessionStore: value.sessionStore }).runRepair({ ...value.repairInput, cycle: 1 });
-    expect(dirty).toMatchObject({ outcome: "blocked", code: "worktree-unsafe", resultCommit: value.subjectCommit, resultTree: value.subjectTree, dirtyState: "dirty" });
-    await writeFile(join(value.worktreePath, "DELIVERED.md"), "delivery\n");
-    expect((await execFileAsync("git", ["status", "--porcelain"], { cwd: value.worktreePath })).stdout).toBe("");
-
-    const nonChild = await new DeveloperService(value.database, value.config, { processRunner: async (invocation) => {
-      await invocation.onStart(4752, "2026-08-11T00:04:02.000Z");
-      for (const marker of ["first", "second"]) {
-        await writeFile(join(invocation.cwd, "DELIVERED.md"), `${marker} repair commit\n`);
-        await execFileAsync("git", ["add", "DELIVERED.md"], { cwd: invocation.cwd });
-        await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", `${marker} repair commit`], { cwd: invocation.cwd });
-      }
-      const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
-      const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
-      await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer" }));
-      await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "repair", summary: "Repair created two commits.", addressedFindingIds: ["finding_blocking"], commandsRun: [], testResults: [], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
-      return { exitCode: 0, stderr: "" };
-    }, sessionStore: value.sessionStore }).runRepair({ ...value.repairInput, cycle: 2 });
-    expect(nonChild).toMatchObject({ outcome: "blocked", code: "worktree-unsafe", resultCommit: expect.not.stringMatching(new RegExp(`^${value.subjectCommit}$`, "i")), dirtyState: "clean" });
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_code, result_commit, result_tree, finished_at FROM forge_delivery_repairs WHERE id = ?").get(nonChild.repairAttemptId))).toMatchObject({ status: "blocked", failure_code: "worktree-unsafe", result_commit: nonChild.resultCommit, result_tree: nonChild.resultTree, finished_at: expect.any(String) });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-*/
-
-test("Developer resolves a guarded merge conflict in the existing session and produces a normal two-parent merge commit", async () => {
-  const value = await fixture();
-  const worktreePath = join(value.root, "worktrees", "task-1");
-  await execFileAsync("git", ["checkout", "-B", "main"], { cwd: join(value.root, "repo") });
-  await execFileAsync("git", ["worktree", "add", "-b", "forge/issue/task_1", worktreePath, "main"], { cwd: join(value.root, "repo") });
-  await writeFile(join(worktreePath, "README.md"), "issue side\n");
-  await execFileAsync("git", ["add", "README.md"], { cwd: worktreePath });
-  await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "issue change"], { cwd: worktreePath });
-  const priorHead = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: worktreePath })).stdout.trim();
-  await execFileAsync("git", ["checkout", "main"], { cwd: join(value.root, "repo") });
-  await writeFile(join(value.root, "repo", "README.md"), "base side\n");
-  await execFileAsync("git", ["add", "README.md"], { cwd: join(value.root, "repo") });
-  await execFileAsync("git", ["-c", "user.name=Forge Base", "-c", "user.email=base@example.invalid", "commit", "-m", "base change"], { cwd: join(value.root, "repo") });
-  const targetBaseSha = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: join(value.root, "repo") })).stdout.trim();
-  await execFileAsync("git", ["checkout", "forge/issue/task_1"], { cwd: worktreePath });
-  await expect(execFileAsync("git", ["merge", "--no-ff", "--no-edit", targetBaseSha], { cwd: worktreePath })).rejects.toBeTruthy();
-  const plan = await new ArtifactStore(value.config.artifactRoot).put("company_1", "merge-conflict-plan", { filename: "merge-plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "merge_conflict_plan", summary: "Resolve README", resolutions: [{ file: "README.md", resolution: "Keep the issue behavior and include the base change." }], verificationStrategy: "Run the complete local suite.", unresolvedQuestions: [] })) });
-  const priorTree = (await execFileAsync("git", ["rev-parse", `${priorHead}^{tree}`], { cwd: worktreePath })).stdout.trim();
-  const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const priorDeliveryArtifact = await artifactStore.put("company_1", "developer-delivery", { filename: "prior-delivery.json", mimeType: "application/json", bytes: Buffer.from("{}") });
-  const priorEvidenceArtifact = await artifactStore.put("company_1", "agent-evidence", { filename: "prior-evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") });
-  const conflictArtifact = await artifactStore.put("company_1", "forward-merge-conflict", { filename: "conflict.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ version: 1, checkpoint: "pre_release", expectedBaseSha: targetBaseSha, observedBaseSha: targetBaseSha, priorHead, priorTree, conflictFiles: ["README.md"], combinedDiff: "", priorCommitSummary: "", baseCommitSummary: "", commandEvidence: { command: "git diff --cc --no-ext-diff", complete: true } })) });
-  const now = new Date().toISOString();
-  value.database.authTransaction((db) => {
-    for (const artifact of [plan, priorDeliveryArtifact, priorEvidenceArtifact, conflictArtifact]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, "company_1", artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_forward_merges (id, task_id, company_id, expected_base_sha, current_base_sha, prior_head, merge_commit, tree, status, conflict_files_json, created_at, workflow_id, project_revision_id, checkpoint, prior_tree, conflict_artifact_id, conflict_artifact_sha256, conflict_file_count, updated_at) VALUES ('merge-developer-1', 'task_1', 'company_1', ?, ?, ?, NULL, NULL, 'conflict', '[\"README.md\"]', ?, 'workflow-test-issue-task_1', 'revision_1', 'pre_release', ?, ?, ?, 1, ?)").run(targetBaseSha, targetBaseSha, priorHead, now, priorTree, conflictArtifact.id, conflictArtifact.sha256, now);
-    db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, session_ref, started_at, finished_at, result_commit, result_tree, dirty_state, delivery_artifact_id, evidence_artifact_id) VALUES ('developer_conflict_subject', 'task_1', 'company_1', 'workflow-test-issue-task_1', 1, 1, 'completed', 'forge/issue/task_1', ?, ?, 'session_developer', ?, ?, ?, ?, 'clean', ?, ?)").run(worktreePath, targetBaseSha, now, now, priorHead, priorTree, priorDeliveryArtifact.id, priorEvidenceArtifact.id);
-    db.prepare("INSERT INTO forge_merge_conflict_resolutions (id, task_id, company_id, workflow_id, forward_merge_id, prior_head, target_base_sha, conflict_files_json, plan_artifact_id, status, created_at, updated_at) VALUES ('merge-plan-1', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'merge-developer-1', ?, ?, '[\"README.md\"]', ?, 'planned', ?, ?)").run(priorHead, targetBaseSha, plan.id, now, now);
-  });
-  const runner: LeadProcessRunner = async (invocation) => {
-    await invocation.onStart(4802, "2026-08-11T00:00:00.000Z");
-    await writeFile(join(invocation.cwd, "README.md"), "issue and base resolved\n");
-    await execFileAsync("git", ["add", "README.md"], { cwd: invocation.cwd });
-    await execFileAsync("git", ["-c", "user.name=Forge Developer", "-c", "user.email=developer@example.invalid", "commit", "-m", "Resolve target-base conflict"], { cwd: invocation.cwd });
-    const resultCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: invocation.cwd })).stdout.trim();
-    const resultTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: invocation.cwd })).stdout.trim();
-    await invocation.onLine(JSON.stringify({ type: "thread.started", thread_id: "raw-developer" }));
-    await invocation.onLine(JSON.stringify({ type: "item.completed", item: { type: "agent_message", text: JSON.stringify({ kind: "merge_conflict_resolution", summary: "README conflict resolved.", resolvedFiles: ["README.md"], commandsRun: ["git add README.md", "git commit"], testResults: ["Complete local suite passed"], resultCommit, resultTree, dirtyState: "clean", blocker: null }) } }));
-    return { exitCode: 0, stderr: "" };
-  };
-  try {
-    const developer = new DeveloperService(value.database, value.config, { processRunner: runner, sessionStore: { async create() { return "session_developer"; }, async read() { return "raw-developer"; } } });
-    const result = await developer.runMergeConflictResolution({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", planRevision: 1, forwardMergeId: "merge-developer-1", developerExecutionId: "developer_conflict_subject", developerSessionRef: "session_developer", worktreePath, branchName: "forge/issue/task_1", priorHead, targetBaseSha, conflictArtifact: { id: conflictArtifact.id, kind: "forward-merge-conflict" }, conflictFileCount: 1, planArtifactId: plan.id });
-    if ("outcome" in result) throw new Error("Expected deterministic merge verification to pass");
-    expect(result).toMatchObject({ developerSessionRef: "session_developer", summary: "README conflict resolved." });
-    const parents = (await execFileAsync("git", ["rev-list", "--parents", "-n", "1", "HEAD"], { cwd: worktreePath })).stdout.trim().split(/\s+/);
-    expect(parents).toEqual([result.resultCommit, priorHead, targetBaseSha]);
-    const deliveryRow = value.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ?").get(result.deliveryArtifactId) as { storage_path: string; sha256: string });
-    const delivery = jsonRequired((await artifactStore.read({ companyId: "company_1", storagePath: deliveryRow.storage_path, sha256: deliveryRow.sha256 })).toString("utf8")) as Record<string, unknown>;
-    expect(delivery).toMatchObject({
-      version: 1,
-      checkId: "merge-developer-1",
-      priorHead,
-      priorTree,
-      targetBaseSha,
-      resultCommit: result.resultCommit,
-      resultTree: result.resultTree,
-      developerExecutionId: result.developerExecutionId,
-      supersededDeliveryArtifactId: priorDeliveryArtifact.id,
-      supersededEvidenceArtifactId: priorEvidenceArtifact.id,
-      verificationArtifactId: result.verificationArtifactId,
-      verification: { outcome: "passed" },
-    });
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, result_commit FROM forge_merge_conflict_resolutions WHERE id = 'merge-plan-1'").get())).toEqual({ status: "completed", result_commit: result.resultCommit });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-});
-
-test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Lead reviews, repairs, and fresh-reviews a controlled defect", async () => {
-  const value = await fixture(process.env.FORGE_CODEX_REAL_MODEL ?? "gpt-5.6-luna", "Create CONTROLLED_PROOF.md with the exact text `forge developer proof`. The file content is mandatory and must remain exact.");
-  try {
-    const lead = new AgentService(value.database, value.config);
-    const plan = await lead.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1", builder: "profile_1" }, revision: 1 });
-    expect(plan.leadOutputKind).toBe("plan");
-    const developer = new DeveloperService(value.database, value.config);
-    const delivery = await developer.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: plan.leadSessionRef, leadOutputArtifactId: plan.leadOutputArtifactId });
-    expect(delivery.outcome).toBe("completed");
-    const defectPath = join(delivery.worktreePath, "CONTROLLED_PROOF.md");
-    await writeFile(defectPath, "wrong proof\n");
-    await execFileAsync("git", ["add", "CONTROLLED_PROOF.md"], { cwd: delivery.worktreePath });
-    await execFileAsync("git", ["-c", "user.name=Forge Test", "-c", "user.email=forge-test@example.invalid", "commit", "-m", "Introduce controlled review defect"], { cwd: delivery.worktreePath });
-    const subjectCommit = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: delivery.worktreePath })).stdout.trim();
-    const subjectTree = (await execFileAsync("git", ["rev-parse", "HEAD^{tree}"], { cwd: delivery.worktreePath })).stdout.trim();
-    const artifactStore = new ArtifactStore(value.config.artifactRoot);
-    const controlledDelivery = await artifactStore.put("company_1", "developer-delivery", { filename: "controlled-defect-delivery.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "delivery", summary: "Controlled exact-subject defect for authenticated review proof.", resultCommit: subjectCommit, resultTree: subjectTree, dirtyState: "clean" })) });
-    const controlledEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "controlled-defect-evidence.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from(`${JSON.stringify({ type: "forge.controlled-proof-defect", subjectCommit, subjectTree })}\n`) });
-    value.database.authTransaction((db) => {
-      for (const artifact of [controlledDelivery, controlledEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-      db.prepare("UPDATE forge_developer_executions SET result_commit = ?, result_tree = ?, dirty_state = 'clean', delivery_artifact_id = ?, evidence_artifact_id = ? WHERE id = ?").run(subjectCommit, subjectTree, controlledDelivery.id, controlledEvidence.id, delivery.developerExecutionId);
-    });
-    const review = await lead.reviewDelivery({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadOutputArtifactId: plan.leadOutputArtifactId, subject: { planRevision: 1, targetBaseSha: delivery.targetBaseSha, subjectCommit, subjectTree, developerExecutionId: delivery.developerExecutionId, deliveryArtifactId: controlledDelivery.id, developerEvidenceArtifactId: controlledEvidence.id, leadSessionRef: plan.leadSessionRef, developerSessionRef: delivery.developerSessionRef }, worktreePath: delivery.worktreePath, branchName: delivery.branchName, supersedesReviewId: null });
-    if (review.outcome !== "completed") throw new Error("Real review did not return a completed result");
-    expect(review.review.leadSessionRef).toBe(plan.leadSessionRef);
-    expect(review.review.leadSessionRef).not.toBe(delivery.developerSessionRef);
-    expect(review.review.opinion).toBe("blocking");
-    expect(review.review.repairPlan).toBeTruthy();
-    const originalReviewRow = value.database.authQuery((db) => db.prepare("SELECT id, subject_commit, subject_tree, opinion_artifact_id, evidence_artifact_id FROM forge_delivery_reviews WHERE id = ?").get(review.review.reviewId) as { id: string; subject_commit: string; subject_tree: string; opinion_artifact_id: string; evidence_artifact_id: string } | undefined);
-    const originalFindingRows = value.database.authQuery((db) => db.prepare("SELECT id, rationale, disposition, repair_instruction FROM forge_delivery_findings WHERE review_id = ? ORDER BY id").all(review.review.reviewId) as Array<{ id: string; rationale: string; disposition: string; repair_instruction: string | null }>);
-    const readArtifact = async (artifactId: string): Promise<Buffer> => {
-      const artifact = value.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ? AND company_id = 'company_1'").get(artifactId) as { storage_path: string; sha256: string });
-      return artifactStore.read({ companyId: "company_1", storagePath: artifact.storage_path, sha256: artifact.sha256 });
-    };
-    const originalOpinionBytes = await readArtifact(review.review.opinionArtifactId);
-    const originalEvidenceBytes = await readArtifact(review.review.evidenceArtifactId);
-    const repaired = await developer.runRepair({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: plan.leadSessionRef, developerSessionRef: delivery.developerSessionRef, developerExecutionId: delivery.developerExecutionId, reviewId: review.review.reviewId, cycle: 1, repairCycleLimit: 2, worktreePath: delivery.worktreePath, branchName: delivery.branchName, targetBaseSha: delivery.targetBaseSha, subjectCommit, subjectTree, blockingFindings: review.review.findings.filter((finding) => finding.severity === "blocking" && finding.disposition === "open"), repairPlan: review.review.repairPlan! });
-    expect(repaired.outcome).toBe("completed");
-    expect(repaired.developerSessionRef).toBe(delivery.developerSessionRef);
-    expect(repaired.resultCommit).not.toBe(subjectCommit);
-    expect((await execFileAsync("git", ["show", `HEAD:CONTROLLED_PROOF.md`], { cwd: delivery.worktreePath })).stdout.trim()).toBe("forge developer proof");
-    if (repaired.outcome !== "completed") throw new Error("Real repair did not complete");
-    const fresh = await lead.reviewDelivery({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadOutputArtifactId: plan.leadOutputArtifactId, supersedesReviewId: review.review.reviewId, subject: { planRevision: 1, targetBaseSha: delivery.targetBaseSha, subjectCommit: repaired.resultCommit!, subjectTree: repaired.resultTree!, developerExecutionId: repaired.developerExecutionId, deliveryArtifactId: repaired.deliveryArtifactId, developerEvidenceArtifactId: repaired.evidenceArtifactId, leadSessionRef: plan.leadSessionRef, developerSessionRef: repaired.developerSessionRef }, worktreePath: delivery.worktreePath, branchName: delivery.branchName });
-    if (fresh.outcome !== "completed") throw new Error("Fresh real review did not return a completed result");
-    expect(fresh.review.opinion).toBe("approved");
-    expect(fresh.review.supersedesReviewId).toBe(review.review.reviewId);
-    expect(fresh.subject.subjectCommit).toBe(repaired.resultCommit);
-    expect(fresh.subject.subjectTree).toBe(repaired.resultTree);
-    expect(fresh.review.leadSessionRef).toBe(review.review.leadSessionRef);
-    expect(value.database.authQuery((db) => db.prepare("SELECT id, subject_commit, subject_tree, opinion_artifact_id, evidence_artifact_id FROM forge_delivery_reviews WHERE id = ?").get(review.review.reviewId))).toEqual(originalReviewRow);
-    expect(value.database.authQuery((db) => db.prepare("SELECT id, rationale, disposition, repair_instruction FROM forge_delivery_findings WHERE review_id = ? ORDER BY id").all(review.review.reviewId))).toEqual(originalFindingRows);
-    expect(await readArtifact(review.review.opinionArtifactId)).toEqual(originalOpinionBytes);
-    expect(await readArtifact(review.review.evidenceArtifactId)).toEqual(originalEvidenceBytes);
-    expect((await execFileAsync("git", ["status", "--porcelain"], { cwd: delivery.worktreePath })).stdout).toBe("");
-    expect((await execFileAsync("git", ["remote"], { cwd: delivery.worktreePath })).stdout).toBe("");
-    expect((await execFileAsync("git", ["for-each-ref", "--format=%(refname)", "refs/remotes"], { cwd: delivery.worktreePath })).stdout).toBe("");
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-}, 600_000);
-
-test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Developer executes a controlled fixture plan in a fresh issue worktree", async () => {
-  const value = await fixture(process.env.FORGE_CODEX_REAL_MODEL ?? "gpt-5.6-luna");
-  const artifactStore = new ArtifactStore(value.config.artifactRoot);
-  const plan = await artifactStore.put("company_1", "lead-plan", { filename: "approved-real.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", gitPresentation, summary: "Create one owner-controlled proof marker", reproduction: null, rootCauseAnalysis: "The fixture intentionally lacks a marker.", steps: [{ number: 1, instruction: "Create REAL_DEVELOPER_PROOF.md containing exactly the text forge developer proof, then commit the file locally.", verification: "REAL_DEVELOPER_PROOF.md exists with the exact text and the worktree is clean." }], compatibilityAnalysis: "No compatibility change.", operationalAnalysis: "No provider or deployment operation is authorized.", verificationStrategy: "Read the file, inspect git status, and report the exact commit and tree.", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["REAL_DEVELOPER_PROOF.md"], materiality: [] })) });
-  const leadEvidence = await artifactStore.put("company_1", "agent-evidence", { filename: "lead-real.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{\"type\":\"lead\",\"session\":\"real-lead\"}\n") });
-  value.database.authTransaction((db) => {
-    const now = new Date().toISOString();
-    for (const artifact of [plan, leadEvidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
-    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id) VALUES ('agent_real_lead', 'task_1', 'company_1', 'workflow-test-issue-task_1', 'planner', 'completed', 1, 'session_real_lead', ?, ?, ?)").run(now, now, leadEvidence.id);
-    db.prepare("UPDATE forge_agent_executions SET output_kind = 'plan', output_revision = 1, output_artifact_id = ?, output_summary = 'Create one owner-controlled proof marker' WHERE id = 'agent_real_lead'").run(plan.id);
-  });
-  try {
-    const service = new DeveloperService(value.database, value.config);
-    const result = await service.run({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { planner: "profile_1", builder: "profile_1" }, leadSessionRef: "session_real_lead", leadOutputArtifactId: plan.id });
-    expect(result.outcome).toBe("completed");
-    expect(result.developerSessionRef).toMatch(/^session_[a-f0-9]{24}$/);
-    expect(result.developerSessionRef).not.toBe("session_real_lead");
-    expect(result.resultCommit).toMatch(/^[a-f0-9]{40,64}$/);
-    expect(result.dirtyState).toBe("clean");
-    expect(value.database.authQuery((db) => db.prepare("SELECT status, session_ref, result_commit, dirty_state FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toMatchObject({ status: "completed", session_ref: result.developerSessionRef, result_commit: result.resultCommit, dirty_state: "clean" });
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-}, 300_000);
-
-test.skipIf(process.env.FORGE_RUN_REAL_CODEX !== "1")("real authenticated Codex produces a Lead result in the isolated fixture repository", async () => {
-  const value = await fixture(process.env.FORGE_CODEX_REAL_MODEL ?? "gpt-5.6-luna");
-  value.database.authQuery((db) => db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES ('profile_2', 'Supplemental reviewer', 'codex', ?, 'medium', 'standard', 1, ?, ?)").run(process.env.FORGE_CODEX_REAL_MODEL ?? "gpt-5.6-luna", new Date().toISOString(), new Date().toISOString()));
-  const calls: string[][] = [];
-  let firstTurn = true;
-  const runner: LeadProcessRunner = async (invocation) => {
-    calls.push(invocation.args);
-    if (!firstTurn) return runCodexProcess(invocation);
-    firstTurn = false;
-    const lines: string[] = [];
-    const result = await runCodexProcess({ ...invocation, onLine: async (line) => { lines.push(line); } });
-    let changed = false;
-    for (let index = lines.length - 1; index >= 0; index -= 1) {
-      try {
-        const event = jsonRequired(lines[index]!) as { type?: unknown; item?: { type?: unknown; text?: unknown } };
-        if (event.type === "item.completed" && event.item?.type === "agent_message" && typeof event.item.text === "string") {
-          lines[index] = JSON.stringify({ ...event, item: { ...event.item, text: "not valid Lead JSON" } });
-          changed = true;
-          break;
-        }
-      } catch {
-        // Ignore non-JSON diagnostic lines; the real runner already records them as evidence.
-      }
-    }
-    expect(changed).toBe(true);
-    for (const line of lines) await invocation.onLine(line);
-    return result;
-  };
-  try {
-    const service = new AgentService(value.database, value.config, { processRunner: runner });
-    const result = await service.runLeadPlanning({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1" }, revision: 1 });
-    expect(result.leadSessionRef).toMatch(/^session_[a-f0-9]{24}$/);
-    expect(result.leadOutputKind).toBe("plan");
-    const review = await service.runSupplementalReview({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1", reviewer: "profile_2" }, revision: 1, leadOutputArtifactId: result.leadOutputArtifactId, leadEvidenceArtifactId: result.leadEvidenceArtifactId });
-    const consolidated = await service.consolidateLeadPlan({ taskId: "task_1", companyId: "company_1", workflowId: "workflow-test-issue-task_1", projectId: "project_1", projectRevisionId: "revision_1", briefArtifactId: value.briefId, imageArtifactIds: [], roleProfiles: { planner: "profile_1", reviewer: "profile_2" }, revision: 2, leadSessionRef: result.leadSessionRef, leadOutputArtifactId: result.leadOutputArtifactId, supplementalReviewArtifactId: review.reviewArtifactId });
-    expect(review.sessionRef).toMatch(/^session_[a-f0-9]{24}$/);
-    expect(review.sessionRef).not.toBe(result.leadSessionRef);
-    expect(consolidated.leadSessionRef).toBe(result.leadSessionRef);
-    expect(calls).toHaveLength(4);
-    for (const call of [calls[1], calls[3]]) {
-      expect(call?.slice(0, 2)).toEqual(["exec", "resume"]);
-      expect(call).toEqual(expect.arrayContaining(["--model", process.env.FORGE_CODEX_REAL_MODEL ?? "gpt-5.6-luna", "-c", 'model_reasoning_effort="medium"', "-c", 'service_tier="default"', "--json"]));
-    }
-  } finally {
-    value.database.close();
-    await rm(value.root, { recursive: true, force: true });
-  }
-}, 300_000);

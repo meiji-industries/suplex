@@ -1,11 +1,13 @@
 import { setHandler } from "@temporalio/workflow";
 import * as contracts from "../issue-contracts.js";
-import * as activityProxies from "./activity-proxies.js";
+import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
 import { issueUpdates } from "../issue-updates.js";
 import type { AcceptDeliveryActivityInput } from "../issue-contracts.js";
 import type { IssueWorkflowContext } from "./context.js";
 export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const agent = activityProxies;
   const validateFinalReview = (rawInput: contracts.StartPlanningInput): contracts.StartPlanningInput => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision || (ctx.state.phase !== "final_review" && !(ctx.state.phase === "delivery_blocked" && ctx.state.finalReviewFailureCode === "final_review_unavailable"))) throw new Error("Final review is not available in the current phase");
@@ -25,7 +27,7 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
     try {
       result = await ctx.acquireExternalTurn<contracts.FinalReviewActivityResult>(
         { operation: "final_review", ...stateTransitions.finalReviewerTurn(ctx), sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
-        (capacityRequestId) => activityProxies.finalReview({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, roleProfiles: ctx.input.roleProfiles, releaseId: ctx.state.releaseId!, deliveryReviewId: ctx.state.deliveryReviewId!, ciRunId: ctx.state.ciRunId!, ...(ctx.state.releaseRepository && ctx.state.baseBranch && ctx.state.pullRequestNumber ? { pullRequestNumber: ctx.state.pullRequestNumber, repository: ctx.state.releaseRepository, baseBranch: ctx.state.baseBranch } : {}), planRevision: ctx.state.planRevision ?? ctx.state.revision, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, developerExecutionId: ctx.state.developerExecutionId!, deliveryArtifactId: ctx.state.deliveryArtifactId!, evidenceArtifactId: ctx.state.developerEvidenceArtifactId!, ...(ctx.state.worktreePath ? { worktreePath: ctx.state.worktreePath } : {}), branchName: ctx.state.branchName!, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (capacityRequestId) => agent.finalReview({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, briefArtifactId: ctx.input.briefArtifactId, roleProfiles: ctx.input.roleProfiles, releaseId: ctx.state.releaseId!, deliveryReviewId: ctx.state.deliveryReviewId!, ciRunId: ctx.state.ciRunId!, ...(ctx.state.releaseRepository && ctx.state.baseBranch && ctx.state.pullRequestNumber ? { pullRequestNumber: ctx.state.pullRequestNumber, repository: ctx.state.releaseRepository, baseBranch: ctx.state.baseBranch } : {}), planRevision: ctx.state.planRevision ?? ctx.state.revision, leadSessionRef: ctx.state.leadSessionRef!, leadOutputArtifactId: ctx.state.leadOutputArtifactId!, developerExecutionId: ctx.state.developerExecutionId!, deliveryArtifactId: ctx.state.deliveryArtifactId!, evidenceArtifactId: ctx.state.developerEvidenceArtifactId!, ...(ctx.state.worktreePath ? { worktreePath: ctx.state.worktreePath } : {}), branchName: ctx.state.branchName!, targetBaseSha: ctx.state.targetBaseSha!, subjectCommit: ctx.state.resultCommit!, subjectTree: ctx.state.resultTree!, ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (review) => review.leadExecutionId,
       );
     } catch (error) {
@@ -43,7 +45,7 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
       try {
         const planned = await ctx.acquireExternalTurn<contracts.DeliveryRepairPlanResult>(
           { operation: "delivery_repair_plan", role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
-          (capacityRequestId) => activityProxies.planDeliveryRepair({
+          (capacityRequestId) => agent.planDeliveryRepair({
           taskId: ctx.input.issueId,
           companyId: ctx.input.companyId,
           workflowId: ctx.input.workflowId,
@@ -95,7 +97,7 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
     if (exactAcceptanceReceipts && (!ctx.state.deliveryReviewId || !ctx.state.pullRequestNumber || !ctx.state.releaseRepository || !ctx.state.baseBranch || !ctx.state.targetBaseSha || !ctx.state.leadSessionRef)) throw new Error("Final review, CI, release, and GitHub evidence are required for acceptance");
     if (!(await ctx.runTargetBaseCheckpoint("pre_acceptance"))) return ctx.state;
     const result = exactAcceptanceReceipts
-      ? await activityProxies.acceptDelivery({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, releaseId: ctx.state.releaseId, deliveryReviewId: ctx.state.deliveryReviewId!, finalReviewId: ctx.state.finalReviewId, ciRunId: ctx.state.ciRunId, actorUserId: command.actorUserId, pullRequestNumber: ctx.state.pullRequestNumber!, repository: ctx.state.releaseRepository!, baseBranch: ctx.state.baseBranch!, baseSha: ctx.state.targetBaseSha!, leadSessionRef: ctx.state.leadSessionRef!, expectedHeadSha: ctx.state.expectedHeadSha, expectedHeadTree: ctx.state.expectedHeadTree, decision, autoMerge: decision === "accept" && ctx.input.pullRequestMode === "auto_merge", ...(command.note !== undefined ? { note: command.note } : {}) })
+      ? await activityProxies.acceptDelivery({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectRevisionId: ctx.input.projectRevisionId, releaseId: ctx.state.releaseId, deliveryReviewId: ctx.state.deliveryReviewId!, finalReviewId: ctx.state.finalReviewId, ciRunId: ctx.state.ciRunId, actorUserId: command.actorUserId, pullRequestNumber: ctx.state.pullRequestNumber!, repository: ctx.state.releaseRepository!, baseBranch: ctx.state.baseBranch!, baseSha: ctx.state.targetBaseSha!, leadSessionRef: ctx.state.leadSessionRef!, expectedHeadSha: ctx.state.expectedHeadSha, expectedHeadTree: ctx.state.expectedHeadTree, decision, autoMerge: decision === "accept" && ctx.input.pullRequestMode === "auto_merge", ...(ctx.herdrExecutionSubstrateEnabled && command.noteId && command.noteSha256 ? { noteId: command.noteId, noteSha256: command.noteSha256 } : command.note !== undefined ? { note: command.note } : {}) })
       : await activityProxies.acceptDelivery({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, releaseId: ctx.state.releaseId, finalReviewId: ctx.state.finalReviewId, ciRunId: ctx.state.ciRunId, actorUserId: command.actorUserId, expectedHeadSha: ctx.state.expectedHeadSha, expectedHeadTree: ctx.state.expectedHeadTree, decision } as unknown as AcceptDeliveryActivityInput);
     if (!exactAcceptanceReceipts) {
       const nextPhase = result.status === "accepted" ? "manual_merge" : result.status === "requested_changes" ? "repair_required" : "cancelled";
@@ -110,7 +112,7 @@ export function registerAcceptanceHandlers(ctx: IssueWorkflowContext): void {
       try {
         const planned = await ctx.acquireExternalTurn<contracts.DeliveryRepairPlanResult>(
           { operation: "delivery_repair_plan", role: "planner", profileId: ctx.input.roleProfiles.planner, sessionRef: ctx.state.leadSessionRef, worktreePath: ctx.state.worktreePath },
-          (capacityRequestId) => activityProxies.planDeliveryRepair({
+          (capacityRequestId) => agent.planDeliveryRepair({
           taskId: ctx.input.issueId,
           companyId: ctx.input.companyId,
           workflowId: ctx.input.workflowId,

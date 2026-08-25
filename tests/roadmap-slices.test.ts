@@ -1,8 +1,6 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 
 import { expect, test } from "vitest";
 
@@ -17,9 +15,20 @@ import { ForgeDatabase } from "../src/database.js";
 import { ForwardMergeService } from "../src/forward-merge.js";
 import { GithubReleaseFailure, ReleaseService, type GithubAcceptancePort, type GithubPullRequest, type GithubReleasePort } from "../src/github-release.js";
 import { ArtifactStore } from "../src/artifacts.js";
+import { runCommand } from "../src/command-runner.js";
 import { jsonRequired } from "../src/task-utils.js";
 
-const exec = promisify(execFile);
+async function exec(command: string, args: string[], options?: { cwd?: string }) {
+  const result = await runCommand({
+    taskId: null,
+    stepId: null,
+    command,
+    args,
+    ...(options?.cwd ? { cwd: options.cwd } : {}),
+  });
+  if (result.exitCode !== 0) throw Object.assign(new Error(`Command failed: ${result.command}`), result);
+  return result;
+}
 const now = "2026-08-11T00:00:00.000Z";
 const baseSha = "a".repeat(40);
 const headSha = "b".repeat(40);
@@ -291,11 +300,11 @@ test("restore drill preserves users, completed work, artifacts, and draft releas
         async updateDraftPullRequest() { providerMutations += 1; return pullRequest({ number: 42, headSha, baseSha }); },
         async getPullRequest() { providerReads += 1; return pullRequest({ number: 42, headSha, baseSha }); },
       });
-      expect(reconciliation.developerExecutions).toEqual([{ executionId: "developer-in-flight", status: "failed", reason: "process-missing" }]);
+      expect(reconciliation.developerExecutions).toEqual([{ executionId: "developer-in-flight", status: "failed", reason: "session-missing" }]);
       expect(reconciliation.providers).toEqual([expect.objectContaining({ releaseId: "release-drill", status: "matched", pullRequestNumber: 42 })]);
       expect(providerReads).toBe(2);
       expect(providerMutations).toBe(0);
-      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = 'developer-in-flight'").get())).toEqual({ status: "failed", failure_code: "developer-process-missing" });
+      expect(restoredDatabase.authQuery((db) => db.prepare("SELECT status, failure_code FROM forge_developer_executions WHERE id = 'developer-in-flight'").get())).toEqual({ status: "failed", failure_code: "developer-session-missing" });
       expect(restoredDatabase.authQuery((db) => db.prepare("SELECT task_id, phase FROM forge_issue_projections ORDER BY task_id").all())).toEqual([{ task_id: "task-a", phase: "development" }, { task_id: "task-completed", phase: "done" }]);
     } finally {
       restoredDatabase.close();

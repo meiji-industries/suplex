@@ -36,6 +36,7 @@ test("rescue resyncs the live workflow projection before retrying its allowed co
       db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project-rescue', 'company-rescue', 'Rescue', '/tmp/repo', '/tmp/worktrees', 'main', 'main', 'true', 'true', '[]', '{}', 'active', ?, ?)").run(now, now);
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-rescue', 'company-rescue', 'task-brief', 'task.md', 'text/markdown', 1, ?, 'brief-rescue', ?)").run("a".repeat(64), now);
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, request_hash, created_at, updated_at) VALUES ('task-rescue', 'company-rescue', 'project-rescue', 'Rescue', 'brief-rescue', '[]', '{}', 0, 'workflow-rescue', 'revision-rescue', 'rescue-key', ?, ?, ?)").run("b".repeat(64), now, now);
+      db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('starting-execution', 'task-rescue', 'company-rescue', 'workflow-rescue', 1, 1, 'starting', 'forge/task-rescue', ?, ?, ?)").run(root, "a".repeat(40), now);
     });
     const live = state(25);
     const close = vi.fn();
@@ -51,6 +52,8 @@ test("rescue resyncs the live workflow projection before retrying its allowed co
     const rescue = new TaskRescueService(tasks as never, database, config);
     const result = await rescue.rescue("admin", "task-rescue");
     expect(result.steps[0]).toMatchObject({ name: "Resync projection", outcome: "completed" });
+    expect(result.steps).toContainEqual(expect.objectContaining({ name: "Release stale bookkeeping", outcome: "skipped", detail: "Process PID rescue is unavailable for Herdr executions." }));
+    expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions WHERE id = 'starting-execution'").get())).toEqual({ status: "starting" });
     expect(tasks.executeCommand).toHaveBeenCalledWith("admin", "task-rescue", "retry_development", expect.objectContaining({ expectedRevision: 25 }));
     expect(close).toHaveBeenCalled();
   } finally {

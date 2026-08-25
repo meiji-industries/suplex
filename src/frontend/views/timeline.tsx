@@ -11,13 +11,14 @@ import { ApplicationFrame } from "../components/app/application-frame.js";
 import { ProfileAvatar } from "../components/app/profile-avatar.js";
 import { useCompanyContext } from "../components/app/company-context.js";
 import { readJson, withCompany } from "../lib/api.js";
-import type { ApiProject, ApiTask } from "../lib/view-shared.js";
+import { invalidateTaskList, readTaskList } from "../lib/task-list.js";
+import type { ApiProject, ApiTaskSummary } from "../lib/view-shared.js";
 
 type RangePreset = "today" | "7-days" | "30-days" | "custom";
 type AgentRole = "planner" | "reviewer" | "builder" | "integrator";
 type TimelineRange = { start: number; end: number };
 
-export type TimelineTask = Pick<ApiTask, "id" | "projectId" | "issueKey" | "title" | "agentInvocations">;
+export type TimelineTask = Pick<ApiTaskSummary, "id" | "projectId" | "issueKey" | "title" | "agentInvocations">;
 
 type WorkInterval = {
   id: string;
@@ -429,7 +430,7 @@ function WorkChart({ summary, overview, range, fullRange, companyId, now, onRang
 export function TimelineView(): ReactElement {
   const { currentCompany, loading, reloadCompanies } = useCompanyContext();
   const companyId = currentCompany?.id ?? "";
-  const [tasks, setTasks] = useState<ApiTask[]>([]);
+  const [tasks, setTasks] = useState<ApiTaskSummary[]>([]);
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [error, setError] = useState("");
@@ -446,11 +447,11 @@ export function TimelineView(): ReactElement {
     if (!companyId || loading) { setLoadedCompanyId(""); setTasks([]); setProjects([]); return; }
     try {
       const [taskResult, projectResult] = await Promise.all([
-        readJson<{ tasks: ApiTask[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks`),
+        readTaskList(companyId),
         readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
       ]);
       if (token !== requestToken.current) return;
-      setTasks(taskResult.tasks); setProjects(projectResult.projects); setLoadedCompanyId(companyId); setNow(Date.now());
+      setTasks(taskResult); setProjects(projectResult.projects); setLoadedCompanyId(companyId); setNow(Date.now());
     } catch (reason) {
       if (token !== requestToken.current) return;
       if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth");
@@ -465,7 +466,7 @@ export function TimelineView(): ReactElement {
   }, []);
   useEffect(() => {
     const events = new EventSource("/api/tasks/events");
-    events.addEventListener("invalidate", () => void reload());
+    events.addEventListener("invalidate", () => { if (companyId) invalidateTaskList(companyId); void reload(); });
     return () => events.close();
   }, [reload]);
 

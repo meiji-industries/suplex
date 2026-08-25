@@ -1,6 +1,6 @@
 import { setHandler } from "@temporalio/workflow";
 import * as contracts from "../issue-contracts.js";
-import * as activityProxies from "./activity-proxies.js";
+import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
 import { issueUpdates } from "../issue-updates.js";
 import { developerExecutionId } from "../deterministic-id.js";
@@ -13,6 +13,8 @@ const CI_RERUN_POLL_DELAY_MS = 60_000;
 const shouldUpdateFromBaseBeforeCiRepair = (result: { outcome: string; repairable: boolean; owner: string | null }, baseUpdateCount: number): boolean => result.outcome === "failed" && result.repairable && result.owner === "lead" && baseUpdateCount < 2;
 
 export function registerCiHandlers(ctx: IssueWorkflowContext): void {
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
+  const agent = activityProxies;
   const validateReconcileCi = (rawInput: contracts.StartPlanningInput): contracts.StartPlanningInput => {
     const command = contracts.StartPlanningInputSchema.parse(rawInput);
     if (command.expectedRevision !== ctx.state.revision || !["ci_waiting", "delivery_blocked"].includes(ctx.state.phase) || !ctx.state.allowedCommands.includes("reconcile_ci")) throw new Error("CI reconciliation is not available in the current phase");
@@ -40,7 +42,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     try {
       const result = await ctx.acquireExternalTurn<contracts.WorkflowCiRepairActivityResult>(
         { operation: "ci_repair_execution", ...stateTransitions.integratorTurn(ctx, "builder"), sessionRef: priorDeveloperSessionRef, worktreePath: ctx.state.worktreePath },
-        (capacityRequestId) => activityProxies.runCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, ...(releaseId ? { releaseId } : {}), projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, ciRunId, ciAttemptId, repairPlanId, repairPlanArtifactId, repairPlanEvidenceArtifactId, failedHeadSha, priorDeveloperExecutionId, priorDeveloperSessionRef, branchName, priorCommit, priorTree, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "repair", ...(capacityRequestId ? { capacityRequestId } : {}) }),
+        (capacityRequestId) => agent.runCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, ...(releaseId ? { releaseId } : {}), projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, planRevision, ciRunId, ciAttemptId, repairPlanId, repairPlanArtifactId, repairPlanEvidenceArtifactId, failedHeadSha, priorDeveloperExecutionId, priorDeveloperSessionRef, branchName, priorCommit, priorTree, developerTurnExecutionId: turnExecutionId, developerAttempt, turnKind: "repair", ...(capacityRequestId ? { capacityRequestId } : {}) }),
         (repair) => repair.developerExecutionId,
       );
       ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: result.outcome === "completed" ? "delivery_ready" : "delivery_blocked", owner: result.outcome === "completed" ? "lead" : "human", allowedCommands: result.outcome === "completed" ? ctx.addRevisionCommand(["review_delivery", "cancel_issue"]) : ctx.addRevisionCommand(["request_delivery_changes", "cancel_issue"]), pendingAction: result.outcome === "completed" ? "Reviewing the latest changes" : "CI repair is blocked", developerExecutionId: result.developerExecutionId, developerSessionRef: result.developerSessionRef, branchName: result.branchName, resultCommit: result.resultCommit, resultTree: result.resultTree, dirtyState: result.outcome === "completed" ? "clean" : "dirty", deliveryArtifactId: result.deliveryArtifactId, developerEvidenceArtifactId: result.evidenceArtifactId, deliverySummary: result.summary, developerOutcome: result.outcome === "completed" ? "completed" : "blocked", deliveryReviewId: result.outcome === "completed" ? null : ctx.state.deliveryReviewId, releaseId: null, expectedHeadSha: null, expectedHeadTree: null, ciRunId: null, ciOutcome: null, ciNextPollAt: null, finalReviewId: null, finalReviewOutcome: null, acceptanceId: null, ciRepairDeveloperExecutionId: result.developerExecutionId, ciRepairDeveloperSessionRef: result.developerSessionRef, blocker: result.outcome === "blocked" ? stateTransitions.humanBlocker("verification_unrecoverable", result.summary, [{ command: "request_delivery_changes", label: "Request delivery changes", requiresNote: true, destructive: false }, { command: "cancel_issue", label: "Cancel issue", requiresNote: false, destructive: true }], undefined) : null, stateChangedAt: new Date().toISOString(), lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
@@ -114,7 +116,7 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
       try {
         const plan = await ctx.acquireExternalTurn<contracts.CiRepairPlanActivityResult>(
           { operation: "ci_repair_plan", ...stateTransitions.integratorTurn(ctx, "planner"), sessionRef: leadSessionRef },
-          (capacityRequestId) => activityProxies.planCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, leadSessionRef, ciRunId: result.runId, ciAttemptId, failedHeadSha: expectedHeadSha, evidenceArtifactId, requiredChecks: [], localVerification: [], roleProfiles: ctx.input.roleProfiles, executionRole: stateTransitions.integratorTurn(ctx, "planner").role === "integrator" ? "integrator" : "planner", ...(capacityRequestId ? { capacityRequestId } : {}) }),
+          (capacityRequestId) => agent.planCiRepair({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, workflowId: ctx.input.workflowId, projectId: ctx.input.projectId, projectRevisionId: ctx.input.projectRevisionId, leadSessionRef, ciRunId: result.runId, ciAttemptId, failedHeadSha: expectedHeadSha, evidenceArtifactId, requiredChecks: [], localVerification: [], roleProfiles: ctx.input.roleProfiles, executionRole: stateTransitions.integratorTurn(ctx, "planner").role === "integrator" ? "integrator" : "planner", ...(capacityRequestId ? { capacityRequestId } : {}) }),
           (repairPlan) => repairPlan.leadExecutionId,
         );
         // The Lead can conclude the failure is not caused by this delivery. Re-run the

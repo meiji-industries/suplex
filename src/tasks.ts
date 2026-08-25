@@ -1,6 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
-import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { AuthUser } from "./auth.js";
 import { AuthFailure, AuthService } from "./auth.js";
@@ -26,11 +24,11 @@ import { TERMINAL_PHASES } from "./issue-phases.js";
 import { MaterialityEvidenceArtifactSchema, PlanSubjectSchema, deterministicMaterialCategories, type MaterialityEvidenceSubject, type PlanBlockerSubject, type PlanMaterialCategory, type PlanSubject } from "./plan-governance.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { developerVerificationProjection } from "./developer-task-projection.js";
-import { parseCodexJsonl } from "./agent-providers/codex-jsonl.js";
-import { normalizeTaskActivityJsonl, type TaskActivityEvent } from "./task-activity.js";
+import { IssueTimelineEvents } from "./issue-timeline-events.js";
+import type { TaskActivityEvent } from "./task-activity.js";
 import type { HermesPrincipal } from "./hermes-agents.js";
 import type { HermesSafeTaskProjection } from "./http/contracts/hermes.js";
-import { creationRequestHash, duplicateTitle, finding, id, json, normalizeText, parseImageIds, parseMetadata, parseRoleAgents, publicDeveloperSummary, shaAbbrev, type TaskFinding, jsonRequired } from "./task-utils.js";
+import { creationRequestHash, duplicateTitle, finding, id, json, normalizeText, parseImageIds, parseMetadata, parseRoleAgents, shaAbbrev, type TaskFinding, jsonRequired } from "./task-utils.js";
 
 export { creationRequestHash, type TaskFinding } from "./task-utils.js";
 
@@ -174,10 +172,6 @@ export interface DeveloperExecutionEvent {
 }
 
 type AgentProgressExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; lastOutputAt: string | null; currentStep: string | null };
-
-function publicExecutionEvent(event: DeveloperExecutionEvent): DeveloperExecutionEvent {
-  return { ...event, summary: publicDeveloperSummary(event.kind, event.stepNumber, event.summary, event.exitCode) };
-}
 
 export interface ReviewFindingDto {
   id: string;
@@ -572,6 +566,14 @@ export interface ForgeTask {
   };
 }
 
+export type TaskListSummary = Pick<ForgeTask, "id" | "companyId" | "projectId" | "issueKey" | "title" | "deliveryTarget" | "phase" | "revision" | "owner" | "allowedCommands" | "pendingAction" | "createdAt" | "updatedAt"> & {
+  agentInvocations: Array<Pick<TaskAgentInvocation, "id" | "role" | "status" | "attempt" | "startedAt" | "finishedAt" | "agentId" | "agentName" | "avatarSeed">>;
+  capacity: Pick<PublicCapacityStatus, "status"> | null;
+  release?: Pick<TaskRelease, "status" | "pullRequestNumber" | "isDraft"> | null;
+  ci?: Pick<TaskCiProjection, "outcome">;
+  deliveryGate?: { release: { state: "draft" | "ready" | "merged" | "closed" } };
+};
+
 export interface TaskCiProjection {
   runId: string;
   releaseId: string;
@@ -912,7 +914,7 @@ export class TaskService {
     }
   }
 
-  listTasks(actorUserId: string, companyId?: string): ForgeTask[] {
+  listTasks(actorUserId: string, companyId?: string): TaskListSummary[] {
     if (companyId) this.auth.requireCompanyAccess(actorUserId, companyId);
     const user = this.user(actorUserId);
     const rows = this.database.authQuery((db) => {
@@ -924,7 +926,7 @@ export class TaskService {
         : user.role === "admin" ? query.all() : query.all(actorUserId);
       return result as TaskRow[];
     });
-    return rows.map((row) => this.publicTask(actorUserId, row));
+    return rows.map((row) => this.taskListSummary(row));
   }
 
   getTask(actorUserId: string, taskId: string): ForgeTask {
@@ -1182,7 +1184,7 @@ export class TaskService {
       this.database.authTransaction((db) => {
         db.prepare(`INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, auto_approve_plan, pull_request_mode, delivery_target, run_project_tests, visual_evidence, workflow_id, project_revision_id, project_configuration_artifact_id, project_configuration_captured_at, idempotency_key, request_hash, creator_agent_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(taskId, companyId, input.projectId, input.title.trim(), briefArtifact!.id, JSON.stringify(imageArtifacts.map((artifact) => artifact.id)), JSON.stringify(roleAgents), supplementalReview ? 1 : 0, autoApprovePlan ? 1 : 0, pullRequestMode, deliveryTarget, runProjectTests ? 1 : 0, visualEvidence, workflowId, configurationArtifact!.id, configurationArtifact!.id, capturedAt, idempotencyKey, requestHash, creatorAgentId, now, now);
         db.prepare(`INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, authoritative_event_hash, projected_at) VALUES (?, ?, ?, ?, 0, 'backlog', 'human', ?, ?, ?, ?, ?, 0, ?, ?)`).run(taskId, companyId, input.projectId, workflowId, JSON.stringify(["start_planning"]), "Start planning", now, `${workflowId}:0`, eventHash, eventHash, now);
-        db.prepare(`INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, 0, 'task_created', ?, ?, ?)`).run(`${workflowId}:0`, taskId, companyId, workflowId, JSON.stringify({ revision: 0, stateHash: eventHash }), now, eventHash);
+        db.prepare(`INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, source, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, 0, 'workflow', 'task_created', ?, ?, ?)`).run(`${workflowId}:0`, taskId, companyId, workflowId, JSON.stringify({ revision: 0, stateHash: eventHash }), now, eventHash);
         db.prepare(`INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, ?, ?, 0, ?, ?)`).run(taskId, companyId, workflowId, JSON.stringify(initialState), now);
         const intentUpdate = db.prepare("UPDATE forge_task_creation_intents SET task_id = ?, state = 'workflow_starting', lease_expires_at = ?, updated_at = ?, error_code = NULL WHERE id = ? AND lease_token = ?").run(taskId, new Date(this.now().getTime() + 30_000).toISOString(), now, reserved.intent.id, reserved.intent.lease_token);
         if (intentUpdate.changes !== 1) throw new CreationLeaseLost();
@@ -1427,8 +1429,24 @@ export class TaskService {
       ...(command === "respond_plan_blocker" ? { expectedWorkflowRevision: expectedRevision } : {}),
     };
     if (command === "approve_plan" || command === "request_plan_revision" || command === "respond_plan_blocker") return this.exactDecisionCommand(actorUserId, taskId, planInput, command);
-    const input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput = command === "send_planner_note"
-      ? { expectedRevision, actorUserId, commandId: payload.commandId ?? randomUUID(), note: payload.note ?? "" }
+    const plannerNote = command === "send_planner_note"
+      ? (() => {
+        const commandId = payload.commandId ?? randomUUID();
+        const note = (redact((payload.note ?? "").trim()) as string).trim();
+        if (!note) throw new TaskFailure("Planner feedback is required", [finding("invalid-note", "note", "Enter a note for the Planner")], 422, task);
+        const noteId = `planner_note_${commandId}`;
+        const noteSha256 = createHash("sha256").update(note).digest("hex");
+        this.database.authTransaction((db) => db.prepare("INSERT INTO forge_planner_notes (id, task_id, company_id, revision, actor, note, created_at, forward_status) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending') ON CONFLICT(id) DO NOTHING").run(noteId, task.id, task.companyId, expectedRevision, actorUserId, note, this.now().toISOString()));
+        return { commandId, noteId, noteSha256 };
+      })()
+      : undefined;
+    const deliveryChangesNote = command === "request_delivery_changes"
+      ? await this.stageDeliveryChangesNote(task, payload.note)
+      : undefined;
+    const input: StartPlanningInput | PlanCommandInput | SendPlannerNoteInput = plannerNote
+      ? { expectedRevision, actorUserId, ...plannerNote }
+      : deliveryChangesNote
+      ? { expectedRevision, actorUserId, noteId: deliveryChangesNote.ref, noteSha256: deliveryChangesNote.sha256, ...(payload.idempotencyKey !== undefined ? { idempotencyKey: payload.idempotencyKey } : {}) }
       : descriptor.family === "start"
       ? { expectedRevision, actorUserId, commandId: payload.commandId ?? randomUUID(), ...(command !== "start_planning" && task.planAuthorizationId ? { planAuthorizationId: task.planAuthorizationId } : {}) }
       : planInput;
@@ -1457,6 +1475,12 @@ export class TaskService {
       const message = stale ? "Task changed before this action was accepted" : projectionDisagrees ? "Refresh — this action is no longer available" : handlerReason ?? (command === "start_planning" ? "Planning command could not be accepted" : command === "record_delivery_decision" ? "Delivery decision could not be accepted" : descriptor.family === "start" ? "Plan action could not be accepted" : "Task action could not be accepted");
       throw new TaskFailure(message, [finding(stale ? "stale-revision" : "workflow-update-rejected", stale ? "expectedRevision" : "workflow", message)], 409, current);
     }
+  }
+
+  private async stageDeliveryChangesNote(task: ForgeTask, value: string | undefined) {
+    const note = (redact((value ?? "").trim()) as string).trim();
+    if (!note) throw new TaskFailure("Delivery feedback is required", [finding("invalid-note", "note", "Enter the requested changes")], 422, task);
+    return this.artifacts.stage(task.companyId, "delivery-changes-note", { filename: `delivery-changes-${task.id}.md`, mimeType: "text/markdown", bytes: Buffer.from(note, "utf8") });
   }
 
   async revisePlan(actorUserId: string, taskId: string, input: PlanRevisionCommand): Promise<ForgeTask> {
@@ -1512,8 +1536,10 @@ export class TaskService {
       return this.getTask(actorUserId, taskId);
     } catch (error) {
       if (error instanceof Error && /stale|subject|conflict|idempotency/i.test(error.message)) await this.artifacts.discardStaged(staged);
-      const message = error instanceof Error && /stale|subject|conflict/i.test(error.message) ? "Task changed before this action was accepted" : "Task action could not be accepted";
-      throw new TaskFailure(message, [finding("workflow-update-rejected", "expectedRevision", message)], 409);
+      const stale = error instanceof Error && /stale|subject|conflict/i.test(error.message);
+      const current = this.getTask(actorUserId, taskId);
+      const message = stale ? "Task changed before this action was accepted" : current.lastHandlerError?.reason ?? "Task action could not be accepted";
+      throw new TaskFailure(message, [finding(stale ? "stale-revision" : "workflow-update-rejected", stale ? "expectedRevision" : "workflow", message)], 409, current);
     }
   }
 
@@ -1581,6 +1607,11 @@ export class TaskService {
     throw new TaskFailure("Not found", [], 404);
   }
 
+  getAgentEventHistory(actorUserId: string, taskId: string, after = 0, limit = 200): { events: ReturnType<IssueTimelineEvents["history"]>; status: { phase: string; terminal: boolean } } {
+    const task = this.getTask(actorUserId, taskId);
+    return { events: new IssueTimelineEvents(this.database).history(task.id, after, Math.min(limit, 200)), status: { phase: task.phase, terminal: TERMINAL_PHASES.has(task.phase) } };
+  }
+
   getTaskActivity(actorUserId: string, taskId: string, limit = 200): { execution: { id: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: string; currentStep: string | null } | null; events: TaskActivityEvent[]; commands: Array<{ id: string; stepId: string; command: string; cwd: string | null; exitCode: number | null; durationMs: number; stdout: string; stderr: string; entries: Array<{ stream: "stdout" | "stderr"; text: string }>; at: string }> } {
     const task = this.getTask(actorUserId, taskId);
     const commands = this.database.authQuery((db) => db.prepare("SELECT id, step_id AS stepId, command, cwd, exit_code AS exitCode, duration_ms AS durationMs, stdout, stderr, entries_json AS entriesJson, finished_at AS at FROM forge_task_command_activity WHERE task_id = ? ORDER BY finished_at DESC LIMIT 50").all(task.id) as Array<{ id: string; stepId: string; command: string; cwd: string | null; exitCode: number | null; durationMs: number; stdout: string; stderr: string; entriesJson: string; at: string }>).map((row) => ({ id: row.id, stepId: row.stepId, command: row.command, cwd: row.cwd, exitCode: row.exitCode, durationMs: row.durationMs, stdout: row.stdout, stderr: row.stderr, at: row.at, entries: (json<Array<{ stream?: unknown; text?: unknown }>>(row.entriesJson, [])).flatMap((entry): Array<{ stream: "stdout" | "stderr"; text: string }> => (entry.stream === "stdout" || entry.stream === "stderr") && typeof entry.text === "string" ? [{ stream: entry.stream, text: entry.text }] : []) }));
@@ -1591,17 +1622,10 @@ export class TaskService {
     ) ORDER BY CASE WHEN status IN ('starting', 'running', 'active', 'reconnecting', 'cancelling', 'result_pending_claim') THEN 0 ELSE 1 END, startedAt DESC LIMIT 1`).get(task.id, task.companyId, task.id, task.companyId) as { id: string; role: "planner" | "builder" | "reviewer" | "integrator"; status: string; currentStep: string | number | null } | undefined);
     if (!execution || !["starting", "running", "active", "reconnecting", "cancelling", "result_pending_claim"].includes(execution.status) || !/^[A-Za-z0-9_-]+$/.test(execution.id)) return { execution: null, events: [], commands };
     const currentStep = execution.currentStep === null ? null : String(execution.currentStep);
-    const root = resolve(this.config.runtimeRoot);
-    const directory = resolve(root, execution.role === "builder" ? "developer-executions" : "agent-turns", execution.id);
-    if (relative(root, directory).startsWith("..")) return { execution: null, events: [], commands };
-    const paths = execution.role === "builder" ? [resolve(directory, "events.jsonl")] : [resolve(directory, "events.jsonl"), resolve(directory, "spool.ndjson")];
-    let source = "";
-    for (const path of paths) try { source = readFileSync(path, "utf8"); if (source) break; } catch { /* The execution may not have written its spool yet. */ }
-    const activity = normalizeTaskActivityJsonl(source.split(/\r?\n/).filter(Boolean));
     const status = execution.status === "running" || execution.status === "active" ? `${execution.role[0]!.toUpperCase()}${execution.role.slice(1)} is working${currentStep ? `: ${currentStep}` : ""}` : `${execution.role[0]!.toUpperCase()}${execution.role.slice(1)}: ${execution.status}`;
     const statusEvent: TaskActivityEvent = { at: new Date().toISOString(), kind: "status", text: String(redact(status)) };
-    const boundedLimit = Math.min(300, Math.max(1, Math.trunc(limit)));
-    return { execution: { ...execution, currentStep }, events: [statusEvent, ...activity.slice(-(boundedLimit - 1))], commands };
+    void limit;
+    return { execution: { ...execution, currentStep }, events: [statusEvent], commands };
   }
 
   getDeveloperProgress(actorUserId: string, taskId: string, after?: { executionId: string; sequence: number }): { status: string; execution: { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; currentStep: string | null } | null; events: DeveloperExecutionEvent[] } {
@@ -1625,39 +1649,13 @@ export class TaskService {
 
   getPlanningProgress(actorUserId: string, taskId: string, after?: { executionId: string; sequence: number }): { status: string; execution: AgentProgressExecution | null; events: DeveloperExecutionEvent[] } {
     const task = this.getTask(actorUserId, taskId);
-    const execution = this.database.authQuery((db) => db.prepare(`SELECT id, status, attempt, started_at AS startedAt, finished_at AS finishedAt, heartbeat_at AS lastHeartbeatAt, spool_relative_path AS spoolRelativePath
-      FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND role = 'planner' AND purpose = 'planning' ORDER BY started_at DESC LIMIT 1`).get(task.id, task.companyId) as { id: string; status: string; attempt: number; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; spoolRelativePath: string | null } | undefined);
+    const execution = this.database.authQuery((db) => db.prepare(`SELECT id, status, started_at AS startedAt, finished_at AS finishedAt, heartbeat_at AS lastHeartbeatAt
+      FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND role = 'planner' AND purpose = 'planning' ORDER BY started_at DESC LIMIT 1`).get(task.id, task.companyId) as { id: string; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null } | undefined);
     if (!execution) return { status: "idle", execution: null, events: [] };
     const status = execution.status;
-    const runtimeRoot = resolve(this.config.runtimeRoot);
-    const spoolPath = execution.spoolRelativePath && !isAbsolute(execution.spoolRelativePath) ? resolve(runtimeRoot, execution.spoolRelativePath) : undefined;
-    const spoolRelative = spoolPath ? relative(runtimeRoot, spoolPath) : "..";
-    if (!spoolPath || spoolRelative === ".." || spoolRelative.startsWith(`..${sep}`) || isAbsolute(spoolRelative)) {
-      return { status, execution: { id: execution.id, status, startedAt: execution.startedAt, finishedAt: execution.finishedAt, lastHeartbeatAt: execution.lastHeartbeatAt, lastOutputAt: null, currentStep: null }, events: [] };
-    }
-    let lastOutputAt: string | null = null;
-    const statusPath = resolve(spoolPath, "..", "status.json");
-    try {
-      const value = jsonRequired(readFileSync(statusPath, "utf8")) as { updatedAt?: unknown };
-      if (typeof value.updatedAt === "string" && !Number.isNaN(Date.parse(value.updatedAt))) lastOutputAt = value.updatedAt;
-    } catch { /* A missing or partial wrapper status does not hide live events. */ }
-    const progress: AgentProgressExecution = { id: execution.id, status, startedAt: execution.startedAt, finishedAt: execution.finishedAt, lastHeartbeatAt: execution.lastHeartbeatAt, lastOutputAt, currentStep: null };
+    const progress: AgentProgressExecution = { id: execution.id, status, startedAt: execution.startedAt, finishedAt: execution.finishedAt, lastHeartbeatAt: execution.lastHeartbeatAt, lastOutputAt: null, currentStep: null };
     if (after?.executionId === execution.id && execution.finishedAt) return { status, execution: progress, events: [] };
-    try {
-      if (!statSync(spoolPath).isFile() || statSync(spoolPath).size > 6 * 1024 * 1024) return { status, execution: progress, events: [] };
-      const text = readFileSync(spoolPath, "utf8");
-      const complete = text.endsWith("\n") ? text : text.slice(0, text.lastIndexOf("\n"));
-      const lines = complete.split("\n").filter(Boolean);
-      let latestTurn = -1;
-      for (let index = 0; index < lines.length; index += 1) if (lines[index]!.startsWith('{"type":"forge.wrapper_started"')) latestTurn = index;
-      const events = parseCodexJsonl(latestTurn >= 0 ? lines.slice(latestTurn) : lines, { executionId: execution.id, attempt: execution.attempt }).receipts
-        .filter((event) => !after || after.executionId !== execution.id || event.sequence > after.sequence)
-        .slice(0, 50)
-        .map((event) => publicExecutionEvent(event));
-      return { status, execution: progress, events };
-    } catch {
-      return { status, execution: progress, events: [] };
-    }
+    return { status, execution: progress, events: [] };
   }
 
   async getTaskReviewArtifact(actorUserId: string, taskId: string, artifactId: string): Promise<{ artifact: { artifactId: string; filename: string; mimeType: string; byteSize: number }; bytes: Buffer }> {
@@ -1702,7 +1700,8 @@ export class TaskService {
         OR EXISTS (SELECT 1 FROM forge_ci_attempts ca JOIN forge_ci_runs cr ON cr.id = ca.run_id WHERE ca.evidence_artifact_id = a.id AND cr.task_id = ? AND cr.company_id = ?)
         OR EXISTS (SELECT 1 FROM forge_ci_repair_plans cp WHERE (cp.plan_artifact_id = a.id OR cp.evidence_artifact_id = a.id) AND cp.task_id = ? AND cp.company_id = ?)
         OR EXISTS (SELECT 1 FROM forge_ci_repairs cx JOIN forge_ci_repair_plans cp ON cp.id = cx.repair_plan_id WHERE (cx.delivery_artifact_id = a.id OR cx.evidence_artifact_id = a.id) AND cp.task_id = ? AND cp.company_id = ?)
-      )`).get(artifactId, task.companyId, ...Array.from({ length: 12 }, () => [task.id, task.companyId]).flat()) as { id: string; kind: string; filename: string; mime_type: string; byte_size: number; storage_path: string; sha256: string } | undefined);
+        OR EXISTS (SELECT 1 FROM forge_herdr_turns ht WHERE ht.task_id = ? AND (ht.rollout_artifact_id = a.id OR ht.result_artifact_id = a.id))
+      )`).get(artifactId, task.companyId, ...Array.from({ length: 12 }, () => [task.id, task.companyId]).flat(), task.id) as { id: string; kind: string; filename: string; mime_type: string; byte_size: number; storage_path: string; sha256: string } | undefined);
     if (!artifact) throw new TaskFailure("Not found", [], 404);
     const bytes = await this.artifacts.getArtifact({ companyId: task.companyId, storagePath: artifact.storage_path, sha256: artifact.sha256 });
     return { artifact: { artifactId: artifact.id, kind: artifact.kind, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }, bytes };
@@ -1985,6 +1984,23 @@ export class TaskService {
     return { subject, summary: plan.content.summary, evidence: plan.content.evidence, header: prompt.header, question: prompt.question, options: prompt.options, nextAction: plan.content.nextAction, createdAt: plan.createdAt };
   }
 
+  private taskListSummary(row: TaskRow): TaskListSummary {
+    const workflowState = this.workflowStateForTask(row);
+    const hasPlan = this.database.authQuery((db) => Boolean(db.prepare("SELECT 1 FROM forge_agent_executions WHERE task_id = ? AND company_id = ? AND output_kind = 'plan' AND output_artifact_id IS NOT NULL LIMIT 1").get(row.id, row.company_id)));
+    const allowedCommands = derivedAllowedCommands(row.phase, IssueCommandSchema.array().safeParse(json<unknown[]>(row.allowed_commands_json, [])).data ?? [], workflowState.planRevision, hasPlan, Boolean(workflowState.successorTaskId));
+    const agentInvocations = this.database.authQuery((db) => db.prepare(`SELECT e.id, e.role, e.status, e.attempt, e.started_at AS startedAt, e.finished_at AS finishedAt, ag.id AS agentId, ag.name AS agentName, ag.avatar_seed AS avatarSeed
+      FROM forge_agent_executions e LEFT JOIN forge_agents ag ON ag.id = json_extract((SELECT role_agents_json FROM forge_tasks WHERE id = e.task_id), '$.' || e.role)
+      WHERE e.task_id = ? AND e.company_id = ?
+      UNION ALL SELECT d.id, 'builder', d.status, d.attempt, d.started_at, d.finished_at, ag.id, ag.name, ag.avatar_seed
+      FROM forge_developer_executions d LEFT JOIN forge_agents ag ON ag.id = json_extract((SELECT role_agents_json FROM forge_tasks WHERE id = d.task_id), '$.builder')
+      WHERE d.task_id = ? AND d.company_id = ? ORDER BY 5, 1`).all(row.id, row.company_id, row.id, row.company_id) as TaskListSummary["agentInvocations"]);
+    const release = this.database.authQuery((db) => db.prepare("SELECT status, pr_number AS pullRequestNumber FROM forge_releases WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND superseded_at IS NULL ORDER BY updated_at DESC LIMIT 1").get(row.id, row.company_id, row.workflow_id) as { status: TaskRelease["status"]; pullRequestNumber: number | null } | undefined);
+    const outcome = this.database.authQuery((db) => db.prepare("SELECT a.outcome FROM forge_ci_attempts a JOIN forge_ci_runs r ON r.id = a.run_id WHERE r.task_id = ? AND r.company_id = ? ORDER BY a.created_at DESC LIMIT 1").get(row.id, row.company_id) as { outcome: CiOutcome } | undefined);
+    const capacity = this.capacity.statusForTask(row.id);
+    const releaseState = workflowState.mergeOutcome === "merged" ? "merged" : workflowState.mergeOutcome === "closed_without_merge" ? "closed" : release?.status === "ready" ? "ready" : release ? "draft" : undefined;
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands, pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, agentInvocations, capacity: capacity ? { status: capacity.status } : null, ...(release ? { release: { status: release.status, pullRequestNumber: release.pullRequestNumber, isDraft: release.pullRequestNumber !== null && release.status === "draft" } } : {}), ...(outcome ? { ci: { outcome: outcome.outcome } } : {}), ...(releaseState ? { deliveryGate: { release: { state: releaseState } } } : {}) };
+  }
+
   private publicTask(actorUserId: string, row: TaskRow): ForgeTask {
     void actorUserId;
     const imageIds = parseImageIds(row.image_artifact_ids_json);
@@ -2000,7 +2016,7 @@ export class TaskService {
     const workflowState = this.workflowStateForTask(row);
     const reviewLineage = this.reviewLineage(row, workflowState);
     let priorTimelineEntryWasPlanning = false;
-    const timeline = this.database.authQuery((db) => db.prepare("SELECT t.id, t.revision, t.event_type, t.metadata_json, t.created_at, s.state_json FROM forge_issue_timeline t LEFT JOIN forge_workflow_snapshots s ON s.task_id = t.task_id AND s.workflow_id = t.workflow_id AND s.revision = t.revision WHERE t.task_id = ? ORDER BY t.revision, t.id").all(row.id) as TimelineRow[]).map((entry) => {
+    const timeline = this.database.authQuery((db) => db.prepare("SELECT t.id, t.revision, t.event_type, t.metadata_json, t.created_at, s.state_json FROM forge_issue_timeline t LEFT JOIN forge_workflow_snapshots s ON s.task_id = t.task_id AND s.workflow_id = t.workflow_id AND s.revision = t.revision WHERE t.task_id = ? AND t.source = 'workflow' ORDER BY t.revision, t.id").all(row.id) as TimelineRow[]).map((entry) => {
       const metadata = parseMetadata(entry.metadata_json);
       if (entry.event_type !== "planning_started") {
         priorTimelineEntryWasPlanning = false;
@@ -2188,7 +2204,7 @@ export class TaskService {
     try { prompts = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, { taskId: row.id, companyId: row.company_id }).prompts; } catch { prompts = undefined; }
     const roleAgents = parseRoleAgents(row.role_agents_json);
     const commands = taskCommandDescriptors(allowedCommands, row.projection_revision);
-    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleAgents, supplementalReview: row.supplemental_review === 1, autoApprovePlan: row.auto_approve_plan === 1, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), executionControls: { runProjectTests: row.run_project_tests === 1, visualEvidence: row.visual_evidence, supplementalReview: row.supplemental_review === 1 }, deliveryReceipt: row.delivery_worktree_path || row.delivery_branch_name || row.delivery_commit ? { worktreePath: row.delivery_worktree_path, branchName: row.delivery_branch_name, commit: row.delivery_commit } : null, pullRequestMode: row.pull_request_mode, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, prompts: { overrides: prompts?.overrides ?? [] }, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, createdAt: row.created_at, updatedAt: row.updated_at, timeline, activity, agentInvocations, capacity, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.projection_status === "stalled" ? "stalled" : row.authoritative_revision === row.projection_revision ? "current" : "lagging", message: row.projection_status_message }, reviewLineage, targetBaseReconciliation, ...(deliveryGate ? { deliveryGate } : {}), ...(githubPullRequest ? { githubPullRequest } : {}), ...(workflowState ? { planRevision: workflowState.planRevision ?? null, planMaterial: workflowState.planMaterial ?? null, materialCategories: workflowState.materialCategories ?? [], supplementalReviewUsed: workflowState.supplementalReviewUsed ?? false, supplementalReviewArtifactId: workflowState.supplementalReviewArtifactId ?? null, decisionId: workflowState.planDecisionReceipt?.decisionId ?? null, leadInputManifestArtifactId: workflowState.leadInputManifestArtifactId ?? undefined, leadInputManifestSha256: workflowState.leadInputManifestSha256 ?? undefined, leadEvidenceSha256: workflowState.leadEvidenceSha256 ?? undefined, leadOutputSha256: workflowState.leadOutputSha256 ?? undefined, blockedCategory: workflowState.blockedCategory ?? null, blockedResumePhase: workflowState.blockedResumePhase ?? null, blockerArtifactId: workflowState.blockerArtifactId ?? null, blockerArtifactSha256: workflowState.blockerArtifactSha256 ?? null, deliveryDecisionArtifactId: workflowState.deliveryDecisionArtifactId ?? null, predecessorTaskId: row.predecessor_task_id, successorTaskId: row.successor_task_id, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), ...(developerExecution ? { developerExecution: { ...developerExecution, branchName: developerExecution.branch_name, summary: developerSummary } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(leadOutput ? { leadOutput } : {}), ...(release !== undefined ? { release } : {}), ...(ci ? { ci } : {}) };
+    return { id: row.id, companyId: row.company_id, projectId: row.project_id, issueKey: row.issue_key, title: row.title, description, briefArtifactId: row.brief_artifact_id, images: imageIds.flatMap((artifactId) => { const artifact = artifactById.get(artifactId); return artifact ? [{ artifactId, filename: artifact.filename, mimeType: artifact.mime_type, byteSize: artifact.byte_size }] : []; }), roleAgents, supplementalReview: row.supplemental_review === 1, autoApprovePlan: row.auto_approve_plan === 1, deliveryTarget: row.delivery_target ?? legacyDeliveryTarget(row.pull_request_mode), executionControls: { runProjectTests: row.run_project_tests === 1, visualEvidence: row.visual_evidence, supplementalReview: row.supplemental_review === 1 }, deliveryReceipt: row.delivery_worktree_path || row.delivery_branch_name || row.delivery_commit ? { worktreePath: row.delivery_worktree_path, branchName: row.delivery_branch_name, commit: row.delivery_commit } : null, pullRequestMode: row.pull_request_mode, workflowId: row.workflow_id, projectRevisionId: row.project_revision_id, prompts: { overrides: prompts?.overrides ?? [] }, phase: row.phase, revision: row.projection_revision, owner: row.owner, allowedCommands, commands, governance: governanceView, pendingAction: row.pending_action, lastHandlerError: workflowState.lastHandlerError ?? null, createdAt: row.created_at, updatedAt: row.updated_at, timeline, activity, agentInvocations, capacity, planHistory, planDecisionHistory, revisionHistory, developerExecutionHistory, deliveryReviewHistory, projection: { authoritativeRevision: row.authoritative_revision, projectedRevision: row.projection_revision, projectedAt: row.projected_at, status: row.projection_status === "stalled" ? "stalled" : row.authoritative_revision === row.projection_revision ? "current" : "lagging", message: row.projection_status_message }, reviewLineage, targetBaseReconciliation, ...(deliveryGate ? { deliveryGate } : {}), ...(githubPullRequest ? { githubPullRequest } : {}), ...(workflowState ? { planRevision: workflowState.planRevision ?? null, planMaterial: workflowState.planMaterial ?? null, materialCategories: workflowState.materialCategories ?? [], supplementalReviewUsed: workflowState.supplementalReviewUsed ?? false, supplementalReviewArtifactId: workflowState.supplementalReviewArtifactId ?? null, decisionId: workflowState.planDecisionReceipt?.decisionId ?? null, leadInputManifestArtifactId: workflowState.leadInputManifestArtifactId ?? undefined, leadInputManifestSha256: workflowState.leadInputManifestSha256 ?? undefined, leadEvidenceSha256: workflowState.leadEvidenceSha256 ?? undefined, leadOutputSha256: workflowState.leadOutputSha256 ?? undefined, blockedCategory: workflowState.blockedCategory ?? null, blockedResumePhase: workflowState.blockedResumePhase ?? null, blockerArtifactId: workflowState.blockerArtifactId ?? null, blockerArtifactSha256: workflowState.blockerArtifactSha256 ?? null, deliveryDecisionArtifactId: workflowState.deliveryDecisionArtifactId ?? null, predecessorTaskId: row.predecessor_task_id, successorTaskId: row.successor_task_id, deliveryReviewBlockerCode: workflowState.deliveryReviewBlockerCode ?? null, deliveryReviewBlockerSummary: workflowState.deliveryReviewBlockerSummary ?? null, deliveryReviewBlockerEvidenceArtifactId: workflowState.deliveryReviewBlockerEvidenceArtifactId ?? null, deliveryRepairBlockerCode: workflowState.deliveryRepairBlockerCode ?? null, deliveryRepairBlockerSummary: workflowState.deliveryRepairBlockerSummary ?? null, deliveryRepairBlockerEvidenceArtifactId: workflowState.deliveryRepairBlockerEvidenceArtifactId ?? null } : {}), ...(predecessor ? { predecessor } : {}), ...(successor ? { successor } : {}), ...(developerExecution ? { developerExecution: { ...developerExecution, branchName: developerExecution.branch_name, summary: developerSummary } } : {}), ...(developerRecovery ? { developerRecovery } : {}), ...(leadOutput ? { leadOutput } : {}), ...(release !== undefined ? { release } : {}), ...(ci ? { ci } : {}) };
   }
 
   private developerReportSummary(companyId: string, artifactId: string): string | null {

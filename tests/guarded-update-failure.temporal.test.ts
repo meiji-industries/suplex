@@ -61,6 +61,8 @@ test("a task created with auto-approve and auto-merge reaches done without anoth
   const projections: IssueWorkflowState[] = [];
   const capacity = createImmediateCapacityActivities();
   const commit = "b".repeat(40);
+  let reviewed = false;
+  let merged = false;
   const activities: Partial<IssueActivities> = {
     ...capacity.activities,
     projectIssueState: async (event) => { projections.push(structuredClone(event.state)); return event.state; },
@@ -95,9 +97,15 @@ test("a task created with auto-approve and auto-merge reaches done without anoth
     reconcileTargetBase: async (input) => ({ outcome: "no_drift", checkId: `target_base_${input.checkpoint}`, checkpoint: input.checkpoint, expectedBaseSha: input.expectedBaseSha, observedBaseSha: input.expectedBaseSha, headSha: input.expectedHeadSha, headTree: input.expectedHeadTree }),
     publishRelease: async () => ({ outcome: "completed", releaseId: "release_auto", repository: "acme/forge", branchName: "forge/issue/auto", baseBranch: "main", headSha: commit, headTree: commit, pullRequestNumber: 7, pullRequestUrl: "https://github.com/acme/forge/pull/7", isDraft: false, reused: false, attempt: 1, targetBaseSha: commit }),
     reconcileCi: async (input) => ({ runId: "ci_auto", attemptId: "ci_attempt_auto", attemptNumber: input.attemptNumber, expectedHeadSha: input.expectedHeadSha, observedHeadSha: input.expectedHeadSha, evidenceArtifactId: "ci_evidence", outcome: "passed", reason: "checks_passed", owner: null, repairable: false, summary: "All required checks passed", retryAt: null, nextPollAt: null, policyHash: "f".repeat(64), propagationDeadline: null, overallDeadline: null }),
-    finalReview: async (input) => ({ finalReviewId: "final_review_auto", leadExecutionId: "lead_execution_final", leadSessionRef: input.leadSessionRef, opinionArtifactId: "final_opinion", evidenceArtifactId: "final_evidence", reviewArtifact: { artifactId: "final_opinion", companyId, kind: "delivery-review", sha256: sha, byteSize: 1, mimeType: "application/json" }, outcome: "approved", summary: "Exact release approved", findings: [], repairPlan: null, repairPlanArtifactId: null, repairPlanSha256: null }),
+    updateCiFromBase: async () => ({ outcome: "no_drift", summary: "The pull request base has not advanced" }),
+    finalReview: async (input) => { reviewed = true; return { finalReviewId: "final_review_auto", leadExecutionId: "lead_execution_final", leadSessionRef: input.leadSessionRef, opinionArtifactId: "final_opinion", evidenceArtifactId: "final_evidence", reviewArtifact: { artifactId: "final_opinion", companyId, kind: "delivery-review", sha256: sha, byteSize: 1, mimeType: "application/json" }, outcome: "approved", summary: "Exact release approved", findings: [], repairPlan: null, repairPlanArtifactId: null, repairPlanSha256: null }; },
     acceptDelivery: async () => ({ acceptanceId: "acceptance_auto", status: "accepted", outcome: "ready", retryAt: null, readyAt: "2026-01-01T00:00:00.000Z", acceptedAt: "2026-01-01T00:00:00.000Z", evidenceArtifactId: null, pullRequestNumber: 7, pullRequestUrl: "https://github.com/acme/forge/pull/7", reasonArtifactId: null }),
     reconcileMerge: async () => ({ outcome: "merged", pullRequestNumber: 7, pullRequestUrl: "https://github.com/acme/forge/pull/7", mergeObservationId: "merge_observation_auto", completionReceiptId: "completion_receipt_auto", observedAt: "2026-01-01T00:00:00.000Z", mergedAt: "2026-01-01T00:00:00.000Z", retryAt: null }),
+    pushDeliveryBranch: async (input) => ({ repository: "acme/forge", branchName: input.branchName, commitSha: input.commitSha }),
+    // GitHub as the reconciler sees it: checks go green once Forge's final review ran, Forge then
+    // requests auto-merge, and the next observation reports the pull request merged.
+    observeGithubPullRequest: async () => ({ exists: true, number: 7, url: "https://github.com/acme/forge/pull/7", state: merged ? "merged" as const : "open" as const, isDraft: false, headSha: commit, baseSha: null, mergeable: "MERGEABLE", checks: reviewed ? { total: 1, pending: 0, failing: 0, successful: 1 } : { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null }),
+    applyGithubPullRequestAction: async () => { merged = true; },
   };
   const worker = await Worker.create({ connection: environment.nativeConnection, namespace: environment.namespace ?? "default", taskQueue, workflowsPath, activities: createIssueActivitiesFake(activities) as unknown as Record<string, (...args: never[]) => unknown> });
   const workerRun = worker.run();
@@ -116,6 +124,7 @@ test("a task created with auto-approve and auto-merge reaches done without anoth
       autoApprovePlan: true,
       autoApprovePlanActorUserId: "member_guarded",
       pullRequestMode: "auto_merge",
+      deliveryTarget: "merged",
       autoMergeActorUserId: "member_guarded",
       continuationState: {
         phase: "blocked",
@@ -145,10 +154,11 @@ test("a task created with auto-approve and auto-merge reaches done without anoth
     expect(projections.map((state) => state.phase)).toContain("development");
 
     const done = await handle.result();
-    expect(done).toMatchObject({ phase: "done", pendingAction: "Merged", mergeOutcome: "merged", acceptanceId: "acceptance_auto", finalReviewOutcome: "approved", ciOutcome: "passed" });
+    // Merged deliveries skip the acceptance gate: done is the reconciler observing GitHub's merge.
+    expect(done).toMatchObject({ phase: "done", pendingAction: "Merged", githubPullRequestState: "merged", finalReviewOutcome: "approved", ciOutcome: "passed" });
     expect(projections.map((state) => state.phase).filter((phase, index, all) => phase !== all[index - 1])).toEqual([
       "planning", "ready_for_development", "development", "delivery_ready", "reviewing_delivery", "delivery_reviewed",
-      "releasing", "ci_waiting", "final_review", "accepted", "manual_merge", "done",
+      "releasing", "ci_waiting", "final_review", "manual_merge", "done",
     ]);
 
     const history = await handle.fetchHistory();
@@ -159,25 +169,29 @@ test("a task created with auto-approve and auto-merge reaches done without anoth
   }
 });
 
-test("a non-decision command failing from a human-owned state that merely offers a decision command still collapses to failed", { timeout: 120_000 }, async () => {
+test("a non-decision command failure is recorded in the guarded state", { timeout: 120_000 }, async () => {
   environment = await TestWorkflowEnvironment.createTimeSkipping();
   const projections: IssueWorkflowState[] = [];
+  let leadPlanningInput: { memberResponseArtifactId?: string | undefined; memberResponseSha256?: string | undefined } | undefined;
   const activities: Partial<IssueActivities> = {
     projectIssueState: async (event) => { projections.push(structuredClone(event.state)); return event.state; },
     recordPlanBlockerResponse: async () => ({ responseId: "blocker_response", subjectHash: sha, answerArtifactId: "answer_artifact", answerArtifactSha256: sha }),
     // No planSubject on this result: exactSubject is false, so the landing "approval" state offers
     // reject_plan (a non-decision command) alongside approve_plan (a decision command).
-    runLeadPlanning: async () => ({
-      leadSessionRef: "lead_session",
-      leadExecutionId: "lead_execution_2",
-      leadEvidenceArtifactId: "lead_evidence",
-      leadOutputArtifactId: "plan_artifact",
-      leadOutputArtifactSha256: sha,
-      leadOutputKind: "plan",
-      leadSummary: "Plan after the blocker answer",
-      materialCategories: ["security_permissions"],
-      material: true,
-    }),
+    runLeadPlanning: async (input) => {
+      leadPlanningInput = input;
+      return {
+        leadSessionRef: "lead_session",
+        leadExecutionId: "lead_execution_2",
+        leadEvidenceArtifactId: "lead_evidence",
+        leadOutputArtifactId: "plan_artifact",
+        leadOutputArtifactSha256: sha,
+        leadOutputKind: "plan",
+        leadSummary: "Plan after the blocker answer",
+        materialCategories: ["security_permissions"],
+        material: true,
+      };
+    },
     // reject_plan mutates state to "planning" and only then calls recordPlanDecision: the bug under
     // test would see "approve_plan" in the prior allowedCommands and misfire the decision-gate revert
     // instead of collapsing to the generic failed state.
@@ -222,16 +236,19 @@ test("a non-decision command failing from a human-owned state that merely offers
     });
     expect(approval).toMatchObject({ phase: "approval", owner: "human" });
     expect(approval.allowedCommands).toEqual(expect.arrayContaining(["approve_plan", "reject_plan"]));
+    expect(leadPlanningInput).toMatchObject({ memberResponseArtifactId: "answer_artifact" });
+    expect(leadPlanningInput).not.toHaveProperty("memberResponseSha256");
 
-    await expect(handle.executeUpdate(rejectPlanUpdate, {
+    const guarded = await handle.executeUpdate(rejectPlanUpdate, {
       args: [{ expectedRevision: approval.revision, actorUserId: "member_guarded", note: "Requesting a revision" }],
       updateId: "non-decision-reject-plan",
-    })).rejects.toThrow();
+    });
 
     const projected = projections.at(-1)!;
-    expect(projected).toMatchObject({ phase: "failed", owner: "human" });
+    expect(guarded).toMatchObject({ phase: "planning", owner: "lead", lastHandlerError: { command: "unknown", reason: "Activity task failed" } });
+    expect(projected).toMatchObject({ phase: "planning", owner: "lead", lastHandlerError: { command: "unknown", reason: "Activity task failed" } });
     expect(projected.allowedCommands).toContain("start_planning");
-    // The bug under test: a misfire would instead revert to "approval" and re-offer approve_plan/reject_plan.
+    // The guard records the failed handler state rather than rejecting the update task.
     expect(projected.allowedCommands).not.toContain("approve_plan");
     expect(projected.allowedCommands).not.toContain("reject_plan");
     // The invariant: the Workflow never keeps a revision the projection never saw.
@@ -245,7 +262,7 @@ test("a non-decision command failing from a human-owned state that merely offers
   }
 });
 
-test("a failed acceptance returns the member to the accepted decision instead of collapsing to failed", { timeout: 120_000 }, async () => {
+test("a failed acceptance records the guarded accepted state", { timeout: 120_000 }, async () => {
   environment = await TestWorkflowEnvironment.createTimeSkipping();
   const projections: IssueWorkflowState[] = [];
   const commit = "b".repeat(40);
@@ -311,15 +328,16 @@ test("a failed acceptance returns the member to the accepted decision instead of
       },
     };
     const handle = await environment.client.workflow.start(issueWorkflow, { workflowId, taskQueue, args: [input] });
-    await expect(handle.executeUpdate(acceptDeliveryUpdate, {
+    const guarded = await handle.executeUpdate(acceptDeliveryUpdate, {
       args: [{ expectedRevision: 30, actorUserId: "member_guarded", commandId: "guarded-accept-1" }],
       updateId: "guarded-accept",
-    })).rejects.toThrow();
+    });
 
     const projected = projections.at(-1)!;
-    expect(projected).toMatchObject({ phase: "accepted", owner: "human", pendingAction: "Merge commits are not allowed on this repository" });
+    expect(guarded).toMatchObject({ phase: "accepted", owner: "human", lastHandlerError: { command: "accept_delivery", reason: "Activity task failed" } });
+    expect(projected).toMatchObject({ phase: "accepted", owner: "human", pendingAction: "Member acceptance required" });
+    expect(projected.lastHandlerError).toMatchObject({ command: "accept_delivery", reason: "Activity task failed" });
     expect(projected.allowedCommands).toContain("accept_delivery");
-    expect(projected.blocker?.actions.map((action) => action.label)).toContain("Retry accept delivery");
     // The invariant: the Workflow never keeps a revision the projection never saw.
     expect(projected.revision).toBe((await handle.query(issueStateQuery)).revision);
 

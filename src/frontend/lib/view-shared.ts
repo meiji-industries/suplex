@@ -4,7 +4,7 @@ import type { AttentionActionResponse, AttentionItemResponse, CompanyAttentionRe
 import type { CredentialResponse, InvitationSummaryResponse } from "../../http/contracts/common.js";
 import type { AgentResponse, ModelResponse, ProfileResponse, ProjectCheckResponse, ProjectResponse } from "../../http/contracts/projects.js";
 import type { HermesAdminAgent } from "../../http/contracts/hermes.js";
-import type { TaskResponse } from "../../http/contracts/tasks.js";
+import type { TaskListTask, TaskResponse } from "../../http/contracts/tasks.js";
 
 export type ApiProfile = ProfileResponse;
 export type ApiAgent = AgentResponse;
@@ -18,6 +18,7 @@ export type ApiAttentionAction = AttentionActionResponse;
 export type ApiAttentionItem = AttentionItemResponse;
 export type ApiAttentionCompany = CompanyAttentionResponse;
 export type ApiTask = TaskResponse;
+export type ApiTaskSummary = TaskListTask;
 export type TaskPhase = IssuePhase;
 export type ApiCi = NonNullable<ApiTask["ci"]>;
 export type ApiRelease = NonNullable<ApiTask["release"]>;

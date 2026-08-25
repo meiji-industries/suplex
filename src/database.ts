@@ -197,30 +197,36 @@ export function applyMigrations(db: Database.Database, folder: string): void {
     created_at numeric
   )`);
   const insert = db.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
+  const foreignKeys = db.pragma("foreign_keys", { simple: true });
+  if (foreignKeys) db.pragma("foreign_keys = OFF");
   // The applied set must be read inside the immediate (write-locked) transaction:
   // the server and worker start concurrently and open the same database file.
-  db.transaction(() => {
-    const applied = db.prepare("SELECT hash, created_at FROM __drizzle_migrations").all() as Array<{ hash: string; created_at: number }>;
-    const appliedByTimestamp = new Map(applied.map((migration) => [migration.created_at, migration.hash]));
+  try {
+    db.transaction(() => {
+      const applied = db.prepare("SELECT hash, created_at FROM __drizzle_migrations").all() as Array<{ hash: string; created_at: number }>;
+      const appliedByTimestamp = new Map(applied.map((migration) => [migration.created_at, migration.hash]));
 
-    // A migration's identity is its timestamp. Two migrations with identical SQL are legal,
-    // so there is deliberately no hash→timestamp cross-check here.
-    for (const migration of migrations) {
-      const hashAtTimestamp = appliedByTimestamp.get(migration.createdAt);
-      if (hashAtTimestamp !== undefined && hashAtTimestamp !== migration.hash) {
-        throw new Error(`Applied migration timestamp has different SQL: ${migration.tag}`);
+      // A migration's identity is its timestamp. Two migrations with identical SQL are legal,
+      // so there is deliberately no hash→timestamp cross-check here.
+      for (const migration of migrations) {
+        const hashAtTimestamp = appliedByTimestamp.get(migration.createdAt);
+        if (hashAtTimestamp !== undefined && hashAtTimestamp !== migration.hash) {
+          throw new Error(`Applied migration timestamp has different SQL: ${migration.tag}`);
+        }
       }
-    }
 
-    for (const migration of migrations) {
-      if (appliedByTimestamp.get(migration.createdAt) === migration.hash) continue;
-      const sql = readFileSync(`${folder}/${migration.tag}.sql`, "utf8");
-      for (const statement of sql.split("--> statement-breakpoint")) {
-        if (statement.trim()) db.exec(statement);
+      for (const migration of migrations) {
+        if (appliedByTimestamp.get(migration.createdAt) === migration.hash) continue;
+        const sql = readFileSync(`${folder}/${migration.tag}.sql`, "utf8");
+        for (const statement of sql.split("--> statement-breakpoint")) {
+          if (statement.trim()) db.exec(statement);
+        }
+        insert.run(migration.hash, migration.createdAt);
       }
-      insert.run(migration.hash, migration.createdAt);
-    }
-  }).immediate();
+    }).immediate();
+  } finally {
+    if (foreignKeys) db.pragma("foreign_keys = ON");
+  }
 }
 
 function isCleanPrefix(expected: ExpectedMigration[], applied: AppliedMigration[]): boolean {
@@ -430,8 +436,8 @@ export class ForgeDatabase {
       projectionLogger.warn("Skipping projection with task identity that no longer matches");
       return;
     }
-    let eventById = database.prepare("SELECT workflow_id, revision, event_hash FROM forge_issue_timeline WHERE id = ?").get(parsed.lastEventId) as { workflow_id: string; revision: number; event_hash: string } | undefined;
-    let eventByRevision = database.prepare("SELECT id, event_hash FROM forge_issue_timeline WHERE workflow_id = ? AND revision = ?").get(parsed.workflowId, parsed.revision) as { id: string; event_hash: string } | undefined;
+    let eventById = database.prepare("SELECT workflow_id, revision, event_hash FROM forge_issue_timeline WHERE id = ? AND source = 'workflow'").get(parsed.lastEventId) as { workflow_id: string; revision: number; event_hash: string } | undefined;
+    let eventByRevision = database.prepare("SELECT id, event_hash FROM forge_issue_timeline WHERE workflow_id = ? AND revision = ? AND source = 'workflow'").get(parsed.workflowId, parsed.revision) as { id: string; event_hash: string } | undefined;
     let current = database.prepare("SELECT revision, event_hash, last_event_id, last_run_id, authoritative_revision, authoritative_event_hash FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string; last_event_id: string; last_run_id: string | null; authoritative_revision: number; authoritative_event_hash: string } | undefined;
     const identical = eventById?.workflow_id === parsed.workflowId
       && eventById.revision === parsed.revision
@@ -451,7 +457,7 @@ export class ForgeDatabase {
       || (eventByRevision && (eventByRevision.id !== parsed.lastEventId || eventByRevision.event_hash !== stateHash))
       || (current && (current.last_run_id !== runId || current.revision >= parsed.revision) && (current.event_hash !== stateHash || current.last_event_id !== parsed.lastEventId || current.last_run_id !== runId || current.revision !== parsed.revision))) {
       projectionLogger.info("Projection state overwritten for re-issued workflow revision");
-      database.prepare("DELETE FROM forge_issue_timeline WHERE workflow_id = ? AND revision >= ?").run(parsed.workflowId, parsed.revision);
+      database.prepare("DELETE FROM forge_issue_timeline WHERE workflow_id = ? AND revision >= ? AND source = 'workflow'").run(parsed.workflowId, parsed.revision);
       database.prepare("DELETE FROM forge_workflow_snapshots WHERE task_id = ? AND revision >= ?").run(parsed.issueId, parsed.revision);
       database.prepare("DELETE FROM forge_issue_projections WHERE task_id = ? AND revision >= ?").run(parsed.issueId, parsed.revision);
       eventById = undefined;
@@ -473,7 +479,8 @@ export class ForgeDatabase {
         database.prepare("UPDATE forge_workflow_snapshots SET company_id = ?, workflow_id = ?, run_id = ?, state_json = ?, updated_at = ? WHERE task_id = ? AND revision = ?").run(parsed.companyId, parsed.workflowId, runId, JSON.stringify(parsed), updatedAt, parsed.issueId, parsed.revision);
       }
     }
-    if (!eventById && !eventByRevision) database.prepare(`INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, run_id, revision, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(parsed.lastEventId, parsed.issueId, parsed.companyId, parsed.workflowId, runId, parsed.revision, eventType, JSON.stringify({ revision: parsed.revision, phase: parsed.phase, stateHash }), updatedAt, stateHash);
+    const priorPhase = database.prepare("SELECT json_extract(metadata_json, '$.phase') AS phase FROM forge_issue_timeline WHERE workflow_id = ? AND source = 'workflow' AND event_type LIKE 'phase_%' ORDER BY revision DESC, stream_id DESC LIMIT 1").get(parsed.workflowId) as { phase: string } | undefined;
+    if (!eventById && !eventByRevision && (parsed.phase === "backlog" || priorPhase?.phase !== parsed.phase)) database.prepare(`INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, run_id, revision, source, event_type, metadata_json, created_at, event_hash) VALUES (?, ?, ?, ?, ?, ?, 'workflow', ?, ?, ?, ?)`).run(parsed.lastEventId, parsed.issueId, parsed.companyId, parsed.workflowId, runId, parsed.revision, eventType, JSON.stringify({ revision: parsed.revision, phase: parsed.phase, stateHash }), updatedAt, stateHash);
     if (!snapshot) database.prepare(`INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, run_id, revision, state_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`).run(parsed.issueId, parsed.companyId, parsed.workflowId, runId, parsed.revision, JSON.stringify(parsed), updatedAt);
     const authoritativeRevision = parsed.revision;
     const authoritativeEventHash = stateHash;
@@ -503,12 +510,12 @@ export class ForgeDatabase {
       const normalizedStored = IssueWorkflowStateSchema.parse({ ...canonical.data, stateChangedAt: parsed.stateChangedAt });
       if (projectionStateHash(normalizedStored) !== stateHash) return;
       const storedHash = projectionStateHash(canonical.data);
-      const timeline = database.prepare("SELECT event_hash FROM forge_issue_timeline WHERE id = ? AND workflow_id = ? AND revision = 0").get(parsed.lastEventId, parsed.workflowId) as { event_hash: string } | undefined;
+      const timeline = database.prepare("SELECT event_hash FROM forge_issue_timeline WHERE id = ? AND workflow_id = ? AND revision = 0 AND source = 'workflow'").get(parsed.lastEventId, parsed.workflowId) as { event_hash: string } | undefined;
       if (!timeline || timeline.event_hash !== storedHash) return;
       const current = database.prepare("SELECT revision, event_hash, authoritative_event_hash FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string; authoritative_event_hash: string } | undefined;
       if (current?.revision === 0 && current.event_hash !== storedHash && current.event_hash !== stateHash) return;
       database.prepare("UPDATE forge_workflow_snapshots SET state_json = ? WHERE task_id = ? AND revision = 0 AND state_json = ?").run(JSON.stringify(parsed), parsed.issueId, snapshot.state_json);
-      database.prepare("UPDATE forge_issue_timeline SET event_hash = ?, metadata_json = ? WHERE id = ? AND workflow_id = ? AND revision = 0 AND event_hash = ?").run(stateHash, JSON.stringify({ revision: 0, phase: parsed.phase, stateHash }), parsed.lastEventId, parsed.workflowId, storedHash);
+      database.prepare("UPDATE forge_issue_timeline SET event_hash = ?, metadata_json = ? WHERE id = ? AND workflow_id = ? AND revision = 0 AND source = 'workflow' AND event_hash = ?").run(stateHash, JSON.stringify({ revision: 0, phase: parsed.phase, stateHash }), parsed.lastEventId, parsed.workflowId, storedHash);
       if (current?.revision === 0 && current.event_hash === storedHash) database.prepare("UPDATE forge_issue_projections SET event_hash = ?, authoritative_event_hash = CASE WHEN authoritative_event_hash = ? THEN ? ELSE authoritative_event_hash END WHERE task_id = ? AND revision = 0 AND event_hash = ?").run(stateHash, storedHash, stateHash, parsed.issueId, storedHash);
       return;
     }
@@ -517,13 +524,13 @@ export class ForgeDatabase {
     if (!normalized.success || projectionStateHash(normalized.data) !== stateHash) return;
 
     const legacyHash = projectionStateHash(legacy);
-    const timeline = database.prepare("SELECT event_hash FROM forge_issue_timeline WHERE id = ? AND workflow_id = ? AND revision = 0").get(parsed.lastEventId, parsed.workflowId) as { event_hash: string } | undefined;
+    const timeline = database.prepare("SELECT event_hash FROM forge_issue_timeline WHERE id = ? AND workflow_id = ? AND revision = 0 AND source = 'workflow'").get(parsed.lastEventId, parsed.workflowId) as { event_hash: string } | undefined;
     if (!timeline || timeline.event_hash !== legacyHash) return;
     const current = database.prepare("SELECT revision, event_hash, authoritative_event_hash FROM forge_issue_projections WHERE task_id = ?").get(parsed.issueId) as { revision: number; event_hash: string; authoritative_event_hash: string } | undefined;
     if (current?.revision === 0 && current.event_hash !== legacyHash && current.event_hash !== stateHash) return;
 
     database.prepare("UPDATE forge_workflow_snapshots SET state_json = ? WHERE task_id = ? AND revision = 0 AND state_json = ?").run(JSON.stringify(parsed), parsed.issueId, snapshot.state_json);
-    database.prepare("UPDATE forge_issue_timeline SET event_hash = ?, metadata_json = ? WHERE id = ? AND workflow_id = ? AND revision = 0 AND event_hash = ?").run(stateHash, JSON.stringify({ revision: 0, phase: parsed.phase, stateHash }), parsed.lastEventId, parsed.workflowId, legacyHash);
+    database.prepare("UPDATE forge_issue_timeline SET event_hash = ?, metadata_json = ? WHERE id = ? AND workflow_id = ? AND revision = 0 AND source = 'workflow' AND event_hash = ?").run(stateHash, JSON.stringify({ revision: 0, phase: parsed.phase, stateHash }), parsed.lastEventId, parsed.workflowId, legacyHash);
     if (current?.revision === 0 && current.event_hash === legacyHash) {
       database.prepare("UPDATE forge_issue_projections SET event_hash = ?, authoritative_event_hash = CASE WHEN authoritative_event_hash = ? THEN ? ELSE authoritative_event_hash END WHERE task_id = ? AND revision = 0 AND event_hash = ?").run(stateHash, legacyHash, stateHash, parsed.issueId, legacyHash);
     }

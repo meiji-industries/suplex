@@ -27,7 +27,7 @@ them with Forge.
   `<report-file>`.
 - `herdr-rebalance.py` takes no arguments. It equalizes widths in the current
   pane's row after a split or close.
-- `scripts/dev-restart.sh <dev-pane-id>` (in this repo) restarts `mise run dev`
+- `scripts/dev-restart.sh [--force] <dev-pane-id>` (in this repo) restarts `mise run dev`
   in the dev-stack pane, but only after `mise run dev:idle` confirms no Temporal
   activity is in flight. Exit 1 means busy and nothing was touched.
 
@@ -80,5 +80,7 @@ never restart it: they report **restart needed**. The orchestrator restarts it
 with `scripts/dev-restart.sh <dev-pane-id>`, which refuses while
 `mise run dev:idle` reports in-flight activities (agent turns, CI polls, GitHub
 operations all run as Temporal activities, so "no pending activities" means
-nothing is interrupted). When it reports busy, wait and retry; do not force it
-and do not ask the user to restart unless the stack is wedged.
+nothing is interrupted). When it reports busy, wait and retry. An operator may
+use `scripts/dev-restart.sh --force <dev-pane-id>` only to restart through a
+turn awaiting human input: Herdr turns safely re-adopt their panes after the
+worker returns. Do not make force the default or use it for ordinary activity.

@@ -227,10 +227,21 @@ function normalizeGithubPull(value: unknown): GithubPullRequest {
 }
 
 function summarizeChecks(checks: z.infer<typeof PullViewResponseSchema>["statusCheckRollup"]): GithubPullRequestObservation["checks"] {
+  const latest = new Map<string, { check: NonNullable<z.infer<typeof PullViewResponseSchema>["statusCheckRollup"]>[number]; completedAt: string | null }>();
+  for (const [index, check] of (checks ?? []).entries()) {
+    const name = typeof check.name === "string" ? check.name : typeof check.context === "string" ? check.context : String(index);
+    const completedAt = typeof check.completedAt === "string" ? check.completedAt : typeof check.startedAt === "string" ? check.startedAt : null;
+    const previous = latest.get(name);
+    if (!previous || (completedAt !== null && (previous.completedAt === null || completedAt >= previous.completedAt)) || (completedAt === null && previous.completedAt === null)) latest.set(name, { check, completedAt });
+  }
   const summary = { total: 0, pending: 0, failing: 0, successful: 0 };
-  for (const check of checks ?? []) {
+  for (const { check } of latest.values()) {
     summary.total += 1;
-    if (check.status !== "COMPLETED") summary.pending += 1;
+    if (check.status === undefined) {
+      if (check.state === "SUCCESS") summary.successful += 1;
+      else if (check.state === "FAILURE" || check.state === "ERROR") summary.failing += 1;
+      else summary.pending += 1;
+    } else if (check.status !== "COMPLETED") summary.pending += 1;
     else if (check.conclusion === "SUCCESS" || check.conclusion === "NEUTRAL" || check.conclusion === "SKIPPED") summary.successful += 1;
     else summary.failing += 1;
   }

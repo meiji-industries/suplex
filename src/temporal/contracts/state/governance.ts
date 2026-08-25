@@ -9,7 +9,7 @@ export const governanceStateFields = {
   planDecisionReceipt: z.object({ idempotencyKey: DecisionIdempotencyKeySchema, decisionId: durableId, decision: z.enum(["approve", "request_revision"]), subjectArtifactId: durableId }).nullable().optional(),
   planBlockerSubject: PlanBlockerSubjectSchema.nullable().optional(),
   /** Historical compatibility only; ignored after deserialization. */
-  planBlockerResponseReceipt: z.object({ idempotencyKey: DecisionIdempotencyKeySchema, responseId: durableId, blockerSubjectHash: z.string().regex(/^[a-f0-9]{64}$/) }).nullable().optional(),
+  planBlockerResponseReceipt: z.object({ idempotencyKey: DecisionIdempotencyKeySchema, responseId: durableId, blockerSubjectHash: z.string().regex(/^[a-f0-9]{64}$/).nullable().optional() }).nullable().optional(),
   planRevision: z.number().int().nonnegative().nullable().optional(),
   planMaterial: z.boolean().nullable().optional(),
   preservedWorktreeCompatibility: z.boolean().nullable().optional(),

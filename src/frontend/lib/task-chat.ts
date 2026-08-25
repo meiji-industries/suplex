@@ -1,8 +1,9 @@
 import { activitySentence, activityRole, withoutLegacyMaterialitySummary } from "./task-activity-feed.js";
 import type { ApiTask } from "./view-shared.js";
+import type { AgentTimelineEvent } from "../../http/contracts/agent-events.js";
 
 export type ChatActor = { name: string; avatarSeed: string };
-export type ChatEvent = { id: string; at: string; kind: string; text: string; files?: string[]; exitCode?: number | null; stepNumber?: number | null; status?: "running" | "completed"; count?: number };
+export type ChatEvent = { id: string; at: string; kind: string; text: string; files?: string[]; exitCode?: number | null; stepNumber?: number | null; status?: "running" | "completed"; detail?: string; toolStatus?: string; output?: string; outputLines?: number; callId?: string; count?: number };
 export type ChatItem =
   | { kind: "member"; id: string; at: string; actor: ChatActor; markdown: string }
   | { kind: "agent_turn"; id: string; role: ApiTask["agentInvocations"][number]["role"]; agent: ChatActor; startedAt: string; finishedAt: string | null; status: "running" | "completed" | "failed" | "blocked"; intro?: string; events: ChatEvent[]; summary?: string; stats?: { filesChanged: number; additions: number; deletions: number } }
@@ -23,6 +24,30 @@ function eventFiles(summary: string): string[] | undefined {
 export function chatEventFromDeveloperEvent(event: { eventId: string; occurredAt: string; kind: string; stepNumber: number | null; summary: string; exitCode: number | null }): ChatEvent {
   const files = eventFiles(event.summary);
   return { id: event.eventId, at: event.occurredAt, kind: event.kind, text: event.summary, ...(files ? { files } : {}), stepNumber: event.stepNumber, exitCode: event.exitCode };
+}
+
+/** Convert the allowlisted rollout payload without recovering structure from prose. */
+export function chatEventFromTimelineEvent(event: AgentTimelineEvent): ChatEvent | undefined {
+  const metadata = event.metadata;
+  const kind = typeof metadata.kind === "string" ? metadata.kind : event.eventType;
+  const data = metadata.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return undefined;
+  const record = data as Record<string, unknown>;
+  const role = typeof record.role === "string" ? record.role : "";
+  if (kind === "message" && role === "human") return undefined;
+  if (kind === "turn_started" || kind === "turn_finished" || kind === "usage") return undefined;
+  const text = typeof record.text === "string" ? record.text
+    : typeof record.summary === "string" ? record.summary
+      : typeof record.path === "string" ? record.path
+        : typeof record.name === "string" ? record.name : "";
+  const files = typeof record.path === "string" ? [record.path] : undefined;
+  const exitCode = typeof record.exitCode === "number" ? record.exitCode : null;
+  const callId = typeof record.id === "string" ? record.id : undefined;
+  const output = typeof record.output === "string" ? record.output : undefined;
+  if (kind === "tool_call" && output && callId) return { id: event.id, at: event.createdAt, kind: "command_output", text: "", output, outputLines: output.split("\n").length, callId, exitCode };
+  const detail = kind === "tool_call" && callId ? callId : undefined;
+  const toolStatus = kind === "tool_call" && typeof record.status === "string" ? record.status : undefined;
+  return { id: event.id, at: event.createdAt, kind, text, ...(files ? { files } : {}), exitCode, ...(callId ? { callId } : {}), ...(detail ? { detail } : {}), ...(toolStatus ? { toolStatus } : {}) };
 }
 
 function systemItem(entry: ApiTask["activity"][number]): ChatItem | undefined {
@@ -108,10 +133,16 @@ export function compactChatEvents(events: ChatEvent[], intro?: ChatEvent): ChatE
     else if (event.kind === "command_finished") paired.push({ ...event, kind: "command", text: commandLabel(event), status: "completed" });
     else paired.push(event);
   }
-  const visible = intro ? paired.filter((event) => event.id !== intro.id) : paired;
+  const outputs = new Map(paired.filter((event) => event.kind === "command_output" && event.callId && event.output).map((event) => [event.callId!, event]));
+  const visible = (intro ? paired.filter((event) => event.id !== intro.id) : paired)
+    .filter((event) => event.kind !== "command_output")
+    .map((event) => {
+      const output = event.kind === "command" && event.callId ? outputs.get(event.callId) : undefined;
+      return output ? { ...event, output: output.output!, outputLines: output.outputLines! } : event;
+    });
   return visible.reduce<ChatEvent[]>((compacted, event) => {
     const previous = compacted.at(-1);
-    if (previous && previous.kind === event.kind && previous.text === event.text && previous.status === event.status && previous.exitCode === event.exitCode) {
+    if (previous && previous.kind === event.kind && previous.text === event.text && previous.status === event.status && previous.exitCode === event.exitCode && (event.kind === "tool_call" ? previous.toolStatus === event.toolStatus : previous.detail === event.detail)) {
       previous.count = (previous.count ?? 1) + 1;
     } else compacted.push({ ...event });
     return compacted;

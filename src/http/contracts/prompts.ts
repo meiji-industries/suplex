@@ -6,7 +6,7 @@ export const PromptScopeQuerySchema = z.object({ scope: PromptScopeSchema, proje
   if (value.scope === "project" && !value.projectId) context.addIssue({ code: "custom", message: "projectId is required", path: ["projectId"] });
   if (value.scope === "global" && value.projectId) context.addIssue({ code: "custom", message: "projectId is not allowed", path: ["projectId"] });
 });
-export const PromptOverrideBodySchema = z.object({ mode: z.enum(["inherit", "append", "replace"]), content: z.string(), note: z.string().max(500).optional() });
+export const PromptOverrideBodySchema = z.object({ mode: z.enum(["inherit", "append", "replace"]), content: z.string(), note: z.string().optional() });
 export const PromptPreviewBodySchema = PromptOverrideBodySchema.omit({ note: true });
 export const PromptRollbackBodySchema = z.object({ revision: z.number().int().positive() });
 export const TaskPromptParamsSchema = z.object({ taskId: z.string().min(1) });

@@ -10,7 +10,7 @@ import { createActivityContext } from "../src/temporal/activities/context.js";
 import { createProjectionActivities } from "../src/temporal/activities/projection.js";
 import { buildInitialIssueWorkflowState, IssueProjectionEventSchema, IssueWorkflowStateSchema, type IssueProjectionEvent } from "../src/temporal/issue-contracts.js";
 
-function createEvent(revision: number, phase: "backlog" | "planning", lastEventId: string): IssueProjectionEvent {
+function createEvent(revision: number, phase: "backlog" | "planning" | "ci_waiting" | "development", lastEventId: string): IssueProjectionEvent {
   const state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState({
       workflowId: "workflow-integrity",
@@ -79,6 +79,28 @@ test("stale projections do not write and re-issued events replace their state", 
   }
 });
 
+test("records one timeline row for repeated observations of a phase", async () => {
+  const root = await mkdtemp(join(tmpdir(), "forge-projection-phase-events-test-"));
+  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  try {
+    fixture(database);
+    database.projectIssueEvent(createEvent(0, "backlog", "workflow-integrity:0"));
+    database.projectIssueEvent(createEvent(1, "ci_waiting", "workflow-integrity:1"));
+    database.projectIssueEvent(createEvent(2, "ci_waiting", "workflow-integrity:2"));
+    database.projectIssueEvent(createEvent(3, "ci_waiting", "workflow-integrity:3"));
+    database.projectIssueEvent(createEvent(4, "development", "workflow-integrity:4"));
+
+    expect(database.authQuery((db) => db.prepare("SELECT revision, event_type FROM forge_issue_timeline WHERE task_id = ? ORDER BY revision").all("task-integrity"))).toEqual([
+      { revision: 0, event_type: "task_created" },
+      { revision: 1, event_type: "phase_ci_waiting" },
+      { revision: 4, event_type: "phase_development" },
+    ]);
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("invalid projection cache input is warned and never fails the workflow activity", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-projection-invalid-test-"));
   const database = new ForgeDatabase(join(root, "forge.sqlite"));
@@ -122,7 +144,7 @@ test("workflow's first projection accepts the creation row when only stateChange
     const now = "2026-08-11T00:00:00.000Z";
     database.authQuery((db) => {
       db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, event_hash, authoritative_revision, authoritative_event_hash, projected_at) VALUES (?, ?, ?, ?, 0, 'backlog', 'human', ?, 'Start planning', ?, 'workflow-integrity:0', ?, 0, ?, ?)").run("task-integrity", "company-integrity", "project-integrity", "workflow-integrity", JSON.stringify(["start_planning"]), now, creationHash, creationHash, now);
-      db.prepare("INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, event_type, metadata_json, created_at, event_hash) VALUES ('workflow-integrity:0', ?, ?, ?, 0, 'task_created', ?, ?, ?)").run("task-integrity", "company-integrity", "workflow-integrity", JSON.stringify({ revision: 0, stateHash: creationHash }), now, creationHash);
+      db.prepare("INSERT INTO forge_issue_timeline (id, task_id, company_id, workflow_id, revision, source, event_type, metadata_json, created_at, event_hash) VALUES ('workflow-integrity:0', ?, ?, ?, 0, 'workflow', 'task_created', ?, ?, ?)").run("task-integrity", "company-integrity", "workflow-integrity", JSON.stringify({ revision: 0, stateHash: creationHash }), now, creationHash);
       db.prepare("INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at) VALUES (?, ?, ?, 0, ?, ?)").run("task-integrity", "company-integrity", "workflow-integrity", JSON.stringify(creationState), now);
     });
     // …then the workflow's first projectIssueState projects the same canonical state at ITS timestamp.

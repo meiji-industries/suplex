@@ -15,14 +15,13 @@ import { ApplicationFrame } from "../components/app/application-frame.js";
 import { getWorkerHealthFailure, useSystemHealth } from "../components/app/system-health.js";
 import { TaskActivity } from "../components/app/task-history.js";
 import { Markdown, type MarkdownImageSource } from "../components/app/markdown.js";
-import { CommandOutputBlock } from "../components/app/command-output.js";
 import { TellPlannerForm } from "../components/app/tell-planner-form.js";
 import DeveloperDiff from "../components/app/developer-diff.js";
 import { TaskLeadPlan } from "../components/app/task-lead-plan.js";
 import { invocationActorLabel } from "../components/app/task-invocations.js";
 import { TaskProgress } from "../components/app/task-progress.js";
 import { PhaseTimings } from "../components/app/phase-timings.js";
-import { taskIsProcessing, taskPresentationPhase, TaskStatus } from "../components/app/task-status.js";
+import { deliveryTargetLabel, taskIsProcessing, taskPresentationPhase, TaskStatus } from "../components/app/task-status.js";
 import { DeveloperRecoveryStatus } from "../components/app/developer-recovery-status.js";
 import type { DeveloperRecoveryAction } from "../components/app/developer-recovery-actions.js";
 import { PlanBlockerResponseForm } from "../components/app/plan-blocker-response-form.js";
@@ -33,7 +32,6 @@ import { PullRequestCard as GithubPullRequestCard } from "../components/app/pull
 import { TaskChat } from "../components/app/task-chat/task-chat.js";
 import { CopyButton } from "../components/app/copy-button.js";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip.js";
-import type { DeveloperExecutionEventResponse } from "../../http/contracts/tasks.js";
 import { adminDate, type ApiAgent, type ApiCi, type ApiProject, type ApiTask } from "../lib/view-shared.js";
 import { readJson, withCompany } from "../lib/api.js";
 import { materialityCriteria, materialityMode } from "../lib/plan-materiality.js";
@@ -41,14 +39,9 @@ import type { IssueCommandSlug } from "../../commands/registry.js";
 import { BLOCKED_PHASES, TERMINAL_PHASES, phaseLabel } from "../../issue-phases.js";
 import { releaseFailureCopy } from "../../release-failures.js";
 import type { ActivityFeedRow } from "../lib/task-activity-feed.js";
-import { Check, Circle, Ellipsis, GitPullRequest, LoaderCircle, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
+import { Check, Circle, Ellipsis, GitPullRequest, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useRef, useState, type ReactElement, type ReactNode } from "react";
 
-type DevelopmentExecution = { id: string | null; status: string; startedAt: string; finishedAt: string | null; lastHeartbeatAt: string | null; lastOutputAt?: string | null; currentStep: string | null };
-type DevelopmentState = { status: string; execution: DevelopmentExecution | null };
-type DeveloperExecutionEventView = DeveloperExecutionEventResponse;
-type DeveloperEventState = { executionId: string | null; events: DeveloperExecutionEventView[]; terminalSteps: Record<number, "completed" | "blocked"> };
-const noopExecutionStatus = (): void => {};
 
 function TaskMediaRow({ taskId, images }: { taskId: string; images: ApiTask["images"] }): ReactElement {
   const [selectedImage, setSelectedImage] = useState<ApiTask["images"][number] | null>(null);
@@ -76,70 +69,26 @@ export function NextAction({ value }: { value: string | null }): ReactElement {
   return <ul className="list-disc space-y-0.5 pl-4 text-[11px]">{(match[1] ?? "").split(", ").map((check) => <li key={check}>{check}</li>)}</ul>;
 }
 
+function executionControlLabel(value: boolean | undefined): string {
+  return value === undefined ? "Not specified" : value ? "Enabled" : "Off";
+}
+
+function visualEvidenceLabel(value: "off" | "capture" | "required" | undefined): string {
+  if (value === "required") return "Required";
+  if (value === "capture") return "Capture";
+  return value === "off" ? "Off" : "Not specified";
+}
+
+function supplementalReviewLabel(task: ApiTask): string {
+  if (task.lastHandlerError?.command === "supplemental_review") return `Not completed — ${task.lastHandlerError.reason}`;
+  return executionControlLabel(task.executionControls?.supplementalReview);
+}
+
 export function formatDuration(milliseconds: number): string {
   const seconds = Math.max(0, Math.floor(milliseconds / 1_000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function DeveloperActivityLine({ event, open }: { event: DeveloperExecutionEventView; open: boolean }): ReactElement {
-  const [headline, ...detail] = event.summary.split("\n");
-  const label = event.kind === "agent_update" ? "Agent update: " : event.kind === "tool_call" ? "Tool call: " : "";
-  const command = headline ?? "Agent output";
-  return <li className="break-words"><span className={label ? "font-medium text-foreground" : undefined}>{label}</span>{command}{detail.length ? <details className="mt-1" open={open}><summary className="cursor-pointer">{event.kind === "command_finished" || event.kind === "test_result" ? "Output" : "Details"}</summary><ShellOutput value={detail.join("\n")} command={command} exitCode={event.exitCode ?? null} at={event.occurredAt ?? new Date().toISOString()} /></details> : null}</li>;
-}
-
-function ShellOutput({ value, command, exitCode, at }: { value: string; command: string; exitCode: number | null; at: string }): ReactElement {
-  const failed = exitCode !== null && exitCode !== 0;
-  return <div className="mt-1" data-shell-output><CommandOutputBlock defaultExpanded output={{ command, exitCode, durationMs: 0, stdout: failed ? "" : value, stderr: failed ? value : "", at }} /></div>;
-}
-
-function DevelopmentStatus({ state, now, inline = false, activityLabel }: { state: DevelopmentState; now: number; inline?: boolean; activityLabel?: string }): ReactElement | null {
-  if (state.status === "completed") return null;
-  const execution = state.execution;
-  const active = ["starting", "running", "cancelling"].includes(state.status);
-  const freshnessAt = execution?.lastHeartbeatAt ?? execution?.startedAt;
-  const stale = active && Boolean(freshnessAt && now - Date.parse(freshnessAt) > 15_000);
-  const label = stale ? "No recent heartbeat" : state.status === "starting" ? "In Progress" : state.status === "result_pending_claim" ? "Finishing development" : state.status === "running" ? "Running" : state.status === "cancelling" ? "Cancelling" : state.status === "queued" ? "Queued" : state.status === "rate_limited" ? "Rate limited" : state.status === "completed" ? "Completed" : state.status === "blocked" ? "Blocked" : state.status === "failed" ? "Failed" : state.status;
-  const elapsed = execution ? formatDuration((execution.finishedAt ? Date.parse(execution.finishedAt) : now) - Date.parse(execution.startedAt)) : "—";
-  const outputAge = execution?.lastOutputAt ? formatDuration(now - Date.parse(execution.lastOutputAt)) : undefined;
-  const heartbeatAge = execution?.lastHeartbeatAt ? formatDuration(now - Date.parse(execution.lastHeartbeatAt)) : undefined;
-  const content = <><span className="flex items-center gap-1.5" role="status" aria-live="polite">{active && Boolean(execution?.lastHeartbeatAt) && !stale ? <LoaderCircle aria-hidden="true" className="size-3.5 animate-spin" /> : null}<span>{label}</span></span><span className="tabular-nums text-muted-foreground">{elapsed}</span>{execution?.currentStep ? <span className="text-muted-foreground">{execution.currentStep}{heartbeatAge ? ` · heartbeat ${heartbeatAge} ago` : ""}</span> : null}{activityLabel && outputAge ? <span className="text-muted-foreground">Last {activityLabel.toLowerCase()} event {outputAge} ago</span> : null}</>;
-  return inline ? <span className="inline-flex items-center gap-x-3 text-xs font-normal">{content}</span> : <div className="flex flex-wrap items-center gap-x-3 gap-y-1">{content}</div>;
-}
-
-function LiveExecutionRun({ taskId, eventPath, activityLabel, onStatus = noopExecutionStatus, onEvents, onRefresh, compact = false }: { taskId: string; eventPath: "development-events" | "planning-events"; activityLabel: string; onStatus?: (status: string, execution: DevelopmentExecution | null) => void; onEvents?: (executionId: string, events: DeveloperExecutionEventView[]) => void; onRefresh: () => Promise<void>; compact?: boolean }): ReactElement | null {
-  const [state, setState] = useState<DevelopmentState>({ status: "idle", execution: null });
-  const [activity, setActivity] = useState<DeveloperExecutionEventView[]>([]);
-  const [now, setNow] = useState(Date.now());
-  const refreshed = useRef("");
-  const executionId = useRef<string | null>(null);
-  useEffect(() => {
-    setState({ status: "idle", execution: null });
-    setActivity([]);
-    executionId.current = null;
-    onStatus("idle", null);
-    const stream = new EventSource(`/api/tasks/${encodeURIComponent(taskId)}/${eventPath}`);
-    stream.addEventListener("status", (message) => { try { const next = JSON.parse((message as MessageEvent<string>).data) as { status: string; execution: DevelopmentExecution | null }; const nextId = next.execution?.id ?? null; if (nextId !== executionId.current) setActivity([]); executionId.current = nextId; onStatus(next.status, next.execution); setState(next); } catch { /* Keep the last safe status. */ } });
-    stream.addEventListener("progress", (message) => { try { const event = JSON.parse((message as MessageEvent<string>).data) as DeveloperExecutionEventView; setActivity((current) => [...current, event].slice(-20)); if (executionId.current) onEvents?.(executionId.current, [event]); } catch { /* Ignore malformed server events. */ } });
-    return () => stream.close();
-  }, [eventPath, taskId, onEvents, onStatus]);
-  useEffect(() => {
-    setNow(Date.now());
-    if (compact || state.execution?.finishedAt || !["starting", "running", "cancelling"].includes(state.status)) return;
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
-    return () => clearInterval(timer);
-  }, [compact, state.execution?.id, state.execution?.finishedAt, state.status]);
-  useEffect(() => {
-    const key = state.execution?.id ? `${state.execution.id}:${["completed", "blocked", "failed", "result_pending_claim"].includes(state.status) ? state.status : "started"}` : "";
-    if (!key || refreshed.current === key) return;
-    refreshed.current = key;
-    void onRefresh();
-  }, [onRefresh, state.execution?.id, state.status]);
-  if (!state.execution && state.status === "idle") return null;
-  const visibleActivity = activity.filter((event) => !(event.kind === "command_started" || event.kind === "command_finished") || !event.summary.includes("forge-step"));
-  const lastOutputIndex = visibleActivity.reduce((last, event, index) => event.summary.includes("\n") ? index : last, -1);
-  return <section className="space-y-2 text-xs" data-development-run={eventPath === "development-events" ? "" : undefined} data-planning-activity={eventPath === "planning-events" ? "" : undefined}>{!compact ? <DevelopmentStatus state={state} now={now} {...(eventPath === "planning-events" ? { activityLabel } : {})} /> : null}{visibleActivity.length ? <div className="space-y-1" data-developer-activity={eventPath === "development-events" ? "" : undefined} data-agent-activity={eventPath === "planning-events" ? "" : undefined}><h3 className="font-medium">{activityLabel} activity</h3><ol className="space-y-1 text-[11px] text-muted-foreground">{visibleActivity.map((event, index) => <DeveloperActivityLine event={event} open={index === lastOutputIndex} key={event.eventId} />)}</ol></div> : null}</section>;
-}
 
 export type TaskPlanAction = Exclude<IssueCommandSlug, "revise-plan" | "continue-work" | "record-progress" | "resolve-decision-blocker"> | "reject-plan";
 export type PlanRevisionInput = { reason: string };
@@ -167,7 +116,7 @@ function PublicationPreview({ release, planned, loading }: { release: NonNullabl
   </section>;
 }
 
-export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onOpenDiff }: { task: ApiTask; busy: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onOpenDiff?: () => void }): ReactElement {
+export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevisePlan, onContinueWork, onOpenDiff, decisionControls }: { task: ApiTask; busy: boolean; onStartPlanning: () => Promise<void>; onPlanAction: (path: TaskPlanAction, note?: string, payload?: Record<string, unknown>) => Promise<void>; onRevisePlan: (input: PlanRevisionInput) => Promise<void>; onContinueWork: (reason: string) => Promise<void>; onOpenDiff?: () => void; decisionControls?: ReactNode }): ReactElement {
   const { snapshot: healthSnapshot } = useSystemHealth();
   const [revisionOpen, setRevisionOpen] = useState(false);
   const [revisionReason, setRevisionReason] = useState("");
@@ -188,12 +137,15 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
   const deliveryAgent = [...(task.agentInvocations ?? [])].reverse().find((candidate) => candidate.role === "builder" && candidate.status === "completed");
   const repairInstruction = task.deliveryReview?.findings.find((finding) => finding.severity === "blocking" && finding.disposition === "open")?.repairInstruction ?? task.deliveryReview?.summary;
   const supplementalCommand = task.commands.find((command) => command.name === "request_supplemental_review");
-  const hasVisibleActions = Boolean(supplementalCommand) || canRevise || canContinue || task.allowedCommands.some((command) => !["cancel_issue", "approve_plan", "reject_plan", "request_plan_revision", "respond_plan_blocker", "resolve_decision_blocker"].includes(command));
   const recoveryOwnsActions = Boolean(task.developerRecovery && task.allowedCommands.some((command) => ["retry_development", "cancel_development"].includes(command)));
   const isBlocked = BLOCKED_PHASES.has(task.phase);
   const presentationPhase = taskPresentationPhase({ phase: task.phase, releaseStatus: task.release?.status, ciOutcome: task.ci?.outcome, allowedCommands: task.allowedCommands });
   const awaitingDeliveryReview = canReviewDelivery && presentationPhase === "reviewing_delivery";
   const canRetryFinalReview = task.phase === "delivery_blocked" && task.allowedCommands.includes("final_review");
+  const hasFooterActions = task.allowedCommands.includes("start_planning") || Boolean(supplementalCommand) || task.allowedCommands.includes("start_development") || (!task.developerRecovery && (task.allowedCommands.includes("retry_development") || task.allowedCommands.includes("cancel_development"))) || ((canReviewDelivery || canPublishDraft) && Boolean(onOpenDiff)) || canReviewDelivery || canRepairDelivery || canContinuePastReview || task.allowedCommands.includes("retry_capacity") || canAcceptDelivery || task.allowedCommands.includes("publish_draft") || task.allowedCommands.includes("resolve_merge_conflict") || task.allowedCommands.includes("retry_target_base_reconciliation") || task.allowedCommands.includes("retry_forward_merge_verification") || task.allowedCommands.includes("reconcile_ci") || task.allowedCommands.includes("repair_ci") || task.allowedCommands.includes("request_delivery_changes") || task.allowedCommands.includes("final_review") || task.allowedCommands.includes("reconcile_acceptance") || task.allowedCommands.includes("reconcile_merge") || (!task.developerRecovery && canRevise) || canContinue;
+  const hasDescription = canReviewDelivery || canAcceptDelivery || canRetryFinalReview || canRepairDelivery || (isBlocked && Boolean(task.lastHandlerError));
+  const hasContent = canReviewDelivery || canPublishDraft || revisionOpen || continueOpen || Boolean(decisionControls);
+  const actionTitle = canReviewDelivery ? deliveryAgent?.agentName && deliveryAgent.avatarSeed ? <span className="inline-flex items-center gap-1.5"><ProfileAvatar name={deliveryAgent.agentName} seed={deliveryAgent.avatarSeed} size="xs" />{deliveryAgent.agentName} completed the approved work.</span> : "Completed the approved work" : canRetryFinalReview ? "Final review did not finish" : canRepairDelivery ? "More proof is needed" : canPublishDraft ? "Ready to Create Pull Request" : canAcceptDelivery ? "Pull request review" : decisionControls ? "Review final plan" : task.allowedCommands.includes("start_planning") ? "Start planning" : supplementalCommand ? "Request supplemental review" : task.allowedCommands.includes("start_development") ? "Start development" : task.allowedCommands.includes("retry_development") ? "Retry development" : task.allowedCommands.includes("cancel_development") ? "Cancel development" : canContinuePastReview ? "Continue delivery" : task.allowedCommands.includes("retry_capacity") ? "Retry capacity" : task.allowedCommands.includes("resolve_merge_conflict") ? "Resolve merge conflict" : task.allowedCommands.includes("retry_target_base_reconciliation") ? "Retry target-base reconciliation" : task.allowedCommands.includes("retry_forward_merge_verification") ? "Retry verification" : task.allowedCommands.includes("reconcile_ci") ? "Check CI" : task.allowedCommands.includes("repair_ci") ? "Repair CI" : task.allowedCommands.includes("request_delivery_changes") ? "Request changes" : task.allowedCommands.includes("final_review") ? "Final review" : task.allowedCommands.includes("reconcile_acceptance") ? "Check ready state" : task.allowedCommands.includes("reconcile_merge") ? "Check merge" : canRevise ? "Revise plan" : canContinue ? "Continue work" : "Needs attention";
   if (task.projection.status === "stalled") return <Card data-task-actions data-task-status-card size="sm" role="alert">
     <CardHeader>
       <CardTitle><h3>Forge's workflow is stuck</h3></CardTitle>
@@ -202,12 +154,11 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
     <CardFooter className="justify-end"><Button size="sm" onClick={() => void onPlanAction("resync-projection")} disabled={busy}>Resync projection</Button></CardFooter>
   </Card>;
   // Status-only phases render nothing here: the sidebar's "Next action" and the Chat already say what Forge is doing.
-  if (!hasVisibleActions) return <div data-task-actions />;
-  if (task.phase === "development" || recoveryOwnsActions) return <div data-task-actions />;
+  if (task.phase === "development" || recoveryOwnsActions || (!hasDescription && !isBlocked && !hasContent && !hasFooterActions)) return <></>;
   return (
     <Card data-task-actions data-task-blocked-card={isBlocked && !awaitingDeliveryReview || undefined} size="sm">
       <CardHeader>
-        <CardTitle><h3>{canReviewDelivery ? deliveryAgent?.agentName && deliveryAgent.avatarSeed ? <span className="inline-flex items-center gap-1.5"><ProfileAvatar name={deliveryAgent.agentName} seed={deliveryAgent.avatarSeed} size="xs" />{deliveryAgent.agentName} completed the approved work.</span> : "Completed the approved work" : canRetryFinalReview ? "Final review did not finish" : canRepairDelivery ? "More proof is needed" : canPublishDraft ? "Ready to Create Pull Request" : canAcceptDelivery ? "Pull request review" : task.pendingAction ?? "Next action"}</h3></CardTitle>
+        <CardTitle><h3>{actionTitle}</h3></CardTitle>
         {canReviewDelivery ? <CardDescription>Ready for your review.</CardDescription> : canAcceptDelivery ? <CardDescription>The work is ready. Publish makes the pull request available for review. Request Changes sends it back to the Developer.</CardDescription> : canRetryFinalReview ? <CardDescription>Forge could not finish its last review. Try again, or choose Request Changes to send the work back.</CardDescription> : canRepairDelivery ? <CardDescription>{repairInstruction ? <>Missing verification: {repairInstruction}</> : "A required verification result is missing."}</CardDescription> : null}
         {isBlocked && task.lastHandlerError ? <CardDescription>Last {task.lastHandlerError.command} error: {task.lastHandlerError.reason}</CardDescription> : null}
         {isBlocked ? <CardAction>{awaitingDeliveryReview ? <TaskStatus phase={task.phase} presentationPhase={presentationPhase} /> : <Badge variant="destructive">{phaseLabel(task.phase)}</Badge>}</CardAction> : null}
@@ -223,6 +174,7 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
         </dl>
       </CardContent> : null}
       {canPublishDraft ? <CardContent className="space-y-3" data-task-publish-preview><PublicationPreview release={task.release} planned={plannedPublication} loading={busy} /></CardContent> : null}
+      {decisionControls ? <CardContent data-plan-decision-controls>{decisionControls}</CardContent> : null}
       {(revisionOpen || continueOpen) ? <CardContent>
         {revisionOpen ? <form className="max-w-xl space-y-3 border-l-2 pl-3" onSubmit={(event) => { event.preventDefault(); void onRevisePlan({ reason: revisionReason }); }}>
           <Field><FieldLabel htmlFor="revision-reason">Why revise this plan?</FieldLabel><Textarea id="revision-reason" required value={revisionReason} onChange={(event) => setRevisionReason(event.target.value)} placeholder="Describe the changed requirement or observed problem." /></Field>
@@ -230,7 +182,7 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
         </form> : null}
         {continueOpen ? <form className="max-w-xl space-y-3 border-l-2 pl-3" onSubmit={(event) => { event.preventDefault(); void onContinueWork(continueReason); }}><Field><FieldLabel htmlFor="continue-reason">Why continue this work?</FieldLabel><Textarea id="continue-reason" required value={continueReason} onChange={(event) => setContinueReason(event.target.value)} placeholder="Describe the next outcome." /></Field><Button type="submit" size="sm" disabled={disabled || !continueReason.trim()}>{busy ? "Creating successor…" : "Create successor"}</Button></form> : null}
       </CardContent> : null}
-      <CardFooter>
+      {hasFooterActions ? <CardFooter>
         <div className="flex w-full flex-wrap justify-end gap-2 [&>[data-variant=default]]:order-1">
       {task.allowedCommands.includes("start_planning") ? <Button size="sm" onClick={() => void onStartPlanning()} disabled={disabled}>{busy ? "Planning…" : task.phase === "failed" ? "Retry planning" : "Start planning"}</Button> : null}
       {supplementalCommand ? <Button size="sm" variant="outline" onClick={() => void onPlanAction(supplementalCommand.endpoint as TaskPlanAction, undefined, { idempotencyKey: crypto.randomUUID() })} disabled={disabled}>Request review</Button> : null}
@@ -257,7 +209,7 @@ export function TaskActions({ task, busy, onStartPlanning, onPlanAction, onRevis
       {!task.developerRecovery && canRevise ? <Button size="sm" variant="outline" onClick={() => setRevisionOpen((open) => !open)} disabled={disabled}>{revisionOpen ? "Close revision" : "Revise plan"}</Button> : null}
       {canContinue ? <Button size="sm" variant="outline" onClick={() => setContinueOpen((open) => !open)} disabled={disabled}>{continueOpen ? "Close continuation" : "Continue work"}</Button> : null}
         </div>
-      </CardFooter>
+      </CardFooter> : null}
     </Card>
   );
 }
@@ -355,21 +307,17 @@ function FinalGatePanel({ task }: { task: ApiTask }): ReactElement | null {
   );
 }
 
-function deliveryTargetLabel(target: ApiTask["deliveryTarget"]): string {
-  return target === "local_worktree" ? "Keep in worktree" : target === "remote_branch" ? "Push branch" : target === "pull_request_ready" ? "Ready for review" : target === "merged" ? "Fully merged" : "Draft pull request";
-}
-
 function TaskConfigurationCard({ task }: { task: ApiTask }): ReactElement {
   return <Card size="sm" aria-label="Configuration used">
     <CardHeader><CardTitle><h3>Configuration used</h3></CardTitle></CardHeader>
-    <CardContent><dl className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><div><dt>Plan review</dt><dd className="text-foreground">{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div><div><dt>Second review</dt><dd className="text-foreground">{task.executionControls.supplementalReview ? "Requested" : "Off"}</dd></div><div><dt>Visual proof</dt><dd className="text-foreground">{task.executionControls.visualEvidence === "required" ? "Required" : task.executionControls.visualEvidence === "capture" ? "Capture when useful" : "Off"}</dd></div></dl></CardContent>
+    <CardContent><dl className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><div><dt>Plan review</dt><dd className="text-foreground">{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div><div><dt>Second review</dt><dd className="text-foreground">{task.lastHandlerError?.command === "supplemental_review" ? `Not completed — ${task.lastHandlerError.reason}` : task.executionControls?.supplementalReview === undefined ? "Not specified" : task.executionControls.supplementalReview ? "Requested" : "Off"}</dd></div><div><dt>Visual proof</dt><dd className="text-foreground">{visualEvidenceLabel(task.executionControls?.visualEvidence)}</dd></div></dl></CardContent>
   </Card>;
 }
 
 function DeliveryChecksCard({ task }: { task: ApiTask }): ReactElement {
   return <Card size="sm" aria-label="Delivery and checks">
     <CardHeader><CardTitle><h3>Delivery &amp; checks</h3></CardTitle></CardHeader>
-    <CardContent><dl className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><div><dt>Delivery target</dt><dd className="text-foreground">{deliveryTargetLabel(task.deliveryTarget)}</dd></div><div><dt>Project tests</dt><dd className="text-foreground">{task.executionControls.runProjectTests ? "Run" : "Skipped for this task"}</dd></div></dl></CardContent>
+    <CardContent><dl className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2"><div><dt>Delivery target</dt><dd className="text-foreground">{deliveryTargetLabel(task.deliveryTarget)}</dd></div><div><dt>Project tests</dt><dd className="text-foreground">{task.executionControls?.runProjectTests === undefined ? "Not specified" : task.executionControls.runProjectTests ? "Run" : "Skipped for this task"}</dd></div></dl></CardContent>
   </Card>;
 }
 
@@ -544,31 +492,6 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
   const visibleLeadPlan = task.leadOutput && (task.leadOutput.content.kind !== "decision_blocker" || !task.governance.blocker) ? task.leadOutput : undefined;
   const exactApproveCommand = approveCommand ? { endpoint: approveCommand.endpoint, expectedRevision: approveCommand.expectedRevision } : undefined;
   const decisionControls = task.phase === "approval" && exactApproveCommand ? <PlanDecisionForm key={task.revision} approveCommand={exactApproveCommand} busy={busy} onSubmit={(payload) => onPlanAction(payload.command.endpoint as TaskPlanAction, payload.note, { idempotencyKey: payload.idempotencyKey })} error={error} /> : null;
-  const [developerEventState, setDeveloperEventState] = useState<DeveloperEventState>({ executionId: null, events: [], terminalSteps: {} });
-  const [developerLiveness, setDeveloperLiveness] = useState<(DevelopmentState & { lastHeartbeatAt: string | null }) | undefined>();
-  const [developmentNow, setDevelopmentNow] = useState(Date.now());
-  useEffect(() => {
-    setDeveloperEventState({ executionId: null, events: [], terminalSteps: {} });
-    setDeveloperLiveness(undefined);
-  }, [task.id]);
-  const handleDevelopmentStatus = useCallback((status: string, execution: DevelopmentExecution | null): void => {
-    const executionId = execution?.id ?? null;
-    setDeveloperEventState((current) => current.executionId === executionId ? current : { executionId, events: [], terminalSteps: {} });
-    setDeveloperLiveness(execution ? { status, execution, lastHeartbeatAt: execution.lastHeartbeatAt } : undefined);
-  }, []);
-  useEffect(() => {
-    setDevelopmentNow(Date.now());
-    const execution = developerLiveness?.execution;
-    if (!execution || execution.finishedAt || !["starting", "running", "cancelling"].includes(developerLiveness?.status ?? "")) return;
-    const timer = window.setInterval(() => setDevelopmentNow(Date.now()), 1_000);
-    return () => window.clearInterval(timer);
-  }, [developerLiveness?.execution?.id, developerLiveness?.execution?.finishedAt, developerLiveness?.status]);
-  const appendDeveloperEvents = useCallback((executionId: string, events: DeveloperExecutionEventView[]): void => setDeveloperEventState((current) => {
-    const selected = current.executionId === executionId ? current : { executionId, events: [], terminalSteps: {} };
-    const terminalSteps = { ...selected.terminalSteps };
-    for (const event of events) if (event.stepNumber !== null && ["step_completed", "step_blocked"].includes(event.kind)) terminalSteps[event.stepNumber] = event.kind === "step_completed" ? "completed" : "blocked";
-    return { executionId, terminalSteps, events: [...selected.events, ...events].filter((event, index, all) => all.findIndex((candidate) => candidate.eventId === event.eventId) === index).slice(-100) };
-  }), []);
   const [answer, setAnswer] = useState("");
   useEffect(() => { setAnswer(""); }, [task.id, task.revision]);
   const [changesFileCount, setChangesFileCount] = useState<number | undefined>(undefined);
@@ -585,9 +508,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
     setActiveWorkTab("diffs");
     setDiffScrollRequest((request) => request + 1);
   }, []);
-  const leadPlanProps = visibleLeadPlan ? { output: visibleLeadPlan, ...(decisionControls ? { decisionControls } : {}), ...(task.developerExecution ? { stepProgress: { taskId: task.id, execution: task.developerExecution, repository: project?.repository, events: developerEventState.executionId === task.developerExecution.id ? developerEventState.events : [], terminalSteps: developerEventState.executionId === task.developerExecution.id ? developerEventState.terminalSteps : {} } } : {}) } : undefined;
-  const leadPlan = leadPlanProps ? <TaskLeadPlan {...leadPlanProps} /> : undefined;
-  const currentPlan = decisionControls && leadPlan ? leadPlan : undefined;
+  const leadPlan = visibleLeadPlan ? <TaskLeadPlan output={visibleLeadPlan} /> : undefined;
   const activityCount = task.activity.length;
   const [optimisticPlannerNotes, setOptimisticPlannerNotes] = useState<ActivityFeedRow[]>([]);
   useEffect(() => { setOptimisticPlannerNotes([]); }, [task.id]);
@@ -640,11 +561,10 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                 <div data-task-current className="-mx-4 border-y border-border/70 bg-background px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10">
                   <div className="mx-auto max-w-4xl space-y-4">
                     <PlanningRunCard task={task} />
-                    {task.phase === "planning" ? <LiveExecutionRun taskId={task.id} eventPath="planning-events" activityLabel="Planner" onRefresh={onRefresh} /> : null}
-                    {pullRequestInMain ? <div data-active-pull-request><GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} />}
-                    {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} developmentStatus={developerLiveness ? <DevelopmentStatus state={developerLiveness} now={developmentNow} inline /> : undefined} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)}><LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} compact /></DeveloperRecoveryStatus> : <LiveExecutionRun taskId={task.id} eventPath="development-events" activityLabel="Builder" onStatus={handleDevelopmentStatus} onEvents={appendDeveloperEvents} onRefresh={onRefresh} />}
+                    {pullRequestInMain ? <div data-active-pull-request><GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} decisionControls={decisionControls} />}
+                    {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} executionStatus={task.developerExecution?.status} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)} /> : null}
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-                    {currentPlan ?? decisionControls}
+                    {leadPlan}
                     {task.governance.blocker && blockerCommand ? <PlanBlockerResponseForm blocker={task.governance.blocker} expectedRevision={blockerCommand.expectedRevision} busy={busy} onSubmit={(payload) => onPlanAction(blockerCommand.endpoint as TaskPlanAction, undefined, { answer: payload.answer, idempotencyKey: payload.idempotencyKey, expectedWorkflowRevision: payload.expectedWorkflowRevision })} error={error} /> : task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">{task.governance.blocker.header}</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}
                     {task.leadOutput?.content.kind === "decision_blocker" && task.allowedCommands.includes("resolve_decision_blocker") ? <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); void onResolveDecisionBlocker(answer); }}><FieldLabel htmlFor="decision-answer">Decision</FieldLabel><Textarea id="decision-answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Answer the Planner's question" maxLength={8000} /><Button size="sm" type="submit" disabled={busy || !answer.trim()}>{busy ? "Saving…" : "Resolve decision"}</Button></form> : null}
                   </div>
@@ -676,7 +596,7 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
             </div>
           </div>
           <aside data-task-properties className="border-border border-t bg-muted/20 px-4 py-6 sm:px-6 lg:sticky lg:top-0 lg:h-fit lg:border-t-0 lg:border-l">
-            <div className="mb-6 space-y-4">{pullRequestInMain ? null : <GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} />}<TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} agentInvocations={task.agentInvocations} activeCapacity={task.capacity?.status === "active" ? task.capacity : undefined} developerLiveness={developerLiveness} /></div>
+            <div className="mb-6 space-y-4">{pullRequestInMain ? null : <GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} />}<TaskProgress phase={task.phase} allowedCommands={task.allowedCommands} createdAt={task.createdAt} updatedAt={task.updatedAt} timeline={task.timeline} agentInvocations={task.agentInvocations} activeCapacity={task.capacity?.status === "active" ? task.capacity : undefined} /></div>
             <TaskAgentAssignments task={task} onRefresh={onRefresh} />
             <h3 className="mb-5 text-xs font-semibold">Properties</h3>
             <dl className="space-y-4 text-xs">
@@ -685,7 +605,11 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
               <div className="space-y-1"><dt className="text-muted-foreground">Mode</dt><dd><TooltipProvider><Tooltip><TooltipTrigger render={<span className="inline-flex cursor-help items-center" tabIndex={0}>{materialityMode(task.planMaterial)}</span>} /><TooltipContent><ul className="space-y-1" aria-label="Materiality criteria">{materialityCriteria(task.planMaterial ? task.materialCategories : []).map((criterion) => <li className="flex items-center gap-1.5" key={criterion.category}>{criterion.checked ? <Check aria-label="Present" className="size-3" /> : <Circle aria-label="Not present" className="size-3 text-muted-foreground" />}<span>{criterion.label}</span></li>)}</ul></TooltipContent></Tooltip></TooltipProvider></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Prompts</dt><dd title={task.prompts.overrides.join("\n") || undefined}><TaskPromptProvenanceRow taskId={task.id} overrides={task.prompts.overrides} /></dd></div>
               {task.developerExecution?.worktreePath ? <div className="space-y-1"><dt className="text-muted-foreground">Worktree</dt><dd className="flex items-center gap-1 min-w-0"><CopyButton value={task.developerExecution.worktreePath} label="Copy worktree path" /><span className="min-w-0 truncate font-mono" title={task.developerExecution.worktreePath}>{task.developerExecution.worktreePath.split("/").pop()}</span></dd></div> : null}
+              <div className="space-y-1"><dt className="text-muted-foreground">Delivery</dt><dd>{deliveryTargetLabel(task.deliveryTarget)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Plan review</dt><dd>{task.autoApprovePlan ? "Auto-approved" : "Needs your approval"}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Run project tests</dt><dd>{executionControlLabel(task.executionControls?.runProjectTests)}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Second review</dt><dd>{supplementalReviewLabel(task)}</dd></div>
+              <div className="space-y-1"><dt className="text-muted-foreground">Screenshots</dt><dd>{visualEvidenceLabel(task.executionControls?.visualEvidence)}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Next action</dt><dd><NextAction value={task.pendingAction} /></dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Sync</dt><dd className="flex items-center gap-1"><Button size="icon-xs" variant="ghost" aria-label="Refresh" title="Refresh" onClick={() => void syncNow()} disabled={busy || syncing}><RefreshCw aria-hidden="true" className={syncing ? "size-3 animate-spin" : "size-3"} /></Button>{syncing ? "In progress" : task.githubPullRequest?.observedAt ? `synced ${Math.max(0, Math.floor((Date.now() - Date.parse(task.githubPullRequest.observedAt)) / 1_000))}s ago` : "never"}</dd></div>
               <div className="space-y-1"><dt className="text-muted-foreground">Created</dt><dd>{adminDate(task.createdAt)}</dd></div>

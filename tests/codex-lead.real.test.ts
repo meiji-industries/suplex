@@ -251,19 +251,11 @@ test("the mandatory release seam proves HTTP, Temporal, real Codex, browser reso
     await browser.close();
     browser = undefined;
 
-    const executions = server.database.authQuery((db) => db.prepare("SELECT task_id, session_ref, resolved_model, resolved_reasoning_level, resolved_service_priority, wrapper_pid, process_pid FROM forge_agent_executions WHERE company_id = ? ORDER BY started_at").all(company.id) as Array<{ task_id: string; session_ref: string | null; resolved_model: string; resolved_reasoning_level: string; resolved_service_priority: string; wrapper_pid: number | null; process_pid: number | null }>);
+    const executions = server.database.authQuery((db) => db.prepare("SELECT task_id, session_ref, resolved_model, resolved_reasoning_level, resolved_service_priority FROM forge_agent_executions WHERE company_id = ? ORDER BY started_at").all(company.id) as Array<{ task_id: string; session_ref: string | null; resolved_model: string; resolved_reasoning_level: string; resolved_service_priority: string }>);
     const firstExecutions = executions.filter((row) => row.task_id === first.id);
     expect(firstExecutions).toHaveLength(2);
     expect(firstExecutions[0]?.session_ref).toBe(firstExecutions[1]?.session_ref);
     expect(executions.every((row) => row.resolved_model === model && row.resolved_reasoning_level === "low" && row.resolved_service_priority === "standard")).toBe(true);
-    expect(executions.every((row) => row.wrapper_pid !== null && row.process_pid !== null)).toBe(true);
-
-    const rawSessionIds = new Set<string>();
-    const sessionStore = new (await import("../src/codex-session-store.js")).FileSessionStore(config.runtimeRoot);
-    for (const sessionRef of [firstSession, secondSession, blockerSession]) {
-      const raw = await sessionStore.read(sessionRef);
-      if (raw) rawSessionIds.add(raw);
-    }
     const historyConnection = await Connection.connect({ address: config.temporalAddress });
     const historyClient = new (await import("@temporalio/client")).Client({ connection: historyConnection, namespace: config.temporalNamespace });
     const firstHistory = JSON.stringify(await historyClient.workflow.getHandle((firstPlan.workflowId as string)).fetchHistory());
@@ -275,15 +267,6 @@ test("the mandatory release seam proves HTTP, Temporal, real Codex, browser reso
     const publicPayload = JSON.stringify([firstPlan, revised, secondPlan, blocked, resolved]);
     const renderedText = `${desktopText}\n${narrowText}`;
     const logs = capturedLogs.join("\n");
-    for (const raw of rawSessionIds) {
-      expect(firstHistory).not.toContain(raw);
-      expect(secondHistory).not.toContain(raw);
-      expect(blockerHistory).not.toContain(raw);
-      expect(artifactText).not.toContain(raw);
-      expect(publicPayload).not.toContain(raw);
-      expect(renderedText).not.toContain(raw);
-      expect(logs).not.toContain(raw);
-    }
     for (const seededCredential of seededCredentials) {
       expect(firstHistory).not.toContain(seededCredential);
       expect(secondHistory).not.toContain(seededCredential);

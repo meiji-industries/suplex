@@ -1,22 +1,61 @@
-# Dev-stack smoke test
+# Herdr execution-substrate smoke test
 
-Run `pnpm smoke` (or `mise run smoke`) against an already-running loopback Forge dev stack. It authenticates through development auto-login, creates a narrowly scoped task, starts planning, and polls every five seconds while asserting planning, auto-approval, Builder execution with a recorded PID, delivery review, release, and a draft pull-request URL.
+This is a manual, operator-only real-Herdr check. It is not CI. Run it only
+against sacrificial tasks with Adam attached to the relevant panes; do not use
+it to interrupt a live issue, restart the shared development stack, or publish
+from a smoke worktree.
 
-It intentionally creates a real task and draft pull request. First validate connectivity without creating anything:
+1. Run `mise run dev:status` and reuse the listening stack. Confirm
+   `herdr --version` reports `0.8.2` and `codex --version` reports a
+   `0.149.0`-compatible CLI.
+2. Create a sacrificial Forge task with an intentionally ambiguous brief and
+   start planning.
+3. Run `herdr workspace list`, `herdr tab list`, `herdr pane list`, and
+   `herdr agent list`/`herdr agent get <lead-agent>`. Verify the project-slug
+   workspace, issue-key tab, an unguarded `shell` pane in Forge's exact issue
+   worktree, and a ready `lead` agent. Confirm Forge did not create a Herdr
+   worktree.
+4. Attach with `herdr agent attach <lead-agent>` and give a scope correction
+   while Lead is working. Confirm the Codex rollout records the user message,
+   Chat renders it once, and the resulting plan reflects the correction.
+5. Submit **Tell the Planner** while Lead is working. Confirm the task phase
+   and revision do not change until its structured result lands, and that the
+   note is queued once in the Lead TUI.
+6. Cause a Lead question or approval dialog. Confirm Forge attention says
+   `Agent needs you in <pane-id>`. Answer only in the attached pane; Forge
+   must not send an automatic answer, and attention must clear afterward.
+7. Interrupt the Lead pane process, then wake or retry the turn. Confirm Forge
+   makes a replacement pane with `codex resume` using the same durable Codex
+   session ID and sends the recovery interruption prompt once for that pane
+   generation.
+8. Approve and start development. Verify the `developer` pane uses the issue
+   worktree and persisted Developer session. In that pane, verify `git push`
+   and destructive Git commands exit `125`. In `shell`, verify `command -v
+   git` selects normal Git and `git status` works. Do not mutate or publish.
+9. Attach to Developer and steer it mid-turn. Confirm the rollout and Chat
+   record the steer, the role-owned result JSON file validates, and SQLite has
+   exactly one Developer result claim with no conflict.
+10. During a second sacrificial turn, use `scripts/dev-restart.sh --force
+    <dev-pane-id>` to restart only the Forge worker when it is awaiting human
+    input. Do not stop Herdr. Confirm the
+    retry rediscovers the live agent and resumes at its persisted rollout
+    offset without duplicate prompt dispatches or events.
+11. In an explicitly isolated smoke window, stop and restart the Herdr server.
+    Confirm the next retry replaces the pane and resumes the same Codex
+    session.
+12. Complete one task as `done` or `cancelled`; confirm a final sanitized
+    layout/rollout snapshot artifact is present before Forge closes its tab.
+    Fail a different sacrificial task; its tab must stay open until one manual
+    `herdr tab close <tab-id>`.
+13. Download and reassemble the sanitized rollout artifact manifest. Verify
+    its manifest hash and that it contains only the approved sanitized evidence
+    ranges—not raw prompts, result content, tool I/O, or encrypted reasoning.
+    Confirm those contents are absent from Temporal history and heartbeat
+    details.
+14. Run the focused checks plus `pnpm run typecheck`, `pnpm run test:replay`,
+    `pnpm run forge -- doctor`, and `mise run dev:status`; record exact test
+    counts and replay `N/N`.
 
-```sh
-FORGE_SMOKE_DRY_RUN=1 pnpm smoke
-```
-
-Environment variables:
-
-- `FORGE_PORT` — API port; defaults to `4111`.
-- `FORGE_SMOKE_PROJECT_ID` — project to use; by default, the first project in the first visible company.
-- `FORGE_SMOKE_TITLE` — task title; defaults to a timestamped smoke title.
-- `FORGE_SMOKE_BRIEF` — task brief; defaults to adding a timestamped line to `docs/SMOKE.md`.
-- `FORGE_SMOKE_DELIVERY` — delivery target; defaults to `pull_request_draft`.
-- `FORGE_SMOKE_TIMEOUT_MINUTES` — overall limit; defaults to `30`.
-- `FORGE_SMOKE_CLEANUP=1` — after success, cancels the task and runs `gh pr close` for the created draft PR.
-- `FORGE_SMOKE_DRY_RUN=1` — validates auto-login, company/project lookup, and the task payload without creating a task.
-
-On a failure or timeout, the script prints `TASK JSON` and `ACTIVITY (last 40 rows)`. The task state shows the failed phase, owner, and pending action; the activity section includes recent command rows to identify the failing agent command. A human-owned phase other than the expected approval gate is treated as a failure so the operator sees an intervention requirement immediately.
+The legacy `pnpm smoke` command is not a substitute for this procedure: it
+cannot prove interactive steering, session recovery, pane guards, or terminal
+lifecycle behavior.

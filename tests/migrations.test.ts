@@ -66,6 +66,17 @@ describe("timestamp migrations", () => {
     try {
       applyMigrations(database, folder);
 
+      expect(database.prepare("PRAGMA index_list('forge_issue_timeline')").all()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: "forge_issue_timeline_task_idx" }),
+      ]));
+      expect(database.prepare("PRAGMA foreign_key_list('forge_developer_result_conflicts')").all()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ from: "existing_delivery_artifact_id", table: "forge_artifacts" }),
+        expect.objectContaining({ from: "existing_evidence_artifact_id", table: "forge_artifacts" }),
+        expect.objectContaining({ from: "conflicting_delivery_artifact_id", table: "forge_artifacts" }),
+        expect.objectContaining({ from: "conflicting_evidence_artifact_id", table: "forge_artifacts" }),
+      ]));
+      expect(database.pragma("foreign_keys", { simple: true })).toBe(1);
+
       // Verify internal agent constraint check
       const profile = database.prepare("SELECT id FROM forge_profiles LIMIT 1").get() as { id: string };
       expect(profile).toBeDefined();

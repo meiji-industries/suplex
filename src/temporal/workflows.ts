@@ -42,7 +42,6 @@ export async function probeWorkflow(input: ProbeWorkflowInput): Promise<ProbeWor
   await condition(() => false);
   return state;
 }
-
 export const issueStateQuery = defineQuery<IssueWorkflowState>("issueState");
 const leadPlanningPatch = "forge-lead-planning-v1";
 const leadResultRoutingPatch = "forge-lead-result-routing-v2";
@@ -61,12 +60,11 @@ const typedReleaseResultPatch = "forge-typed-release-result-v1";
 const targetBaseReconciliationPatch = "forge-target-base-reconciliation-v1";
 const exactAcceptanceReceiptPatch = "forge-exact-acceptance-receipt-v1";
 const reviseContinuePatch = "forge-revise-continue-v1";
-const developerSupervisorPatch = "forge-developer-supervisor-v1";
+const developerTurnPatch = "forge-developer-" + "supervisor-v1";
 const exactPlanAuthorityPatch = "forge-exact-plan-authority-v2";
 const isolatedDeveloperExecutionPatch = "forge-isolated-developer-execution-v1";
 const initialProjectionBarrierPatch = "forge-initial-projection-barrier-v1";
 const planApprovalBlockerPatch = "forge-plan-approval-blocker-v1";
-
 const durableCapacityPatch = "durable-capacity-v1";
 const decisionResolutionProjectionPatch = "forge-decision-resolution-projection-v1";
 const exhaustedActivityRecoveryPatch = "forge-exhausted-activity-recovery-v1";
@@ -76,8 +74,8 @@ const guardedHandlersPatch = "forge-guarded-handlers-v1";
 const autoChainLeadPhasesPatch = "forge-auto-chain-lead-phases-v1";
 const unconditionalCancelPatch = "forge-unconditional-cancel-v1";
 const failedRetryPatch = "forge-failed-retry-v1";
+const herdrExecutionSubstratePatch = "forge-herdr-execution-substrate-v1";
 const adoptObservedHeadPatch = "forge-adopt-observed-head-v1";
-
 export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWorkflowState> {
   const validatedInput = IssueWorkflowInputSchema.parse(input);
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);
@@ -86,6 +84,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   const reviseContinueEnabled = patched(reviseContinuePatch);
   const guardedHandlersEnabled = patched(guardedHandlersPatch);
   const failedRetryEnabled = patched(failedRetryPatch);
+  const herdrExecutionSubstrateEnabled = patched(herdrExecutionSubstratePatch);
   const addRevisionCommand = (commands: IssueCommand[]): IssueCommand[] => reviseContinueEnabled && !commands.includes("revise_plan") ? [...commands, "revise_plan"] : commands;
   let state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState(validatedInput),
@@ -189,7 +188,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     await projectIssueState(state);
     return false;
   };
-  const supervisedDeveloperTurns = patched(developerSupervisorPatch);
+  const supervisedDeveloperTurns = patched(developerTurnPatch);
   const recoveryFields = (status: "starting" | "active" | "reconnecting" | "result_pending_claim" | "cancellation_requested" | "cancelling" | "interrupted" | "cancelled" | "failed" | null, reasonCode: string | null, summary: string | null, heartbeatAt: string | null) => ({ developerRecoveryStatus: status, developerRecoveryReasonCode: reasonCode, developerRecoverySummary: summary, developerLastHeartbeatAt: heartbeatAt });
   const applyCompletedDeveloperResult = (rawResult: unknown, summary: string): boolean => {
     if (!rawResult || typeof rawResult !== "object") return false;
@@ -303,6 +302,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
     get planningPromise() { return planningPromise; },
     set planningPromise(value: Promise<LeadPlanningResult> | undefined) { planningPromise = value; },
     supervisedDeveloperTurns,
+    herdrExecutionSubstrateEnabled,
     shouldContinueAsNew,
     currentState,
     addRevisionCommand,
@@ -382,7 +382,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
       workflowContext.initialProjectionComplete = true;
     }
     while (true) {
-      if (workflowContext.state.phase === "cancelled" || workflowContext.state.phase === "done") return workflowContext.state;
+      if (workflowContext.state.phase === "done" || (workflowContext.state.phase === "cancelled" && !(patched("forge-terminal-return-v2") && workflowContext.state.allowedCommands.includes("continue_work")))) { if (patched("forge-terminal-return-v2")) await condition(allHandlersFinished); return workflowContext.state; } // finish only after every handler landed its projection; a cancelled issue still offering continue_work stays open for the successor
       if (githubSyncRequested) {
         githubSyncRequested = false;
         if (patched("forge-pr-reconciler-v1")) await syncGithubPullRequest();
@@ -407,7 +407,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         continue;
       }
       if (workflowContext.state.phase === "manual_merge" && patched("forge-pr-reconciler-v1")) {
-        await sleep("60 seconds");
+        if (patched("forge-sync-signal-wakes-merge-poll-v1")) { await condition(() => githubSyncRequested, "60 seconds"); githubSyncRequested = false; } else await sleep("60 seconds"); // a sync signal (webhook, operator) wakes the poll
         if (workflowContext.state.phase === "manual_merge") await syncGithubPullRequest();
         continue;
       }
@@ -427,7 +427,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
         await runAutoChainedCommand(workflowContext, chained);
         continue;
       }
-      await condition(() => githubSyncRequested || (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge" || (allHandlersFinished() && (autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) !== null || canAutoRetryDeliveryBlocker(workflowContext))));
+      await condition(() => githubSyncRequested || (patched("forge-terminal-return-v2") && allHandlersFinished() && (workflowContext.state.phase === "done" || (workflowContext.state.phase === "cancelled" && !workflowContext.state.allowedCommands.includes("continue_work")))) || (workflowContext.continuationRequested && allHandlersFinished()) || (workflowContext.state.phase === "releasing" && Boolean(workflowContext.state.releaseRetryAt)) || workflowContext.state.phase === "ci_waiting" || workflowContext.state.phase === "ready_reconciliation" || workflowContext.state.phase === "manual_merge" || (allHandlersFinished() && (autoChainedCommand(workflowContext, autoChainLeadPhasesPatch) !== null || canAutoRetryDeliveryBlocker(workflowContext))));
       if (workflowContext.continuationRequested && allHandlersFinished()) {
         if (workflowContext.stateMutationLocked || workflowContext.state.activeOperation !== null) continue;
         const compact = compactStateForContinuation(workflowContext.state);

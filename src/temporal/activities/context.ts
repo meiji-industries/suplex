@@ -7,11 +7,10 @@ import { projectionStateHash, type ForgeDatabase } from "../../database.js";
 import type { ForgeConfig } from "../../config.js";
 import { ArtifactStore, type StoredArtifact } from "../../artifacts.js";
 import { redact } from "../../logging.js";
-import { AgentFailure, AgentService, type LeadProcessRunner } from "../../codex-lead.js";
+import { AgentFailure, AgentService } from "../../codex-lead.js";
 import { DeveloperService } from "../../codex-developer.js";
 import { cancelDeveloperExecution, reconcileDeveloperExecutions } from "../../developer-recovery.js";
 import { cancelAgentExecution, reconcileAgentExecutions } from "../../agent-recovery.js";
-import { runDeveloperTurn, type DeveloperTurnRunResult } from "../../developer-turn-runner.js";
 import { AcceptanceFailure, AcceptanceService } from "../../acceptance.js";
 import { CiFailure, CiProviderFailure, CiService, createGithubCiProvider, type CiProvider } from "../../ci.js";
 import { createGithubReleasePort, GithubReleaseFailure, ReleaseService, type GithubReleaseAdapter } from "../../github-release.js";
@@ -43,7 +42,6 @@ import {
   type AttentionCategory,
   type DeliveryReviewActivityResult,
   type DeliveryReviewServiceInput,
-  type DeveloperSupervisorActivityIdentity,
   type DeveloperTurnActivityOutcome,
   type DeveloperRepairActivityResult,
   type DurableArtifactReference,
@@ -64,14 +62,6 @@ export interface ActivityOptions {
   ciProvider?: CiProvider;
   logSink?: (line: string) => void;
 }
-
-class SupervisedDeveloperTerminalError extends Error {
-  constructor(readonly result: DeveloperTurnRunResult) {
-    super(`Developer turn ended as ${result.terminal}`);
-    this.name = "SupervisedDeveloperTerminalError";
-  }
-}
-
 export function asNonRetryableApplicationFailure(error: unknown): ApplicationFailure | undefined {
   if (error instanceof WorktreeFailure) {
     return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
@@ -86,13 +76,11 @@ export function asNonRetryableApplicationFailure(error: unknown): ApplicationFai
   if (!(error instanceof AgentFailure) || !error.nonRetryable) return undefined;
   return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
 }
-
 export function asRetryableAgentFailure(error: unknown): ApplicationFailure | undefined {
   if (!(error instanceof AgentFailure) || error.code !== "rate-limited") return undefined;
   const retryAt = error.retryAt ?? (error.retryAfterMs !== undefined ? new Date(Date.now() + error.retryAfterMs).toISOString() : undefined);
   return ApplicationFailure.retryable(error.message, error.code, { ...(retryAt ? { retryAt } : {}), ...(error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {}) });
 }
-
 export function asNonRetryableCapacityFailure(error: unknown): ApplicationFailure | undefined {
   if (!(error instanceof CapacityFailure)) return undefined;
   if (error.code === "invalid-status") {
@@ -101,7 +89,6 @@ export function asNonRetryableCapacityFailure(error: unknown): ApplicationFailur
   }
   return ApplicationFailure.nonRetryable(error.message, error.code, { code: error.code, summary: error.message });
 }
-
 const LegacyPinnedProjectRevisionSchema = z.object({
   repositoryPath: z.string().min(1),
   worktreeRoot: z.string().min(1),
@@ -115,12 +102,10 @@ const LegacyPinnedProjectRevisionSchema = z.object({
   verificationCommand: z.string().min(1),
 });
 const DeveloperDeliverySchema = z.object({ steps: z.array(z.object({ filesChanged: z.array(z.string()).optional(), commandsRun: z.array(z.string()).optional(), testResults: z.array(z.string()).optional() }).passthrough()).default([]) }).passthrough();
-
 function pinnedProjectRevision(raw: string): AcceptedProjectRevision {
   try { return parseAcceptedProjectRevision(raw); }
   catch { return LegacyPinnedProjectRevisionSchema.parse(jsonRequired(raw)) as AcceptedProjectRevision; }
 }
-
 function normalizeReviewResult(raw: unknown, rawInput: unknown): DeliveryReviewActivityResult {
   const input = DeliveryReviewActivityInputSchema.parse(rawInput);
   const result = DeliveryReviewActivityResultSchema.safeParse(raw);
@@ -135,14 +120,12 @@ function normalizeReviewResult(raw: unknown, rawInput: unknown): DeliveryReviewA
   });
   throw result.error;
 }
-
 function normalizeRepairResult(raw: unknown, rawInput: unknown): DeveloperRepairActivityResult {
   DeveloperRepairActivityInputSchema.parse(rawInput);
   const result = DeveloperRepairActivityResultSchema.safeParse(raw);
   if (result.success) return result.data;
   throw result.error;
 }
-
 async function durableArtifactReference(database: ForgeDatabase, store: ArtifactStore, companyId: string, artifactId: string, kind?: DurableArtifactReference["kind"]): Promise<DurableArtifactReference> {
   const row = database.authQuery((db) => db.prepare("SELECT id AS artifactId, company_id AS companyId, kind, sha256, byte_size AS byteSize, mime_type AS mimeType, storage_path AS storagePath FROM forge_artifacts WHERE id = ? AND company_id = ?").get(artifactId, companyId) as ({ artifactId: string; companyId: string; kind: string; sha256: string; byteSize: number; mimeType: string; storagePath: string } | undefined));
   if (!row || (kind && row.kind !== kind)) throw new Error("Scoped artifact reference is unavailable");
@@ -151,7 +134,6 @@ async function durableArtifactReference(database: ForgeDatabase, store: Artifact
   if (bytes.byteLength !== reference.byteSize) throw new Error("Scoped artifact size verification failed");
   return reference;
 }
-
 async function verifiedArtifactBytes(database: ForgeDatabase, store: ArtifactStore, companyId: string, expected: DurableArtifactReference, kind: DurableArtifactReference["kind"]): Promise<Buffer> {
   const actual = await durableArtifactReference(database, store, companyId, expected.artifactId, kind);
   for (const field of ["artifactId", "companyId", "kind", "byteSize", "mimeType"] as const) {
@@ -163,12 +145,9 @@ async function verifiedArtifactBytes(database: ForgeDatabase, store: ArtifactSto
   if (!stored) throw new Error("Scoped artifact storage is unavailable");
   return store.getArtifact({ companyId, storagePath: row.storagePath, sha256: stored.sha256 });
 }
-
 function artifactReference(artifact: Pick<StoredArtifact, "id" | "kind">) {
   return ArtifactReferenceSchema.parse({ id: artifact.id, kind: artifact.kind });
 }
-
-
 function reconcileBlocker(error: unknown): { code: TargetBaseBlockerCode; owner: "human" | "provider" | "lead"; retryable: boolean; summary: string } {
   const code = error instanceof ForwardMergeFailure ? error.code : "provider-unavailable";
   const mapped: Record<string, { code: TargetBaseBlockerCode; owner: "human" | "provider" | "lead"; retryable: boolean; summary: string }> = {
@@ -185,7 +164,6 @@ function reconcileBlocker(error: unknown): { code: TargetBaseBlockerCode; owner:
   };
   return mapped[code] ?? { code: "provider_unavailable", owner: "provider", retryable: true, summary: "Target-base reconciliation could not be completed" };
 }
-
 export function createActivityContext(database: ForgeDatabase, config: ForgeConfig, options: ActivityOptions = {}) {
   const logger = new StructuredLogger(options.logSink);
   const defaultAgent = new AgentService(database, config);
@@ -241,49 +219,19 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     }
   };
   const bindCapacityExecution = async <T>(_capacityRequestId: string | undefined, _owner: { executionKind: "agent" | "developer"; executionId: string; sessionRef?: string | null; worktreePath?: string | null }, result: T): Promise<T> => result;
-  const recoverFinalizedDeveloperResult = async <T>(_input: { taskId: string; companyId: string; workflowId: string; planRevision: number } & DeveloperSupervisorActivityIdentity): Promise<{ result: T } | undefined> => undefined;
   const runSupervised = async <T extends { developerExecutionId: string; evidenceArtifactId: string | null; deliveryArtifactId?: string; verificationArtifact?: { id: string } }>(
-    input: { taskId: string; companyId: string; workflowId: string; planRevision: number; capacityRequestId?: string } & DeveloperSupervisorActivityIdentity,
+    input: { taskId: string; companyId: string; workflowId: string; planRevision: number; capacityRequestId?: string; developerTurnExecutionId: string },
     operation: (service: Pick<DeveloperService, "run" | "runRepair" | "runMergeConflictResolution" | "runCiRepair">) => Promise<T>,
   ): Promise<DeveloperTurnActivityOutcome<T>> => {
-    let terminal: DeveloperTurnRunResult | undefined;
-    const processRunner: LeadProcessRunner = async (invocation) => {
-      const env = Object.fromEntries(Object.entries(invocation.env ?? {}).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-      terminal = await runDeveloperTurn({
-        database,
-        config,
-        executionId: input.developerTurnExecutionId,
-        developerAttempt: input.developerAttempt,
-        planRevision: input.planRevision,
-        turnKind: input.turnKind,
-        companyId: input.companyId,
-        taskId: input.taskId,
-        workflowId: input.workflowId,
-        canonicalWorktreePath: invocation.cwd,
-        worktreeIdentityHash: createHash("sha256").update(`${input.companyId}\0${input.workflowId}\0${invocation.cwd}`).digest("hex"),
-        command: invocation.command,
-        args: invocation.args,
-        ...(invocation.stdin !== undefined ? { stdin: invocation.stdin } : {}),
-        cwd: invocation.cwd,
-        env,
-        onStart: invocation.onStart,
-        onLine: invocation.onLine,
-      });
-      for (const line of terminal.lines) await invocation.onLine(line);
-      if (terminal.terminal !== "result") throw new SupervisedDeveloperTerminalError(terminal);
-      return { exitCode: terminal.exitCode ?? -1, stderr: terminal.exitSignal ? `Developer process exited with ${terminal.exitSignal}` : "" };
-    };
     try {
-      const recovered = await recoverFinalizedDeveloperResult<T>(input);
-      if (recovered) return { status: "completed", result: recovered.result };
-      const service = options.developer ? developer as DeveloperService : new DeveloperService(database, config, { github: githubRelease, processRunner });
-      const result = await operation(service);
+      const result = await operation(developer as DeveloperService);
       await bindCapacityExecution(input.capacityRequestId, { executionKind: "developer", executionId: result.developerExecutionId }, result);
-      return { status: "completed", result };
+      return {
+        status: "completed",
+        result,
+        resultHash: createHash("sha256").update(JSON.stringify(result)).digest("hex"),
+      };
     } catch (error) {
-      if (error instanceof SupervisedDeveloperTerminalError) {
-        return { status: "interrupted", developerExecutionId: input.developerTurnExecutionId, reasonCode: "developer-worker-lost", summary: "The Developer process ended before Forge could claim a result.", lastHeartbeatAt: error.result.lastHeartbeatAt };
-      }
       if (error instanceof AgentFailure) {
         const evidence = database.authQuery((db) => (db.prepare("SELECT evidence_artifact_id AS evidenceArtifactId FROM forge_developer_executions WHERE id = ?").get(input.developerTurnExecutionId) as { evidenceArtifactId: string | null } | undefined)?.evidenceArtifactId ?? null);
         return { status: "failed", developerExecutionId: input.developerTurnExecutionId, reasonCode: error.code, summary: SafeSummarySchema.parse(error.message), evidenceArtifactId: evidence };
@@ -325,7 +273,6 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     reconcileDeveloperExecutions,
     cancelAgentExecution,
     reconcileAgentExecutions,
-    runDeveloperTurn,
     AcceptanceFailure,
     AcceptanceService,
     CiFailure,
@@ -392,7 +339,6 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     agentCategory,
     invokeAgent,
     bindCapacityExecution,
-    recoverFinalizedDeveloperResult,
     runSupervised,
     latestWorktree,
     cancellationSignal,
@@ -411,5 +357,4 @@ export function createActivityContext(database: ForgeDatabase, config: ForgeConf
     DeveloperDeliverySchema,
   };
 }
-
 export type ActivityContext = ReturnType<typeof createActivityContext>;

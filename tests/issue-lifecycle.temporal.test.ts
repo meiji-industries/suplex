@@ -39,19 +39,17 @@ test("runs the issue lifecycle, governance, recovery, CI, continuation, and rebu
     const tellApprovalPlan = await executeIssueCommand(config, tellApproval.workflowId, "start_planning", { expectedRevision: 0, actorUserId: "issue-admin" });
     const approvalNote = "Do not change .github/PULL_REQUEST_TEMPLATE.md; undo that please.";
     const revisedApproval = await executeIssueCommand(config, tellApproval.workflowId, "send_planner_note", { expectedRevision: tellApprovalPlan.revision, actorUserId: "issue-admin", note: approvalNote, commandId: "tell-approval-1" });
-    expect(revisedApproval).toMatchObject({ phase: "approval", owner: "human", planMaterial: true });
-    expect(revisedApproval.planRevision).toBeGreaterThan(tellApprovalPlan.planRevision!);
-    expect(harness.plannerInputs.at(-1)).toEqual({ taskId: "issue-tell-approval", leadSessionRef: "session_integration", operatorNotes: [approvalNote] });
+    expect(revisedApproval).toMatchObject({ phase: tellApprovalPlan.phase, revision: tellApprovalPlan.revision, planRevision: tellApprovalPlan.planRevision });
+    expect(harness.plannerInputs).not.toContainEqual({ taskId: "issue-tell-approval", leadSessionRef: "session_integration", operatorNotes: [approvalNote] });
     expect(database.authQuery((db) => db.prepare("SELECT actor, note FROM forge_planner_notes WHERE task_id = 'issue-tell-approval'").get())).toEqual({ actor: "issue-admin", note: approvalNote });
 
     state.planningMaterial = false;
     const tellDevelopmentWorkflowId = `${runtimeIdentifiers(config.installationId).workflowPrefix}-issue-ci-tell-development`;
     await startIssueWorkflow(config, { companyId: "issue-company", projectId: "issue-project", issueId: "ci-tell-development", projectRevisionId: "issue-revision", briefArtifactId: "issue-brief", briefSha256: "0".repeat(64), imageArtifactIds: [], roleProfiles: harness.issueRoleProfiles, supplementalReview: false, repairCycleLimit: 0, continuationState: { phase: "development", revision: 8, owner: "lead", allowedCommands: ["cancel_development", "cancel_issue"], pendingAction: "Developer execution", lastEventId: `${tellDevelopmentWorkflowId}:8`, continuationCount: 0, lastSummaryHash: null, blocker: null, stateChangedAt: new Date().toISOString(), leadSessionRef: "session_integration", leadOutputArtifactId: artifacts.integrationLeadOutputArtifactId, planRevision: 1, planMaterial: false, planApproved: true, materialCategories: [], supplementalReviewUsed: false, repairCycle: 0, developerExecutionId: "developer_before_note", developerSessionRef: "session_developer_integration", developerAttempt: 1, worktreePath: join(harness.root, "worktrees", "ci-tell-development"), branchName: "forge/issue/ci-tell-development", targetBaseSha: "a".repeat(40), resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean" } });
     const developmentNote = "Undo the pull request template change and keep the rest.";
-    await executeIssueCommand(config, tellDevelopmentWorkflowId, "send_planner_note", { expectedRevision: 8, actorUserId: "issue-admin", note: developmentNote, commandId: "tell-development-1" });
-    expect(harness.cancelledDeveloperIds).toContain("developer_before_note");
-    expect(harness.plannerInputs.at(-1)).toEqual({ taskId: "ci-tell-development", leadSessionRef: "session_integration", operatorNotes: [developmentNote] });
-    expect(harness.developerInputs.at(-1)).toMatchObject({ taskId: "ci-tell-development", supersedesExecutionId: "developer_before_note", reuseWorktree: true, operatorNote: developmentNote });
+    const forwardedDevelopment = await executeIssueCommand(config, tellDevelopmentWorkflowId, "send_planner_note", { expectedRevision: 8, actorUserId: "issue-admin", note: developmentNote, commandId: "tell-development-1" });
+    expect(forwardedDevelopment).toMatchObject({ phase: "development", revision: 8, developerExecutionId: "developer_before_note" });
+    expect(harness.cancelledDeveloperIds).not.toContain("developer_before_note");
     state.planningMaterial = true;
 
     // repairCycleLimit: 0 so the auto-chain's one blocking review lands directly in delivery_blocked
@@ -324,16 +322,13 @@ test("cancel_issue cancels a Lead activity despite a stale revision and late res
     const cancelled = await executeIssueCommand(config, started.workflowId, "cancel_issue", { expectedRevision: staleRevision, actorUserId: "issue-admin" });
     expect(cancelled).toMatchObject({ phase: "cancelled", owner: "human" });
 
-    // Release the held Lead turn now that cancellation was requested: its stale result must
-    // not resurrect a cancelled issue (the capacity turn is rejected as stale and discarded).
+    // Release the held Lead turn now that cancellation was requested: its late result must not
+    // resurrect a cancelled issue. The update settles only once the Workflow has handled that
+    // result, so the state read afterwards is final, not a race against the projection.
     state.releasePlanning();
     state.holdPlanning = false;
     await plannedIssuePromise.catch(() => undefined);
-    for (let attempt = 0; attempt < 20; attempt += 1) {
-      issueState = await queryIssueWorkflow(config, started.workflowId);
-      if (issueState.phase === "cancelled") break;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
+    issueState = await queryIssueWorkflow(config, started.workflowId);
     expect(issueState).toMatchObject({ phase: "cancelled", owner: "human" });
     expect(database.authQuery((db) => db.prepare("SELECT revision, phase FROM forge_issue_projections WHERE task_id = 'issue-restart'").get())).toEqual({ revision: issueState.revision, phase: "cancelled" });
   } finally {

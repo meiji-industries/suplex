@@ -24,8 +24,9 @@ test("makes conflict summaries easy to scan", () => {
 test("renders the approved plan as static numbered instructions", () => {
   const html = renderToStaticMarkup(createElement(TaskLeadPlan, { output: { kind: "plan", summary: "Plan", executionId: "lead_1", outputArtifactId: "plan_1", evidenceArtifactId: "evidence_1", content: { kind: "plan", summary: "Plan", gitPresentation: { branchSlug: "stream-progress", pullRequestTitle: "Stream progress", pullRequestDescription: "Show live Developer progress." }, reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "First", entryPoint: null, completionCriterion: null, verification: "test one", verificationCommands: [] }, { number: 2, instruction: "Second", entryPoint: null, completionCriterion: null, verification: "test two", verificationCommands: [] }], compatibilityAnalysis: "Compatible", operationalAnalysis: "No impact", verificationStrategy: "Run checks", unresolvedTechnicalQuestions: [], materialCategories: [], preservedWorktreeCompatibility: null, affectedPaths: [], materiality: [], developerContext: { includeTaskBrief: false, evidenceArtifactIds: [], imageArtifactIds: [], repositoryInstructionPaths: [], artifactStepNumbers: {} } } }, decisionControls: createElement("button", null, "Approve Plan") }));
 
-  expect(html).toContain("Step 1 — First");
-  expect(html).toContain("Step 2 — Second");
+  const text = html.replace(/<[^>]+>/g, "");
+  expect(text).toContain("Step 1 — First");
+  expect(text).toContain("Step 2 — Second");
   expect(html).toContain('data-plan-steps="true"');
   expect(html).toContain('data-orientation="vertical"');
   expect(html).toMatch(/data-plan-steps="true"><div[^>]*data-slot="timeline-item"/);

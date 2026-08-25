@@ -1,11 +1,12 @@
 import { ApplicationFailure, setHandler } from "@temporalio/workflow";
 import * as contracts from "../issue-contracts.js";
-import * as activityProxies from "./activity-proxies.js";
+import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
 import { issueUpdates } from "../issue-updates.js";
 import { githubPullRequestObservationFields } from "../../github-pull-request-observation.js";
 import type { IssueWorkflowContext } from "./context.js";
 export function registerReleaseHandlers(ctx: IssueWorkflowContext): void {
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
   const runPublishTurn = async (): Promise<contracts.IssueWorkflowState> => {
     ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "releasing", owner: "lead", allowedCommands: [], pendingAction: "Opening the pull request", lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
     await ctx.project();

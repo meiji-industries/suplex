@@ -14,9 +14,7 @@ import { BackupService, reconcileRestoredState } from "./backup.js";
 import { CapacityManager } from "./capacity.js";
 import { createGithubReleasePort } from "./github-release.js";
 import { ProjectionRebuildFailure, ProjectionRebuildService } from "./projection-rebuild.js";
-import { runAgentWrapper } from "./agent-wrapper.js";
-import { reconcileAgentExecutions } from "./agent-recovery.js";
-import { reconcileDeveloperExecutions } from "./developer-recovery.js";
+import { reconcileHerdrSessions } from "./herdr-recovery.js";
 import { formatDoctor, runDoctor } from "./diagnostics/doctor.js";
 import { formatTaskDiagnostic, inspectTask, writeTaskBundle } from "./diagnostics/task.js";
 import { runLogViewer } from "./log-viewer.js";
@@ -45,12 +43,6 @@ async function stopForge(config: ReturnType<typeof loadConfig>): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  if (command === "agent-wrapper") {
-    const manifestPath = process.argv[3];
-    if (!manifestPath) throw new Error("agent-wrapper requires a manifest path");
-    await runAgentWrapper(manifestPath);
-    return;
-  }
   if (command === "setup" || command === "onboard") {
     await runSetup();
     return;
@@ -143,8 +135,7 @@ async function main(): Promise<void> {
         }
         const restoredAuth = new AuthService(restoredDatabase, config);
         const companies = restoredAuth.listVisibleCompanies("admin").length;
-        await reconcileAgentExecutions(restoredDatabase);
-        await reconcileDeveloperExecutions(restoredDatabase);
+        await reconcileHerdrSessions(restoredDatabase);
         new CapacityManager(restoredDatabase, config).reconcileFromLedgers();
         const reconciliation = await reconcileRestoredState(restoredDatabase, createGithubReleasePort());
         const handoff = {
@@ -175,8 +166,7 @@ async function main(): Promise<void> {
     const database = new ForgeDatabase(config.databasePath);
     try {
       const rebuild = await new ProjectionRebuildService(database, config).rebuild();
-      await reconcileAgentExecutions(database);
-      await reconcileDeveloperExecutions(database);
+      await reconcileHerdrSessions(database);
       new CapacityManager(database, config).reconcileFromLedgers();
       process.stdout.write(`Rebuilt ${rebuild.rebuilt} issue projections (${rebuild.findings.length} findings) and reconciled operator ledgers\n`);
     } finally { database.close(); }

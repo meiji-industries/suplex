@@ -184,7 +184,7 @@ test("concurrent exchanges consume one pairing code exactly once", async () => {
   const issued = service.create(adminId, { name: "Hermes Concurrent", companyId, projectIds: ["project_allowed"] });
   database.close();
   const contenders = [0, 1].map(() => {
-    const contender = spawn("pnpm", ["exec", "tsx", "tests/fixtures/hermes-exchange-contender.ts", join(root, "forge.sqlite"), issued.pairingCode, "profile-concurrent"], { cwd: process.cwd(), stdio: ["pipe", "pipe", "pipe"] });
+    const contender = spawn(process.execPath, ["--import", "tsx", "tests/fixtures/hermes-exchange-contender.ts", join(root, "forge.sqlite"), issued.pairingCode, "profile-concurrent"], { cwd: process.cwd(), stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let ready!: () => void;

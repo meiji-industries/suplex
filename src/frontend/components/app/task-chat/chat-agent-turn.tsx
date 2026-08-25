@@ -2,15 +2,34 @@ import { useEffect, useState } from "react";
 import { ChevronDown } from "lucide-react";
 
 import { Collapsible } from "../../ui/collapsible.js";
+import { Badge } from "../../ui/badge.js";
+import { Button } from "../../ui/button.js";
+import { Card, CardContent } from "../../ui/card.js";
 import { Markdown } from "../markdown.js";
 import { ProfileAvatar } from "../profile-avatar.js";
 import type { ChatEvent, ChatItem } from "../../../lib/task-chat.js";
 
 function duration(startedAt: string, finishedAt: string | null, now: number): string { return `${Math.max(0, Math.floor(((finishedAt ? Date.parse(finishedAt) : now) - Date.parse(startedAt)) / 1_000))}s`; }
+function ReasoningEvent({ event }: { event: ChatEvent }) {
+  const [expanded, setExpanded] = useState(false);
+  const long = event.text.split("\n").length > 4 || event.text.length > 500;
+  return <li data-task-chat-reasoning><Card size="sm"><CardContent><div className="space-y-2"><p className="text-[11px] font-medium text-muted-foreground">Reasoning</p>{!long || expanded ? <Markdown source={event.text} /> : <p className="whitespace-pre-wrap text-[12px] text-muted-foreground">{event.text.split("\n").slice(0, 4).join("\n")}</p>}{long ? <Button type="button" variant="ghost" size="xs" onClick={() => setExpanded((current) => !current)}>{expanded ? "Show less" : "Show more"}</Button> : null}</div></CardContent></Card></li>;
+}
+
 function EventLine({ event, onOpenDiff }: { event: ChatEvent; onOpenDiff: () => void }) {
-  const label = event.kind === "file_change" ? "Edited" : event.kind === "test_result" ? "Tests:" : event.kind === "tool_call" ? "Tool:" : "";
-  const status = event.kind === "command" ? event.status === "running" ? "…" : event.exitCode === 0 ? "✓" : event.exitCode === null || event.exitCode === undefined ? "" : `exit ${event.exitCode}` : "";
-  return <li className="break-words text-[12px] text-muted-foreground">{label ? <span className="font-medium text-foreground">{label} </span> : null}{event.files?.length ? <>{event.files.map((file) => <button type="button" className="underline underline-offset-2" onClick={onOpenDiff} key={file}>{file}</button>)} {event.text}</> : event.text}{event.count && event.count > 1 ? ` ×${event.count}` : ""}{status ? <span className="ml-1">{status}</span> : null}</li>;
+  if (event.kind === "thinking_summary") return <ReasoningEvent event={event} />;
+  if (event.kind === "command") {
+    const [expanded, setExpanded] = useState(false);
+    const failed = event.exitCode !== null && event.exitCode !== undefined && event.exitCode !== 0;
+    const label = event.status === "running" ? "…" : event.exitCode === null || event.exitCode === undefined ? "exit —" : `exit ${event.exitCode}`;
+    const lines = event.output?.split("\n") ?? [];
+    const preview = expanded ? lines : lines.slice(0, 3);
+    return <li data-task-chat-command className="font-mono text-[12px]"><div className="flex flex-wrap items-center gap-1.5"><code className="break-all">$ {event.text}</code><Badge variant={failed ? "destructive" : "secondary"}>{label}</Badge></div>{preview.length ? <pre className="mt-1 whitespace-pre-wrap break-words text-muted-foreground">{preview.join("\n")}</pre> : null}{lines.length > 3 ? <Button type="button" variant="ghost" size="xs" onClick={() => setExpanded((current) => !current)}>{expanded ? "Show less" : `… +${lines.length - 3} lines`}</Button> : null}</li>;
+  }
+  if (event.kind === "tool_call") return <li data-task-chat-tool-call className="break-words text-[12px] text-muted-foreground"><span className="font-medium text-foreground">{event.text}</span>{event.detail ? <span> · {event.detail}</span> : null}{event.toolStatus ? <span> ({event.toolStatus})</span> : null}{event.count && event.count > 1 ? ` ×${event.count}` : ""}</li>;
+  if (event.kind === "file_change") return <li className="break-words text-[12px] text-muted-foreground"><span className="font-medium text-foreground">Edited </span>{event.files?.map((file) => <button type="button" className="underline underline-offset-2" onClick={onOpenDiff} key={file}>{file}</button>)} {event.text}</li>;
+  if (event.kind === "message") return <li data-task-chat-agent-message className="text-[13px]"><Markdown source={event.text} /></li>;
+  return <li className="break-words text-[12px] text-muted-foreground">{event.kind === "test_result" ? <span className="font-medium text-foreground">Tests: </span> : null}{event.text}{event.count && event.count > 1 ? ` ×${event.count}` : ""}</li>;
 }
 export function ChatAgentTurn({ item, onOpenDiff, onLoadEvents }: { item: Extract<ChatItem, { kind: "agent_turn" }>; onOpenDiff: () => void; onLoadEvents: () => Promise<void> }) {
   const [now, setNow] = useState(Date.now());

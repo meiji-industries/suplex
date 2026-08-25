@@ -91,23 +91,27 @@ Blockers are typed and owned: `blocked` and `delivery_blocked` name who must act
 
 Judgment and execution are separated. The Lead owns one resumable Codex session per issue for planning, delivery review, repair planning, and merge-conflict planning; the Developer owns a separate session that implements the exact final plan. A Developer that finds repository evidence contradicting the plan stops and returns it to the Lead rather than improvising, and it never publishes branches or calls providers — release automation and `gh` operations run deterministically in the worker.
 
-Developer turns are isolated and crash-safe. The activity reserves a lease in SQLite, then hands the turn to a detached supervisor process, so a worker restart cannot orphan or duplicate an execution:
+Developer turns are isolated and crash-safe. Forge records the durable turn and
+result claim in SQLite, then drives the persistent interactive Developer
+session through Herdr. A worker, Herdr-server, or pane restart recreates a
+pane with `codex resume` against that same session rather than relying on a
+PID:
 
 ```text
   issueWorkflow (Temporal)
      │ activity: runDeveloperExecutionSupervised
      ▼
-  execution lease (SQLite) ──▶ detached developer supervisor process
-  token hash, worktree            │ control socket + heartbeats
-  identity, heartbeats            ▼
-                              Codex developer turn inside the issue worktree
-                              ~/forge/worktrees/<owner>/<repository>/…
-                                  │
-                                  ▼
-                              hash-verified result file
-                                  │ validated and claimed exactly once
-                                  ▼
-                  workflow records the exact commit + tree (delivery_ready)
+  durable turn + result claim (SQLite) ──▶ Herdr Developer pane
+  session ID, prompt hash, offset             │ interactive Codex session
+  and completion markers                      ▼
+                                        Codex in the issue worktree
+                                   ~/forge/worktrees/<owner>/<repository>/…
+                                                    │
+                                                    ▼
+                                      schema-valid result file + rollout marker
+                                                    │ claimed exactly once
+                                                    ▼
+                            workflow records the exact commit + tree (delivery_ready)
 ```
 
 Every issue gets its own Git worktree and branch; parallel issues on the same repository never share a working directory. When the target base advances, Forge forward-merges at explicit gates instead of rebasing, and a conflict blocks for a Lead-planned resolution.
@@ -201,7 +205,11 @@ pnpm run forge verify-backup /path/to/forge-backup.tar.gz
 
 The archive contains the application database, artifact store, and non-secret configuration. Temporal Workflow history remains in Temporal Cloud. User records and company/project state are retained, but passkey registrations, sessions, challenges, invitation tokens, provider credentials, the Temporal API key, and generated environment files are removed. Reauthentication is required after restore.
 
-Restore only into a new empty directory. The command verifies the archive, rebuilds the durable issue projections and operator attention ledgers, reconciles recorded Developer executions and existing GitHub release state without mutating GitHub, and writes `forge-backup/restore-handoff.json` with measured timings and explicit next steps:
+Restore only into a new empty directory. The command verifies the archive,
+rebuilds durable issue projections and operator attention ledgers, reconciles
+durable role-session/turn state and existing GitHub release state without
+mutating GitHub, and writes `forge-backup/restore-handoff.json` with measured
+timings and explicit next steps:
 
 ```sh
 pnpm run forge restore /path/to/forge-backup.tar.gz /path/to/forge-restored

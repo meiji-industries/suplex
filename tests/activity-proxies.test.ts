@@ -22,13 +22,25 @@ describe("activity proxies retry policies", () => {
         : (() => {
             const ref = call.match(/retry:\s*([A-Z_]+)/);
             expect(ref, `unrecognized retry policy shape in: ${call}`).not.toBeNull();
-            const constBlock = source.match(new RegExp(`const ${ref![1]} = \\{[\\s\\S]*?\\};`));
+            const constBlock = source.match(new RegExp(`const ${ref![1]}(?:\\s*:\\s*[^=]+)?\\s*= \\{[\\s\\S]*?\\};`));
             expect(constBlock, `no const named ${ref![1]}`).not.toBeNull();
             const constAttempts = constBlock![0].match(/maximumAttempts:\s*(\d+)/);
             expect(constAttempts, `${ref![1]} has no maximumAttempts`).not.toBeNull();
             return Number(constAttempts![1]);
           })();
       expect(attempts, `unbounded maximumAttempts in: ${call}`).toBeGreaterThan(0);
+    }
+  });
+
+  test("Herdr agent proxies omit the schedule-to-close ceiling and use their matching bounded retries", () => {
+    const calls = source.match(/proxyActivities<[^>]+>\((herdr\w+ActivityOptions)\);/g) ?? [];
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      const optionsName = call.match(/\((herdr\w+ActivityOptions)\)/)?.[1];
+      expect(optionsName).toBeDefined();
+      const options = source.match(new RegExp(`const ${optionsName}[^=]*= \\{[\\s\\S]*?\\};`))?.[0] ?? "";
+      expect(options).not.toContain("scheduleToCloseTimeout");
+      expect(options).toMatch(/retry:\s*(EXTERNAL_AGENT_RETRY_POLICY|SUPERVISED_DEVELOPER_RETRY_POLICY)/);
     }
   });
 });

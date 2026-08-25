@@ -1,22 +1,8 @@
+import { HerdrCodexProvider } from "./agent-providers/herdr-codex.js";
 import type { ForgeDatabase } from "./database.js";
-import { defaultProcessController, type ProcessInspection } from "./process-manager.js";
+import { CliHerdrClient } from "./herdr-client.js";
+import { reconcileHerdrSessions } from "./herdr-recovery.js";
 import type { DeveloperCancellationResult } from "./temporal/issue-contracts.js";
-
-export interface DeveloperProcessInspection {
-  pid: number;
-  processGroupId: number;
-  processStartIdentity: string;
-  command: string;
-  executable?: string;
-  argv?: string[];
-  ownerUid?: number;
-}
-
-export interface DeveloperProcessController {
-  inspect(pid: number): Promise<DeveloperProcessInspection | undefined>;
-  signalGroup(processGroupId: number, signal: "SIGTERM" | "SIGKILL"): Promise<void>;
-  isProcessGroupAlive?: (processGroupId: number) => Promise<boolean>;
-}
 
 export interface DeveloperRecoveryOutcome {
   executionId: string;
@@ -27,55 +13,45 @@ export interface DeveloperRecoveryOutcome {
 export interface RestoredDeveloperRecoveryReport {
   executionId: string;
   status: "active" | "failed";
-  reason: "process-alive" | "process-missing";
+  reason: "session-active" | "session-missing";
 }
 
-const controller: DeveloperProcessController = {
-  async inspect(pid) {
-    const process = await defaultProcessController.inspect(pid);
-    return process ? { pid: process.pid, processGroupId: process.processGroup, processStartIdentity: `${process.pid}:${process.startTime}`, command: process.command, executable: process.executable, argv: process.argv, ...(process.ownerUid === undefined ? {} : { ownerUid: process.ownerUid }) } : undefined;
-  },
-  async signalGroup(processGroupId, signal) { await defaultProcessController.signalGroup?.(processGroupId, signal); },
-  ...(defaultProcessController.isProcessGroupAlive ? { isProcessGroupAlive: defaultProcessController.isProcessGroupAlive } : {}),
-};
-
-interface RunningExecution { id: string; processPid: number | null }
-
-function running(database: ForgeDatabase): RunningExecution[] {
-  return database.authQuery((db) => db.prepare("SELECT id, process_pid AS processPid FROM forge_developer_executions WHERE status = 'running' ORDER BY started_at, id").all() as RunningExecution[]);
-}
-
-function fail(database: ForgeDatabase, executionId: string): void {
-  const now = new Date().toISOString();
-  database.authTransaction((db) => {
-    db.prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = COALESCE(finished_at, ?), failure_code = 'developer-process-missing', failure_summary = 'Builder process is no longer running.' WHERE id = ? AND status = 'running'").run(now, executionId);
+export async function reconcileDeveloperExecutions(database: ForgeDatabase): Promise<DeveloperRecoveryOutcome[]> {
+  const sessionOutcomes = await reconcileHerdrSessions(database);
+  const developerSessionIds = new Set(database.authQuery((db) => db.prepare("SELECT id FROM forge_herdr_role_sessions WHERE session_role = 'developer' AND is_current = 1 AND status NOT IN ('closed')").all() as Array<{ id: string }>).map((session) => session.id));
+  const sessionsByTask = new Map(
+    sessionOutcomes
+      .filter((outcome) => developerSessionIds.has(outcome.sessionId))
+      .map((outcome) => [outcome.taskId, outcome]),
+  );
+  const executions = database.authQuery((db) => db
+    .prepare("SELECT id, task_id AS taskId FROM forge_developer_executions WHERE status IN ('starting', 'running') ORDER BY started_at, id")
+    .all() as Array<{ id: string; taskId: string }>);
+  return executions.map((execution) => {
+    const session = sessionsByTask.get(execution.taskId);
+    if (session && session.status !== "failed" && session.status !== "unbound") {
+      return { executionId: execution.id, status: "active" as const };
+    }
+    database.authTransaction((db) => db
+      .prepare("UPDATE forge_developer_executions SET status = 'failed', finished_at = COALESCE(finished_at, ?), failure_code = 'developer-session-missing', failure_summary = 'Builder session cannot be recovered.' WHERE id = ? AND status IN ('starting', 'running')")
+      .run(new Date().toISOString(), execution.id));
+    return { executionId: execution.id, status: "failed" as const, reason: "herdr-session-missing" };
   });
 }
 
-/** A running execution remains untouched while its recorded Builder pid exists. */
-export async function reconcileDeveloperExecutions(database: ForgeDatabase, processController: DeveloperProcessController = controller): Promise<DeveloperRecoveryOutcome[]> {
-  const outcomes: DeveloperRecoveryOutcome[] = [];
-  for (const execution of running(database)) {
-    if (execution.processPid && await processController.inspect(execution.processPid)) outcomes.push({ executionId: execution.id, status: "active", reason: "process-alive" });
-    else { fail(database, execution.id); outcomes.push({ executionId: execution.id, status: "failed", reason: "process-missing" }); }
-  }
-  return outcomes;
+export async function reconcileRestoredDeveloperExecutions(database: ForgeDatabase): Promise<RestoredDeveloperRecoveryReport[]> {
+  return (await reconcileDeveloperExecutions(database)).map((outcome) => ({
+    executionId: outcome.executionId,
+    status: outcome.status,
+    reason: outcome.status === "active" ? "session-active" : "session-missing",
+  }));
 }
 
-export async function reconcileRestoredDeveloperExecutions(database: ForgeDatabase, processController: DeveloperProcessController = controller): Promise<RestoredDeveloperRecoveryReport[]> {
-  return (await reconcileDeveloperExecutions(database, processController)).map((outcome) => ({ executionId: outcome.executionId, status: outcome.status, reason: outcome.status === "active" ? "process-alive" : "process-missing" }));
-}
-
-export async function cancelDeveloperExecution(database: ForgeDatabase, executionId: string, processController: DeveloperProcessController = controller): Promise<DeveloperCancellationResult> {
-  const execution = database.authQuery((db) => db.prepare("SELECT process_pid AS processPid, process_group_id AS processGroupId FROM forge_developer_executions WHERE id = ? AND status = 'running'").get(executionId) as { processPid: number | null; processGroupId: number | null } | undefined);
-  if (!execution?.processPid || !await processController.inspect(execution.processPid)) {
-    fail(database, executionId);
-    return { status: "interrupted", executionId, reasonCode: "developer-process-missing", summary: "Builder process is no longer running." };
-  }
-  if (execution.processGroupId) await processController.signalGroup(execution.processGroupId, "SIGTERM");
+export async function cancelDeveloperExecution(database: ForgeDatabase, executionId: string): Promise<DeveloperCancellationResult> {
+  const execution = database.authQuery((db) => db.prepare("SELECT task_id AS taskId FROM forge_developer_executions WHERE id = ? AND status IN ('starting', 'running')").get(executionId) as { taskId: string } | undefined);
+  if (!execution) return { status: "cancelled" };
+  await new HerdrCodexProvider(database, new CliHerdrClient()).interrupt(execution.taskId, "developer");
   const now = new Date().toISOString();
-  database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ?, failure_code = NULL, failure_summary = NULL WHERE id = ? AND status = 'running'").run(now, executionId));
-  return { status: "cancelled_confirmed", executionId, exitCode: null, exitSignal: "SIGTERM", evidenceArtifactId: null };
+  database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ?, failure_code = NULL, failure_summary = NULL WHERE id = ? AND status IN ('starting', 'running')").run(now, executionId));
+  return { status: "cancelled_confirmed", executionId, exitCode: null, exitSignal: "SIGINT", evidenceArtifactId: null };
 }
-
-export type { ProcessInspection };

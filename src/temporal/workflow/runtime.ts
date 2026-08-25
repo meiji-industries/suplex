@@ -152,7 +152,7 @@ export function createAcquireExternalTurn(
   return async <T>(spec: { operation: CapacityOperation; role: CapacityRole; profileId?: string | undefined; sessionRef?: string | null | undefined; worktreePath?: string | null | undefined }, run: (capacityRequestId?: string) => Promise<T>, executionId: (result: T) => string | undefined, durableCapacityEnabled = options.patched(options.durableCapacityPatch)): Promise<T> => {
     if (options.patched("forge-simple-capacity-v1")) {
       const state = stateRef.get();
-      stateRef.set(IssueWorkflowStateSchema.parse({ ...state, pendingAction: "Waiting for a free agent slot", revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
+      stateRef.set(IssueWorkflowStateSchema.parse({ ...state, revision: state.revision + 1, lastEventId: `${state.workflowId}:${state.revision + 1}` }));
       await options.projectState(stateRef.get());
       return run(undefined);
     }

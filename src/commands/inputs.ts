@@ -12,12 +12,16 @@ export const StartPlanningInputSchema = z.object({
   reconcileOnly: z.literal(true).optional(),
 });
 
-export const SendPlannerNoteInputSchema = z.object({
+const SendPlannerNoteBaseSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
   actorUserId: durableId,
-  note: z.string().trim().min(1),
   commandId: durableId,
-}).strict();
+});
+
+export const SendPlannerNoteInputSchema = z.union([
+  SendPlannerNoteBaseSchema.extend({ noteId: durableId, noteSha256: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(),
+  SendPlannerNoteBaseSchema.extend({ note: z.string().trim().min(1) }).strict(),
+]);
 
 export const ResolveDecisionBlockerInputSchema = z.object({
   expectedRevision: z.number().int().nonnegative(),
@@ -45,6 +49,7 @@ export const PlanCommandInputSchema = z.object({
   exactBaseSha: z.string().regex(/^[a-f0-9]{40,64}$/i).optional(),
   decision: z.enum(["accept", "request_changes", "cancel"]).optional(),
   idempotencyKey: DecisionIdempotencyKeySchema.optional(),
+  noteId: durableId.optional(),
   noteStagingRef: durableId.optional(),
   /** Historical command payload compatibility; ignored. */
   noteSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),

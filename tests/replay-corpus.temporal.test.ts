@@ -17,7 +17,6 @@ test("runs and replays the Temporal scenario corpus", async () => {
       expect(executions.map(({ scenario }) => scenario)).toEqual(replayScenarios.map((definition) => definition.name));
       expect(executions.find(({ scenario }) => scenario === "normal_success")?.currentPhase).toBe("done");
       expect(executions.find(({ scenario }) => scenario === "continue_as_new")?.finalState.continuationCount).toBe(2);
-      expect(executions.find(({ scenario }) => scenario === "developer_ownership_ambiguous")?.finalState.capacity?.status).toBe("ownership_ambiguous");
       for (const execution of executions) {
         const revisions = execution.projections.map(({ revision }) => revision);
         expect(new Set(revisions).size, `duplicate projected revision in ${execution.scenario}: ${execution.projections.map(({ revision, phase, continuationCount }) => `${revision}:${phase}:${continuationCount}`).join(",")}`).toBe(revisions.length);

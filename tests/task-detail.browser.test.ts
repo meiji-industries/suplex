@@ -274,17 +274,6 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await observerDetail.locator('[data-status="planning"]').waitFor();
       const planningRun = observerDetail.locator("[data-planning-run]");
       await planningRun.waitFor();
-      const planningExecutionId = `agent_${"e".repeat(24)}`;
-      const planningSpoolPath = join(config.runtimeRoot, "agent-turns", planningExecutionId, "spool.ndjson");
-      await mkdir(join(config.runtimeRoot, "agent-turns", planningExecutionId), { recursive: true });
-      const planningObservedAt = new Date(Date.now() - 60_000).toISOString();
-      await writeFile(planningSpoolPath, `${JSON.stringify({ type: "item.completed", observedAt: planningObservedAt, item: { id: "planning-browser-update", type: "agent_message", text: "Inspecting README structure." } })}\n`);
-      await writeFile(join(config.runtimeRoot, "agent-turns", planningExecutionId, "status.json"), JSON.stringify({ updatedAt: planningObservedAt }));
-      database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, started_at, heartbeat_at, spool_relative_path) VALUES (?, ?, ?, ?, 'planner', 'running', 1, 'planning', ?, ?, ?)").run(planningExecutionId, taskId, company.id, plannedState!.workflowId, new Date().toISOString(), new Date().toISOString(), `agent-turns/${planningExecutionId}/spool.ndjson`));
-      const planningActivity = observerDetail.locator("[data-planning-activity]");
-      await planningActivity.getByText("Planner activity", { exact: true }).waitFor();
-      await planningActivity.getByText("Agent update: Inspecting README structure.", { exact: true }).waitFor();
-      await planningActivity.getByText("Last planner event 1:00 ago", { exact: true }).waitFor();
       expect(await planningRun.getByText("Browser task profile", { exact: false }).isVisible()).toBe(true);
       const progressDuringPlanning = observerDetail.locator("[data-task-progress]");
       expect(await progressDuringPlanning.locator("svg.animate-spin").count()).toBe(1);
@@ -296,7 +285,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       const planningNarrow = await context.newPage();
       await planningNarrow.setViewportSize({ width: 390, height: 844 });
       await planningNarrow.goto(page.url());
-      await planningNarrow.locator("[data-planning-activity]").getByText("Inspecting README structure.", { exact: false }).waitFor();
+      await planningNarrow.locator("[data-planning-run]").waitFor();
       expect(await planningNarrow.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
       await planningNarrow.close();
       database.authTransaction((db) => {
@@ -335,9 +324,11 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       await taskDetail.getByRole("button", { name: "Step 1 — Inspect repository", exact: true }).waitFor();
       const activityPlan = taskDetail.locator('[data-task-activity-revision="1"] [data-task-activity-plan]');
       const currentPlan = current.locator('[data-task-lead-plan]');
+      const taskActions = current.locator('[data-task-actions]');
       expect(await activityPlan.count()).toBe(0);
       expect(await currentPlan.locator('[data-slot="card-content"]').count()).toBe(1);
-      expect(await currentPlan.locator('[data-slot="card-footer"] [data-plan-decision-form]').count()).toBe(1);
+      expect(await taskActions.getByRole("heading", { name: "Review final plan", exact: true }).count()).toBe(1);
+      expect(await taskActions.locator('[data-plan-decision-controls] [data-plan-decision-form]').count()).toBe(1);
       expect(await taskDetail.getByText("Plan step progress", { exact: true }).count()).toBe(0);
       expect(await taskDetail.locator("[data-plan-step-progress]").count()).toBe(0);
       await page.setViewportSize({ width: 1280, height: 900 });
@@ -373,7 +364,7 @@ test("task detail remains truthful and usable on desktop and narrow viewports", 
       expect(await prLink.evaluate((element) => element === document.activeElement)).toBe(true);
       expect(await taskDetail.locator('[data-task-lead-plan] [data-slot="accordion"]').count()).toBe(1);
       expect(await current.locator('[data-plan-decision-form]').count()).toBe(1);
-      expect(await currentPlan.locator('[data-plan-decision-controls]').count()).toBe(1);
+      expect(await taskActions.locator('[data-plan-decision-controls]').count()).toBe(1);
       expect(await taskDetail.locator('[data-task-header-content] [data-plan-decision-form]').count()).toBe(0);
       await taskDetail.getByRole("button", { name: "Step 1 — Inspect repository", exact: true }).click();
       await taskDetail.getByText("The issue is understood", { exact: true }).waitFor();

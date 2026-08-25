@@ -1,0 +1,139 @@
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { expect, test } from "vitest";
+
+import { ArtifactStore } from "../src/artifacts.js";
+import { AgentFailure } from "../src/agent-failure.js";
+import { DeveloperService } from "../src/codex-developer.js";
+import { runCommand } from "../src/command-runner.js";
+import { createTestConfig } from "../src/config.js";
+import { ForgeDatabase } from "../src/database.js";
+import type { HerdrTurnInput, HerdrTurnOutput } from "../src/herdr-turn-runner.js";
+
+export async function command(command: string, args: string[], cwd: string): Promise<string> {
+  const result = await runCommand({ taskId: null, stepId: null, command, args, cwd });
+  if (result.exitCode !== 0) throw new Error(result.stderr);
+  return result.stdout.trim();
+}
+
+export async function fixture() {
+  const root = await mkdtemp(join(tmpdir(), "forge-codex-developer-"));
+  const repository = join(root, "repo");
+  const worktreeRoot = join(root, "worktrees");
+  await mkdir(repository, { recursive: true });
+  await mkdir(worktreeRoot, { recursive: true });
+  await writeFile(join(repository, "README.md"), "fixture\n");
+  await writeFile(join(repository, "package.json"), '{"scripts":{"test":"node -e \'process.exit(0)\'"}}');
+  await command("git", ["init"], repository);
+  await command("git", ["config", "user.email", "forge@example.invalid"], repository);
+  await command("git", ["config", "user.name", "Forge"], repository);
+  await command("git", ["add", "."], repository);
+  await command("git", ["commit", "-m", "fixture"], repository);
+  const targetSha = await command("git", ["rev-parse", "HEAD"], repository);
+  const config = createTestConfig(root, { repositoryRoot: root, artifactRoot: join(root, "artifacts"), runtimeRoot: join(root, "runtime") });
+  const database = new ForgeDatabase(config.databasePath);
+  const artifacts = new ArtifactStore(config.artifactRoot);
+  const brief = await artifacts.put("company_1", "task-brief", { filename: "brief.md", mimeType: "text/markdown", bytes: Buffer.from("Fix fixture.") });
+  const plan = await artifacts.put("company_1", "lead-plan", { filename: "plan.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ kind: "plan", summary: "Fixture", gitPresentation: { branchSlug: "fixture", pullRequestTitle: "Fixture", pullRequestDescription: "Fixture" }, reproduction: null, rootCauseAnalysis: null, steps: [{ number: 1, instruction: "Add marker", verification: "Marker exists", verificationCommands: [] }], compatibilityAnalysis: "None", operationalAnalysis: "None", verificationStrategy: "Check", unresolvedTechnicalQuestions: [], materialCategories: [], affectedPaths: ["MARKER.md"], materiality: [] })) });
+  const evidence = await artifacts.put("company_1", "agent-evidence", { filename: "lead.jsonl", mimeType: "application/x-ndjson", bytes: Buffer.from("{}\n") });
+  const taskConfiguration = await artifacts.put("company_1", "task-project-configuration", { filename: "configuration.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ projectId: "project_1", projectName: "Project", repositoryPath: repository, worktreeRoot, repository: "acme/forge", baseBranch: "main", targetBranch: "main", baseSha: targetSha, targetSha, setupCommand: "true", verificationCommand: "pnpm test", requiredChecks: [], roleAgents: { builder: "profile_1" }, roleProfiles: { builder: "profile_1" }, capturedAt: new Date().toISOString() })) });
+  const now = new Date().toISOString();
+  database.authQuery((db) => {
+    db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('user_1', 'Forge', 'forge', 'admin', 'active', ?, ?)").run(now, now);
+    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company_1', 'Company', 'active', ?)").run(now);
+    db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES ('profile_1', 'Developer', 'codex', 'gpt-5-codex', 'medium', 'standard', 1, ?, ?)").run(now, now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES ('project_1', 'company_1', 'Project', ?, ?, 'acme/forge', 'main', 'main', '', 'pnpm test', '[]', '{}', 'active', ?, ?)").run(repository, worktreeRoot, now, now);
+    for (const artifact of [brief, plan, evidence]) db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+    db.prepare("INSERT INTO forge_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, 'task_1', ?, ?, ?, ?, ?, ?, ?)").run(taskConfiguration.id, taskConfiguration.companyId, taskConfiguration.kind, taskConfiguration.filename, taskConfiguration.mimeType, taskConfiguration.byteSize, taskConfiguration.sha256, taskConfiguration.storagePath, taskConfiguration.createdAt);
+    db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, project_configuration_artifact_id, project_configuration_captured_at, idempotency_key, created_at, updated_at) VALUES ('task_1', 'company_1', 'project_1', 'Fixture', ?, '[]', '{}', 0, 'workflow_1', 'revision_1', ?, ?, 'fixture', ?, ?)").run(brief.id, taskConfiguration.id, now, now, now);
+    db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, session_ref, started_at, finished_at, evidence_artifact_id, output_kind, output_revision, output_artifact_id, output_summary) VALUES ('lead_1', 'task_1', 'company_1', 'workflow_1', 'planner', 'completed', 1, 'session_lead', ?, ?, ?, 'plan', 1, ?, 'Fixture')").run(now, now, evidence.id, plan.id);
+  });
+  return { root, database, config, input: { taskId: "task_1", companyId: "company_1", workflowId: "workflow_1", projectId: "project_1", projectRevisionId: "revision_1", planRevision: 1, roleProfiles: { builder: "profile_1" }, leadSessionRef: "session_lead", leadOutputArtifactId: plan.id } };
+}
+
+export function fakeTurnRunner(handler: (input: HerdrTurnInput<unknown>) => unknown | Promise<unknown>) {
+  const calls: HerdrTurnInput<unknown>[] = [];
+  return { calls, turnRunner: { async run<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T>> {
+    calls.push(input as HerdrTurnInput<unknown>);
+    const result = await handler(input as HerdrTurnInput<unknown>);
+    if (result instanceof Error) throw result;
+    return { turnId: `turn_${calls.length}`, sessionId: "codex_uuid", roleSessionId: "session_0123456789abcdef01234567", result: result as T, resultHash: `hash_${calls.length}` };
+  } } };
+}
+
+test("Developer delivery uses the fake turn role session and preserves delivery assertions", async () => {
+  const value = await fixture();
+  const worktree = join(value.root, "worktrees", "task_1");
+  const fake = fakeTurnRunner(async () => {
+    await writeFile(join(worktree, "MARKER.md"), "done\n");
+    await command("git", ["add", "MARKER.md"], worktree);
+    await command("git", ["commit", "-m", "deliver"], worktree);
+    return { kind: "delivery", summary: "Marker delivered", steps: [{ number: 1, status: "completed", filesChanged: ["MARKER.md"], commandsRun: [], testResults: [], notes: "done" }], authorizedStepsNotCompleted: [], resultCommit: "a".repeat(40), resultTree: "b".repeat(40), dirtyState: "clean", blocker: null };
+  });
+  try {
+    const result = await new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run(value.input);
+    expect(result).toMatchObject({ outcome: "completed", deliverySummary: "Marker delivered", developerSessionRef: "session_0123456789abcdef01234567" });
+    expect(fake.calls[0]).toMatchObject({ promptKind: "implementation", sessionRole: "developer", executionRole: "builder", ledger: "developer" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT session_ref, status FROM forge_developer_executions WHERE id = ?").get(result.developerExecutionId))).toEqual({ session_ref: "session_0123456789abcdef01234567", status: "completed" });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("implementation fails loudly when its frozen Builder profile no longer resolves", async () => {
+  const value = await fixture();
+  const worktree = join(value.root, "worktrees", "task_1");
+  const fake = fakeTurnRunner(async () => {
+    await writeFile(join(worktree, "MARKER.md"), "done\n");
+    await command("git", ["add", "MARKER.md"], worktree);
+    await command("git", ["commit", "-m", "deliver"], worktree);
+    return { kind: "delivery", summary: "Fallback delivered", steps: [{ number: 1, status: "completed", filesChanged: ["MARKER.md"], commandsRun: [], testResults: [], notes: "done" }], authorizedStepsNotCompleted: [], resultCommit: "a".repeat(40), resultTree: "b".repeat(40), dirtyState: "clean", blocker: null };
+  });
+  try {
+    value.database.authQuery((db) => {
+      db.prepare("DELETE FROM forge_profiles WHERE id = 'profile_1'").run();
+      db.prepare("UPDATE forge_profiles SET model = 'gpt-5.6-terra', reasoning_level = 'medium', service_priority = 'fast'").run();
+    });
+
+    await expect(new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run(value.input)).rejects.toMatchObject({ code: "developer-profile-unavailable", message: "Developer profile profile_1 is unavailable" });
+    expect(fake.calls).toEqual([]);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("implementation fails loudly when no fallback Developer profile exists", async () => {
+  const value = await fixture();
+  const fake = fakeTurnRunner(() => new Error("runner must not start"));
+  try {
+    value.database.authQuery((db) => db.prepare("DELETE FROM forge_profiles").run());
+
+    await expect(
+      new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run(value.input),
+    ).rejects.toMatchObject({ code: "developer-profile-unavailable" });
+    expect(fake.calls).toEqual([]);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("a thrown developer turn finalizes its execution and conflict claims are non-retryable", async () => {
+  const value = await fixture();
+  const fake = fakeTurnRunner(() => new Error("turn lost"));
+  try {
+    await expect(new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run({ ...value.input, developerTurnExecutionId: "developer_throw" })).rejects.toMatchObject({ code: "developer-failed" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT status, failure_summary FROM forge_developer_executions WHERE id = 'developer_throw'").get())).toEqual({ status: "failed", failure_summary: "Builder could not start: turn lost" });
+    expect(value.database.authQuery((db) => db.prepare("SELECT count(*) AS count FROM forge_developer_executions WHERE status IN ('starting', 'running')").get())).toEqual({ count: 0 });
+    const conflict = new AgentFailure("developer-result-claim-conflict", "conflict", { nonRetryable: true });
+    expect(conflict).toMatchObject({ code: "developer-result-claim-conflict", nonRetryable: true });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
+test("a retry returns its recorded claim without rerunning the Developer", async () => {
+  const value = await fixture();
+  const fake = fakeTurnRunner(() => new Error("runner must not start"));
+  const result = { developerExecutionId: "developer_claimed", developerSessionRef: "session", worktreePath: "/worktree", branchName: "work/claimed", targetBaseSha: "a".repeat(40), currentStep: null, resultCommit: "b".repeat(40), resultTree: "c".repeat(40), dirtyState: "clean", deliveryArtifactId: "delivery", evidenceArtifactId: "evidence", deliverySummary: "Already completed", outcome: "completed" };
+  try {
+    const artifactId = (value.database.authQuery((db) => db.prepare("SELECT id FROM forge_artifacts LIMIT 1").get()) as { id: string }).id;
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES (?, ?, ?, ?, ?, ?, 'completed', ?, ?, ?, ?)").run("developer_claimed", "task_1", "company_1", "workflow_1", 1, 1, "work/claimed", "/worktree", "a".repeat(40), new Date().toISOString()));
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_developer_result_claims (execution_id, claim_key, result_hash, activity_result_json, delivery_artifact_id, evidence_artifact_id, claimed_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run("developer_claimed", "developer:developer_claimed", "hash", JSON.stringify(result), artifactId, artifactId, new Date().toISOString()));
+    await expect(new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run({ ...value.input, developerTurnExecutionId: "developer_claimed" })).resolves.toEqual(result);
+    expect(fake.calls).toEqual([]);
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});

@@ -74,3 +74,17 @@ Need a change? Create a new migration.
 - A new replay scenario = one file in `tests/replay-scenarios/` + one line in its index.
 - Temporal update names, patch strings, `setHandler` order, and `durableCommand` kind strings are FROZEN. `tests/temporal-contract-pins.test.ts` and `tests/issue-command-executor.test.ts` enforce this — if they fail, your change is wrong, not the tests.
 - If `tests/architecture-guardrails.test.ts` line budgets fail, move code into the per-domain modules instead of raising the budget.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `meiji-industries/forge` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default vocabulary: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `CONTEXT.md` at the root plus `docs/adr/`. See `docs/agents/domain.md`.

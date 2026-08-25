@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -129,22 +129,18 @@ test("a creator that loses its lease cannot advance the creation intent", async 
 });
 
 
-test("Planning progress reuses the durable agent spool", async () => {
+test("Planning progress is timeline-backed and does not read legacy spools", async () => {
   const value = await fixture();
   try {
     const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Planning progress", description: "body", idempotencyKey: "planning-progress-task", images: [] });
-    const executionId = `agent_${"a".repeat(24)}`;
     const startedAt = "2026-08-11T00:00:00.000Z";
-    const spoolRelativePath = `agent-turns/${executionId}/spool.ndjson`;
-    await mkdir(join(value.config.runtimeRoot, "agent-turns", executionId), { recursive: true });
-    await writeFile(join(value.config.runtimeRoot, spoolRelativePath), `${JSON.stringify({ type: "item.completed", item: { id: "planning-update", type: "agent_message", text: "Inspecting the README." } })}\n`);
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, started_at, heartbeat_at, spool_relative_path) VALUES (?, ?, ?, ?, 'planner', 'running', 1, 'planning', ?, ?, ?)").run(executionId, created.task.id, value.companyId, created.task.workflowId, startedAt, startedAt, spoolRelativePath));
+    const executionId = `agent_${"a".repeat(24)}`;
+    value.database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, purpose, started_at, heartbeat_at) VALUES (?, ?, ?, ?, 'planner', 'running', 1, 'planning', ?, ?)").run(executionId, created.task.id, value.companyId, created.task.workflowId, startedAt, startedAt));
 
     const first = value.tasks.getPlanningProgress(value.adminId, created.task.id);
     expect(first).toMatchObject({ status: "running", execution: { id: executionId, status: "running" } });
-    expect(first.events).toHaveLength(1);
-    expect(first.events[0]?.summary).toBe("Inspecting the README.");
-    expect(value.tasks.getPlanningProgress(value.adminId, created.task.id, { executionId, sequence: 1 }).events).toEqual([]);
+    expect(first.events).toEqual([]);
+    expect(value.tasks.getPlanningProgress(value.adminId, created.task.id, { executionId, sequence: 0 }).events).toEqual([]);
     value.database.authQuery((db) => db.prepare("UPDATE forge_agent_executions SET status = 'failed', finished_at = ? WHERE id = ?").run(startedAt, executionId));
     expect(value.tasks.getPlanningProgress(value.adminId, created.task.id)).toMatchObject({ status: "failed", execution: { status: "failed" } });
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
@@ -436,6 +432,25 @@ test("tells the operator to refresh when the workflow rejects a stale projected 
   } finally {
     value.database.close(); await rm(value.root, { recursive: true, force: true });
   }
+});
+
+test("surfaces the durable handler reason when a plan decision is rejected", async () => {
+  const value = await fixture();
+  try {
+    const created = await value.tasks.createTask(value.adminId, value.companyId, { projectId: value.projectId, title: "Rejected approval", description: "Reviewed delivery", idempotencyKey: "rejected-approval-0001", images: [] });
+    const initial = value.stateByTask.get(created.task.id)!;
+    const approval = IssueWorkflowStateSchema.parse({ ...initial, revision: 1, phase: "approval", owner: "human", allowedCommands: ["approve_plan", "request_plan_revision", "cancel_issue"], pendingAction: "Approve final plan", lastEventId: `${initial.workflowId}:1` });
+    value.stateByTask.set(created.task.id, approval);
+    projectState(value.database, approval);
+    value.workflow.execute = async () => {
+      const rejected = IssueWorkflowStateSchema.parse({ ...approval, lastHandlerError: { command: "approve_plan", reason: "The plan references an unavailable target branch", at: "2026-08-24T00:00:00.000Z" } });
+      value.stateByTask.set(created.task.id, rejected);
+      projectState(value.database, rejected);
+      throw new Error("workflow rejected the update");
+    };
+
+    await expect(value.tasks.executeCommand(value.adminId, created.task.id, "approve_plan", { expectedRevision: 1, note: "Ship it", idempotencyKey: "approval-reason-0001" })).rejects.toMatchObject({ message: "The plan references an unavailable target branch" });
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
 test("shows the current target-base blocker instead of stale Developer recovery text", async () => {

@@ -604,8 +604,8 @@ export async function withWorktreeBuildCaches(input: WorktreeBuildCacheInput): P
   return { ...input.env, ...additions };
 }
 
-export async function createGitCommandGuard(runtimeRoot: string): Promise<GitCommandGuard> {
-  const directory = join(resolve(runtimeRoot), `developer-guard-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+export async function createGitCommandGuard(runtimeRoot: string, name = "developer-guard"): Promise<GitCommandGuard> {
+  const directory = join(resolve(runtimeRoot), name);
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const gitBin = process.env.FORGE_GIT_BIN?.trim() || execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   if (!gitBin) throw new WorktreeFailure("git-unavailable", "Git is unavailable for guarded Developer execution");

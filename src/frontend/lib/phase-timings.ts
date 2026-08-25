@@ -1,6 +1,6 @@
 import { ISSUE_PHASES, phaseLabel, type IssuePhase } from "../../issue-phases.js";
 
-export type PhaseTimingActivity = { eventType: string; createdAt: string };
+export type PhaseTimingActivity = { eventType: string; createdAt: string; metadata?: Record<string, unknown> };
 
 export type PhaseTiming = {
   phase: IssuePhase;
@@ -17,7 +17,8 @@ export type PhaseTimingLane = {
   timings: PhaseTiming[];
 };
 
-function phaseFromEvent(eventType: string): IssuePhase | undefined {
+function phaseFromEvent(eventType: string, metadata: Record<string, unknown> = {}): IssuePhase | undefined {
+  if (eventType === "planning_started") return metadata.planningStage === "completed" ? "approval" : "planning";
   if (!eventType.startsWith("phase_")) return undefined;
   const phase = eventType.slice("phase_".length);
   return (ISSUE_PHASES as readonly string[]).includes(phase) ? phase as IssuePhase : undefined;
@@ -26,7 +27,7 @@ function phaseFromEvent(eventType: string): IssuePhase | undefined {
 /** Derives each visit to a workflow phase from durable activity-feed rows. */
 export function phaseTimings(activity: PhaseTimingActivity[], currentPhase: IssuePhase, asOf = new Date().toISOString()): PhaseTiming[] {
   const phaseChanges = activity
-    .map((entry) => ({ phase: phaseFromEvent(entry.eventType), at: entry.createdAt }))
+    .map((entry) => ({ phase: phaseFromEvent(entry.eventType, entry.metadata), at: entry.createdAt }))
     .filter((entry): entry is { phase: IssuePhase; at: string } => entry.phase !== undefined && Number.isFinite(Date.parse(entry.at)))
     .sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
   const end = Number.isFinite(Date.parse(asOf)) ? asOf : new Date().toISOString();

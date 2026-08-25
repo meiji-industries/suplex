@@ -1,12 +1,13 @@
 import { setHandler } from "@temporalio/workflow";
 import * as contracts from "../issue-contracts.js";
-import * as activityProxies from "./activity-proxies.js";
+import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
 import { applyTargetBaseRevalidation } from "../target-base.js";
 import { developerExecutionId } from "../deterministic-id.js";
 import { issueUpdates } from "../issue-updates.js";
 import type { IssueWorkflowContext } from "./context.js";
 export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
   const reconcileMergeTurn = async (): Promise<contracts.IssueWorkflowState> => {
     const exactAcceptanceReceipts = ctx.patched(ctx.exactAcceptanceReceiptPatch);
     if (!ctx.state.releaseId || !ctx.state.expectedHeadSha || !ctx.state.acceptanceId) throw new Error("Exact accepted release head is required for merge reconciliation");
@@ -46,6 +47,7 @@ export function registerMergeHandlers(ctx: IssueWorkflowContext): void {
 }
 
 export async function resolveMergeConflict(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
     if (command.expectedRevision !== ctx.state.revision || ctx.state.phase !== "merge_conflict_required") throw new Error("Merge-conflict resolution is not available in the current phase");
     if (!ctx.state.developerExecutionId || !ctx.state.developerSessionRef || !ctx.state.leadSessionRef || !ctx.state.leadOutputArtifactId || !ctx.state.branchName || !ctx.state.forwardMergeId || !ctx.state.forwardMergePriorHead || !ctx.state.forwardMergePriorTree || !ctx.state.forwardMergeTargetBaseSha || !ctx.state.forwardMergeConflictArtifact || typeof ctx.state.forwardMergeConflictFileCount !== "number" || !ctx.state.targetBaseSha) throw new Error("An owned Developer execution and forward-merge evidence are required");
     const planRevision = ctx.state.planRevision ?? ctx.state.revision;

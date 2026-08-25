@@ -6,15 +6,15 @@ import { ForgeDatabase } from "./database.js";
 import { createActivities } from "./temporal/activities.js";
 import { StructuredLogger } from "./logging.js";
 import { runtimeIdentifiers } from "./runtime-identifiers.js";
-import { reconcileDeveloperExecutions } from "./developer-recovery.js";
+import { reconcileHerdrSessions } from "./herdr-recovery.js";
 import { activateLocalWorkerDeployment } from "./worker-deployment.js";
 import { reconcileSuccessorIntents } from "./successor-recovery.js";
 import { reconcileTaskCreationIntents } from "./task-creation-recovery.js";
 import { activityPayloadInterceptors } from "./temporal/payload-boundary-interceptors.js";
 import { buildProductionWorkflowBundle, temporalDataConverter, workflowBundleBuildId } from "./temporal/workflow-bundle.js";
-import { reconcileAgentExecutions } from "./agent-recovery.js";
 import { CapacityManager } from "./capacity.js";
 import { reconcileDonePullRequests } from "./done-pull-request-reconciliation.js";
+import { migrateLegacyHerdrSessions } from "./herdr-session-migration.js";
 
 export function workerHasLivePollers(status: Pick<WorkerStatus, "runState" | "workflowPollerState" | "activityPollerState">): boolean {
   return status.runState === "RUNNING"
@@ -24,6 +24,13 @@ export function workerHasLivePollers(status: Pick<WorkerStatus, "runState" | "wo
 
 export function deploymentVersionOptions(installationId: string, buildId: string) {
   return { useWorkerVersioning: true as const, version: { deploymentName: runtimeIdentifiers(installationId).ownerLabel, buildId }, defaultVersioningBehavior: "AUTO_UPGRADE" as const };
+}
+
+export function reclaimOrphanedHerdrExecutions(database: ForgeDatabase, now = new Date().toISOString()): { agentExecutions: number; developerExecutions: number } {
+  return database.authTransaction((db) => ({
+    agentExecutions: db.prepare("UPDATE forge_agent_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = COALESCE(finished_at, ?) WHERE status IN ('starting', 'running', 'cancelling')").run(now).changes,
+    developerExecutions: db.prepare("UPDATE forge_developer_executions SET status = 'failed', failure_code = 'worker-restart-orphan', finished_at = COALESCE(finished_at, ?) WHERE status IN ('starting', 'running', 'cancelling')").run(now).changes,
+  }));
 }
 
 async function waitForWorkerPolling(worker: Worker, failure: { error?: unknown }, timeoutMs = 30_000): Promise<void> {
@@ -107,6 +114,18 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
   logger.info("Worker startup: opening database");
   const database = new ForgeDatabase(config.databasePath);
   logger.info("Worker startup: database ready");
+  const legacySessions = await migrateLegacyHerdrSessions(database, config.runtimeRoot);
+  if (legacySessions.unresolved.length) {
+    logger.warn("Worker startup: terminalizing unresolved legacy Codex sessions", { executionIds: legacySessions.unresolved } as never);
+    const now = new Date().toISOString();
+    const placeholders = legacySessions.unresolved.map(() => "?").join(", ");
+    database.authTransaction((db) => {
+      db.prepare(`UPDATE forge_agent_executions SET status = 'failed', failure_code = 'legacy-session-unresolved', finished_at = ? WHERE id IN (${placeholders}) AND status IN ('starting', 'running', 'cancelling')`).run(now, ...legacySessions.unresolved);
+      db.prepare(`UPDATE forge_developer_executions SET status = 'failed', failure_code = 'legacy-session-unresolved', finished_at = ? WHERE id IN (${placeholders}) AND status IN ('starting', 'running', 'cancelling')`).run(now, ...legacySessions.unresolved);
+    });
+  }
+  const reclaimed = reclaimOrphanedHerdrExecutions(database);
+  logger.info("Worker startup: reclaimed orphaned execution ledgers", reclaimed as never);
   const identifiers = runtimeIdentifiers(config.installationId);
   const workerId = `${identifiers.workerPrefix}-${process.pid}`;
   let connection: NativeConnection | undefined;
@@ -172,8 +191,7 @@ export async function runWorker(config: ForgeConfig = loadConfig()): Promise<voi
     };
     refreshRegistration();
     reconcileTaskCreation();
-    void runReconciliation(logger, "agent-execution-reconciliation", () => reconcileAgentExecutions(database), (result) => result.filter((outcome) => outcome.status === "failed").length, (result) => ({ inspected: result.length, failed: result.filter((outcome) => outcome.status === "failed").length }));
-    void runReconciliation(logger, "developer-execution-reconciliation", () => reconcileDeveloperExecutions(database), (result) => result.filter((outcome) => outcome.status === "failed").length, (result) => ({ inspected: result.length, failed: result.filter((outcome) => outcome.status === "failed").length }));
+    void runReconciliation(logger, "herdr-session-reconciliation", () => reconcileHerdrSessions(database), (result) => result.filter((outcome) => outcome.status === "failed").length, (result) => ({ inspected: result.length, failed: result.filter((outcome) => outcome.status === "failed").length }));
     const reconcileWorkflowStall = (): void => {
       if (workflowStallRecovery || !connection) return;
       workflowStallRecovery = runReconciliation(

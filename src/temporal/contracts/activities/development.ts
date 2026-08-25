@@ -132,7 +132,7 @@ export interface DeveloperSupervisorActivityIdentity {
 }
 
 export type DeveloperTurnActivityOutcome<T> =
-  | { status: "completed"; result: T }
+  | { status: "completed"; result: T; resultHash: string }
   | { status: "interrupted"; developerExecutionId: string; reasonCode: string; summary: string; lastHeartbeatAt: string | null }
   | { status: "failed"; developerExecutionId: string; reasonCode: string; summary: string; evidenceArtifactId: string | null };
 

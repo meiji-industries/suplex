@@ -1,0 +1,780 @@
+import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { access, chmod, mkdir, rm, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import type { ForgeDatabase } from "./database.js";
+import {
+  HerdrFailure,
+  type HerdrAgent,
+  type HerdrClient,
+} from "./herdr-client.js";
+import { discoverRollout, rolloutCandidatePaths } from "./codex-rollout.js";
+import { createGitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
+export type RoleSessionRole = "lead" | "developer" | "reviewer";
+export interface LaunchSettings {
+  model: string;
+  reasoningLevel: string;
+  serviceTier: "default" | "priority" | "fast";
+}
+export interface RoleSessionTask {
+  taskId: string;
+  projectId: string;
+  projectSlug: string;
+  issueKey?: string;
+  worktreePath: string;
+  runtimeRoot: string;
+}
+export interface EnsuredRoleSession {
+  id: string;
+  agentName: string;
+  paneId: string;
+  codexSessionId: string | null;
+  generation: number;
+  rolloutPath?: string;
+  live: HerdrAgent;
+}
+const now = (): string => new Date().toISOString();
+const quote = (value: string): string => `'${value.replace(/'/g, "'\\''")}'`;
+const isMissingHerdrFailure = (error: unknown): boolean =>
+  error instanceof HerdrFailure &&
+  [
+    "pane_not_found",
+    "tab_not_found",
+    "workspace_not_found",
+    "agent_not_found",
+    "agent_name_not_found",
+  ].includes(error.code);
+export function herdrLabel(value: string): string {
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 32) || "task"
+  );
+}
+export function agentName(
+  issue: string,
+  taskId: string,
+  role: RoleSessionRole,
+  collision = false,
+  generation?: number,
+): string {
+  const base = herdrLabel(issue);
+  const generationSuffix =
+    role === "reviewer" && generation !== undefined ? `-${generation}` : "";
+  const suffix = collision
+    ? `-${herdrLabel(taskId).slice(-8)}-${role}${generationSuffix}`
+    : `-${role}${generationSuffix}`;
+  return `${base.slice(0, 32 - suffix.length)}${suffix}`
+    .replace(/^-/, "a-")
+    .slice(0, 32);
+}
+export function launchFingerprint(settings: LaunchSettings, cwd = ""): string {
+  return createHash("sha256").update(JSON.stringify({ ...settings, cwd })).digest("hex");
+}
+export function developerPaneEnvironment(input: {
+  guardDirectory: string;
+  gitRealBin: string;
+  env: NodeJS.ProcessEnv;
+  readinessSentinel?: string;
+}): string {
+  const keys = [
+    "HOME",
+    "USER",
+    "LOGNAME",
+    "SHELL",
+    "TERM",
+    "LANG",
+    "LC_ALL",
+    "COLORTERM",
+    "CODEX_HOME",
+    "HERDR_ENV",
+    "HERDR_SOCKET",
+    "MISE_DATA_DIR",
+    "MISE_CONFIG_DIR",
+    "MISE_TRUSTED_CONFIG_PATHS",
+    "CARGO_TARGET_DIR",
+    "PNPM_STORE_PATH",
+    "npm_config_cache",
+    "GOCACHE",
+    "PIP_CACHE_DIR",
+    "UV_CACHE_DIR",
+    "CCACHE_DIR",
+  ];
+  const values: Record<string, string> = {};
+  for (const key of keys) if (input.env[key]) values[key] = input.env[key]!;
+  values.TERM ??= "xterm-256color";
+  values.PATH = `${input.guardDirectory}:${input.env.PATH ?? ""}`;
+  values.FORGE_GIT_GUARD_DIR = input.guardDirectory;
+  values.FORGE_GIT_REAL_BIN = input.gitRealBin;
+  values.ZDOTDIR = input.guardDirectory;
+  if (input.readinessSentinel)
+    values.FORGE_HERDR_READINESS_SENTINEL = input.readinessSentinel;
+  const shell = "/bin/zsh";
+  const script = `exec ${quote(shell)} -i`;
+  return `exec env -i ${Object.entries(values)
+    .map(([key, value]) => `${key}=${quote(value)}`)
+    .join(" ")} /bin/sh -c ${quote(script)}`;
+}
+export class HerdrSessionStore {
+  private readonly ensuring = new Map<string, Promise<void>>();
+  constructor(
+    private readonly database: ForgeDatabase,
+    private readonly herdr: HerdrClient,
+    private readonly environment: NodeJS.ProcessEnv = process.env,
+    private readonly wait: (ms: number) => Promise<void> = (ms) =>
+      new Promise((resolve) => setTimeout(resolve, ms)),
+  ) {}
+  readRoleSession(id: string): Record<string, unknown> | null {
+    return this.database.authQuery((db) =>
+      (db
+        .prepare("SELECT * FROM forge_herdr_role_sessions WHERE id = ?")
+        .get(id) as Record<string, unknown> | undefined) ?? null,
+    );
+  }
+  async ensureRoleSession(
+    task: RoleSessionTask,
+    role: RoleSessionRole,
+    settings: LaunchSettings,
+  ): Promise<EnsuredRoleSession> {
+    const reserved = this.reserve(task, role);
+    const previous = this.ensuring.get(reserved.id) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.ensuring.set(reserved.id, current);
+    await previous;
+    try {
+      return await this.ensureReserved(
+        this.readRoleSession(reserved.id) ?? reserved,
+        task,
+        role,
+        settings,
+      );
+    } finally {
+      release();
+      if (this.ensuring.get(reserved.id) === current)
+        this.ensuring.delete(reserved.id);
+    }
+  }
+  private async ensureReserved(
+    row: Record<string, any>,
+    task: RoleSessionTask,
+    role: RoleSessionRole,
+    settings: LaunchSettings,
+  ): Promise<EnsuredRoleSession> {
+    const fingerprint = launchFingerprint(settings, task.worktreePath);
+    let closedPaneId: string | undefined;
+    let paneMismatch = false;
+    let existing = row.agent_name
+      ? await this.getRecordedAgent(row.agent_name)
+      : null;
+    if (existing && existing.paneId === row.pane_id) {
+      this.assertIdentity(row, existing);
+      if (row.launch_fingerprint === fingerprint)
+        return this.ready(row, existing, fingerprint);
+      await this.closeRecordedPane(row.id, existing.paneId);
+      closedPaneId = existing.paneId;
+      existing = null;
+    }
+    if (existing) {
+      existing = null;
+      paneMismatch = true;
+    }
+    const workspace = await this.workspace(task);
+    const tab = await this.tab(task, workspace.workspaceId);
+    let name = paneMismatch ? null : row.agent_name;
+    if (!name) {
+      name = this.deriveAgentName(task, role, Number(row.generation));
+      const liveNames = await this.herdr.listAgents();
+      if (liveNames.some((candidate) => candidate.name === name))
+        name = this.deriveAgentName(task, role, Number(row.generation), true);
+    }
+    this.database.authQuery((db) =>
+      db
+        .prepare(
+          "UPDATE forge_herdr_role_sessions SET agent_name = ?, status = 'starting', updated_at = ? WHERE id = ?",
+        )
+        .run(name, now(), row.id),
+    );
+    if (row.pane_id && !existing && row.pane_id !== closedPaneId)
+      await this.closeRecordedPane(row.id, row.pane_id);
+    let paneId: string | undefined;
+    try {
+      const pane = await this.herdr.splitPane({
+        paneId: tab.shellPaneId,
+        direction: "right",
+        cwd: task.worktreePath,
+        focus: false,
+      });
+      paneId = pane.paneId;
+      await this.herdr.renamePane(pane.paneId, role);
+      this.database.authQuery((db) =>
+        db
+          .prepare(
+            "UPDATE forge_herdr_role_sessions SET agent_name = ?, pane_id = ?, launch_fingerprint = ?, status = 'starting', updated_at = ? WHERE id = ?",
+          )
+          .run(name, pane.paneId, fingerprint, now(), row.id),
+      );
+      const readinessPath = await this.readinessPath(task.runtimeRoot);
+      const shell = this.environment.SHELL || "/bin/zsh";
+      let preparation = `export FORGE_HERDR_READINESS_SENTINEL=${quote(readinessPath)}; exec ${quote(shell)} -ic ${quote(
+        `printf ok > "$FORGE_HERDR_READINESS_SENTINEL"; exec ${quote(shell)} -f`,
+      )}`;
+      if (role === "developer") {
+        const guard = await createGitCommandGuard(task.runtimeRoot, `developer-guard-${row.id}`);
+        const gitRealBin = guard.gitRealBin ?? guard.env.FORGE_GIT_REAL_BIN;
+        if (!gitRealBin)
+          throw new HerdrFailure(
+            "guard_invalid",
+            false,
+            "Developer Git guard is incomplete",
+          );
+        await this.writeDeveloperZshrc(guard.directory);
+        preparation = developerPaneEnvironment({
+          guardDirectory: guard.directory,
+          gitRealBin,
+          env: withWorktreeMiseTrust(this.environment, task.worktreePath),
+          readinessSentinel: readinessPath,
+        });
+        await this.preparePane(
+          pane.paneId,
+          task.runtimeRoot,
+          preparation,
+          readinessPath,
+          true,
+        );
+        this.database.authQuery((db) =>
+          db
+            .prepare(
+              "UPDATE forge_herdr_role_sessions SET guard_directory = ? WHERE id = ?",
+            )
+            .run(guard.directory, row.id),
+        );
+      } else {
+        await this.preparePane(
+          pane.paneId,
+          task.runtimeRoot,
+          preparation,
+          readinessPath,
+        );
+      }
+      const args = row.codex_session_id
+      ? [
+          "resume",
+          "--model",
+          settings.model,
+          "-c",
+          `model_reasoning_effort=${JSON.stringify(settings.reasoningLevel)}`,
+          "-c",
+          `service_tier=${JSON.stringify(settings.serviceTier)}`,
+          "-c",
+          "check_for_update_on_startup=false",
+          "--dangerously-bypass-approvals-and-sandbox",
+          row.codex_session_id,
+        ]
+      : [
+          "--model",
+          settings.model,
+          "-c",
+          `model_reasoning_effort=${JSON.stringify(settings.reasoningLevel)}`,
+          "-c",
+          `service_tier=${JSON.stringify(settings.serviceTier)}`,
+          "-c",
+          "check_for_update_on_startup=false",
+          "--dangerously-bypass-approvals-and-sandbox",
+        ];
+      let live: HerdrAgent;
+      try {
+        live = await this.startOrReplace({
+          sessionId: row.id,
+          name,
+          paneId: pane.paneId,
+          args,
+          task,
+          tab,
+          role,
+          generation: Number(row.generation),
+          preparation,
+          scriptFile: role === "developer",
+          readinessPath,
+        });
+      } catch (error) {
+        if (
+          row.codex_session_id &&
+          !(await this.hasRollout(row.codex_session_id, task.worktreePath))
+        )
+          throw new HerdrFailure(
+            "codex_session_unrecoverable",
+            false,
+            "The recorded Codex session rollout is missing",
+          );
+        throw error;
+      }
+      this.assertIdentity(row, live);
+      this.started(row, live, fingerprint);
+      return this.ready(
+        { ...row, agent_name: name, pane_id: live.paneId, generation: Number(row.generation) + 1 },
+        live,
+        fingerprint,
+      );
+    } catch (error) {
+      if (
+        paneId &&
+        !(error instanceof HerdrFailure && error.code === "agent_blocked")
+      )
+        await this.cleanupFailedPane(row.id, paneId);
+      if (
+        error instanceof HerdrFailure &&
+        error.code === "codex_session_unrecoverable"
+      )
+        this.database.authQuery((db) =>
+          db
+            .prepare(
+              "UPDATE forge_herdr_role_sessions SET status = 'failed', updated_at = ? WHERE id = ?",
+            )
+            .run(now(), row.id),
+        );
+      throw error;
+    }
+  }
+  private assertIdentity(row: Record<string, any>, live: HerdrAgent): void {
+    if (
+      row.codex_session_id &&
+      live.agentSession &&
+      row.codex_session_id !== live.agentSession
+    )
+      throw new HerdrFailure(
+        "session_identity_conflict",
+        false,
+        "Herdr reported a different Codex session",
+      );
+  }
+  private async getRecordedAgent(name: string): Promise<HerdrAgent | null> {
+    return this.getRecorded(() => this.herdr.getAgent(name));
+  }
+  private async getRecorded<T>(read: () => Promise<T>): Promise<T | null> {
+    try {
+      return await read();
+    } catch (error) {
+      if (isMissingHerdrFailure(error)) return null;
+      throw error;
+    }
+  }
+  private async closeRecordedPane(id: string, paneId: string): Promise<void> {
+    try {
+      await this.herdr.closePane(paneId);
+    } catch (error) {
+      if (!isMissingHerdrFailure(error)) throw error;
+    }
+    this.database.authQuery((db) =>
+      db
+        .prepare(
+          "UPDATE forge_herdr_role_sessions SET pane_id = NULL, updated_at = ? WHERE id = ? AND pane_id = ?",
+        )
+        .run(now(), id, paneId),
+    );
+  }
+  private deriveAgentName(
+    task: RoleSessionTask,
+    role: RoleSessionRole,
+    generation: number,
+    collision = false,
+  ): string {
+    return agentName(
+      task.issueKey || task.taskId,
+      task.taskId,
+      role,
+      collision,
+      generation,
+    );
+  }
+  private started(
+    row: Record<string, any>,
+    live: HerdrAgent,
+    fingerprint: string,
+  ): void {
+    this.database.authQuery((db) =>
+      db
+        .prepare(
+          `UPDATE forge_herdr_role_sessions
+           SET agent_name = ?, pane_id = ?, launch_fingerprint = ?, generation = generation + 1,
+               status = 'ready', last_seen_at = ?,
+               updated_at = ?, ensure_token = NULL, ensure_expires_at = NULL
+           WHERE id = ?`,
+        )
+        .run(
+          live.name,
+          live.paneId,
+          fingerprint,
+          now(),
+          now(),
+          row.id,
+        ),
+    );
+  }
+  private async startOrReplace(input: {
+    sessionId: string;
+    name: string;
+    paneId: string;
+    args: string[];
+    task: RoleSessionTask;
+    tab: { shellPaneId: string };
+    role: RoleSessionRole;
+    generation: number;
+    preparation: string;
+    scriptFile: boolean;
+    readinessPath: string;
+  }): Promise<HerdrAgent> {
+    try {
+      return await this.herdr.startAgent({
+        name: input.name,
+        paneId: input.paneId,
+        kind: "codex",
+        args: input.args,
+      });
+    } catch (error) {
+      if (this.isInactiveRecordedName(error)) {
+        const replacement = this.deriveAgentName(
+          input.task,
+          input.role,
+          input.generation,
+          true,
+        );
+        this.recordStartingName(input.sessionId, replacement, input.paneId);
+        return this.herdr.startAgent({
+          name: replacement,
+          paneId: input.paneId,
+          kind: "codex",
+          args: input.args,
+        });
+      }
+      if (
+        !(error instanceof HerdrFailure) ||
+        (error.code !== "pane_not_available" &&
+          !error.message.includes("not an available shell"))
+      )
+        throw error;
+      const live = await this.getRecordedAgent(input.name);
+      if (live && live.paneId === input.paneId) return live;
+      await this.closeRecordedPane(input.sessionId, input.paneId);
+      const pane = await this.herdr.splitPane({
+        paneId: input.tab.shellPaneId,
+        direction: "right",
+        cwd: input.task.worktreePath,
+        focus: false,
+      });
+      await this.herdr.renamePane(pane.paneId, input.role);
+      await this.preparePane(
+        pane.paneId,
+        input.task.runtimeRoot,
+        input.preparation,
+        input.readinessPath,
+        input.scriptFile,
+      );
+      try {
+        return await this.herdr.startAgent({
+          name: input.name,
+          paneId: pane.paneId,
+          kind: "codex",
+          args: input.args,
+        });
+      } catch (retryError) {
+        await this.closePaneDuringFailureCleanup(pane.paneId);
+        throw retryError;
+      }
+    }
+  }
+  private isInactiveRecordedName(error: unknown): boolean {
+    return (
+      error instanceof HerdrFailure &&
+      error.code === "agent_name_not_found"
+    );
+  }
+  private recordStartingName(
+    id: string,
+    name: string,
+    paneId: string,
+  ): void {
+    this.database.authQuery((db) =>
+      db
+        .prepare(
+          "UPDATE forge_herdr_role_sessions SET agent_name = ?, pane_id = ?, status = 'starting', updated_at = ? WHERE id = ?",
+        )
+        .run(name, paneId, now(), id),
+    );
+  }
+  private async closePaneDuringFailureCleanup(paneId: string): Promise<void> {
+    try {
+      await this.herdr.closePane(paneId);
+    } catch (error) {
+      if (!isMissingHerdrFailure(error)) throw error;
+    }
+  }
+  private async cleanupFailedPane(id: string, paneId: string): Promise<void> {
+    await this.closePaneDuringFailureCleanup(paneId);
+    this.database.authQuery((db) =>
+      db
+        .prepare(
+          "UPDATE forge_herdr_role_sessions SET agent_name = NULL, pane_id = NULL, status = 'unbound', ensure_token = NULL, ensure_expires_at = NULL, updated_at = ? WHERE id = ? AND pane_id = ?",
+        )
+        .run(now(), id, paneId),
+    );
+  }
+  private async hasRollout(sessionId: string, cwd: string): Promise<boolean> {
+    try {
+      await discoverRollout(
+        await rolloutCandidatePaths(this.environment.CODEX_HOME),
+        { sessionId, cwd },
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  private async readinessPath(runtimeRoot: string): Promise<string> {
+    const directory = join(resolve(runtimeRoot), "herdr-ready");
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
+    return join(directory, randomUUID());
+  }
+  private async preparePane(
+    paneId: string,
+    runtimeRoot: string,
+    preparation: string,
+    readinessPath: string,
+    scriptFile = false,
+  ): Promise<void> {
+    if (!scriptFile) {
+      await this.herdr.runPaneCommand(paneId, preparation);
+      await this.waitForReadiness(readinessPath);
+      return;
+    }
+    const launchPath = await this.writeLaunchScript(runtimeRoot, preparation);
+    try {
+      await this.herdr.runPaneCommand(paneId, `source ${quote(launchPath)}`);
+      await this.waitForReadiness(readinessPath);
+    } finally {
+      await rm(launchPath, { force: true }).catch(() => undefined);
+    }
+  }
+  private async writeLaunchScript(
+    runtimeRoot: string,
+    body: string,
+  ): Promise<string> {
+    const directory = join(resolve(runtimeRoot), "herdr-launch");
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    await chmod(directory, 0o700);
+    const path = join(directory, `${randomUUID()}.sh`);
+    await writeFile(path, `${body}\n`, { mode: 0o600 });
+    await chmod(path, 0o600);
+    return path;
+  }
+  private async writeDeveloperZshrc(directory: string): Promise<void> {
+    await writeFile(
+      join(directory, ".zshrc"),
+      `if [ -r "$HOME/.zshrc" ]; then source "$HOME/.zshrc"; fi
+export PATH="$FORGE_GIT_GUARD_DIR:$PATH"
+if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READINESS_SENTINEL"; fi
+`,
+      { mode: 0o600 },
+    );
+    await chmod(join(directory, ".zshrc"), 0o600);
+  }
+  private async waitForReadiness(path: string): Promise<void> {
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      try {
+        await access(path);
+        await rm(path, { force: true });
+        return;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      await this.wait(500);
+    }
+    throw new HerdrFailure(
+      "readiness_timeout",
+      true,
+      "Timed out waiting for pane readiness sentinel",
+    );
+  }
+  private reserve(
+    task: RoleSessionTask,
+    role: RoleSessionRole,
+  ): Record<string, any> {
+    return this.database.authQuery((db) =>
+      db.transaction(() => {
+        let row =
+          role === "reviewer"
+            ? undefined
+            : (db
+                .prepare(
+                  "SELECT * FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1 ORDER BY generation DESC LIMIT 1",
+                )
+                .get(task.taskId, role) as Record<string, any> | undefined);
+        if (!row) {
+          const id = `session_${randomBytes(12).toString("hex")}`;
+          const generation =
+            Number(
+              (
+                db
+                  .prepare(
+                    "SELECT COALESCE(MAX(generation), -1) AS generation FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ?",
+                  )
+                  .get(task.taskId, role) as {
+                  generation: number;
+                }
+              ).generation,
+            ) + 1;
+          db.prepare(
+            "INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, status, created_at, updated_at, ensure_token, ensure_expires_at) VALUES (?, ?, ?, ?, 1, 'codex', 'unbound', ?, ?, ?, ?)",
+          ).run(
+            id,
+            task.taskId,
+            role,
+            generation,
+            now(),
+            now(),
+            randomUUID(),
+            now(),
+          );
+          row = db
+            .prepare("SELECT * FROM forge_herdr_role_sessions WHERE id = ?")
+            .get(id) as Record<string, any>;
+        }
+        return row;
+      })(),
+    );
+  }
+  private async workspace(task: RoleSessionTask): Promise<{
+    workspaceId: string;
+  }> {
+    const row = this.database.authQuery(
+      (db) =>
+        db
+          .prepare(
+            "SELECT workspace_id FROM forge_herdr_project_workspaces WHERE project_id = ?",
+          )
+          .get(task.projectId) as
+          | {
+              workspace_id: string | null;
+            }
+          | undefined,
+    );
+    const workspaceId = row?.workspace_id;
+    const found = workspaceId
+      ? await this.getRecorded(() => this.herdr.getWorkspace(workspaceId))
+      : null;
+    if (found) return { workspaceId: found.workspaceId };
+    const created = await this.herdr.createWorkspace({
+      label: herdrLabel(task.projectSlug),
+      cwd: task.worktreePath,
+      focus: false,
+    });
+    this.database.authQuery((db) =>
+      db
+        .prepare(
+          "INSERT INTO forge_herdr_project_workspaces (project_id, workspace_label, workspace_id, state, created_at, updated_at) VALUES (?, ?, ?, 'open', ?, ?) ON CONFLICT(project_id) DO UPDATE SET workspace_id = excluded.workspace_id, state = 'open', updated_at = excluded.updated_at",
+        )
+        .run(
+          task.projectId,
+          herdrLabel(task.projectSlug),
+          created.workspace.workspaceId,
+          now(),
+          now(),
+        ),
+    );
+    return { workspaceId: created.workspace.workspaceId };
+  }
+  private async tab(
+    task: RoleSessionTask,
+    workspaceId: string,
+  ): Promise<{
+    shellPaneId: string;
+  }> {
+    const row = this.database.authQuery(
+      (db) =>
+        db
+          .prepare(
+            "SELECT tab_id, shell_pane_id FROM forge_herdr_task_tabs WHERE task_id = ?",
+          )
+          .get(task.taskId) as
+          | {
+              tab_id: string | null;
+              shell_pane_id: string | null;
+            }
+          | undefined,
+    );
+    const tabId = row?.tab_id;
+    const shellPaneId = row?.shell_pane_id;
+    if (
+      tabId &&
+      shellPaneId &&
+      (await this.getRecorded(() => this.herdr.getTab(tabId))) &&
+      (await this.getRecorded(() => this.herdr.getPane(shellPaneId)))
+    )
+      return { shellPaneId };
+    const created = await this.herdr.createTab({
+      workspaceId,
+      label: task.issueKey || task.taskId,
+      cwd: task.worktreePath,
+      focus: false,
+    });
+    await this.herdr.renamePane(created.rootPane.paneId, "shell");
+    this.database.authQuery((db) =>
+      db
+        .prepare(
+          "INSERT INTO forge_herdr_task_tabs (task_id, project_id, workspace_id, tab_label, tab_id, shell_pane_id, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'open', ?, ?) ON CONFLICT(task_id) DO UPDATE SET tab_id = excluded.tab_id, shell_pane_id = excluded.shell_pane_id, workspace_id = excluded.workspace_id, state = 'open', updated_at = excluded.updated_at",
+        )
+        .run(
+          task.taskId,
+          task.projectId,
+          workspaceId,
+          task.issueKey || task.taskId,
+          created.tab.tabId,
+          created.rootPane.paneId,
+          now(),
+          now(),
+        ),
+    );
+    return { shellPaneId: created.rootPane.paneId };
+  }
+  private ready(
+    row: Record<string, any>,
+    live: HerdrAgent,
+    fingerprint: string,
+  ): EnsuredRoleSession {
+    this.database.authQuery((db) =>
+      db
+        .prepare(
+          "UPDATE forge_herdr_role_sessions SET agent_name = ?, pane_id = ?, codex_session_id = COALESCE(codex_session_id, ?), status = ?, last_agent_status = ?, last_seen_at = ?, launch_fingerprint = ?, updated_at = ? WHERE id = ?",
+        )
+        .run(
+          live.name,
+          live.paneId,
+          live.agentSession ?? null,
+          live.status === "working" ? "working" : "ready",
+          live.status ?? null,
+          now(),
+          fingerprint,
+          now(),
+          row.id,
+        ),
+    );
+    return {
+      id: row.id,
+      agentName: live.name,
+      paneId: live.paneId,
+      codexSessionId:
+        typeof row.codex_session_id === "string"
+          ? row.codex_session_id
+          : live.agentSession ?? null,
+      generation: Number(row.generation),
+      ...(typeof row.rollout_path === "string"
+        ? { rolloutPath: row.rollout_path }
+        : {}),
+      live,
+    };
+  }
+}

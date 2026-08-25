@@ -21,6 +21,8 @@ export interface PlanBlockerResponseActivityInput {
   workflowId: string;
   actorUserId: string;
   blockerArtifactId: string;
+  /** Optional recorded metadata; it never authorizes or blocks the response. */
+  blockerArtifactSha256?: string | null;
   expectedWorkflowRevision: number;
   answerStagingRef: string;
   idempotencyKey: string;

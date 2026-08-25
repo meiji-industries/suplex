@@ -9,7 +9,6 @@ import { GithubReleaseFailure, type ReleaseService } from "../../github-release.
 import { routedIssueCommands, type IssueCommand } from "../../commands/registry.js";
 import { CompanyIdParamsSchema, ExpectedRevisionBodySchema, HttpPlanDecisionBodySchema, ResolveDecisionBlockerBodySchema, TaskArtifactParamsSchema, TaskExecutionParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { ContinueWorkBodySchema, ContinueWorkResponseSchema, DeveloperExecutionEventsResponseSchema, DuplicateTaskBodySchema, PlanRevisionBodySchema, TaskActivityResponseSchema, TaskAgentsBodySchema, TaskBodySchema, TaskDetailsBodySchema, TaskDeveloperDiffResponseSchema, TaskDiagnosticsResponseSchema, TaskListResponseSchema, TaskReleaseResponseSchema, TaskRescueResponseSchema, TaskResponseSchema } from "../contracts/tasks.js";
-import developmentEvents from "./development-events.js";
 import { TaskRescueService } from "../../task-rescue.js";
 import type { ForgeDatabase } from "../../database.js";
 import type { ForgeConfig } from "../../config.js";
@@ -27,7 +26,6 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, options) => {
   const { tasks } = options;
   const rescue = options.database && options.config ? new TaskRescueService(tasks, options.database, options.config) : undefined;
   const taskResponse = { response: { 200: TaskResponseSchema } };
-  await app.register(developmentEvents, { tasks });
   typed.get("/api/tasks", { schema: { response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id) }));
   typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, response: { 200: TaskListResponseSchema } } }, async (request, reply) => reply.send({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId) }));
   typed.post("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, body: TaskBodySchema, response: { 200: TaskResponseSchema, 201: TaskResponseSchema } } }, async (request, reply) => {

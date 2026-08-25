@@ -15,6 +15,8 @@ export interface AcceptDeliveryActivityInput {
   leadSessionRef: string;
   expectedHeadSha: string;
   expectedHeadTree: string;
+  noteId?: string;
+  noteSha256?: string;
   note?: string;
   autoMerge?: boolean;
 }

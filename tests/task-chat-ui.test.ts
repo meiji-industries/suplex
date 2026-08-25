@@ -25,10 +25,29 @@ describe("task chat UI", () => {
   });
 
   it("shows collapsed command results and repeated event counts", () => {
-    const item = { ...completed, finishedAt: null, status: "running" as const, events: [{ id: "command", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "Inspecting Git state", exitCode: 0, status: "completed" as const }, { id: "repeat", at: "2026-08-23T00:00:11.000Z", kind: "agent_update", text: "Checking files", count: 4 }] };
+    const item = { ...completed, finishedAt: null, status: "running" as const, events: [{ id: "command", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "Inspecting Git state", output: "one\ntwo\nthree\nfour", exitCode: 0, status: "completed" as const }, { id: "repeat", at: "2026-08-23T00:00:11.000Z", kind: "agent_update", text: "Checking files", count: 4 }] };
     const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
     expect(html).toContain("Inspecting Git state");
-    expect(html).toContain("✓");
+    expect(html).toContain("exit 0");
+    expect(html).toContain("… +1 lines");
     expect(html).toContain("×4");
+  });
+
+  it("renders typed reasoning, command, and tool-call events", () => {
+    const item = { ...completed, finishedAt: null, status: "running" as const, events: [
+      { id: "reasoning", at: "2026-08-23T00:00:10.000Z", kind: "thinking_summary", text: "one\ntwo\nthree\nfour\nfive" },
+      { id: "failed", at: "2026-08-23T00:00:11.000Z", kind: "command", text: "pnpm test", exitCode: 1, status: "completed" as const },
+      { id: "tool", at: "2026-08-23T00:00:12.000Z", kind: "tool_call", text: "exec", detail: "call-123", count: 3 },
+      { id: "message", at: "2026-08-23T00:00:13.000Z", kind: "message", text: "**Done**" },
+    ] };
+    const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    expect(html).toContain("data-task-chat-reasoning");
+    expect(html).toContain("Show more");
+    expect(html).toContain("exit 1");
+    expect(html).toContain("data-variant=\"destructive\"");
+    expect(html).toContain("exec");
+    expect(html).toContain("call-123");
+    expect(html).toContain("×3");
+    expect(html).toContain("<strong>Done</strong>");
   });
 });

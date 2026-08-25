@@ -49,6 +49,7 @@ export interface IssueWorkflowContext {
   planningScope: CancellationScope | undefined;
   planningPromise: Promise<LeadPlanningResult> | undefined;
   readonly supervisedDeveloperTurns: boolean;
+  readonly herdrExecutionSubstrateEnabled: boolean;
   readonly shouldContinueAsNew: (revision: number) => boolean;
   readonly currentState: () => IssueWorkflowState;
   readonly assignState: (next: () => unknown) => IssueWorkflowState;

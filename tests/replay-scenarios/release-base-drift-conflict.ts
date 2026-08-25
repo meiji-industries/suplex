@@ -3,14 +3,14 @@ import type { ReplayScenarioDefinition } from "../replay-scenario-driver.js";
 export const scenario = {
   name: "release_base_drift_conflict",
   captureId: "release-base-drift-conflict-v1",
-  activityOverrides: (_context, shared) => ({
-    async publishRelease(input) {
-      const result = await shared.publishRelease!(input);
-      // Drift once. The Lead-owned republish is automatic now, so a fake that always
-      // drifts would keep the fixture re-reviewing and republishing forever.
-      if (_context.ciAttempts.get("publish") !== undefined) return result;
-      _context.ciAttempts.set("publish", 1);
-      return { ...result, outcome: "base-drift-conflict" as const, releaseId: null, pullRequestNumber: null, pullRequestUrl: null, isDraft: false as const, baseDriftConflict: true as const, forwardMergeId: "forward-merge-conflict", priorHead: input.subjectCommit, targetBaseSha: "9".repeat(40), mergeConflictEvidence: { artifactId: "merge-conflict-evidence", companyId: "fixture-company", kind: "merge-conflict-evidence" as const, sha256: "a".repeat(64), byteSize: 1, mimeType: "application/json" } };
+  activityOverrides: (context, shared) => ({
+    // Base drift is found while keeping the open pull request current (forge-kodiak-merge-v1), not at
+    // publish time. Conflict once: the Integrator's resolution chains itself, so a fake that always
+    // conflicts would keep the fixture resolving forever.
+    async updateCiFromBase(input) {
+      if (context.ciAttempts.get("base-update") !== undefined) return shared.updateCiFromBase!(input);
+      context.ciAttempts.set("base-update", 1);
+      return { outcome: "conflict" as const, forwardMergeId: "forward-merge-conflict", priorHead: input.expectedHeadSha, priorTree: input.expectedHeadTree, baseSha: "9".repeat(40), conflictArtifactId: "forward-merge-conflict-artifact", conflictFileCount: 1, summary: "Controlled base-update conflict" };
     },
   }),
   async script(handle, helpers) {

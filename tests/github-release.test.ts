@@ -115,6 +115,32 @@ test("maps GitHub's pull-request observation into Forge's provider truth", () =>
   });
 });
 
+test("summarizes only the latest check run and classic commit statuses", () => {
+  const observe = (statusCheckRollup: unknown[]) => mapGithubPullRequestObservation({
+    number: 488, url: "https://github.com/meiji-industries/sampler/pull/488", state: "OPEN", isDraft: false, headRefOid: headSha, baseRefOid: baseSha,
+    mergeable: "MERGEABLE", autoMergeRequest: null, reviewDecision: null, author: null, changedFiles: 0, additions: 0, deletions: 0, statusCheckRollup,
+  }).checks;
+
+  expect(observe([
+    { __typename: "CheckRun", name: "claude-review", status: "COMPLETED", conclusion: "CANCELLED", startedAt: "2026-08-24T23:45:26Z", completedAt: "2026-08-24T23:45:27Z" },
+    { __typename: "CheckRun", name: "claude-review", status: "COMPLETED", conclusion: "SUCCESS", startedAt: "2026-08-24T23:45:36Z", completedAt: "2026-08-24T23:46:17Z" },
+    { __typename: "CheckRun", name: "[code]smith", status: "COMPLETED", conclusion: "SKIPPED", startedAt: "2026-08-24T23:45:24Z", completedAt: "2026-08-24T23:45:24Z" },
+  ])).toEqual({ total: 2, pending: 0, failing: 0, successful: 2 });
+  expect(observe([
+    { name: "test", status: "COMPLETED", conclusion: "FAILURE", completedAt: "2026-08-24T23:45:27Z" },
+    { name: "test", status: "COMPLETED", conclusion: "SUCCESS", completedAt: "2026-08-24T23:46:17Z" },
+  ])).toEqual({ total: 1, pending: 0, failing: 0, successful: 1 });
+  expect(observe([
+    { name: "cancelled", status: "COMPLETED", conclusion: "CANCELLED", completedAt: "2026-08-24T23:45:27Z" },
+    { name: "failed", status: "COMPLETED", conclusion: "FAILURE", completedAt: "2026-08-24T23:45:27Z" },
+  ])).toEqual({ total: 2, pending: 0, failing: 2, successful: 0 });
+  expect(observe([
+    { __typename: "StatusContext", context: "CI (Linux)", state: "SUCCESS", updatedAt: "2026-08-24T23:45:27Z" },
+    { __typename: "StatusContext", context: "CI (Windows)", state: "PENDING", updatedAt: "2026-08-24T23:45:27Z" },
+    { __typename: "CheckRun", name: "lint", status: "COMPLETED", conclusion: "SUCCESS", completedAt: "2026-08-24T23:45:27Z" },
+  ])).toEqual({ total: 3, pending: 1, failing: 0, successful: 2 });
+});
+
 test("maps nullable authors, avatar fallbacks, and change stats", () => {
   const observation = {
     number: 1484, url: "https://github.com/acme/forge/pull/1484", state: "OPEN" as const, isDraft: false,

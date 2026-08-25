@@ -25,6 +25,20 @@ test("derives chronological phase visits and duration labels from activity-feed 
   expect(phaseTimingDuration(7_260_000)).toBe("2h 1m");
 });
 
+test("derives planning and approval visits from legacy planning activity", () => {
+  const timings = phaseTimings([
+    { eventType: "planning_started", createdAt: "2026-08-22T12:00:00.000Z" },
+    { eventType: "planning_started", metadata: { planningStage: "completed" }, createdAt: "2026-08-22T12:04:00.000Z" },
+    { eventType: "phase_development", createdAt: "2026-08-22T12:10:00.000Z" },
+  ], "development", "2026-08-22T12:15:00.000Z");
+
+  expect(timings).toEqual([
+    expect.objectContaining({ phase: "planning", durationMs: 240_000 }),
+    expect.objectContaining({ phase: "approval", durationMs: 360_000 }),
+    expect.objectContaining({ phase: "development", durationMs: 300_000, current: true }),
+  ]);
+});
+
 test("renders proportional timing segments, an active accessible current bar, and timestamps", () => {
   const html = renderToStaticMarkup(createElement(PhaseTimings, { activity, phase: "reviewing_delivery", updatedAt: "2026-08-22T12:20:00.000Z" }));
 

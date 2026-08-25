@@ -1,4 +1,4 @@
-import { ActivityCancellationType } from "@temporalio/common";
+import { ActivityCancellationType, type ActivityOptions, type RetryPolicy } from "@temporalio/common";
 import { proxyActivities } from "@temporalio/workflow";
 
 import type { ProbeActivities } from "../contracts.js";
@@ -13,7 +13,7 @@ import type { DeliveryBlockerActivities, IssueActivities } from "../issue-contra
 // converted to ApplicationFailure.nonRetryable inside the activities
 // themselves (see asNonRetryableApplicationFailure), which bypasses this
 // policy entirely regardless of maximumAttempts.
-const BOOKKEEPING_RETRY_POLICY = {
+const BOOKKEEPING_RETRY_POLICY: RetryPolicy = {
   maximumAttempts: 5,
   initialInterval: "1 second",
   maximumInterval: "15 seconds",
@@ -24,19 +24,22 @@ export const { recordProbeStarted } = proxyActivities<ProbeActivities>({
   startToCloseTimeout: "1 minute",
   retry: BOOKKEEPING_RETRY_POLICY,
 });
-
 export const { projectIssueState: projectIssueStateActivity } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
   retry: BOOKKEEPING_RETRY_POLICY,
 });
-
-const EXTERNAL_AGENT_RETRY_POLICY = {
+const EXTERNAL_AGENT_RETRY_POLICY: RetryPolicy = {
   maximumAttempts: 3,
   initialInterval: "1 second",
   maximumInterval: "30 seconds",
   nonRetryableErrorTypes: ["rate-limited"],
 };
-
+const SUPERVISED_DEVELOPER_RETRY_POLICY: RetryPolicy = {
+  maximumAttempts: 100,
+  initialInterval: "1 second",
+  maximumInterval: "30 seconds",
+  nonRetryableErrorTypes: ["developer-ownership-ambiguous", "developer-result-claim-conflict"],
+};
 export const { runLeadPlanning } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
   scheduleToCloseTimeout: "25 minutes",
@@ -44,6 +47,8 @@ export const { runLeadPlanning } = proxyActivities<IssueActivities>({
   cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
+const herdrLeadActivityOptions: ActivityOptions = { startToCloseTimeout: "20 minutes", heartbeatTimeout: "15 seconds", cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED, retry: EXTERNAL_AGENT_RETRY_POLICY };
+export const { runLeadPlanning: runHerdrLeadPlanning } = proxyActivities<IssueActivities>(herdrLeadActivityOptions);
 
 export const { runSupplementalReview, consolidateLeadPlan } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
@@ -52,6 +57,7 @@ export const { runSupplementalReview, consolidateLeadPlan } = proxyActivities<Is
   cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
+export const { runSupplementalReview: runHerdrSupplementalReview, consolidateLeadPlan: consolidateHerdrLeadPlan } = proxyActivities<IssueActivities>(herdrLeadActivityOptions);
 
 export const { runDeveloperExecution } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
@@ -59,14 +65,24 @@ export const { runDeveloperExecution } = proxyActivities<IssueActivities>({
   heartbeatTimeout: "15 seconds",
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
+const herdrDeveloperActivityOptions: ActivityOptions = { startToCloseTimeout: "60 minutes", heartbeatTimeout: "15 seconds", retry: EXTERNAL_AGENT_RETRY_POLICY };
+export const { runDeveloperExecution: runHerdrDeveloperExecution } = proxyActivities<IssueActivities>(herdrDeveloperActivityOptions);
 
 export const { runDeveloperExecutionSupervised, runDeveloperRepairSupervised, resolveMergeConflictSupervised } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
   scheduleToCloseTimeout: "65 minutes",
   heartbeatTimeout: "15 seconds",
   cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
-  retry: { maximumAttempts: 100, initialInterval: "1 second", maximumInterval: "30 seconds", nonRetryableErrorTypes: ["developer-ownership-ambiguous", "developer-result-claim-conflict"] },
+  retry: SUPERVISED_DEVELOPER_RETRY_POLICY,
 });
+
+const herdrSupervisedDeveloperActivityOptions: ActivityOptions = {
+  ...herdrDeveloperActivityOptions,
+  cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
+  retry: SUPERVISED_DEVELOPER_RETRY_POLICY,
+};
+
+export const { runDeveloperExecutionSupervised: runHerdrDeveloperExecutionSupervised, runDeveloperRepairSupervised: runHerdrDeveloperRepairSupervised, resolveMergeConflictSupervised: resolveHerdrMergeConflictSupervised } = proxyActivities<IssueActivities>(herdrSupervisedDeveloperActivityOptions);
 
 export const { cancelDeveloperExecution } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
@@ -119,6 +135,8 @@ export const { reviewDelivery } = proxyActivities<IssueActivities>({
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 
+export const { reviewDelivery: reviewHerdrDelivery } = proxyActivities<IssueActivities>(herdrLeadActivityOptions);
+
 export const { recordDeliveryBlocker } = proxyActivities<DeliveryBlockerActivities>({
   startToCloseTimeout: "1 minute",
   retry: { maximumAttempts: 1 },
@@ -130,6 +148,8 @@ export const { runDeveloperRepair } = proxyActivities<IssueActivities>({
   heartbeatTimeout: "15 seconds",
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
+
+export const { runDeveloperRepair: runHerdrDeveloperRepair } = proxyActivities<IssueActivities>(herdrDeveloperActivityOptions);
 
 export const { recordDeliveryDecision } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "1 minute",
@@ -165,12 +185,23 @@ export const { planMergeConflict } = proxyActivities<IssueActivities>({
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 
+export const { planMergeConflict: planHerdrMergeConflict } = proxyActivities<IssueActivities>(herdrLeadActivityOptions);
+
 export const { resolveMergeConflict } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
   scheduleToCloseTimeout: "65 minutes",
   heartbeatTimeout: "15 seconds",
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
+
+export const { resolveMergeConflict: resolveHerdrMergeConflict } = proxyActivities<IssueActivities>(herdrDeveloperActivityOptions);
+
+export function agentActivities(herdrExecutionSubstrateEnabled: boolean) {
+  if (!herdrExecutionSubstrateEnabled) {
+    return { runLeadPlanning, runSupplementalReview, consolidateLeadPlan, runDeveloperExecution, runDeveloperExecutionSupervised, runDeveloperRepairSupervised, resolveMergeConflictSupervised, reviewDelivery, runDeveloperRepair, planMergeConflict, resolveMergeConflict, finalReview, planDeliveryRepair, planCiRepair, runCiRepair };
+  }
+  return { runLeadPlanning: runHerdrLeadPlanning, runSupplementalReview: runHerdrSupplementalReview, consolidateLeadPlan: consolidateHerdrLeadPlan, runDeveloperExecution: runHerdrDeveloperExecution, runDeveloperExecutionSupervised: runHerdrDeveloperExecutionSupervised, runDeveloperRepairSupervised: runHerdrDeveloperRepairSupervised, resolveMergeConflictSupervised: resolveHerdrMergeConflictSupervised, reviewDelivery: reviewHerdrDelivery, runDeveloperRepair: runHerdrDeveloperRepair, planMergeConflict: planHerdrMergeConflict, resolveMergeConflict: resolveHerdrMergeConflict, finalReview: finalHerdrReview, planDeliveryRepair: planHerdrDeliveryRepair, planCiRepair: planHerdrCiRepair, runCiRepair: runHerdrCiRepair };
+}
 
 export const { reconcileCi } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "2 minutes",
@@ -188,6 +219,8 @@ export const { planCiRepair } = proxyActivities<IssueActivities>({
   retry: { maximumAttempts: 1 },
 });
 
+export const { planCiRepair: planHerdrCiRepair } = proxyActivities<IssueActivities>(herdrLeadActivityOptions);
+
 export const { runCiRepair } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "60 minutes",
   scheduleToCloseTimeout: "65 minutes",
@@ -195,6 +228,8 @@ export const { runCiRepair } = proxyActivities<IssueActivities>({
   cancellationType: ActivityCancellationType.WAIT_CANCELLATION_COMPLETED,
   retry: { maximumAttempts: 100, initialInterval: "1 second", maximumInterval: "30 seconds", nonRetryableErrorTypes: ["developer-ownership-ambiguous", "developer-result-claim-conflict"] },
 });
+
+export const { runCiRepair: runHerdrCiRepair } = proxyActivities<IssueActivities>(herdrSupervisedDeveloperActivityOptions);
 
 export const { updateCiFromBase } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "10 minutes",
@@ -209,11 +244,15 @@ export const { finalReview } = proxyActivities<IssueActivities>({
   retry: EXTERNAL_AGENT_RETRY_POLICY,
 });
 
+export const { finalReview: finalHerdrReview } = proxyActivities<IssueActivities>(herdrLeadActivityOptions);
+
 export const { planDeliveryRepair } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "20 minutes",
   scheduleToCloseTimeout: "25 minutes",
   retry: { maximumAttempts: 1 },
 });
+
+export const { planDeliveryRepair: planHerdrDeliveryRepair } = proxyActivities<IssueActivities>(herdrLeadActivityOptions);
 
 export const { acceptDelivery } = proxyActivities<IssueActivities>({
   startToCloseTimeout: "5 minutes",

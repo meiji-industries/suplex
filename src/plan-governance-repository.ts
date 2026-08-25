@@ -133,7 +133,7 @@ export class PlanGovernanceRepository {
     return { decisionId, duplicate, noteArtifactId };
   }
 
-  recordBlockerResponseIdempotently(input: { taskId: string; companyId: string; workflowId: string; blockerArtifactId: string; answerArtifactId: string; actorUserId: string; expectedWorkflowRevision: number; idempotencyKey: string }): { responseId: string; duplicate: boolean; answerArtifactId: string } {
+  recordBlockerResponseIdempotently(input: { taskId: string; companyId: string; workflowId: string; blockerArtifactId: string; blockerArtifactSha256?: string | null; answerArtifactId: string; answerArtifactSha256?: string | null; actorUserId: string; expectedWorkflowRevision: number; idempotencyKey: string }): { responseId: string; duplicate: boolean; answerArtifactId: string } {
     artifact(this.database, input.companyId, input.answerArtifactId);
     let responseId = id("blocker_response");
     let answerArtifactId = input.answerArtifactId;
@@ -141,7 +141,7 @@ export class PlanGovernanceRepository {
     this.database.authTransaction((db) => {
       const existing = db.prepare("SELECT id, answer_artifact_id AS answerArtifactId FROM forge_plan_blocker_responses WHERE workflow_id = ? AND idempotency_key = ?").get(input.workflowId, input.idempotencyKey) as { id: string; answerArtifactId: string } | undefined;
       if (existing) { responseId = existing.id; answerArtifactId = existing.answerArtifactId; duplicate = true; return; }
-      db.prepare("INSERT INTO forge_plan_blocker_responses (id, task_id, company_id, workflow_id, blocker_artifact_id, answer_artifact_id, actor_user_id, expected_workflow_revision, idempotency_key, subject_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(responseId, input.taskId, input.companyId, input.workflowId, input.blockerArtifactId, input.answerArtifactId, input.actorUserId, input.expectedWorkflowRevision, input.idempotencyKey, input.blockerArtifactId, new Date().toISOString());
+      db.prepare("INSERT INTO forge_plan_blocker_responses (id, task_id, company_id, workflow_id, blocker_artifact_id, blocker_artifact_sha256, answer_artifact_id, answer_artifact_sha256, actor_user_id, expected_workflow_revision, idempotency_key, subject_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(responseId, input.taskId, input.companyId, input.workflowId, input.blockerArtifactId, input.blockerArtifactSha256, input.answerArtifactId, input.answerArtifactSha256, input.actorUserId, input.expectedWorkflowRevision, input.idempotencyKey, input.blockerArtifactSha256, new Date().toISOString());
     });
     return { responseId, duplicate, answerArtifactId };
   }

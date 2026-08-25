@@ -1,14 +1,13 @@
-import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 
 import { expect, test } from "vitest";
 
 import { AuthService, type WebAuthnAdapter } from "../src/auth.js";
 import { ArtifactStore } from "../src/artifacts.js";
 import { createApp } from "../src/app.js";
+import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import type { GithubAdapter } from "../src/github.js";
@@ -18,10 +17,10 @@ import { IssueProjectionEventSchema } from "../src/temporal/issue-contracts.js";
 import { SESSION_COOKIE_NAME } from "../src/auth-identifiers.js";
 import { createWorkflowPortFake } from "./fakes/workflow-port.js";
 
-const execFileAsync = promisify(execFile);
-
 async function git(args: string[], cwd: string): Promise<string> {
-  return (await execFileAsync("git", args, { cwd })).stdout.trim();
+  const result = await runCommand({ taskId: null, stepId: null, command: "git", args, cwd });
+  if (result.exitCode !== 0) throw new Error(result.stderr || "git failed");
+  return result.stdout.trim();
 }
 
 function fakeWebAuthn(): WebAuthnAdapter {
@@ -75,13 +74,16 @@ test("task API creation is idempotent and exposes safe backlog/read models", asy
     expect(duplicate.statusCode).toBe(200); expect(duplicate.json()).toMatchObject({ id: created.json().id, workflowId: created.json().workflowId });
     const task = created.json() as { id: string; workflowId: string };
     const executionId = "agent_activity_test";
-    await mkdir(join(config.runtimeRoot, "agent-turns", executionId), { recursive: true });
-    await writeFile(join(config.runtimeRoot, "agent-turns", executionId, "spool.ndjson"), `${JSON.stringify({ type: "item.started", item: { type: "command_execution", command: "pnpm typecheck" } })}\n`);
-    database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at, spool_relative_path) VALUES (?, ?, ?, ?, 'planner', 'running', 1, ?, ?)").run(executionId, task.id, company.id, task.workflowId, new Date().toISOString(), `agent-turns/${executionId}/spool.ndjson`));
+    database.authQuery((db) => db.prepare("INSERT INTO forge_agent_executions (id, task_id, company_id, workflow_id, role, status, attempt, started_at) VALUES (?, ?, ?, ?, 'planner', 'running', 1, ?)").run(executionId, task.id, company.id, task.workflowId, new Date().toISOString()));
+    database.authQuery((db) => db.prepare("INSERT INTO forge_delivery_review_attempts (id, task_id, company_id, workflow_id, plan_revision, base_sha, subject_commit, subject_tree, lead_execution_id, lead_session_ref, status, correction_attempts, failure_code, failure_summary, created_at, finished_at) VALUES ('cancelled-review-attempt', ?, ?, ?, 0, ?, ?, ?, ?, 'lead-session', 'failed', 0, 'cancelled', 'The Codex Lead turn was cancelled.', ?, ?)").run(task.id, company.id, task.workflowId, "a".repeat(40), "b".repeat(40), "c".repeat(40), executionId, new Date().toISOString(), new Date().toISOString()));
+    const list = await app.inject({ method: "GET", url: `/api/companies/${company.id}/tasks`, headers: { cookie, origin } });
+    expect(list.statusCode).toBe(200); expect(list.json().tasks[0]).toMatchObject({ id: task.id, title: "API creation task", agentInvocations: [expect.objectContaining({ id: executionId, role: "planner" })] }); expect(list.json().tasks[0]).not.toHaveProperty("timeline"); expect(list.json().tasks[0]).not.toHaveProperty("activity"); expect(list.json().tasks[0]).not.toHaveProperty("reviewLineage");
+    const detail = await app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: { cookie, origin } });
+    expect(detail.statusCode).toBe(200); expect(detail.json().reviewLineage.reviewAttempts).toContainEqual(expect.objectContaining({ id: "cancelled-review-attempt", code: "cancelled" }));
     const activity = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/activity`, headers: { cookie, origin } });
     expect(activity.statusCode).toBe(200);
     expect(activity.headers["cache-control"]).toBe("private, no-store");
-    expect(activity.json()).toMatchObject({ execution: { id: executionId, role: "planner", status: "running" }, events: expect.arrayContaining([expect.objectContaining({ kind: "command", text: "pnpm typecheck" })]) });
+    expect(activity.json()).toMatchObject({ execution: { id: executionId, role: "planner", status: "running" }, events: expect.arrayContaining([expect.objectContaining({ kind: "status" })]) });
     const body = await new ArtifactStore(config.artifactRoot).put(company.id, "release-public-body", { filename: "release.md", mimeType: "text/markdown", bytes: Buffer.from("## Summary\n\nAPI creation task") });
     database.authTransaction((db) => { const now = new Date().toISOString(); db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(body.id, body.companyId, body.kind, body.filename, body.mimeType, body.byteSize, body.sha256, body.storagePath, body.createdAt); db.prepare("INSERT INTO forge_releases (id, task_id, company_id, workflow_id, release_key, repository, head_branch, base_branch, base_sha, head_sha, head_tree, status, pr_number, pr_url, title, body_artifact_id, reused, created_at, updated_at) SELECT 'release-api-creation', id, company_id, workflow_id, 'release-api-creation-key', 'acme/forge', 'issue/api-creation-task', 'main', ?, ?, ?, 'draft', 17, 'https://github.com/acme/forge/pull/17', title, ?, 1, ?, ? FROM forge_tasks WHERE id = ?").run("a".repeat(40), "b".repeat(40), "c".repeat(40), body.id, now, now, task.id); });
     const release = await app.inject({ method: "GET", url: `/api/tasks/${task.id}/release`, headers: { cookie, origin } });

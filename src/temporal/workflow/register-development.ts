@@ -1,12 +1,13 @@
 import { setHandler } from "@temporalio/workflow";
 import { assertPayloadWithinLimit } from "../policy.js";
 import * as contracts from "../issue-contracts.js";
-import * as activityProxies from "./activity-proxies.js";
+import * as legacyActivityProxies from "./activity-proxies.js";
 import * as stateTransitions from "./state-transitions.js";
 import { developerExecutionId } from "../deterministic-id.js";
 import { issueUpdates } from "../issue-updates.js";
 import type { IssueWorkflowContext } from "./context.js";
 export async function startDevelopment(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>): Promise<contracts.IssueWorkflowState> {
+    const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
     if (ctx.commandAlreadyProcessed(command.commandId)) {
       await ctx.recordHandlerNoop("start_development", "This development command was already processed.");
       return ctx.state;
@@ -71,6 +72,7 @@ export async function startDevelopment(ctx: IssueWorkflowContext, command: Retur
 }
 
 export async function retryDevelopment(ctx: IssueWorkflowContext, command: ReturnType<typeof contracts.StartPlanningInputSchema.parse>, operatorNote?: string): Promise<contracts.IssueWorkflowState> {
+  const activityProxies = { ...legacyActivityProxies, ...legacyActivityProxies.agentActivities(ctx.herdrExecutionSubstrateEnabled) };
   if (ctx.commandAlreadyProcessed(command.commandId)) {
     await ctx.recordHandlerNoop("retry_development", "This retry command was already processed.");
     return ctx.state;

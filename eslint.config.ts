@@ -3,8 +3,6 @@ import tseslint from "typescript-eslint";
 const droppedTables = [
   "forge_developer_execution_leases",
   "forge_developer_execution_truth",
-  "forge_developer_result_claims",
-  "forge_developer_result_conflicts",
   "forge_plan_authorizations",
   "forge_issue_governance",
   "forge_projection_integrity_findings",
@@ -47,7 +45,7 @@ export default tseslint.config({
     ],
   },
 }, {
-  files: ["src/command-runner.ts", "src/developer-supervisor.ts", "src/codex-lead.ts", "src/codex-developer.ts"],
+  files: ["src/command-runner.ts", "src/codex-lead.ts"],
   rules: {
     "no-restricted-imports": "off",
   },

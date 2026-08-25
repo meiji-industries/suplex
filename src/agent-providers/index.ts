@@ -1,7 +1,7 @@
-import { codexProvider } from "./codex.js";
+import { herdrCodexProvider } from "./herdr-codex.js";
 import type { AgentProvider } from "./provider.js";
 
-export const agentProviders = { codex: codexProvider } as const satisfies Record<string, AgentProvider>;
+export const agentProviders = { codex: herdrCodexProvider } as const satisfies Record<string, AgentProvider>;
 
 /**
  * Single resolution point for the active agent provider. Multi-provider

@@ -68,7 +68,7 @@ function fixture(database: ForgeDatabase): void {
   const now = "2026-08-20T00:00:00.000Z";
   database.authQuery((db) => {
     db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES (?, ?, 'active', ?)").run(companyId, "Happy Company", now);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, active_revision_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)").run(projectId, companyId, "Happy Project", "/tmp/happy-repo", "/tmp/happy-worktrees", "main", "main", "true", "true", "[]", "{}", projectRevisionId, now, now);
+    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, target_branch, setup_command, verification_command, required_checks_json, role_defaults_json, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)").run(projectId, companyId, "Happy Project", "/tmp/happy-repo", "/tmp/happy-worktrees", "main", "main", "true", "true", "[]", "{}", now, now);
     db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES (?, ?, ?, 'admin', 'active', ?, ?)").run(actorUserId, "Happy Member", "happy@forge.local", now, now);
     for (const [id, kind] of [[briefArtifactId, "task-brief"], [finalReviewArtifactId, "delivery-review"], [decisionNoteArtifactId, "decision-note"]] as const) {
       db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, ?, ?, 'application/json', 1, ?, ?, ?)").run(id, companyId, kind, `${id}.json`, sha256, `${companyId}/objects/aa/${id}.bin`, now);
@@ -106,6 +106,9 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
   const capacity = createImmediateCapacityActivities();
   let planningTurn = 0;
   let baseUpdateTurn = 0;
+  let reviewed = false;
+  let merged = false;
+  const githubActions: string[] = [];
 
   const activities: Partial<IssueActivities> = {
     ...capacity.activities,
@@ -151,9 +154,14 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
         ? { outcome: "updated" as const, baseSha: "b".repeat(40), headSha: "c".repeat(40), headTree: "d".repeat(40), summary: "Merged the latest base branch into the pull request and pushed it" }
         : { outcome: "no_drift" as const, summary: "The pull request base has not advanced" };
     }),
-    finalReview: counted("finalReview", async (input) => ({ finalReviewId: "final-review-happy", leadExecutionId: "lead-execution-final", leadSessionRef: input.leadSessionRef, opinionArtifactId: finalReviewArtifactId, evidenceArtifactId: finalReviewArtifactId, evidenceArtifactSha256: sha256, reviewArtifact: { artifactId: finalReviewArtifactId, companyId, kind: "delivery-review" as const, sha256, byteSize: 1, mimeType: "application/json" }, outcome: "approved" as const, summary: "Exact release approved", findings: [], repairPlan: null, repairPlanArtifactId: null, repairPlanSha256: null })),
+    finalReview: counted("finalReview", async (input) => { reviewed = true; return { finalReviewId: "final-review-happy", leadExecutionId: "lead-execution-final", leadSessionRef: input.leadSessionRef, opinionArtifactId: finalReviewArtifactId, evidenceArtifactId: finalReviewArtifactId, evidenceArtifactSha256: sha256, reviewArtifact: { artifactId: finalReviewArtifactId, companyId, kind: "delivery-review" as const, sha256, byteSize: 1, mimeType: "application/json" }, outcome: "approved" as const, summary: "Exact release approved", findings: [], repairPlan: null, repairPlanArtifactId: null, repairPlanSha256: null }; }),
     acceptDelivery: counted("acceptDelivery", async () => ({ acceptanceId: "acceptance-happy", status: "accepted" as const, outcome: "ready" as const, retryAt: null, readyAt: "2026-08-20T00:00:00.000Z", acceptedAt: "2026-08-20T00:00:00.000Z", evidenceArtifactId: null, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", reasonArtifactId: null })),
     reconcileMerge: counted("reconcileMerge", async () => ({ outcome: "merged" as const, pullRequestNumber: 42, pullRequestUrl: "https://github.com/acme/forge/pull/42", mergeObservationId: "merge-observation-happy", completionReceiptId: "completion-receipt-happy", observedAt: "2026-08-20T00:00:00.000Z", mergedAt: "2026-08-20T00:00:00.000Z", retryAt: null })),
+    pushDeliveryBranch: counted("pushDeliveryBranch", async (input) => ({ repository: "acme/forge", branchName: input.branchName, commitSha: input.commitSha })),
+    // GitHub as the reconciler sees it: checks go green once Forge's final review ran, Forge then
+    // requests auto-merge, and the next observation reports the pull request merged.
+    observeGithubPullRequest: counted("observeGithubPullRequest", async () => ({ exists: true, number: 42, url: "https://github.com/acme/forge/pull/42", state: merged ? "merged" as const : "open" as const, isDraft: false, headSha: observedCommit, baseSha: null, mergeable: "MERGEABLE", checks: reviewed ? { total: 1, pending: 0, failing: 0, successful: 1 } : { total: 1, pending: 1, failing: 0, successful: 0 }, autoMergeEnabled: false, reviewDecision: null })),
+    applyGithubPullRequestAction: counted("applyGithubPullRequestAction", async (input) => { githubActions.push(input.action); merged = true; }),
   };
 
   const worker = await Worker.create({ connection: environment.nativeConnection, namespace: environment.namespace ?? "default", taskQueue, workflowsPath, activities: createIssueActivitiesFake(activities) as unknown as Record<string, (...args: never[]) => unknown> });
@@ -173,6 +181,7 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
       autoApprovePlan: true,
       autoApprovePlanActorUserId: actorUserId,
       pullRequestMode: "auto_merge",
+      deliveryTarget: "merged",
       autoMergeActorUserId: actorUserId,
     };
     const handle = await environment.client.workflow.start(issueWorkflow, { workflowId, taskQueue, args: [input] });
@@ -201,11 +210,14 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
       args: [{ expectedRevision: blocked.revision, expectedWorkflowRevision: blocked.revision, actorUserId, answerStagingRef: "staging-happy-answer", answerSha256: sha256, idempotencyKey: "happy-blocker-answer" }],
       updateId: "happy-blocker-response",
     });
-    expect(delivered).toMatchObject({ phase: "delivery_ready", developerOutcome: "completed", developerExecutionId: "developer-execution-happy", planMaterial: true, decisionId: "decision-happy" });
+    expect(delivered).toMatchObject({ phase: "delivery_ready", developerOutcome: "completed", developerExecutionId: "developer-execution-happy", planMaterial: true });
     await settled();
 
     const done = await handle.result();
-    expect(done).toMatchObject({ phase: "done", pendingAction: "Merged", allowedCommands: [], mergeOutcome: "merged", acceptanceId: "acceptance-happy", completionReceiptId: "completion-receipt-happy", finalReviewOutcome: "approved", ciOutcome: "passed" });
+    // Merged deliveries skip the acceptance gate: GitHub owns the pull request after the final review,
+    // so done is the reconciler observing the merge, not a Forge acceptance/merge receipt.
+    expect(done).toMatchObject({ phase: "done", pendingAction: "Merged", allowedCommands: [], githubPullRequestState: "merged", finalReviewOutcome: "approved", ciOutcome: "passed" });
+    expect(githubActions).toEqual(["enable_auto_merge"]);
     const finalState = await settled();
     expect(finalState.phase).toBe("done"); expect(calls.get("updateCiFromBase")).toBe(2);
     expect(calls.get("reviewDelivery")).toBe(1);
@@ -217,10 +229,11 @@ test("a task created with auto-approve and auto-merge runs from Backlog to Done 
     expect(phaseSequence).toEqual([
       "backlog", "planning", "blocked", "planning", "ready_for_development", "development", "delivery_ready",
       "reviewing_delivery", "delivery_reviewed", "releasing", "ci_waiting",
-      "final_review", "accepted", "manual_merge", "done",
+      "final_review", "manual_merge", "done",
     ]);
 
-    expect(Object.fromEntries([...calls].filter(([, count]) => count > 3))).toEqual({});
+    // GitHub observation is polled by design; every other activity runs a bounded number of times.
+    expect(Object.fromEntries([...calls].filter(([name, count]) => count > 3 && name !== "observeGithubPullRequest"))).toEqual({});
 
     const history = await handle.fetchHistory();
     await Worker.runReplayHistory({ workflowsPath }, history, workflowId);

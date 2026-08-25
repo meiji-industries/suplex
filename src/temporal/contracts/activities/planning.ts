@@ -75,15 +75,18 @@ export const CreateSuccessorActivityInputSchema = z.object({
 export type CreateSuccessorActivityInput = z.infer<typeof CreateSuccessorActivityInputSchema>;
 export const CreateSuccessorActivityResultSchema = SuccessorReferenceSchema;
 export type CreateSuccessorActivityResult = z.infer<typeof CreateSuccessorActivityResultSchema>;
-export const RecordPlannerNoteActivityInputSchema = z.object({
+const RecordPlannerNoteActivityBaseSchema = z.object({
   taskId: durableId,
   companyId: durableId,
   workflowId: durableId,
   revision: z.number().int().nonnegative(),
   actorUserId: durableId,
-  note: z.string().trim().min(1),
   commandId: durableId,
-}).strict();
+});
+export const RecordPlannerNoteActivityInputSchema = z.union([
+  RecordPlannerNoteActivityBaseSchema.extend({ noteId: durableId, noteSha256: z.string().regex(/^[a-f0-9]{64}$/).optional() }).strict(),
+  RecordPlannerNoteActivityBaseSchema.extend({ note: z.string().trim().min(1) }).strict(),
+]);
 export type RecordPlannerNoteActivityInput = z.infer<typeof RecordPlannerNoteActivityInputSchema>;
 
 export interface PlanningActivities {

@@ -86,11 +86,7 @@ export class TaskRescueService {
         } finally { await temporal.connection.close(); }
       } catch (error) { steps.push(this.record(task, "Re-dispatch workflow", "failed", error instanceof Error ? error.message.slice(0, 300) : "Temporal reset failed.")); }
     } else steps.push(this.record(task, "Re-dispatch workflow", "skipped", "Workflow has no stale or failed workflow task."));
-    const released = this.database.authTransaction((db) => {
-      const now = new Date().toISOString();
-      return db.prepare(`UPDATE forge_developer_executions SET status = 'failed', finished_at = COALESCE(finished_at, ?), failure_code = 'rescue-process-missing', failure_summary = 'Builder process is no longer running.', heartbeat_at = ? WHERE task_id = ? AND status = 'running' AND process_pid IS NULL`).run(now, now, task.id).changes;
-    });
-    steps.push(this.record(task, "Release stale bookkeeping", released ? "completed" : "skipped", released ? `Released ${released} stale execution record${released === 1 ? "" : "s"}.` : "No pid-less execution was found."));
+    steps.push(this.record(task, "Release stale bookkeeping", "skipped", "Process PID rescue is unavailable for Herdr executions."));
     task = this.task(actorUserId, taskId);
     const command = retryCommands.find((candidate) => task.allowedCommands.includes(candidate));
     if (command && (task.phase === "delivery_blocked" || task.phase === "blocked" || task.phase === "failed" || task.phase === "ci_repair_required" || task.phase === "repair_required" || task.allowedCommands.includes("retry_development"))) {

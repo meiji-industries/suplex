@@ -4,6 +4,7 @@ import { expect, test } from "vitest";
 
 import { DeveloperRecoveryActions } from "../src/frontend/components/app/developer-recovery-actions.js";
 import { DeveloperRecoveryStatus } from "../src/frontend/components/app/developer-recovery-status.js";
+import { PlanDecisionForm } from "../src/frontend/components/app/plan-decision-form.js";
 import { SystemHealthProvider } from "../src/frontend/components/app/system-health.js";
 import { NextAction, TaskActions } from "../src/frontend/views/task-details.js";
 import type { ApiTask } from "../src/frontend/lib/view-shared.js";
@@ -55,6 +56,37 @@ test("keeps actionable Developer recovery summaries", () => {
   }));
 
   expect(html).toContain("The Builder process exited before returning a result.");
+});
+
+test("labels a blocked delivery as awaiting a decision while keeping retry available", () => {
+  const html = renderToStaticMarkup(createElement(DeveloperRecoveryStatus, {
+    taskId: "task-1",
+    recovery: { status: "failed", reasonCode: "target-suite-failures", summary: "The target repository has unrelated failures.", lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: null, nextAction: null },
+    executionStatus: "blocked",
+    allowedCommands: ["retry_development"],
+    busy: false,
+    isAdmin: true,
+    onAction: async () => undefined,
+  }));
+
+  expect(html).toContain("Needs a decision");
+  expect(html).toContain("Retry development");
+  expect(html).not.toContain("Failed");
+});
+
+test("keeps failed and cancelled Developer executions distinct", () => {
+  const render = (status: "failed" | "cancelled", executionStatus: string): string => renderToStaticMarkup(createElement(DeveloperRecoveryStatus, {
+    taskId: "task-1",
+    recovery: { status, reasonCode: null, summary: null, lastHeartbeatAt: null, currentOwner: "forge", evidenceArtifactId: null, nextAction: null },
+    executionStatus,
+    allowedCommands: ["retry_development"],
+    busy: false,
+    isAdmin: true,
+    onAction: async () => undefined,
+  }));
+
+  expect(render("failed", "failed")).toContain("Failed");
+  expect(render("cancelled", "cancelled")).toContain("Cancelled");
 });
 
 test("claimed Developer recovery does not hide delivery review actions", () => {
@@ -228,12 +260,31 @@ test("uses planned publication copy before publishing and skeletons while publis
   expect(render(true).match(/data-slot="skeleton"/g)).toHaveLength(3);
 });
 
-test("shows a status card when a background phase has no action", () => {
+test("hides a task-actions card with only a planning status label", () => {
   const task = {
-    phase: "releasing",
+    phase: "planning",
     allowedCommands: [],
     commands: [],
-    pendingAction: "Publishing draft pull request",
+    pendingAction: "Lead planning",
+    projection: { status: "current" },
+  } as unknown as ApiTask;
+  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
+    task,
+    busy: false,
+    onStartPlanning: async () => undefined,
+    onPlanAction: async () => undefined,
+    onRevisePlan: async () => undefined,
+    onContinueWork: async () => undefined,
+  }) }));
+  expect(html).not.toContain("data-task-actions");
+});
+
+test("keeps task-actions cards with an available command", () => {
+  const task = {
+    phase: "ready",
+    allowedCommands: ["start_planning"],
+    commands: [],
+    pendingAction: "Start planning",
     projection: { status: "current" },
   } as unknown as ApiTask;
   const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
@@ -245,7 +296,54 @@ test("shows a status card when a background phase has no action", () => {
     onContinueWork: async () => undefined,
   }) }));
   expect(html).toContain("data-task-actions");
-  expect(html).not.toContain('data-task-status-card="true"');
+  expect(html).toContain(">Start planning<");
+});
+
+test("keeps final-plan decisions together in the actions card", () => {
+  const task = {
+    phase: "approval",
+    allowedCommands: ["request_supplemental_review", "approve_plan", "request_plan_revision"],
+    commands: [{ name: "request_supplemental_review", endpoint: "request-supplemental-review" }],
+    pendingAction: "A distinctive workflow label that is not a card title",
+    projection: { status: "current" },
+  } as unknown as ApiTask;
+  const decisionControls = createElement(PlanDecisionForm, { approveCommand: { endpoint: "approve-plan", expectedRevision: 3 }, revisionCommand: { endpoint: "request-plan-revision", expectedRevision: 3 }, busy: false, onSubmit: async () => undefined });
+  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
+    task,
+    busy: false,
+    onStartPlanning: async () => undefined,
+    onPlanAction: async () => undefined,
+    onRevisePlan: async () => undefined,
+    onContinueWork: async () => undefined,
+    decisionControls,
+  }) }));
+
+  expect(html).toContain("Review final plan");
+  expect(html).not.toContain(task.pendingAction!);
+  expect(html.match(/data-plan-decision-controls="true"/g)).toHaveLength(1);
+  expect(html.match(/>Approve Plan</g)).toHaveLength(1);
+  expect(html.match(/>Request Changes</g)).toHaveLength(1);
+  expect(html).toContain(">Request review<");
+});
+
+test("keeps the stalled-projection task-actions card", () => {
+  const task = {
+    phase: "planning",
+    allowedCommands: [],
+    commands: [],
+    pendingAction: "Lead planning",
+    projection: { status: "stalled", message: "Workflow activity timed out." },
+  } as unknown as ApiTask;
+  const html = renderToStaticMarkup(createElement(SystemHealthProvider, { initialSnapshot: undefined, children: createElement(TaskActions, {
+    task,
+    busy: false,
+    onStartPlanning: async () => undefined,
+    onPlanAction: async () => undefined,
+    onRevisePlan: async () => undefined,
+    onContinueWork: async () => undefined,
+  }) }));
+  expect(html).toContain('data-task-status-card="true"');
+  expect(html).toContain("Workflow activity timed out.");
 });
 
 test("explains delivery review without internal role language", () => {

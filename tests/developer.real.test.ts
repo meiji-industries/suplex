@@ -1,87 +1,24 @@
-import { execFile } from "node:child_process";
 import { lstat, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { promisify } from "node:util";
 import { test, expect } from "vitest";
 
 import { ArtifactStore } from "../src/artifacts.js";
 import { DeveloperService } from "../src/codex-developer.js";
-import { FileSessionStore } from "../src/codex-lead.js";
+import { runCommand } from "../src/command-runner.js";
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { createGithubAdapter } from "../src/github.js";
 import { jsonRequired } from "../src/task-utils.js";
 
-const execFileAsync = promisify(execFile);
 const realEnabled = process.env.FORGE_RUN_REAL_CODEX === "1";
 const realTest = realEnabled ? test : test.skip;
 
-/**
- * Opt-in release gate. It deliberately uses the installed Codex binary and a
- * real supervisor; fake process runners cannot satisfy this test. The full
- * authenticated project/authorization/provider seam is exercised by the
- * release fixture when the owner-controlled environment supplies its config.
- */
-realTest("real Codex Developer turn uses one supervised child and one ordinary commit", async () => {
-  /* The durable supervisor protocol is covered by main's recovery gate. The
-     end-to-end authorized service gate below exercises this branch's seam.
-  const model = process.env.FORGE_CODEX_REAL_MODEL;
-  const root = await mkdtemp(join(tmpdir(), "forge-developer-real-"));
-  const repository = join(root, "repo");
-  const worktree = join(root, "worktree");
-  const runtimeRoot = join(root, "runtime");
-  try {
-    await execFileAsync("git", ["init", "-b", "main", repository]);
-    await writeFile(join(repository, "README.md"), "real proof\n");
-    await execFileAsync("git", ["-C", repository, "config", "user.name", "Forge real proof"]);
-    await execFileAsync("git", ["-C", repository, "config", "user.email", "forge-real-proof@example.invalid"]);
-    await execFileAsync("git", ["-C", repository, "add", "README.md"]);
-    await execFileAsync("git", ["-C", repository, "commit", "-m", "base"]);
-    const startingSha = (await execFileAsync("git", ["-C", repository, "rev-parse", "HEAD"])).stdout.trim();
-    await writeFile(join(repository, "README.md"), "moved target\n");
-    await execFileAsync("git", ["-C", repository, "add", "README.md"]);
-    await execFileAsync("git", ["-C", repository, "commit", "-m", "move target"]);
-    const movedTargetSha = (await execFileAsync("git", ["-C", repository, "rev-parse", "HEAD"])).stdout.trim();
-    await execFileAsync("git", ["-C", repository, "worktree", "add", "-b", "work/issue/real-proof", worktree, startingSha]);
-    expect((await execFileAsync("git", ["-C", worktree, "rev-parse", "HEAD"])).stdout.trim()).toBe(startingSha);
-    expect(movedTargetSha).not.toBe(startingSha);
-    const guard = await createGitCommandGuard(runtimeRoot);
-    try {
-      const turn = await runDeveloperTurn({
-        command: process.env.FORGE_CODEX_COMMAND ?? "codex",
-        args: ["exec", "--json", "--skip-git-repo-check", "--dangerously-bypass-approvals-and-sandbox", ...(model ? ["--model", model] : [])],
-        cwd: worktree,
-        env: guard.env,
-        worktreePath: worktree,
-        controlRoot: join(runtimeRoot, "developer-turn"),
-        executionId: "real-proof-execution",
-        attempt: 1,
-        leaseTokenHash: "a".repeat(64),
-        supervisorId: "real-proof-supervisor",
-        prompt: "Execute the authorized two-step plan, create proof.txt, create exactly one ordinary local commit directly on the accepted starting revision, leave the worktree clean, and return the required delivery JSON. Forge will independently run the accepted pinned setup and final verification after the process exits. Do not use push, PR, merge, rebase, amend, reset, clean, or provider mutation.",
-      });
-      const finalSha = (await execFileAsync("git", ["-C", worktree, "rev-parse", "HEAD"])).stdout.trim();
-      const parent = (await execFileAsync("git", ["-C", worktree, "rev-parse", "HEAD^"])).stdout.trim();
-      const status = (await execFileAsync("git", ["-C", worktree, "status", "--porcelain"])).stdout.trim();
-      expect(turn.identity.executionId).toBe("real-proof-execution");
-      expect(turn.identity.supervisorId).toBe("real-proof-supervisor");
-      expect(parent).toBe(startingSha);
-      expect(finalSha).not.toBe(startingSha);
-      expect(status).toBe("");
-      expect(turn.process.exitCode).toBe(0);
-      expect(turn.parsed.threadId).toBeTruthy();
-      expect(turn.parsed.finalReport).toBeTruthy();
-      expect(turn.parsed.receipts.every((receipt) => receipt.stepNumber === null)).toBe(true);
-    } finally {
-      await guard.cleanup();
-    }
-  } finally {
-    await rm(root, { recursive: true, force: true });
-  }
-  */
-  expect(true).toBe(true);
-}, 60 * 60_000);
+async function execFileAsync(command: string, args: string[], options: { cwd?: string } = {}) {
+  const result = await runCommand({ taskId: null, stepId: null, command, args, ...options });
+  if (result.exitCode !== 0) throw new Error(result.stderr || `${command} exited with ${result.exitCode}`);
+  return result;
+}
 
 realTest("real Codex passes the authorized Developer service seam with scoped artifacts and provider observation", async () => {
   const providerRepository = process.env.FORGE_REAL_GITHUB_REPOSITORY;
@@ -137,9 +74,8 @@ realTest("real Codex passes the authorized Developer service seam with scoped ar
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task_real', 'company_real', 'project_real', 'Real Developer proof', ?, ?, '{\"developer\":\"profile_real\"}', 1, 'workflow_real', 'revision_real', 'real-proof-key', ?, ?)").run(brief.id, JSON.stringify([referencedImage.id, unreferencedImage.id]), now, now);
       db.prepare("INSERT INTO forge_issue_outputs (id, task_id, company_id, workflow_id, revision, kind, output_artifact_id, evidence_artifact_id, session_ref, execution_id, created_at) VALUES ('output_real', 'task_real', 'company_real', 'workflow_real', 1, 'plan', ?, ?, 'lead-session-real', 'lead-execution-real', ?)").run(plan.id, supplemental.id, now);
     });
-    const sessions = new FileSessionStore(config.runtimeRoot);
-    const leadSessionRef = await sessions.create("raw-lead-real-proof");
-    const service = new DeveloperService(database, config, { sessionStore: sessions, githubObservation: createGithubAdapter() });
+    const leadSessionRef = "session_lead_real";
+    const service = new DeveloperService(database, config, { githubObservation: createGithubAdapter() });
     const authorization = { authorizationId: "authorization_real", taskId: "task_real", companyId: "company_real", projectId: "project_real", workflowId: "workflow_real", planRevision: 1, planArtifactId: plan.id, planSha256: plan.sha256, authorizationKind: "routine_auto" as const, approvalDecisionId: null, authorizedAt: now };
     const result = await service.run({ taskId: "task_real", companyId: "company_real", workflowId: "workflow_real", projectId: "project_real", projectRevisionId: "revision_real", planRevision: 1, roleProfiles: { builder: "profile_real" }, leadSessionRef, leadOutputArtifactId: plan.id, authorization });
 
@@ -151,7 +87,7 @@ realTest("real Codex passes the authorized Developer service seam with scoped ar
     expect(reconciliation.independentVerification).toMatchObject({ outcome: "passed", commands: [{ command: "npm test", exitCode: 0 }] });
     expect(result.targetBaseSha).toBe(acceptedSha);
     expect(movedTargetSha).not.toBe(acceptedSha);
-    expect(await sessions.read(result.developerSessionRef)).not.toBe(await sessions.read(leadSessionRef));
+    expect(database.authQuery((db) => db.prepare("SELECT id, codex_session_id FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = 'developer'").get("task_real"))).toMatchObject({ id: result.developerSessionRef, codex_session_id: expect.any(String) });
     const worktreeHead = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: result.worktreePath })).stdout.trim();
     const parent = (await execFileAsync("git", ["rev-parse", "HEAD^"], { cwd: result.worktreePath })).stdout.trim();
     expect(worktreeHead).toBe(result.resultCommit);

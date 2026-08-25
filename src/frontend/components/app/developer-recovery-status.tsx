@@ -21,11 +21,12 @@ const labels: Record<DeveloperRecoveryView["status"], string> = {
   failed: "Failed",
 };
 
-export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, busy, isAdmin, onAction, developmentStatus, children }: { taskId: string; recovery: DeveloperRecoveryView | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction) => Promise<void>; developmentStatus?: ReactNode; children?: ReactNode }): ReactElement | null {
+export function DeveloperRecoveryStatus({ taskId, recovery, executionStatus, allowedCommands, busy, isAdmin, onAction, developmentStatus, children }: { taskId: string; recovery: DeveloperRecoveryView | undefined; executionStatus?: string | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction) => Promise<void>; developmentStatus?: ReactNode; children?: ReactNode }): ReactElement | null {
   if (!recovery) return null;
   const interrupted = recovery.status === "interrupted";
   const failed = recovery.status === "failed";
-  const attention = interrupted || failed;
+  const blocked = executionStatus === "blocked";
+  const attention = interrupted || (failed && !blocked);
   const description = attention ? recovery.summary : null;
   const recoveryCommands = allowedCommands;
   const hasActions = recoveryCommands.includes("retry_development") || recoveryCommands.includes("cancel_development");
@@ -33,7 +34,7 @@ export function DeveloperRecoveryStatus({ taskId, recovery, allowedCommands, bus
   return <Card data-developer-recovery role="alert" size="sm">
       <Collapsible.Root defaultOpen className="flex flex-col gap-(--card-spacing)">
         <Collapsible.Trigger nativeButton={false} render={<CardHeader className="group/developer-recovery-trigger cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset" />}>
-          <CardTitle className="flex flex-wrap items-center gap-2">Development <Badge variant={attention ? "destructive" : "secondary"}>{labels[recovery.status]}</Badge>{developmentStatus}</CardTitle>
+          <CardTitle className="flex flex-wrap items-center gap-2">Development <Badge variant={attention ? "destructive" : "secondary"}>{blocked ? "Needs a decision" : labels[recovery.status]}</Badge>{developmentStatus}</CardTitle>
           {description ? <CardDescription>{description}</CardDescription> : null}
           <CardAction><ChevronRight aria-hidden="true" className="size-4 text-muted-foreground transition-transform group-data-[panel-open]/developer-recovery-trigger:rotate-90" /></CardAction>
         </Collapsible.Trigger>

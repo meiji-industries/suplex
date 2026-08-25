@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 
-import { readJson, withCompany } from "../../lib/api.js";
-import { type ApiTask } from "../../lib/view-shared.js";
+import { withCompany } from "../../lib/api.js";
+import { invalidateTaskList, readTaskList } from "../../lib/task-list.js";
+import { type ApiTaskSummary } from "../../lib/view-shared.js";
 import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../ui/sidebar.js";
 import { taskIsProcessing, taskPresentationPhase, TaskStatusIcon } from "./task-status.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 import { GitPullRequest } from "lucide-react";
 
-function pullRequestStatus(task: ApiTask): { label: string; dotClass: string } | null {
+function pullRequestStatus(task: ApiTaskSummary): { label: string; dotClass: string } | null {
   if (!task.release?.pullRequestNumber) return null;
   const state = task.deliveryGate?.release.state ?? (task.release.isDraft ? "draft" : "ready");
   if (state === "merged") return { label: "merged", dotClass: "bg-emerald-500" };
@@ -27,12 +28,11 @@ export function showRecentTasks(pathname: string): boolean {
 export function RecentTasks({ close }: { close?: () => void }): ReactElement | null {
   const companyId = useOptionalCompanyContext()?.currentCompany?.id;
   const visible = showRecentTasks(window.location.pathname);
-  const [tasks, setTasks] = useState<ApiTask[]>([]);
+  const [tasks, setTasks] = useState<ApiTaskSummary[]>([]);
   const reload = useCallback(async (): Promise<void> => {
     if (!visible || !companyId) return setTasks([]);
     try {
-      const result = await readJson<{ tasks: ApiTask[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks`);
-      setTasks(recentTasks(result.tasks));
+      setTasks(recentTasks(await readTaskList(companyId)));
     } catch {
       setTasks([]);
     }
@@ -41,7 +41,7 @@ export function RecentTasks({ close }: { close?: () => void }): ReactElement | n
   useEffect(() => {
     if (!visible) return;
     const events = new EventSource("/api/tasks/events");
-    events.addEventListener("invalidate", () => void reload());
+    events.addEventListener("invalidate", () => { if (companyId) invalidateTaskList(companyId); void reload(); });
     return () => events.close();
   }, [reload, visible]);
 

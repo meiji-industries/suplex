@@ -37,9 +37,9 @@ export function PullRequestCard({ task, busy, onRefresh, onMarkReady }: { task: 
         {pr.author ? <span className="flex min-w-0 items-center gap-1.5"><img className="size-5 shrink-0 rounded-full" src={pr.author.avatarUrl} alt="" /><span className="min-w-0 truncate">{pr.author.login}</span></span> : null}
         <code className="shrink-0 rounded bg-muted px-1.5">{task.release.baseBranch}</code>
         <span className="shrink-0 text-muted-foreground" aria-hidden="true">←</span>
-        <code className="min-w-0 flex-1 truncate rounded bg-muted px-1.5" title={task.release.headBranch}>{task.release.headBranch}</code>
+        <code className="min-w-0 truncate rounded bg-muted px-1.5" title={task.release.headBranch}>{task.release.headBranch}</code>
         <CopyButton value={task.release.headBranch} label="Copy head branch" />
-        {changeStatsAvailable ? <span className="flex shrink-0 items-center gap-1.5 tabular-nums"><span className="text-muted-foreground">{pr.changedFiles} {pr.changedFiles === 1 ? "file" : "files"}</span><span className="text-emerald-600 dark:text-emerald-400">+{pr.additions}</span><span className="text-red-600 dark:text-red-400">−{pr.deletions}</span></span> : null}
+        {changeStatsAvailable ? <span className="ml-auto flex shrink-0 items-center gap-1.5 tabular-nums"><span className="text-muted-foreground">{pr.changedFiles} {pr.changedFiles === 1 ? "file" : "files"}</span><span className="text-emerald-600 dark:text-emerald-400">+{pr.additions}</span><span className="text-red-600 dark:text-red-400">−{pr.deletions}</span></span> : null}
       </div> : null}
       <div className="text-[11px] text-muted-foreground">{details}</div>
     </CardContent>

@@ -4,7 +4,7 @@ import type { TaskResponse } from "../../../http/contracts/tasks.js";
 import type { IssuePhase } from "../../../issue-phases.js";
 import { phaseTimingDuration, phaseTimingLanes, phaseTimings } from "../../lib/phase-timings.js";
 
-type Activity = Pick<TaskResponse["activity"][number], "createdAt" | "eventType">;
+type Activity = Pick<TaskResponse["activity"][number], "createdAt" | "eventType"> & { metadata?: Record<string, unknown> };
 
 function timestamp(value: string): string {
   return new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });

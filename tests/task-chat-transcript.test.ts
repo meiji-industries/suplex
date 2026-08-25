@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildChatTranscript, type ChatEvent } from "../src/frontend/lib/task-chat.js";
+import { buildChatTranscript, chatEventFromTimelineEvent, type ChatEvent } from "../src/frontend/lib/task-chat.js";
 import type { ApiTask } from "../src/frontend/lib/view-shared.js";
 
 const at = (second: number) => `2026-08-23T00:00:${String(second).padStart(2, "0")}.000Z`;
@@ -10,6 +10,26 @@ const reviewer = (id: string, startedAt: string, finishedAt: string | null) => (
 const deliveryReview = (id: string, leadExecutionId: string, outcome: "approved" | "blocking", summary: string, createdAt: string): ApiTask["deliveryReviewHistory"][number] => ({ id, leadExecutionId, outcome, summary, planRevision: 1, baseSha: "base", subjectCommit: "commit", subjectTree: "tree", opinionArtifactId: "opinion", evidenceArtifactId: "evidence", repairCycle: 0, createdAt });
 
 describe("buildChatTranscript", () => {
+  it("maps neutral rollout events without parsing command prose", () => {
+    expect(chatEventFromTimelineEvent({ streamId: 1, id: "timeline", eventType: "file_change", metadata: { kind: "file_change", data: { path: "src/app.ts", status: "modified" } }, createdAt: at(1), executionId: "execution", executionRole: "builder", sessionId: "session", forgeTurnId: "turn" })).toEqual({ id: "timeline", at: at(1), kind: "file_change", text: "src/app.ts", files: ["src/app.ts"], exitCode: null });
+  });
+
+  it("hides human rollout scaffolding and lifecycle events", () => {
+    const event = (id: string, kind: string, data: Record<string, unknown>) => chatEventFromTimelineEvent({ streamId: 1, id, eventType: kind, metadata: { kind, data }, createdAt: at(1), executionId: "execution", executionRole: "builder", sessionId: "session", forgeTurnId: "turn" });
+    expect(event("forge", "message", { role: "human", text: "[forge-turn:turn] completion contract" })).toBeUndefined();
+    expect(event("environment", "message", { role: "human", text: "  <environment_context>" })).toBeUndefined();
+    expect(event("agents", "message", { role: "human", text: "# AGENTS.md instructions for /Users/dev/code/forge" })).toBeUndefined();
+    expect(event("steering", "message", { role: "human", text: "Please also cover the edge case." })).toBeUndefined();
+    expect(event("started", "turn_started", {})).toBeUndefined();
+    expect(event("finished", "turn_finished", {})).toBeUndefined();
+    expect(event("usage", "usage", {})).toBeUndefined();
+  });
+
+  it("renders member steering from task activity instead of rollout messages", () => {
+    const value = buildChatTranscript(task({ activity: [{ id: "steering", revision: 1, eventType: "planner_note", metadata: { note: "Please also cover the edge case." }, createdAt: at(10), kind: "member", actor: { id: "member", displayName: "Mara", username: "mara", avatarSeed: "mara" } }] }));
+    expect(value).toContainEqual(expect.objectContaining({ kind: "member", markdown: "Please also cover the edge case." }));
+  });
+
   it("keeps the brief first and retains planner-note rounds with their turns", () => {
     const value = buildChatTranscript(task({ activity: [{ id: "created", revision: 0, eventType: "task_created", metadata: {}, createdAt: at(1), kind: "member" }, { id: "note-1", revision: 1, eventType: "planner_note", metadata: { note: "Revise A" }, createdAt: at(10), kind: "member" }, { id: "summary-1", revision: 2, eventType: "planner_note_revised", metadata: { summary: "Plan A" }, createdAt: at(20), kind: "workflow" }, { id: "note-2", revision: 3, eventType: "planner_note", metadata: { note: "Revise B" }, createdAt: at(30), kind: "member" }, { id: "summary-2", revision: 4, eventType: "planner_note_revised", metadata: { summary: "Plan B" }, createdAt: at(40), kind: "workflow" }], agentInvocations: [planner("one", at(11), at(20)), planner("two", at(31), at(40))] }));
     expect(value.map((item) => item.kind)).toEqual(["member", "member", "agent_turn", "member", "agent_turn"]);
@@ -51,6 +71,22 @@ describe("buildChatTranscript", () => {
     const turn = value.find((item) => item.kind === "agent_turn");
     expect(turn).toMatchObject({ intro: "I'll inspect the README", events: [{ kind: "command", text: "Inspecting Git state", exitCode: 0 }, { text: "Checking files", count: 4 }] });
     expect(turn && turn.kind === "agent_turn" ? turn.events.some((event) => event.id === "intro") : false).toBe(false);
+  });
+
+  it("collapses consecutive identical tool calls while retaining their identifying payload", () => {
+    const events = ["one", "two", "three"].map((id, index) => chatEventFromTimelineEvent({ streamId: index + 1, id, eventType: "tool_call", metadata: { kind: "tool_call", data: { name: "exec", id: `call-${id}`, status: "completed" } }, createdAt: at(10 + index), executionId: "one", executionRole: "planner", sessionId: "session", forgeTurnId: "turn" })!);
+    const value = buildChatTranscript(task({ agentInvocations: [planner("one", at(10), at(20))] }), new Map([["one", events]]));
+    expect(value.find((item) => item.kind === "agent_turn")).toMatchObject({ events: [{ kind: "tool_call", text: "exec", detail: "call-one", toolStatus: "completed", count: 3 }] });
+  });
+
+  it("keeps distinct command rows and joins a later output preview by call id", () => {
+    const event = (id: string, kind: string, data: Record<string, unknown>) => chatEventFromTimelineEvent({ streamId: 1, id, eventType: kind, metadata: { kind, data }, createdAt: at(10), executionId: "one", executionRole: "planner", sessionId: "session", forgeTurnId: "turn" })!;
+    const value = buildChatTranscript(task({ agentInvocations: [planner("one", at(10), at(20))] }), new Map([["one", [
+      event("first", "command", { id: "call-one", text: "pwd" }),
+      event("second", "command", { id: "call-two", text: "git status" }),
+      event("output", "tool_call", { id: "call-one", output: "repo\nclean" }),
+    ]]]));
+    expect(value.find((item) => item.kind === "agent_turn")).toMatchObject({ events: [{ kind: "command", text: "pwd", output: "repo\nclean" }, { kind: "command", text: "git status" }] });
   });
 
   it("shows the delivery review outcome from its matching lead execution", () => {

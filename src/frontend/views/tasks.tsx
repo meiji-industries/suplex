@@ -21,11 +21,12 @@ import { useCompanyContext } from ".././components/app/company-context.js";
 import { getWorkerHealthFailure, useSystemHealth } from ".././components/app/system-health.js";
 import { TaskStatus, TaskStatusIcon, taskPresentationPhase, taskStatusAppearance } from ".././components/app/task-status.js";
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
+import { invalidateTaskList, readTaskList } from ".././lib/task-list.js";
 import { navigate } from ".././lib/navigation.js";
 import { ACTIVE_PHASES as activeTaskPhases, BLOCKED_PHASES as blockedTaskPhases, phaseLabel as taskPhaseLabel } from "../../issue-phases.js";
 import { CheckCircle2, ChevronDown, ChevronRight, CircleDashed, CircleDotDashed, CircleX, Ellipsis, Filter, FolderKanban, Layers3, ListFilter, Plus, UserRound } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type ReactElement } from "react";
-import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiProject, type ApiTask, type TaskPhase } from "../lib/view-shared.js";
+import { relativeTime, reconcileScopedNotFound, taskActionPayload, taskPhases, type ApiAgent, type ApiProject, type ApiTask, type ApiTaskSummary, type TaskPhase } from "../lib/view-shared.js";
 import { TaskDetailsPage, TaskDetailsNotFound, TaskDetailsSkeleton, type PlanRevisionInput, type TaskPlanAction } from "./task-details.js";
 
 async function fileAsImage(file: File): Promise<{ filename: string; mimeType: string; base64: string }> {
@@ -158,7 +159,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const [projects, setProjects] = useState<ApiProject[]>([]);
   const [agents, setAgents] = useState<ApiAgent[]>([]);
   const [roleAgentOverrides, setRoleAgentOverrides] = useState<{ planner?: string; builder?: string; reviewer?: string; integrator?: string }>({});
-  const [tasks, setTasks] = useState<ApiTask[]>([]);
+  const [tasks, setTasks] = useState<ApiTaskSummary[]>([]);
   const [loadedCompanyId, setLoadedCompanyId] = useState("");
   const [selectedState, setSelected] = useState<ApiTask>();
   const [projectId, setProjectId] = useState("");
@@ -180,6 +181,9 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const selectedRef = useRef<ApiTask | undefined>(undefined);
   const requestToken = useRef(0);
   const companyId = currentCompany?.id ?? "";
+  const routeBase = mode === "board" ? "/board" : "/tasks";
+  const detailPrefix = `${routeBase}/`;
+  const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
 
   useEffect(() => { selectedRef.current = selectedState; }, [selectedState]);
 
@@ -190,17 +194,13 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     try {
       const [projectResult, taskResult, agentResult] = await Promise.all([
         readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
-        readJson<{ tasks: ApiTask[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks`),
+        readTaskList(companyId),
         readJson<{ agents: ApiAgent[] }>("/api/agents"),
       ]);
       if (token !== requestToken.current) return;
-      setProjects(projectResult.projects); setTasks(taskResult.tasks); setAgents(agentResult.agents);
+      setProjects(projectResult.projects); setTasks(taskResult); setAgents(agentResult.agents);
       setProjectId((current) => projectResult.projects.some((project) => project.id === current) ? current : projectResult.projects[0]?.id ?? "");
-      const detailPrefix = mode === "board" ? "/board/" : "/tasks/";
-      const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
-      const nextSelected = routeTaskId ? taskResult.tasks.find((task) => task.id === routeTaskId) : selectedRef.current ? taskResult.tasks.find((task) => task.id === selectedRef.current!.id) : undefined;
-      setSelected(nextSelected);
-      setDetailNotFound(Boolean(routeTaskId) && !nextSelected);
+      setDetailNotFound(Boolean(routeTaskId) && !taskResult.some((task) => task.id === routeTaskId));
       setLoadedCompanyId(companyId);
     } catch (reason) {
       if (token !== requestToken.current) return;
@@ -210,6 +210,13 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     }
   }, [companyId, loading, mode, reloadCompanies]);
   useEffect(() => { void reload(); }, [reload]);
+  useEffect(() => {
+    if (!companyId || !routeTaskId || !loadedCompanyId || detailNotFound) return;
+    let cancelled = false;
+    setSelected(undefined);
+    void readJson<ApiTask>(`/api/tasks/${encodeURIComponent(routeTaskId)}`).then((task) => { if (!cancelled) { selectedRef.current = task; setSelected(task); } }).catch(() => { if (!cancelled) setDetailNotFound(true); });
+    return () => { cancelled = true; };
+  }, [companyId, detailNotFound, loadedCompanyId, routeTaskId]);
   useEffect(() => {
     if (mode !== "tasks") return;
     const openNewTask = (): void => { setCreateError(""); setCreateOpen(true); };
@@ -228,15 +235,13 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   }, [companyId]);
   useEffect(() => {
     const events = new EventSource("/api/tasks/events");
-    events.addEventListener("ready", () => void reload());
-    events.addEventListener("invalidate", () => void reload());
+    const refresh = (): void => { if (companyId) invalidateTaskList(companyId); void reload(); };
+    events.addEventListener("ready", refresh);
+    events.addEventListener("invalidate", refresh);
     return () => events.close();
   }, [reload]);
 
   const scopeLoaded = Boolean(companyId) && loadedCompanyId === companyId;
-  const routeBase = mode === "board" ? "/board" : "/tasks";
-  const detailPrefix = `${routeBase}/`;
-  const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
   const visibleProjects = scopeLoaded ? projects : [];
   const visibleTasks = scopeLoaded ? tasks : [];
   const boardTasks = boardProjectId === "all" ? visibleTasks : visibleTasks.filter((task) => task.projectId === boardProjectId);
@@ -258,7 +263,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
     { id: "blocked", title: "Blocked", phases: blockedTaskPhases, tasks: visibleTasks.filter((task) => blockedTaskPhases.has(task.phase)) },
     { id: "completed", title: "Completed", phases: new Set<TaskPhase>(["done", "cancelled"]), tasks: visibleTasks.filter((task) => task.phase === "done" || task.phase === "cancelled") },
   ].filter((group) => taskFilter === "all" ? group.tasks.length > 0 : group.id === taskFilter).map((group) => ({ ...group, tasks: [...group.tasks].sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)) }));
-  const selectTask = (task: ApiTask): void => { setSelected(task); selectedRef.current = task; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`${routeBase}/${encodeURIComponent(task.id)}`, companyId)); };
+  const selectTask = (task: ApiTaskSummary): void => { setSelected(undefined); selectedRef.current = undefined; setDetailNotFound(false); window.history.pushState({}, "", withCompany(`${routeBase}/${encodeURIComponent(task.id)}`, companyId)); window.dispatchEvent(new Event("forge:navigate")); };
   const addImages = async (files: File[]): Promise<void> => {
     setCreateError("");
     if (images.length + files.length > 8) { setCreateError("At most eight images may be attached"); return; }
@@ -396,7 +401,8 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   if (routeTaskId && !companyId) return <TaskDetailsNotFound companyId="" returnTo={mode} />;
   if (routeTaskId && !scopeLoaded && !error) return <TaskDetailsSkeleton />;
   if (routeTaskId && !scopeLoaded && error) return <ApplicationFrame title="Unable to load task"><div className="px-4 py-8 sm:px-6 lg:px-10"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div></ApplicationFrame>;
-  if (routeTaskId && (!selected || detailNotFound)) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
+  if (routeTaskId && detailNotFound) return <TaskDetailsNotFound companyId={companyId} returnTo={mode} />;
+  if (routeTaskId && !selected) return <TaskDetailsSkeleton />;
   if (routeTaskId && selected) return <TaskDetailsPage task={selected} project={visibleProjects.find((project) => project.id === selected.projectId)} companyId={companyId} busy={busy} error={error} isAdmin={user?.role === "admin"} onStartPlanning={startPlanning} onPlanAction={planAction} onRevisePlan={revisePlan} onContinueWork={continueWork} onResolveDecisionBlocker={resolveDecisionBlocker} onMarkReady={markReady} onMerge={mergePullRequest} onDuplicate={duplicateTask} onUpdateDetails={updateTaskDetails} onRefresh={refreshTask} onRescue={rescueTask} />;
 
   if (mode === "board") {

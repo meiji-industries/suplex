@@ -1,11 +1,13 @@
 #!/bin/zsh
-# usage: scripts/dev-restart.sh <dev-pane-id>
+# usage: scripts/dev-restart.sh [--force] <dev-pane-id>
 # Restarts `mise run dev` in the given Herdr pane, only when no Temporal activity is in flight.
 # Exit 1 = busy (nothing touched), exit 2 = pane did not come back healthy.
 set -e
-PANE="$1"; [ -n "$PANE" ] || { echo "usage: $0 <dev-pane-id>" >&2; exit 64; }
+FORCE=0
+[ "$1" = "--force" ] && { FORCE=1; shift; }
+PANE="$1"; [ -n "$PANE" ] || { echo "usage: $0 [--force] <dev-pane-id>" >&2; exit 64; }
 cd "$(dirname "$0")/.."
-mise run dev:idle || exit 1
+[ "$FORCE" = 1 ] || mise run dev:idle || exit 1
 MARK="Worker startup: local deployment activated"
 count() { herdr pane read "$1" --source recent-unwrapped --lines 2000 | grep -c "$MARK" || true; }
 before=$(count "$PANE")

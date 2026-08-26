@@ -14,6 +14,15 @@ test("task status uses the shared phase icons", () => {
   expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "done" }))).toContain("lucide-circle-check");
   expect(taskStatusLabel("done", "pull_request_draft")).toBe("Done · Draft PR");
   expect(taskStatusLabel("done", "pull_request_ready")).toBe("Done · PR ready");
+  expect(taskStatusLabel("done", "pull_request_ready", "merged")).toBe("Done · Merged");
+  const merged = renderToStaticMarkup(createElement(TaskStatus, { phase: "done", deliveryTarget: "pull_request_ready", pullRequestState: "merged" }));
+  expect(merged).toContain("Done · Merged");
+  expect(merged).toContain('data-task-status-icon="merged"');
+  expect(merged).toContain("bg-emerald-500");
+  expect(merged).toContain("text-white");
+  expect(merged).toContain("lucide-check");
+  expect(merged).not.toContain("lucide-circle-check");
+  expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "done", deliveryTarget: "pull_request_ready", pullRequestState: "open" }))).toContain("lucide-circle-check");
   expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "delivery_blocked", presentationPhase: "ci_waiting" }))).toContain("Waiting for CI");
   expect(renderToStaticMarkup(createElement(TaskStatus, { phase: "manual_merge" }))).toContain("Ready to Merge");
   expect(taskStatusAppearance("cancelled")).toMatchObject({ iconClass: "text-foreground/70", badge: "secondary" });

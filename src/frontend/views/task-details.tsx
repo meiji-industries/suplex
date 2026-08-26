@@ -321,14 +321,6 @@ function DeliveryChecksCard({ task }: { task: ApiTask }): ReactElement {
   </Card>;
 }
 
-function ReviewersTakeCard({ task }: { task: ApiTask }): ReactElement {
-  const review = task.governance.supplementalReview;
-  return <Card size="sm" aria-label="Reviewer’s take">
-    <CardHeader><CardTitle><h3>Reviewer’s take</h3></CardTitle></CardHeader>
-    <CardContent>{review ? <SupplementalReviewPanel value={{ reviewer: { name: review.reviewerProfile.name }, verdict: review.verdict, summary: review.summary, concerns: review.concerns, plannerResponse: review.plannerResponse }} /> : <p className="text-[11px] text-muted-foreground">No second review was requested.</p>}</CardContent>
-  </Card>;
-}
-
 function TaskOptions({ canCancel, busy, resyncBusy, onCancel, onDuplicate, onResync }: { canCancel: boolean; busy: boolean; resyncBusy: boolean; onCancel: () => void; onDuplicate: () => void; onResync: () => void }): ReactElement {
   return (
     <DropdownMenu>
@@ -565,6 +557,12 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                     {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} executionStatus={task.developerExecution?.status} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)} /> : null}
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
                     {leadPlan}
+                    {task.governance.supplementalReview ? <Card data-task-second-review size="sm" aria-label="Second review">
+                      <CardContent>
+                        <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-xs font-semibold"><span className="font-semibold">Second review: {task.governance.supplementalReview.verdict === "approve" ? "Approved" : "Revise"}</span></h3><span className="text-[11px] text-muted-foreground">{task.governance.supplementalReview.reviewerProfile.name}</span></div>
+                        <SupplementalReviewPanel hideHeader value={{ reviewer: { name: task.governance.supplementalReview.reviewerProfile.name }, verdict: task.governance.supplementalReview.verdict, summary: task.governance.supplementalReview.summary, concerns: task.governance.supplementalReview.concerns, plannerResponse: task.governance.supplementalReview.plannerResponse }} />
+                      </CardContent>
+                    </Card> : null}
                     {task.governance.blocker && blockerCommand ? <PlanBlockerResponseForm blocker={task.governance.blocker} expectedRevision={blockerCommand.expectedRevision} busy={busy} onSubmit={(payload) => onPlanAction(blockerCommand.endpoint as TaskPlanAction, undefined, { answer: payload.answer, idempotencyKey: payload.idempotencyKey, expectedWorkflowRevision: payload.expectedWorkflowRevision })} error={error} /> : task.governance.blocker ? <section className="space-y-1" data-plan-blocker><h3 className="text-xs font-semibold">{task.governance.blocker.header}</h3><p className="text-[13px]">{task.governance.blocker.question}</p><p className="text-[12px] text-muted-foreground">{task.governance.blocker.nextAction}</p></section> : null}
                     {task.leadOutput?.content.kind === "decision_blocker" && task.allowedCommands.includes("resolve_decision_blocker") ? <form className="space-y-2" onSubmit={(event) => { event.preventDefault(); void onResolveDecisionBlocker(answer); }}><FieldLabel htmlFor="decision-answer">Decision</FieldLabel><Textarea id="decision-answer" value={answer} onChange={(event) => setAnswer(event.target.value)} placeholder="Answer the Planner's question" maxLength={8000} /><Button size="sm" type="submit" disabled={busy || !answer.trim()}>{busy ? "Saving…" : "Resolve decision"}</Button></form> : null}
                   </div>
@@ -574,7 +572,6 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                   <TabsContent value="other" className="space-y-4">
                 <TaskConfigurationCard task={task} />
                 <DeliveryChecksCard task={task} />
-                <ReviewersTakeCard task={task} />
                 {hasChecks ? <CiDiagnostics ci={task.ci!} /> : null}
                 {task.release ? <ReleasePanel task={task} /> : null}
                 {task.targetBaseReconciliation.status ? <Card size="sm" aria-label="Target-base reconciliation">

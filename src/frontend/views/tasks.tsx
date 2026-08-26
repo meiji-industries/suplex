@@ -19,7 +19,7 @@ import { ApplicationFrame } from ".././components/app/application-frame.js";
 import { ProfileAvatar } from ".././components/app/profile-avatar.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { getWorkerHealthFailure, useSystemHealth } from ".././components/app/system-health.js";
-import { TaskStatus, TaskStatusIcon, taskPresentationPhase, taskStatusAppearance } from ".././components/app/task-status.js";
+import { ACTIVE_INVOCATION_STATUSES, TaskStatus, TaskStatusIcon, taskPresentationPhase, taskStatusAppearance } from ".././components/app/task-status.js";
 import { isApiError, readJson, withCompany, type CompanyStatus } from ".././lib/api.js";
 import { invalidateTaskList, readTaskList } from ".././lib/task-list.js";
 import { navigate } from ".././lib/navigation.js";
@@ -445,10 +445,19 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
                     <KanbanColumnContent value={phase} className="min-h-0 flex-1 space-y-2 overflow-y-auto px-2 pb-2">
                       {taskBoard[phase].map((task) => {
                         const project = visibleProjects.find((candidate) => candidate.id === task.projectId);
+                        const activeInvocations = Array.from(task.agentInvocations.reduce((byAgent, invocation) => {
+                          if (!ACTIVE_INVOCATION_STATUSES.has(invocation.status)) return byAgent;
+                          const current = byAgent.get(invocation.agentId);
+                          if (!current || invocation.startedAt > current.startedAt) byAgent.set(invocation.agentId, invocation);
+                          return byAgent;
+                        }, new Map<string | null | undefined, (typeof task.agentInvocations)[number]>()).values());
                         return <button type="button" className="block w-full rounded-md border border-border/90 bg-card px-3 py-2.5 text-left text-xs transition-colors hover:border-muted-foreground/35 hover:bg-background focus-visible:outline-2 focus-visible:outline-ring" key={task.id} onClick={() => selectTask(task)}>
                           <span className="block font-medium leading-4 text-card-foreground">{task.issueKey ? <span className="mr-1.5 font-normal text-muted-foreground">{task.issueKey}</span> : null}{task.title}</span>
                           {task.pendingAction ? <span className="mt-1 block truncate text-[11px] leading-4 text-muted-foreground">{task.pendingAction}</span> : null}
                           <span className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground"><Layers3 className="size-3" />{project?.name ?? "Unknown project"}</span>
+                          {activeInvocations.length ? <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
+                            {activeInvocations.map((invocation) => <span key={invocation.id} className="flex items-center gap-1"><ProfileAvatar name={invocation.agentName ?? invocation.role} seed={invocation.avatarSeed ?? invocation.id} size="xs" /><span className="truncate">{invocation.agentName ?? invocation.role}</span><span className="text-[10px] text-muted-foreground/70">{invocation.role}</span></span>)}
+                          </span> : null}
                         </button>;
                       })}
                     </KanbanColumnContent>

@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 
 import { ACTIVE_PHASES, BLOCKED_PHASES, phaseLabel, type IssuePhase } from "../../../issue-phases.js";
 
-const ACTIVE_INVOCATION_STATUSES = new Set(["starting", "running", "cancelling"]);
+export const ACTIVE_INVOCATION_STATUSES = new Set(["starting", "running", "cancelling"]);
 const BACKGROUND_PHASES = new Set<IssuePhase>(["releasing", "ci_waiting", "ready_reconciliation"]);
 type DeliveryTarget = "local_worktree" | "remote_branch" | "pull_request_draft" | "pull_request_ready" | "merged";
 

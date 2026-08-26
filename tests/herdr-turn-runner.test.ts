@@ -236,6 +236,47 @@ test("binds the Forge marker to its following Codex task_started turn", async ()
   } finally { outcome.database.close(); await rm(outcome.root, { recursive: true, force: true }); }
 });
 
+test("re-sends an unobserved prompt before recording awaiting-human attention", async () => {
+  const setup = await fixture();
+  let now = new Date();
+  const prompts: string[] = [];
+  let sleeps = 0;
+  const herdr = {
+    prompt: async (_name: string, prompt: string) => {
+      prompts.push(prompt);
+      if (prompts.length === 2) {
+        const turn = "re-sent";
+        await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(prompt) })}${line({ type: "task_started", turn_id: turn })}`);
+        await writeFile(resultPath(prompt), JSON.stringify({ status: "ok" }));
+        await appendFile(setup.session.rolloutPath!, line({ type: "task_complete", turn_id: turn, duration_ms: 1 }));
+      }
+      return setup.session.live;
+    },
+    getAgent: async () => ({ ...setup.session.live, status: "idle" }),
+  };
+  const runner = new HerdrTurnRunner(
+    setup.database,
+    herdr as never,
+    { ensureRoleSession: async () => setup.session } as never,
+    new IssueTimelineEvents(setup.database),
+    undefined,
+    undefined,
+    async () => {
+      sleeps += 1;
+      if (sleeps === 1) {
+        expect(setup.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt FROM forge_herdr_turns").get())).toEqual({ status: "waiting", attention_excerpt: null });
+        now = new Date(now.getTime() + 15_000);
+      }
+    },
+    () => now,
+  );
+  try {
+    await expect(runner.run(setup.input)).resolves.toMatchObject({ result: { status: "ok" } });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toBe(prompts[0]);
+  } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
+});
+
 test("binds a marker to the active Codex turn when task_started arrives first", async () => {
   const outcome = await runScenario(async (prompt, session) => {
     await appendFile(session.rolloutPath!, `${line({ type: "task_started", turn_id: "active" })}${line({ type: "user_message", message: "AGENTS.md instructions injected by Codex" })}${line({ type: "user_message", message: marker(prompt) })}${line({ type: "task_complete", turn_id: "active", duration_ms: 1 })}`);
@@ -550,9 +591,11 @@ test("recognizes explicit options blocks without a trailing question mark", asyn
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });
 
-test("surfaces an unbound turn whose agent remains idle without its result", async () => {
+test("surfaces an unbound turn only after all prompt delivery attempts go unobserved", async () => {
   const setup = await fixture();
+  let now = new Date();
   let sent = "";
+  let sleeps = 0;
   const herdr = {
     prompt: async (_name: string, prompt: string) => {
       sent = prompt;
@@ -561,16 +604,27 @@ test("surfaces an unbound turn whose agent remains idle without its result", asy
     },
     getAgent: async () => ({ ...setup.session.live, status: "idle" }),
   };
-  const runner = new HerdrTurnRunner(setup.database, herdr as never, { ensureRoleSession: async () => setup.session } as never, new IssueTimelineEvents(setup.database));
+  const runner = new HerdrTurnRunner(
+    setup.database,
+    herdr as never,
+    { ensureRoleSession: async () => setup.session } as never,
+    new IssueTimelineEvents(setup.database),
+    undefined,
+    undefined,
+    async () => {
+      sleeps += 1;
+      if (sleeps <= 3) now = new Date(now.getTime() + [15_000, 30_000, 60_000][sleeps - 1]!);
+      if (sleeps === 5) {
+        expect(setup.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt FROM forge_herdr_turns").get())).toEqual({ status: "awaiting_human", attention_excerpt: "Prompt was not accepted by the agent after 4 attempts" });
+        const row = setup.database.authQuery((db) => db.prepare("SELECT result_relative_path FROM forge_herdr_turns").get()) as { result_relative_path: string };
+        await writeFile(join(setup.root, row.result_relative_path), JSON.stringify({ status: "ok" }));
+        await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(sent) })}${line({ type: "task_complete", turn_id: "idle", duration_ms: 1 })}`);
+      }
+    },
+    () => now,
+  );
   try {
     const running = runner.run(setup.input);
-    await new Promise((resolve) => setTimeout(resolve, 75));
-    expect(setup.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt FROM forge_herdr_turns").get())).toEqual({ status: "waiting", attention_excerpt: null });
-    await new Promise((resolve) => setTimeout(resolve, 1_050));
-    const row = setup.database.authQuery((db) => db.prepare("SELECT status, attention_excerpt, result_relative_path FROM forge_herdr_turns").get() as { status: string; attention_excerpt: string; result_relative_path: string });
-    expect(row).toMatchObject({ status: "awaiting_human", attention_excerpt: expect.stringContaining(`Agent remained idle without writing ${join(setup.root, row.result_relative_path)}`) });
-    await writeFile(join(setup.root, row.result_relative_path), JSON.stringify({ status: "ok" }));
-    await appendFile(setup.session.rolloutPath!, `${line({ type: "user_message", message: marker(sent) })}${line({ type: "task_complete", turn_id: "idle", duration_ms: 1 })}`);
     await expect(running).resolves.toMatchObject({ result: { status: "ok" } });
   } finally { setup.database.close(); await rm(setup.root, { recursive: true, force: true }); }
 });

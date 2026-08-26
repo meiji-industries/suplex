@@ -45,6 +45,7 @@ export class HerdrTurnRunner {
     private readonly artifacts?: ArtifactStore,
     private readonly candidates: () => Promise<string[]> = rolloutCandidatePaths,
     private readonly sleep: (ms: number) => Promise<void> = delay,
+    private readonly now: () => Date = () => new Date(),
   ) {}
 
   async run<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T>> {
@@ -66,10 +67,12 @@ export class HerdrTurnRunner {
         this.create(turnId, input, session, resultPath, correction);
         this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', updated_at = ? WHERE turn_id = ?", start, start, iso(), turnId);
         const marker = `[forge-turn:${turnId}]`;
-        await this.herdr.prompt(session.agentName, `${this.completionBlock(marker, resultPath, input.schemaPath)}${validationIssues ? `\n\nYour previous result file failed schema validation. Correct these issues:\n${validationIssues}` : ""}\n\n${input.prompt}`);
+        const prompt = `${this.completionBlock(marker, resultPath, input.schemaPath)}${validationIssues ? `\n\nYour previous result file failed schema validation. Correct these issues:\n${validationIssues}` : ""}\n\n${input.prompt}`;
+        await this.herdr.prompt(session.agentName, prompt);
         session = await this.resolveIdentity(session, input, turnId, candidates);
-        this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, status = 'waiting', updated_at = ? WHERE turn_id = ?", iso(), iso(), turnId);
-        const completion = await this.wait(input, session, turnId, marker, resultPath, input.signal);
+        const promptSentAt = this.now().toISOString();
+        this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, status = 'waiting', updated_at = ? WHERE turn_id = ?", promptSentAt, promptSentAt, turnId);
+        const completion = await this.wait(input, session, turnId, marker, resultPath, prompt, input.signal);
         const bytes = await this.stableResult(
           resultPath,
           completion.resultVersion,
@@ -100,11 +103,12 @@ export class HerdrTurnRunner {
     }
   }
 
-  private async wait(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, marker: string, resultPath: string, signal?: AbortSignal): Promise<Completion> {
+  private async wait(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, marker: string, resultPath: string, prompt: string, signal?: AbortSignal): Promise<Completion> {
     const completion: Completion = { marker: false, completed: false, steeredAfterCompletion: false };
     let activeTurnId: string | undefined;
     let polls = 0;
     let idlePolls = 0;
+    let resends = 0;
     let executionActive = true;
     for (;;) {
       if (signal?.aborted || polls % 5 === 0 && !(executionActive = this.heartbeat(input)))
@@ -169,12 +173,25 @@ export class HerdrTurnRunner {
         );
       if (stable) return completion;
       if (live.status === "idle" || live.status === "done") {
-        const excerpt = completion.completed
-          ? `Finished without writing ${resultPath}`
-          : ++idlePolls >= 2
-            ? `Agent remained ${live.status} without writing ${resultPath}`
-            : await this.questionExcerpt(input, session, turnId);
-        if (excerpt) await this.updateAttention(session, turnId, "awaiting_human", excerpt);
+        if (!completion.marker) {
+          const resendAfter = [15_000, 30_000, 60_000][resends];
+          const sentAt = Date.parse(this.promptSentAt(turnId) ?? "");
+          if (resends < 3 && (!Number.isFinite(sentAt) || this.now().getTime() - sentAt >= resendAfter!)) {
+            await this.herdr.prompt(session.agentName, prompt);
+            const now = this.now().toISOString();
+            this.update("UPDATE forge_herdr_turns SET prompt_sent_at = ?, updated_at = ? WHERE turn_id = ?", now, now, turnId);
+            resends += 1;
+          } else if (resends >= 3) {
+            await this.updateAttention(session, turnId, "awaiting_human", "Prompt was not accepted by the agent after 4 attempts");
+          }
+        } else {
+          const excerpt = completion.completed
+            ? `Finished without writing ${resultPath}`
+            : ++idlePolls >= 2
+              ? `Agent remained ${live.status} without writing ${resultPath}`
+              : await this.questionExcerpt(input, session, turnId);
+          if (excerpt) await this.updateAttention(session, turnId, "awaiting_human", excerpt);
+        }
       } else {
         idlePolls = 0;
       }

@@ -24,6 +24,7 @@ import { loadDefaultPrompts, renderPrompt } from "./prompts.js";
 import { isVersionedPromptSet } from "./prompt-resolution.js";
 import { PlanGovernanceRepository } from "./plan-governance-repository.js";
 import { jsonRequired } from "./task-utils.js";
+import { WorktreeManager } from "./worktrees.js";
 
 const execFileAsync = promisify(execFile);
 type MergeConflictPlanInput = MergeConflictPlanActivityInput;
@@ -219,18 +220,21 @@ interface DeliveryReviewContext {
 export interface AgentServiceOptions {
   now?: () => Date;
   turnRunner?: { run<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T>> };
+  worktrees?: WorktreeManager;
 }
 
 export class AgentService {
   private readonly artifacts: ArtifactStore;
   private readonly now: () => Date;
   private readonly turnRunner: { run<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T>> };
+  private readonly worktrees: WorktreeManager;
 
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: AgentServiceOptions = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot, database);
     this.now = options.now ?? (() => new Date());
     const herdr = new CliHerdrClient();
     this.turnRunner = options.turnRunner ?? new HerdrTurnRunner(database, herdr, new HerdrSessionStore(database, herdr), new IssueTimelineEvents(database), this.artifacts);
+    this.worktrees = options.worktrees ?? new WorktreeManager();
   }
 
   private renderTaskPrompt(input: { taskId: string; companyId: string }, path: string, values: Record<string, string>): string {
@@ -335,10 +339,12 @@ export class AgentService {
       JOIN forge_artifacts b ON b.id = t.brief_artifact_id
       WHERE t.id = ? AND t.company_id = ? AND t.project_id = ? AND t.workflow_id = ? AND b.id = ?`).get(input.taskId, input.companyId, input.projectId, input.workflowId, input.briefArtifactId) as PlanningRow | undefined);
     if (!row) throw new AgentFailure("scoped-input-missing", "Lead planning evidence is unavailable");
-    row.normalized_json = JSON.stringify(this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input)));
+    const configuration = this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input));
+    row.normalized_json = JSON.stringify(configuration);
     const completed = await this.completedPlanningResult(input);
     if (completed) return completed;
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(pinnedRepositoryPath(row.normalized_json)));
+    await this.worktrees.syncBase(repositoryPath, configuration.baseBranch);
     const brief = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: row.brief_storage_path, sha256: row.brief_sha256 })).toString("utf8");
     const revisionNote = input.revisionNoteArtifactId
       ? this.database.authQuery((db) => db.prepare("SELECT storage_path AS storagePath, sha256 FROM forge_artifacts WHERE id = ? AND company_id = ? AND kind = 'plan-decision'").get(input.revisionNoteArtifactId, input.companyId) as { storagePath: string; sha256: string } | undefined)
@@ -604,7 +610,7 @@ export class AgentService {
     if (!failedChecks.length) throw new AgentFailure("ci-repair-not-authorized", "Only exact-head failed checks can enter CI repair planning");
     const existingPlan = this.database.authQuery((db) => db.prepare("SELECT id, plan_artifact_id AS planArtifactId, evidence_artifact_id AS evidenceArtifactId, lead_execution_id AS leadExecutionId, lead_session_ref AS leadSessionRef, summary FROM forge_ci_repair_plans WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND ci_run_id = ? AND ci_attempt_id = ? AND status = 'planned' ORDER BY created_at DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.ciRunId, input.ciAttemptId) as { id: string; planArtifactId: string; evidenceArtifactId: string; leadExecutionId: string; leadSessionRef: string; summary: string } | undefined);
     if (existingPlan) return { planId: existingPlan.id, planArtifactId: existingPlan.planArtifactId, evidenceArtifactId: existingPlan.evidenceArtifactId, leadExecutionId: existingPlan.leadExecutionId, leadSessionRef: existingPlan.leadSessionRef, summary: existingPlan.summary };
-    let revisionConfig: { requiredChecks?: unknown; verificationCommand?: unknown; repositoryPath: string };
+    let revisionConfig: { requiredChecks?: unknown; verificationCommand?: unknown; repositoryPath: string; baseBranch: string };
     try {
       revisionConfig = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input);
     } catch {
@@ -613,6 +619,7 @@ export class AgentService {
     const requiredChecks = input.requiredChecks.length ? input.requiredChecks : Array.isArray(revisionConfig.requiredChecks) ? revisionConfig.requiredChecks.filter((check): check is string => typeof check === "string") : [];
     const localVerification = input.localVerification.length ? input.localVerification : typeof revisionConfig.verificationCommand === "string" ? [revisionConfig.verificationCommand] : [];
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(revisionConfig.repositoryPath));
+    await this.worktrees.syncBase(repositoryPath, revisionConfig.baseBranch);
     const profile = await this.resolveTurnProfile(input.roleProfiles?.[executionRole] ?? input.roleProfiles?.planner, input.leadSessionRef, "Integrator", executionRole);
     const executionId = `agent_${randomBytes(12).toString("hex")}`;
     const startedAt = this.now().toISOString();
@@ -881,6 +888,7 @@ export class AgentService {
     const configuration = loadTaskConfiguration(this.database.authQuery((db) => db), this.artifacts, input);
     const normalizedJson = JSON.stringify(configuration);
     const repositoryPath = await taskScopedPath(this.config.repositoryRoot, await realpath(configuration.repositoryPath));
+    await this.worktrees.syncBase(repositoryPath, configuration.baseBranch);
     const brief = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.brief_storage_path, sha256: context.brief_sha256 })).toString("utf8");
     const draft = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.output_storage_path, sha256: context.output_sha256 })).toString("utf8");
     const instructions = await this.repositoryEvidence(repositoryPath);
@@ -935,6 +943,8 @@ export class AgentService {
     const review = this.database.authQuery((db) => db.prepare("SELECT a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a WHERE a.id = ? AND a.company_id = ?").get(rawInput.supplementalReviewArtifactId, rawInput.companyId) as { storagePath: string; sha256: string } | undefined);
     if (!draft || !review) throw new AgentFailure("scoped-input-missing", "Consolidation evidence is unavailable");
     const repositoryPath = await this.consolidationRepositoryPath(rawInput);
+    const configuration = this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, rawInput));
+    await this.worktrees.syncBase(repositoryPath, configuration.baseBranch);
     const draftText = (await this.artifacts.getArtifact({ ...draft, companyId: rawInput.companyId })).toString("utf8");
     const reviewText = (await this.artifacts.getArtifact({ ...review, companyId: rawInput.companyId })).toString("utf8");
     const schemaPath = await this.ensureResultSchema("lead-consolidation", LeadReviewResponseSchema);

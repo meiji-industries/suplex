@@ -57,6 +57,38 @@ test("does not assign Cargo caches to non-Cargo worktrees and preserves configur
   } finally { await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("synchronizes a clean base checkout and skips dirty or other-branch checkouts", async () => {
+  const value = await fixture();
+  const sha = "a".repeat(40);
+  const calls: string[][] = [];
+  let status = "";
+  let branch = "main";
+  const manager = new WorktreeManager({
+    async run(args) {
+      calls.push(args);
+      if (args[0] === "status") return status;
+      if (args[0] === "symbolic-ref") return branch;
+      if (args[0] === "rev-parse") return sha;
+      return "";
+    },
+  });
+  try {
+    await expect(manager.syncBase(value.repositoryPath, "main")).resolves.toEqual({ synced: true, headSha: sha });
+    expect(calls).toContainEqual(["merge", "--ff-only", "refs/remotes/origin/main"]);
+
+    calls.length = 0;
+    status = " M README.md";
+    await expect(manager.syncBase(value.repositoryPath, "main")).resolves.toEqual({ synced: false, reason: "dirty", headSha: sha });
+    expect(calls.some((args) => args[0] === "merge")).toBe(false);
+
+    calls.length = 0;
+    status = "";
+    branch = "feature/elsewhere";
+    await expect(manager.syncBase(value.repositoryPath, "main")).resolves.toEqual({ synced: false, reason: "other-branch", headSha: sha });
+    expect(calls.some((args) => args[0] === "merge")).toBe(false);
+  } finally { await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("creates a deterministic exact-base worktree and guards prohibited Git/provider operations", async () => {
   const value = await fixture();
   try {

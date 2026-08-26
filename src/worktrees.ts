@@ -36,6 +36,12 @@ export interface WorktreeRecord {
   targetBaseSha: string;
 }
 
+export interface SyncBaseResult {
+  synced: boolean;
+  reason?: "dirty" | "other-branch";
+  headSha: string;
+}
+
 export interface DeliveryGitState {
   branchName: string;
   headSha: string;
@@ -203,6 +209,30 @@ export class WorktreeManager {
     const sha = await this.git.run(["rev-parse", "--verify", `refs/remotes/origin/${baseBranch}`], canonical);
     if (!shaPattern.test(sha)) throw new WorktreeFailure("base-commit-mismatch", "Fetched base branch did not resolve to a commit");
     return sha;
+  }
+
+  async syncBase(repositoryPath: string, baseBranch: string): Promise<SyncBaseResult> {
+    if (!branchPattern.test(baseBranch)) throw new WorktreeFailure("unsafe-branch", "Base branch is not a safe Git ref");
+    const canonical = await canonicalDirectory(repositoryPath, "repository-unavailable");
+    try {
+      await this.git.run(["fetch", "--no-tags", "origin", `refs/heads/${baseBranch}:refs/remotes/origin/${baseBranch}`], canonical);
+      const [status, branch] = await Promise.all([
+        this.git.run(["status", "--porcelain", "--untracked-files=all"], canonical),
+        this.git.run(["symbolic-ref", "--short", "HEAD"], canonical),
+      ]);
+      if (status || branch !== baseBranch) {
+        const headSha = await this.git.run(["rev-parse", "HEAD"], canonical);
+        if (!shaPattern.test(headSha)) throw new WorktreeFailure("base-commit-mismatch", "Repository HEAD did not resolve to a commit");
+        return { synced: false, reason: status ? "dirty" : "other-branch", headSha };
+      }
+      await this.git.run(["merge", "--ff-only", `refs/remotes/origin/${baseBranch}`], canonical);
+      const headSha = await this.git.run(["rev-parse", "HEAD"], canonical);
+      if (!shaPattern.test(headSha)) throw new WorktreeFailure("base-commit-mismatch", "Repository HEAD did not resolve to a commit");
+      return { synced: true, headSha };
+    } catch (error) {
+      if (error instanceof WorktreeFailure) throw error;
+      throw new WorktreeFailure("base-sync-failed", "Git could not synchronize the repository base branch");
+    }
   }
 
   async create(input: WorktreeInput): Promise<WorktreeRecord> {

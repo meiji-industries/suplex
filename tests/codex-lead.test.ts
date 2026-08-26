@@ -84,6 +84,7 @@ async function fixture(model = "gpt-5-codex", briefText = "Investigate the fixtu
   await execFileAsync("git", ["config", "user.name", "Forge Test"], { cwd: repositoryPath });
   await execFileAsync("git", ["add", "README.md", "package.json", ".gitignore", "pnpm-lock.yaml"], { cwd: repositoryPath });
   await execFileAsync("git", ["commit", "-m", "fixture"], { cwd: repositoryPath });
+  await execFileAsync("git", ["remote", "add", "origin", repositoryPath], { cwd: repositoryPath });
   const config = createTestConfig(root, { repositoryRoot: root, artifactRoot: join(root, "artifacts"), runtimeRoot: join(root, "runtime") });
   const database = new ForgeDatabase(config.databasePath);
   const artifactStore = new ArtifactStore(config.artifactRoot);

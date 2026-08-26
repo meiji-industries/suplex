@@ -506,13 +506,13 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
                     const appearance = taskStatusAppearance(presentationPhase);
                     return (
                       <a data-task-row key={task.id} href={withCompany(`/tasks/${encodeURIComponent(task.id)}`, companyId)} className="group/task-row grid min-h-9 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md px-3 text-[13px] outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring/50 sm:grid-cols-[auto_minmax(0,1fr)_auto_auto] sm:px-4">
-                        <TaskStatusIcon phase={presentationPhase} pullRequestState={task.deliveryGate?.release.state} />
+                        <TaskStatusIcon phase={presentationPhase} pullRequestState={task.githubPullRequest?.state} />
                         <span className="flex min-w-0 items-center gap-2">
                           {task.issueKey ? <span className="shrink-0 text-xs text-muted-foreground">{task.issueKey}</span> : null}
                           <span className="truncate font-medium">{task.title}</span>
                           {project ? <><ChevronRight className="hidden size-3 shrink-0 text-muted-foreground/60 md:block" /><span className="hidden truncate text-xs text-muted-foreground md:block">{project.name}</span></> : null}
                         </span>
-                        <span className="hidden sm:inline-flex"><ReuiBadge variant={appearance.badge} size="sm" radius="full">{taskStatusLabel(presentationPhase, task.deliveryTarget, task.deliveryGate?.release.state)}</ReuiBadge></span>
+                        <span className="hidden sm:inline-flex"><ReuiBadge variant={appearance.badge} size="sm" radius="full">{taskStatusLabel(presentationPhase, task.deliveryTarget, task.githubPullRequest?.state)}</ReuiBadge></span>
                         <time dateTime={task.updatedAt} className="w-16 text-right text-[11px] text-muted-foreground">{taskListDate(task.updatedAt)}</time>
                       </a>
                     );

@@ -123,6 +123,7 @@ export const TaskListTaskSchema = z.object({
   release: TaskReleaseResponseSchema.pick({ status: true, pullRequestNumber: true, isDraft: true }).nullable().optional(),
   ci: z.object({ outcome: CiOutcomeSchema.nullable() }).optional(),
   deliveryGate: z.object({ release: z.object({ state: z.enum(["draft", "ready", "merged", "closed"]) }) }).optional(),
+  githubPullRequest: z.object({ state: z.enum(["open", "closed", "merged"]).nullable() }).optional(),
 });
 export type TaskListTask = z.infer<typeof TaskListTaskSchema>;
 export const TaskListResponseSchema = z.object({ tasks: z.array(TaskListTaskSchema) });

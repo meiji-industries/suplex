@@ -164,6 +164,10 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const [selectedState, setSelected] = useState<ApiTask>();
   const [projectId, setProjectId] = useState("");
   const [boardProjectId, setBoardProjectId] = useState("all");
+  const [hideEmptyColumns, setHideEmptyColumns] = useState(() => {
+    try { return localStorage.getItem("forge.board.hideEmptyColumns") !== "false"; }
+    catch { return true; }
+  });
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [autoApprovePlan, setAutoApprovePlan] = useState(false);
@@ -186,6 +190,10 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
   const routeTaskId = window.location.pathname.startsWith(detailPrefix) ? decodeURIComponent(window.location.pathname.slice(detailPrefix.length)) : "";
 
   useEffect(() => { selectedRef.current = selectedState; }, [selectedState]);
+  useEffect(() => {
+    try { localStorage.setItem("forge.board.hideEmptyColumns", String(hideEmptyColumns)); }
+    catch { /* Local storage may be unavailable. */ }
+  }, [hideEmptyColumns]);
 
   const reload = useCallback(async (): Promise<void> => {
     const token = ++requestToken.current;
@@ -417,6 +425,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
                 </SelectTrigger>
                 <SelectContent><SelectItem value="all">All projects</SelectItem>{visibleProjects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent>
               </Select>
+              <label className="flex cursor-pointer items-center gap-2 text-xs"><Checkbox checked={hideEmptyColumns} onCheckedChange={(c) => setHideEmptyColumns(c === true)} />Hide empty columns</label>
               <Layers3 className="size-3.5 text-muted-foreground" aria-hidden="true" />
             </div>
             <div className="flex items-center gap-1">
@@ -427,7 +436,7 @@ export function TasksView({ mode = "tasks" }: { mode?: "tasks" | "board" }): Rea
           <div className="min-h-0 flex-1 overflow-x-auto overflow-y-hidden p-2">
             <Kanban value={taskBoard} onValueChange={() => {}} getItemValue={(task) => task.id} className="h-full">
               <KanbanBoard className="h-full min-w-max grid-flow-col auto-cols-[286px] grid-cols-none gap-2">
-                {taskPhases.map((phase) => {
+                {taskPhases.filter((phase) => !hideEmptyColumns || taskBoard[phase].length > 0).length === 0 ? <p className="text-xs text-muted-foreground">No tasks</p> : taskPhases.filter((phase) => !hideEmptyColumns || taskBoard[phase].length > 0).map((phase) => {
                   return <KanbanColumn disabled key={phase} value={phase} className="min-h-0 rounded-md bg-muted/45">
                     <div className="flex h-10 shrink-0 items-center justify-between px-3 text-xs">
                       <div className="flex min-w-0 items-center gap-2"><TaskStatus phase={phase} /><span className="text-muted-foreground">{taskBoard[phase].length}</span></div>

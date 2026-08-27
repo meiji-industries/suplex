@@ -36,6 +36,7 @@ test("attention page renders projection-backed task rows", { timeout: 60_000 }, 
       db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, brief_artifact_id, image_artifact_ids_json, role_agents_json, supplemental_review, workflow_id, project_revision_id, idempotency_key, created_at, updated_at) VALUES ('task-a', 'company-a', 'project-a', 'Needs a decision', 'brief-a', '[]', '{}', 0, 'workflow-a', 'revision-a', 'attention-browser', ?, ?)").run(now, now);
       db.prepare("UPDATE forge_companies SET issue_code = 'ATTN' WHERE id = 'company-a'").run();
       db.prepare("INSERT INTO forge_issue_projections (task_id, company_id, project_id, workflow_id, revision, phase, owner, allowed_commands_json, pending_action, updated_at, last_event_id, authoritative_revision, projected_at, state_changed_at, projection_status, reconciled_at) VALUES ('task-a', 'company-a', 'project-a', 'workflow-a', 7, 'delivery_blocked', 'human', '[\"record_delivery_decision\",\"cancel_issue\"]', 'Decision required', ?, 'workflow-a:7', 7, ?, ?, 'current', ?)").run(now, now, now, now);
+      db.prepare("INSERT INTO forge_workflow_snapshots (task_id, company_id, workflow_id, revision, state_json, updated_at, run_id) VALUES ('task-a', 'company-a', 'workflow-a', 7, ?, ?, 'test')").run(JSON.stringify({ blocker: { category: "member_decision", summary: "Choose a behavior" }, mergeDecision: { question: "Choose a behavior", choices: [{ id: "safe", label: "Preserve changes", description: "Keep the current worktree." }, { id: "clean", label: "Discard changes", description: "Start from a clean worktree." }], recommendedChoiceId: "safe" } }), now);
     });
     const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
     const server = createApp({ config, auth, attention: new AttentionService(database, auth), health: { temporal: async () => ({ id: "temporal", label: "Temporal", status: "healthy", summary: "Ready", details: {} }), database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }), artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }), worker: async () => ({ id: "worker", label: "Worker", status: "healthy", summary: "Ready", details: {} }), codexAuth: async () => ({ id: "codex-auth", label: "Codex", status: "healthy", summary: "Ready", details: {} }), ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }) } });
@@ -54,10 +55,14 @@ test("attention page renders projection-backed task rows", { timeout: 60_000 }, 
       const page = await context.newPage();
       await page.goto(`http://127.0.0.1:${address.port}/attention`);
       expect(await page.getByText("Needs a decision", { exact: true }).isVisible()).toBe(true);
-      expect(await page.getByText("Decision required", { exact: true }).isVisible()).toBe(true);
-      expect(await page.getByRole("button", { name: "record delivery decision" }).isVisible()).toBe(true);
+      expect(await page.getByRole("radio", { name: /Preserve changes/ }).isChecked()).toBe(true);
+      expect(await page.getByRole("radio", { name: /Discard changes/ }).isVisible()).toBe(true);
+      expect(await page.getByRole("textbox", { name: "Decision needed note" }).isVisible()).toBe(true);
+      expect(await page.getByRole("button", { name: "Choose a behavior" }).isVisible()).toBe(true);
       await page.setViewportSize({ width: 390, height: 844 });
       expect(await page.getByRole("button", { name: "Open settings navigation" }).isVisible()).toBe(true);
+      expect(await page.getByRole("radio", { name: /Preserve changes/ }).isChecked()).toBe(true);
+      expect(await page.getByRole("button", { name: "Choose a behavior" }).isVisible()).toBe(true);
       await page.close(); await context.close();
     } finally { await browser.close(); await server.close(); }
   } finally { database.close(); await rm(root, { recursive: true, force: true }); }

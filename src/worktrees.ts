@@ -6,6 +6,7 @@ import { access, constants, lstat, mkdir, readFile, realpath, rm, stat, statfs, 
 import { delimiter, join, relative, resolve, sep } from "node:path";
 
 import type { ForgeDatabase } from "./database.js";
+import { claimOperation, operationKey, settleOperation } from "./operation-claims.js";
 import { OwnedWorktreeSchema, type OwnedWorktree } from "./developer-contracts.js";
 import { runCommand } from "./command-runner.js";
 
@@ -416,9 +417,22 @@ export class WorktreeManager {
     return { remoteExists: true, ahead, behind, headSha };
   }
 
-  async push(worktreePath: string, branchName: string): Promise<void> {
+  async push(worktreePath: string, branchName: string, claims?: { database: ForgeDatabase; taskId: string }): Promise<void> {
     if (!branchPattern.test(branchName)) throw new WorktreeFailure("unsafe-branch", "Task branch is unsafe");
-    await this.git.run(["push", "origin", branchName], await canonicalDirectory(worktreePath, "worktree-unavailable"));
+    const canonical = await canonicalDirectory(worktreePath, "worktree-unavailable");
+    const headSha = await this.git.run(["rev-parse", "HEAD"], canonical);
+    const key = claims ? operationKey(["push", claims.taskId, branchName, headSha]) : undefined;
+    if (claims && key) {
+      const claim = claimOperation(claims.database, { key, taskId: claims.taskId, kind: "push" });
+      if (!claim.claimed && claim.status === "settled") return;
+    }
+    try {
+      await this.git.run(["push", "origin", branchName], canonical);
+      if (claims && key) settleOperation(claims.database, key, "settled");
+    } catch (error) {
+      if (claims && key) settleOperation(claims.database, key, "failed", { message: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
   }
 
   async currentDiff(input: WorktreeDiffInput): Promise<WorktreeDiff> {

@@ -140,4 +140,36 @@ describe("task chat UI", () => {
     expect(html.match(/<li data-task-chat-tool-call[^]*?<\/li>/)?.[0]).not.toContain("aria-expanded");
     expect(html).toContain("<strong>Done</strong>");
   });
+
+  it("renders completed patch rows as collapsed file disclosures without acknowledgements", () => {
+    const item = { ...completed, finishedAt: null, status: "running" as const, events: [{ id: "patch", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "Apply patch", status: "completed" as const, patch: { files: [{ path: "src/a.ts", operation: "Edit" as const, additions: 1, deletions: 1, rows: [{ kind: "deletion" as const, text: "old", oldLine: 2 }, { kind: "addition" as const, text: "new", newLine: 2 }] }] } }] };
+    const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    expect(html).toContain("Edit");
+    expect(html).toContain("src/a.ts");
+    expect(html).toContain("+1");
+    expect(html).toContain("−1");
+    expect(html).toContain("lucide-file-pen-line");
+    expect(html).toContain("lucide-chevron-right");
+    expect(html).not.toContain("{}");
+    expect(html).not.toContain(">old<");
+  });
+
+  it("opens running patches with literal diff rows and line number cells", () => {
+    const item = { ...completed, finishedAt: null, status: "running" as const, events: [{ id: "patch", at: "2026-08-23T00:00:10.000Z", kind: "command", text: "Apply patch", status: "running" as const, patch: { files: [{ path: "src/<a>.ts", operation: "Edit" as const, additions: 1, deletions: 1, rows: [{ kind: "deletion" as const, text: "<old>", oldLine: 2 }, { kind: "addition" as const, text: "<new>", newLine: 2 }] }] } }] };
+    const html = renderToStaticMarkup(createElement(ChatAgentTurn, { item, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    expect(html).toContain("data-task-chat-patch-diff");
+    expect(html).toContain("&lt;old&gt;");
+    expect(html).toContain("&lt;new&gt;");
+    expect(html).toContain(">2</span><span");
+    expect(html).toContain('>2</span><code');
+  });
+
+  it("uses checkpoint markers only for completed turns", () => {
+    const render = (status: "completed" | "failed" | "blocked") => renderToStaticMarkup(createElement(ChatAgentTurn, { item: { ...completed, status, finishedAt: "2026-08-23T00:00:40.000Z" }, onOpenDiff: () => undefined, onLoadEvents: async () => undefined }));
+    expect(render("completed")).toContain("data-task-chat-completion-marker");
+    expect(render("completed")).toContain("lucide-bookmark");
+    expect(render("completed")).toContain("Builder has finished");
+    expect(render("failed")).not.toContain("data-task-chat-completion-marker");
+    expect(render("blocked")).not.toContain("data-task-chat-completion-marker");
+  });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildChatTranscript, chatEventFromTimelineEvent, type ChatEvent } from "../src/frontend/lib/task-chat.js";
+import { buildChatTranscript, chatEventFromTimelineEvent, compactChatEvents, type ChatEvent } from "../src/frontend/lib/task-chat.js";
 import type { ApiTask } from "../src/frontend/lib/view-shared.js";
 
 const at = (second: number) => `2026-08-23T00:00:${String(second).padStart(2, "0")}.000Z`;
@@ -12,6 +12,15 @@ const deliveryReview = (id: string, leadExecutionId: string, outcome: "approved"
 describe("buildChatTranscript", () => {
   it("maps neutral rollout events without parsing command prose", () => {
     expect(chatEventFromTimelineEvent({ streamId: 1, id: "timeline", eventType: "file_change", metadata: { kind: "file_change", data: { path: "src/app.ts", status: "modified" } }, createdAt: at(1), executionId: "execution", executionRole: "builder", sessionId: "session", forgeTurnId: "turn" })).toEqual({ id: "timeline", at: at(1), kind: "file_change", text: "src/app.ts", files: ["src/app.ts"], exitCode: null });
+  });
+
+  it("retains validated patches through timeline conversion and hides their empty acknowledgement", () => {
+    const event = (id: string, kind: string, data: Record<string, unknown>) => chatEventFromTimelineEvent({ streamId: 1, id, eventType: kind, metadata: { kind, data }, createdAt: at(1), executionId: "execution", executionRole: "builder", sessionId: "session", forgeTurnId: "turn" })!;
+    const patch = { files: [{ path: "src/a.ts", operation: "Edit", additions: 1, deletions: 1, rows: [{ kind: "deletion", text: "old", oldLine: 1 }, { kind: "addition", text: "new", newLine: 1 }] }] };
+    const command = event("patch", "command", { id: "call-patch", text: "Apply patch", patch });
+    expect(command.patch).toEqual(patch);
+    expect(compactChatEvents([command, event("ack", "tool_call", { id: "call-patch", output: "{}" })])).toMatchObject([expect.objectContaining({ id: "patch", patch })]);
+    expect(event("bad", "command", { id: "call-bad", text: "Apply patch", patch: { files: [{ path: "/tmp/a.ts" }] } }).patch).toBeUndefined();
   });
 
   it("hides human rollout scaffolding and lifecycle events", () => {

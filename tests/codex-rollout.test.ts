@@ -117,6 +117,39 @@ test("tool output previews are clipped", () => {
   expect((parseRolloutChunk(input, `${JSON.stringify(row)}\n`).events[0]!.data.output as string).length).toBe(600);
 });
 
+test("patch calls retain sanitized structured diffs from escaped and direct input", () => {
+  const input = { sessionId: "session", forgeTurnId: "turn", executionId: "execution", executionRole: "builder" as const, offset: 0 };
+  const source = "*** Begin Patch\n*** Update File: src/a.ts\n*** Move to: src/renamed.ts\n@@ -2,2 +2,2 @@\n old\n-old value\n+new token=secret\n*** Add File: src/new.ts\n+first\n+second\n*** Delete File: src/old.ts\n-old\n*** End Patch";
+  const rows = [
+    { timestamp: "2026-08-24T10:52:08.000Z", type: "response_item", payload: { type: "custom_tool_call", call_id: "escaped", name: "exec", input: `const patch = ${JSON.stringify(source)};` } },
+    { timestamp: "2026-08-24T10:52:09.000Z", type: "response_item", payload: { type: "custom_tool_call", call_id: "direct", name: "exec", input: source } },
+  ];
+  const events = parseRolloutChunk(input, `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`).events;
+  for (const id of ["escaped", "direct"]) {
+    const patch = events.find((event) => event.data.id === id)?.data.patch;
+    expect(patch).toEqual(expect.objectContaining({ files: expect.arrayContaining([
+      expect.objectContaining({ path: "src/renamed.ts", operation: "Edit", additions: 1, deletions: 1, rows: expect.arrayContaining([expect.objectContaining({ kind: "context", oldLine: 2, newLine: 2, text: "old" }), expect.objectContaining({ kind: "deletion", oldLine: 3, text: "old value" }), expect.objectContaining({ kind: "addition", newLine: 3, text: "new [REDACTED]" })]) }),
+      expect.objectContaining({ path: "src/new.ts", operation: "Add", additions: 2, deletions: 0, rows: expect.arrayContaining([expect.objectContaining({ newLine: 1 })]) }),
+      expect.objectContaining({ path: "src/old.ts", operation: "Delete", additions: 0, deletions: 1, rows: expect.arrayContaining([expect.objectContaining({ oldLine: 1 })]) }),
+    ]) }));
+  }
+});
+
+test("malformed, unsafe, and oversized patch input falls back without leaking source", () => {
+  const input = { sessionId: "session", forgeTurnId: "turn", executionId: "execution", executionRole: "builder" as const, offset: 0 };
+  const inputs = [
+    "const patch = \"*** Begin Patch\\\\n*** Update File: ../../secret.ts\\\\n+token=secret\\\\n*** End Patch\";",
+    "const patch = \"*** Begin Patch\\\\n*** Update File: src/a.ts\\\\n+token=secret\";",
+    `const patch = ${JSON.stringify(`*** Begin Patch\n*** Update File: src/a.ts\n+${"x".repeat(600)}\n*** End Patch`)};`,
+  ];
+  const events = parseRolloutChunk(input, `${inputs.map((value, index) => JSON.stringify({ timestamp: "2026-08-24T10:52:08.000Z", type: "response_item", payload: { type: "custom_tool_call", call_id: `call-${index}`, name: "exec", input: value } })).join("\n")}\n`).events;
+  expect(events).toHaveLength(3);
+  expect(events).toEqual(expect.arrayContaining(inputs.slice(0, 2).map((_, index) => expect.objectContaining({ data: expect.objectContaining({ id: `call-${index}`, text: "Apply patch" }) }))));
+  expect(events.slice(0, 2).every((event) => !("patch" in event.data))).toBe(true);
+  const clipped = events[2]!.data.patch as { files: Array<{ rows: Array<{ text: string }> }> };
+  expect(clipped.files[0]!.rows[0]!.text).toHaveLength(500);
+});
+
 test("marker discovery chooses the newest rollout when a retry reused its turn ID", async () => {
   const root = await mkdtemp(resolve(tmpdir(), "forge-rollout-"));
   const cwd = resolve(root, "worktree");

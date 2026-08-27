@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { z } from "zod";
 import { redact } from "./logging.js";
 import { json } from "./task-utils.js";
+import { parseApplyPatch } from "./codex-patch.js";
 const TimestampSchema = z.string().datetime();
 const NonnegativeInteger = z.number().int().nonnegative();
 export const CodexRolloutSessionMetaSchema = z
@@ -334,6 +335,10 @@ export function parseRolloutChunk(
       payload.type === "custom_tool_call"
     ) {
       const name = typeof payload.name === "string" ? payload.name : "tool";
+      const patch =
+        typeof payload.input === "string"
+          ? parseApplyPatch(payload.input, safePreview)
+          : undefined;
       events.push(
         event(
           input,
@@ -347,6 +352,7 @@ export function parseRolloutChunk(
             text: commandFromInput(payload.input),
             status:
               typeof payload.status === "string" ? payload.status : undefined,
+            ...(patch ? { patch } : {}),
           },
         ),
       );

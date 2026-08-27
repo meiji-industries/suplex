@@ -186,6 +186,15 @@ export class HerdrTurnRunner {
             const description = handoff?.kind === "dirty" ? `Developer pane ended with ${handoff.dirtyFileCount} uncommitted files and no delivery result` : `Developer pane ended with ${handoff?.kind ?? "no new commit"} and no delivery result`;
             throw new AgentFailure("turn_outcome_missing", description, { nonRetryable: true });
           }
+          // A direct question is already a durable human-attention boundary. Do
+          // not overwrite it with the one-time completion resume request.
+          const question = !completion.completed && await this.questionExcerpt(input, session, turnId);
+          if (question) {
+            idlePolls = 0;
+            await this.updateAttention(session, turnId, "awaiting_human", question);
+            await this.sleep(1_000);
+            continue;
+          }
           const row = this.database.authQuery((db) => db.prepare("SELECT status FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { status: string } | undefined);
           if (row?.status !== "awaiting_human") {
             await this.herdr.prompt(session.agentName, `Your previous turn ended without writing the required result file at ${resultPath}. Write it now using the exact schema you were given, then reply with the completion marker ${marker}.`);
@@ -197,7 +206,7 @@ export class HerdrTurnRunner {
             ? `Finished without writing ${resultPath}`
             : ++idlePolls >= 2
               ? `Agent remained ${live.status} without writing ${resultPath}`
-              : await this.questionExcerpt(input, session, turnId);
+              : undefined;
           if (excerpt) await this.updateAttention(session, turnId, "awaiting_human", excerpt);
         }
       } else {

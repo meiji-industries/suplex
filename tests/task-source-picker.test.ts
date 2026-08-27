@@ -35,6 +35,7 @@ test("source menu rows use Base UI's activation event", () => {
 
 test("source prefill remains editable and only generated values are replaced", () => {
   const first = prefillForTaskSource(pull); const next = prefillForTaskSource(branch);
+  expect(first).toEqual({ title: "Improve picker", description: "" });
   expect(preserveEditedPrefill(first, first, next)).toEqual(next);
   expect(preserveEditedPrefill({ title: "My title", description: first.description }, first, next)).toEqual({ title: "My title", description: next.description });
   expect(preserveEditedPrefill({ title: first.title, description: "My description" }, first, next)).toEqual({ title: next.title, description: "My description" });

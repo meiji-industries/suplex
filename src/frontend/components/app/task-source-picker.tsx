@@ -24,7 +24,7 @@ export function filterTaskSources(rows: TaskSourceSummary[], query: string): Tas
 
 export function prefillForTaskSource(source: TaskSourceSummary): { title: string; description: string } {
   return source.kind === "pull_request"
-    ? { title: source.title, description: source.body || `Continue pull request #${source.number} (${source.headBranch} → ${source.baseBranch}).` }
+    ? { title: source.title, description: "" }
     : { title: source.subject || source.branch, description: `Continue work from branch \`${source.branch}\` at \`${source.headSha.slice(0, 8)}\`.\n\n${source.subject}` };
 }
 

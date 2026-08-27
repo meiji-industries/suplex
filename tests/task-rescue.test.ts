@@ -2,10 +2,15 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { expect, test, vi } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 
 const { connectTemporal, reconcileIssueDeveloperDelivery } = vi.hoisted(() => ({ connectTemporal: vi.fn(), reconcileIssueDeveloperDelivery: vi.fn() }));
 vi.mock("../src/temporal/service.js", () => ({ connectTemporal, reconcileIssueDeveloperDelivery }));
+
+afterEach(() => {
+  connectTemporal.mockReset();
+  reconcileIssueDeveloperDelivery.mockReset();
+});
 
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
@@ -81,6 +86,9 @@ test("rescue stops after typed Developer reconciliation reaches delivery ready",
     const tasks = { getTask: vi.fn().mockImplementation(() => ({ id: "task-rescue", companyId: "company-rescue", workflowId: "workflow-rescue", revision: 25, phase: "delivery_blocked", allowedCommands: ["retry_development"] })), executeCommand: vi.fn() };
     const result = await new TaskRescueService(tasks as never, database, config).rescue("admin", "task-rescue");
     expect(result.steps).toContainEqual(expect.objectContaining({ name: "Reconcile Developer delivery", outcome: "completed" }));
+    expect(result.steps).not.toContainEqual(expect.objectContaining({ name: "Re-dispatch workflow" }));
+    expect(result.steps).not.toContainEqual(expect.objectContaining({ name: "Release stale bookkeeping" }));
+    expect(result.steps).not.toContainEqual(expect.objectContaining({ name: "Retry current step" }));
     expect(tasks.executeCommand).not.toHaveBeenCalled();
   } finally { database.close(); await rm(root, { recursive: true, force: true }); }
 });

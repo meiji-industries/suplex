@@ -32,6 +32,7 @@ const USER_COLUMNS: SettingsTableColumn[] = [
 
 const PROFILE_COLUMNS: SettingsTableColumn[] = [
   { key: "name", label: "Name ↓", width: 240 },
+  { key: "provider", label: "Provider", width: 110 },
   { key: "model", label: "Model", width: 200 },
   { key: "reasoning", label: "Reasoning", width: 75 },
   { key: "priority", label: "Priority", width: 102 },
@@ -88,9 +89,10 @@ const PASSKEY_COLUMNS: SettingsTableColumn[] = [
 
 const MODEL_COLUMNS: SettingsTableColumn[] = [
   { key: "model", label: "Model ↓", width: 220 },
+  { key: "provider", label: "Provider", width: 110 },
   { key: "displayName", label: "Display name", width: 200 },
   { key: "status", label: "Status", width: 100 },
-  { key: "sort", label: "Sort", width: 80 },
+  { key: "sort", label: "Sort", width: 64 },
   { key: "menu", width: 28 },
   { key: "end", width: 32 },
 ];
@@ -135,6 +137,7 @@ export function AdminView(): ReactElement {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileModel, setProfileModel] = useState("gpt-5.6-sol");
+  const [profileProvider, setProfileProvider] = useState<"codex" | "claude">("codex");
   const [profileReasoning, setProfileReasoning] = useState("medium");
   const [profilePriority, setProfilePriority] = useState("standard");
   const [profileCapacity, setProfileCapacity] = useState("");
@@ -151,6 +154,7 @@ export function AdminView(): ReactElement {
   const [capacityEdits, setCapacityEdits] = useState<Record<string, string>>({});
   const [modelId, setModelId] = useState("");
   const [modelName, setModelName] = useState("");
+  const [modelProvider] = useState<"codex" | "claude">("codex");
   const [modelOpen, setModelOpen] = useState(false);
   const [inviteToken, setInviteToken] = useState("");
   const [inviteExpiresAt, setInviteExpiresAt] = useState("");
@@ -226,15 +230,15 @@ export function AdminView(): ReactElement {
     } catch { setError("Unable to copy invitation"); }
   };
   const openNewProfile = (): void => {
-    setEditingProfileId(null); setProfileName(""); setProfileReasoning("medium"); setProfilePriority("standard"); setProfileCapacity(""); setProfileOpen(true);
+    setEditingProfileId(null); setProfileName(""); setProfileProvider("codex"); setProfileModel("gpt-5.6-sol"); setProfileReasoning("medium"); setProfilePriority("standard"); setProfileCapacity(""); setProfileOpen(true);
   };
   const openEditProfile = (profile: ApiProfile): void => {
-    setEditingProfileId(profile.id); setProfileName(profile.name); setProfileModel(profile.model); setProfileReasoning(profile.reasoningLevel); setProfilePriority(profile.servicePriority); setProfileCapacity(profile.capacity === null ? "" : String(profile.capacity)); setProfileOpen(true);
+    setEditingProfileId(profile.id); setProfileName(profile.name); setProfileProvider(profile.provider); setProfileModel(profile.model); setProfileReasoning(profile.reasoningLevel); setProfilePriority(profile.servicePriority); setProfileCapacity(profile.capacity === null ? "" : String(profile.capacity)); setProfileOpen(true);
   };
   const saveProfile = async (): Promise<void> => {
     const editing = editingProfileId !== null;
     try {
-      await readJson(editing ? `/api/admin/profiles/${encodeURIComponent(editingProfileId)}` : "/api/admin/profiles", { method: editing ? "PATCH" : "POST", body: JSON.stringify({ name: profileName, model: profileModel, reasoningLevel: profileReasoning, servicePriority: profilePriority, capacity: profileCapacity.trim() === "" ? null : Number(profileCapacity) }) });
+      await readJson(editing ? `/api/admin/profiles/${encodeURIComponent(editingProfileId)}` : "/api/admin/profiles", { method: editing ? "PATCH" : "POST", body: JSON.stringify({ name: profileName, provider: profileProvider, model: profileModel, reasoningLevel: profileReasoning, servicePriority: profilePriority, capacity: profileCapacity.trim() === "" ? null : Number(profileCapacity) }) });
       setProfileName(""); setProfileCapacity(""); setEditingProfileId(null); setProfileOpen(false); await reload();
     } catch { setError(editing ? "Unable to update profile" : "Unable to create profile"); }
   };
@@ -451,7 +455,7 @@ export function AdminView(): ReactElement {
   };
   const createModel = async (): Promise<void> => {
     try {
-      await readJson("/api/admin/models", { method: "POST", body: JSON.stringify({ id: modelId, displayName: modelName, description: "", sortOrder: 100 }) });
+      await readJson("/api/admin/models", { method: "POST", body: JSON.stringify({ id: modelId, provider: modelProvider, displayName: modelName, description: "", sortOrder: 100 }) });
       setModelId(""); setModelName(""); setModelOpen(false); await reload();
     } catch { setError("Unable to add model"); }
   };
@@ -576,6 +580,7 @@ export function AdminView(): ReactElement {
                     return (
                       <SettingsTableRow aria-label={`Edit ${profile.name}`} key={profile.id} onClick={(event) => { if (!(event.target as HTMLElement).closest("button, input")) openEditProfile(profile); }} onKeyDown={(event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); openEditProfile(profile); } }} tabIndex={0}>
                         <SettingsTableCell><span className="flex min-w-0 items-center gap-3"><span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-semibold">{profile.name[0]?.toUpperCase()}</span><span className="min-w-0"><span className="block truncate">{profile.name}</span><span className="block truncate text-[10px] leading-3 text-muted-foreground">{profile.capacity === null ? `Default · ${profile.effectiveCapacity} slots effective` : `Override · ${profile.capacity} slots`} · {lane?.activeCount ?? 0} active / {lane?.queuedCount ?? 0} queued</span></span></span></SettingsTableCell>
+                        <SettingsTableCell className="capitalize">{profile.provider === "claude" ? "Claude Code" : "Codex"}</SettingsTableCell>
                         <SettingsTableCell className="truncate">{profile.model}</SettingsTableCell>
                         <SettingsTableCell className="truncate text-muted-foreground">{profile.reasoningLevel}</SettingsTableCell>
                         <SettingsTableCell className="truncate text-muted-foreground">{profile.servicePriority}</SettingsTableCell>
@@ -595,7 +600,8 @@ export function AdminView(): ReactElement {
                 <form onSubmit={(event) => { event.preventDefault(); void saveProfile(); }}>
                   <FieldGroup>
                     <Field><FieldLabel htmlFor="profile-name">Profile name</FieldLabel><Input id="profile-name" autoFocus value={profileName} onChange={(event) => setProfileName(event.target.value)} /></Field>
-                    <Field><FieldLabel htmlFor="profile-model">Model</FieldLabel><Select value={profileModel || null} onValueChange={(value) => setProfileModel(value ?? "")}><SelectTrigger id="profile-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{models.filter((model) => model.status === "active").map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field>
+                    <Field><FieldLabel htmlFor="profile-provider">Provider</FieldLabel><Select value={profileProvider} onValueChange={(value) => { const provider = value as "codex" | "claude"; setProfileProvider(provider); if (!models.some((model) => model.status === "active" && model.provider === provider && model.id === profileModel)) setProfileModel(""); }}><SelectTrigger id="profile-provider"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="codex">Codex</SelectItem><SelectItem value="claude">Claude Code</SelectItem></SelectContent></Select></Field>
+                    <Field><FieldLabel htmlFor="profile-model">Model</FieldLabel><Select value={profileModel || null} onValueChange={(value) => setProfileModel(value ?? "")}><SelectTrigger id="profile-model"><SelectValue placeholder="Select a model" /></SelectTrigger><SelectContent>{models.filter((model) => model.status === "active" && model.provider === profileProvider).map((model) => <SelectItem key={model.id} value={model.id}>{model.displayName} · {model.id}</SelectItem>)}</SelectContent></Select></Field>
                     <Field><FieldLabel htmlFor="profile-reasoning">Reasoning level</FieldLabel><Select value={profileReasoning} onValueChange={(value) => setProfileReasoning(value ?? "medium")}><SelectTrigger id="profile-reasoning"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="low">Low</SelectItem><SelectItem value="medium">Medium</SelectItem><SelectItem value="high">High</SelectItem><SelectItem value="xhigh">XHigh</SelectItem></SelectContent></Select></Field>
                     <Field><FieldLabel htmlFor="profile-priority">Service priority</FieldLabel><Select value={profilePriority} onValueChange={(value) => setProfilePriority(value ?? "standard")}><SelectTrigger id="profile-priority"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="standard">Standard</SelectItem><SelectItem value="priority">Priority</SelectItem><SelectItem value="fast">Fast</SelectItem></SelectContent></Select></Field>
                     <Field><FieldLabel htmlFor="profile-capacity">Capacity override</FieldLabel><Input id="profile-capacity" inputMode="numeric" placeholder="Default" value={profileCapacity} onChange={(event) => setProfileCapacity(event.target.value)} /><FieldDescription>Blank inherits the host default.</FieldDescription></Field>
@@ -948,6 +954,7 @@ export function AdminView(): ReactElement {
                   {models.map((model) => (
                     <SettingsTableRow key={model.id} size="member">
                       <SettingsTableCell className="truncate"><code className="text-[11px] text-muted-foreground">{model.id}</code></SettingsTableCell>
+                      <SettingsTableCell className="capitalize">{model.provider === "claude" ? "Claude Code" : "Codex"}</SettingsTableCell>
                       <SettingsTableCell className="truncate">{model.displayName}{model.description ? <span className="ml-1 text-muted-foreground">· {model.description}</span> : null}</SettingsTableCell>
                       <SettingsTableCell className="text-muted-foreground">{model.status}</SettingsTableCell>
                       <SettingsTableCell className="text-muted-foreground">{model.sortOrder}</SettingsTableCell>

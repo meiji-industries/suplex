@@ -4,6 +4,7 @@ export const HEALTH_CHECK_IDS = [
   "artifact-root",
   "worker",
   "codex-auth",
+  "claude-auth",
   "herdr-readiness",
   "gh-auth",
   "backup",

@@ -44,6 +44,7 @@ adapter exists.
   lane keys `codex:<profile>`, the `codex-auth` health id, and the
   `FORGE_CODEX_*` env vars are contracts, not code seams; they remain
   literal (the env fallback now lives inside the codex adapter).
+- Claude provider details are recorded in [ADR 0006](0006-claude-code-provider.md).
 - `src/codex-lead.ts`/`src/codex-developer.ts` keep their historical file
   names to avoid churning ~15 import sites and test suites; renaming them is
   safe follow-up work once the conflict-hotspot refactor lands.

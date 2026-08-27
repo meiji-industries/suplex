@@ -280,9 +280,9 @@ export class ForgeDatabase {
     this.orm = drizzle(this.db, { schema: { ...authSchema, probeWorkflows, workerRegistrations } });
     try {
       if (migrate) {
+        this.ensureModelCatalog();
         this.preflightProjectRepositoryIdentities();
         applyMigrations(this.db, migrationFolder());
-        this.ensureModelCatalog();
       }
     } catch (error) {
       this.db.close();

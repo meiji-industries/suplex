@@ -7,17 +7,12 @@ import type { z } from "zod";
 
 import { AgentFailure } from "./agent-failure.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
-import { sanitizeCodexLine } from "./codex-rollout-sanitizer.js";
-import {
-  discoverRollout,
-  parseRolloutChunk,
-  rolloutCandidatePaths,
-  type NeutralTimelineEvent,
-} from "./codex-rollout.js";
+import { type NeutralTimelineEvent, type RolloutParseResult } from "./codex-rollout.js";
 import type { ForgeDatabase } from "./database.js";
 import { HerdrFailure, type HerdrClient } from "./herdr-client.js";
 import type { IssueTimelineEvents } from "./issue-timeline-events.js";
 import type { EnsuredRoleSession, HerdrSessionStore, RoleSessionRole } from "./herdr-session-store.js";
+import { herdrRuntime, type HerdrProviderRuntime } from "./agent-providers/herdr-runtime.js";
 import { redact } from "./logging.js";
 import { jsonRequired } from "./task-utils.js";
 
@@ -34,7 +29,7 @@ const responseStyleBlock = `Forge response style
 export interface HerdrTurnInput<T> {
   task: { taskId: string; projectId: string; projectSlug: string; issueKey?: string; worktreePath: string; runtimeRoot: string };
   sessionRole: Role; executionRole: ExecutionRole; ledger: "agent" | "developer"; executionId: string; promptKind: string; prompt: string;
-  profile: { model: string; reasoningLevel: string; servicePriority: string }; resultSchema: z.ZodType<T>; schemaPath: string;
+  profile: { provider?: "codex" | "claude"; model: string; reasoningLevel: string; servicePriority: string }; resultSchema: z.ZodType<T>; schemaPath: string;
   companyId: string; workflowId: string; revision: number; signal?: AbortSignal | undefined;
 }
 export interface HerdrTurnOutput<T> { turnId: string; sessionId: string; roleSessionId: string; result: T; resultHash: string; }
@@ -43,13 +38,15 @@ const artifactChunkBytes = 512 * 1024;
 
 /** Result-file completion for a single interactive Codex turn. Pane text is never a result. */
 export class HerdrTurnRunner {
+  private readonly activeTurnIds = new Map<string, string | undefined>();
+  private readonly runtimes: (kind: "codex" | "claude") => HerdrProviderRuntime = herdrRuntime;
   constructor(
     private readonly database: ForgeDatabase,
     private readonly herdr: HerdrClient,
     private readonly sessions: HerdrSessionStore,
     private readonly timeline: IssueTimelineEvents,
     private readonly artifacts?: ArtifactStore,
-    private readonly candidates: () => Promise<string[]> = rolloutCandidatePaths,
+    private readonly candidates: () => Promise<string[]> = () => herdrRuntime("codex").candidatePaths(process.env),
     private readonly sleep: (ms: number) => Promise<void> = delay,
     private readonly now: () => Date = () => new Date(),
   ) {}
@@ -83,7 +80,7 @@ export class HerdrTurnRunner {
             await this.quarantine(resultPath);
             this.create(turnId, input, session, resultPath, correction, prompt);
           }
-          const candidates = session.codexSessionId ? undefined : [...(await this.candidates())];
+          const candidates = session.codexSessionId ? undefined : [...(await (session.provider === "codex" ? this.candidates() : this.runtimes(session.provider).candidatePaths(process.env)))];
           const start = await this.offset(session.rolloutPath);
           this.update("UPDATE forge_herdr_turns SET rollout_start_offset = ?, rollout_cursor_offset = ?, status = 'dispatching', updated_at = ? WHERE turn_id = ?", start, start, iso(), turnId);
           await this.herdr.prompt(session.agentName, prompt);
@@ -125,7 +122,7 @@ export class HerdrTurnRunner {
     let executionActive = true;
     for (;;) {
       if (signal?.aborted || polls % 5 === 0 && !(executionActive = this.heartbeat(input)))
-        throw new AgentFailure("cancelled", "The interactive Codex turn was cancelled.", { nonRetryable: true });
+        throw new AgentFailure("cancelled", "The interactive agent turn was cancelled.", { nonRetryable: true });
       polls += 1;
       const drained = await this.drain(input, session, turnId);
       for (const event of drained.events) activeTurnId = await this.reduceCompletion(completion, activeTurnId, event, marker, resultPath);
@@ -184,80 +181,48 @@ export class HerdrTurnRunner {
     turnId: string,
     before?: string[],
   ): Promise<EnsuredRoleSession> {
-    if (session.codexSessionId) return session;
+    const runtime = this.runtimes(session.provider ?? "codex");
+    if (session.codexSessionId && session.rolloutPath) return session;
     const baseline = new Set(before);
     let ambiguous = false;
     for (let attempt = 0; attempt < 45; attempt += 1) {
       const live = await this.herdr.getAgent(session.agentName);
-      const paths = await this.candidates();
+      const paths = (session.provider ?? "codex") === "codex" ? await this.candidates() : await runtime.candidatePaths(process.env);
       const reported = live?.agentSession;
       try {
-        const rollout = await discoverRollout(paths, {
-          cwd: input.task.worktreePath,
-          ...(reported ? { sessionId: reported } : { before: baseline }),
-        });
+        const rollout = await runtime.discover(paths, { cwd: input.task.worktreePath, ...(session.codexSessionId ? { sessionId: session.codexSessionId } : reported ? { sessionId: reported } : { before: baseline }) });
         this.bindIdentity(session.id, rollout.sessionId, rollout.path);
-        return {
-          ...session,
-          codexSessionId: rollout.sessionId,
-          rolloutPath: rollout.path,
-          live: live ?? session.live,
-        };
+        return { ...session, codexSessionId: rollout.sessionId, rolloutPath: rollout.path, live: live ?? session.live };
       } catch (error) {
         if (error instanceof AgentFailure) throw error;
-        if (
-          error instanceof Error &&
-          error.message === "Codex rollout identity is ambiguous"
-        )
-          ambiguous = true;
+        if (error instanceof Error && error.message === "Codex rollout identity is ambiguous") ambiguous = true;
       }
-      if (!reported) {
+      if (!session.codexSessionId && !reported) {
         try {
-          const rollout = await discoverRollout(paths, {
-            cwd: input.task.worktreePath,
-            marker: `[forge-turn:${turnId}]`,
-          });
+          const rollout = await runtime.discover(paths, { cwd: input.task.worktreePath, marker: `[forge-turn:${turnId}]` });
           this.bindIdentity(session.id, rollout.sessionId, rollout.path);
-          return {
-            ...session,
-            codexSessionId: rollout.sessionId,
-            rolloutPath: rollout.path,
-            live: live ?? session.live,
-          };
-        } catch (error) {
-          if (error instanceof AgentFailure) throw error;
-        }
+          return { ...session, codexSessionId: rollout.sessionId, rolloutPath: rollout.path, live: live ?? session.live };
+        } catch (error) { if (error instanceof AgentFailure) throw error; }
       }
       await this.sleep(2_000);
     }
-    throw new AgentFailure(
-      ambiguous ? "session-identity-ambiguous" : "session-identity-missing",
-      "Codex did not create one identifiable rollout after the first prompt",
-    );
+    throw new AgentFailure(ambiguous ? "session-identity-ambiguous" : "session-identity-missing", "Interactive agent did not create one identifiable transcript after the first prompt");
   }
 
   private bindIdentity(id: string, sessionId: string, rolloutPath: string): void {
     const changed = this.database.authQuery((db) =>
-      db
-        .prepare(
-          "UPDATE forge_herdr_role_sessions SET codex_session_id = ?, rollout_path = ?, status = 'ready', updated_at = ? WHERE id = ? AND (codex_session_id IS NULL OR codex_session_id = ?)",
-        )
+      db.prepare("UPDATE forge_herdr_role_sessions SET codex_session_id = ?, rollout_path = ?, status = 'ready', updated_at = ? WHERE id = ? AND (codex_session_id IS NULL OR codex_session_id = ?)")
         .run(sessionId, rolloutPath, iso(), id, sessionId).changes,
     );
-    if (changed !== 1)
-      throw new AgentFailure(
-        "session-identity-conflict",
-        "The durable role session has a different Codex identity",
-        { nonRetryable: true },
-      );
+    if (changed !== 1) throw new AgentFailure("session-identity-conflict", "The durable role session has a different agent identity", { nonRetryable: true });
   }
-
   private async drain(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string) {
-    if (!session.rolloutPath) return { events: [] as ReturnType<typeof parseRolloutChunk>["events"] };
+    if (!session.rolloutPath) return { events: [] as RolloutParseResult["events"] };
     const source = await readFile(session.rolloutPath).catch(() => Buffer.alloc(0));
     const row = this.database.authQuery((db) => db.prepare("SELECT rollout_cursor_offset FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { rollout_cursor_offset: number } | undefined);
     const offset = row?.rollout_cursor_offset ?? 0;
-    const parsed = parseRolloutChunk({ sessionId: session.codexSessionId!, forgeTurnId: turnId, executionId: input.executionId, executionRole: input.executionRole, offset }, source.subarray(offset).toString("utf8"));
+    const parsed = this.runtimes(session.provider ?? "codex").parseChunk({ sessionId: session.codexSessionId!, forgeTurnId: turnId, executionId: input.executionId, executionRole: input.executionRole, offset }, source.subarray(offset).toString("utf8"), "", this.activeTurnIds.get(turnId) ? { activeTurnId: this.activeTurnIds.get(turnId)! } : {});
+    this.activeTurnIds.set(turnId, parsed.turnId);
     this.timeline.insert({ taskId: input.task.taskId, companyId: input.companyId, workflowId: input.workflowId, runId: null, revision: input.revision }, session.id, offset, parsed.events);
     if (parsed.offset > offset) this.update("UPDATE forge_herdr_turns SET rollout_cursor_offset = ?, updated_at = ? WHERE turn_id = ?", parsed.offset, iso(), turnId);
     return parsed;
@@ -269,7 +234,6 @@ export class HerdrTurnRunner {
     return `${this.completionBlock(marker, path, schema)}${validationIssues ? `\n\nYour previous result file failed schema validation. Correct these issues:\n${validationIssues}` : ""}\n\n${responseStyleBlock}\n\n${taskPrompt}`;
   }
   private completionBlock(marker: string, path: string, schema: string): string { return `${marker}\n\nForge completion contract\n- Atomically write exactly one JSON object to ${path} (write a sibling temp file, then rename).\n- The object must satisfy ${schema}; no Markdown fence or commentary belongs in the file.\n- Do not say the task is complete until the result file exists.`; }
-  private async ensure(input: HerdrTurnInput<unknown>): Promise<EnsuredRoleSession> { return this.sessions.ensureRoleSession(input.task, input.sessionRole, { model: input.profile.model, reasoningLevel: input.profile.reasoningLevel, serviceTier: input.profile.servicePriority === "fast" ? "fast" : input.profile.servicePriority === "priority" ? "priority" : "default" }); }
   private existingTurn(input: HerdrTurnInput<unknown>, correction: number): { resultRelativePath: string; status: string; promptSentAt: string | undefined; resultHash: string | undefined } | undefined {
     return this.database.authQuery((db) => db.prepare(
       "SELECT result_relative_path AS resultRelativePath, status, prompt_sent_at AS promptSentAt, result_sha256 AS resultHash FROM forge_herdr_turns WHERE ledger = ? AND execution_id = ? AND prompt_kind = ? AND correction_index = ? AND task_id = ? AND role_session_id = ?",
@@ -280,6 +244,7 @@ export class HerdrTurnRunner {
     if (!session) throw new AgentFailure("recovery-session-missing", "The durable role session is missing", { nonRetryable: true });
     return session.id;
   }
+  private async ensure(input: HerdrTurnInput<unknown>): Promise<EnsuredRoleSession> { return this.sessions.ensureRoleSession(input.task, input.sessionRole, { provider: input.profile.provider ?? "codex", model: input.profile.model, reasoningLevel: input.profile.reasoningLevel, serviceTier: input.profile.servicePriority === "fast" ? "fast" : input.profile.servicePriority === "priority" ? "priority" : "default" }); }
   private existingResultPath(input: HerdrTurnInput<unknown>, value: string): string {
     const path = join(input.task.runtimeRoot, value);
     if (relative(input.task.runtimeRoot, path).startsWith("..")) throw new AgentFailure("recovery-result-path-invalid", "The durable result path is outside the Forge runtime", { nonRetryable: true });
@@ -288,7 +253,7 @@ export class HerdrTurnRunner {
   private async recoverCompletion(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string, marker: string, resultPath: string): Promise<Completion> {
     const row = this.database.authQuery((db) => db.prepare("SELECT rollout_start_offset FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { rollout_start_offset: number } | undefined);
     const source = session.rolloutPath ? await readFile(session.rolloutPath).catch(() => Buffer.alloc(0)) : Buffer.alloc(0);
-    const parsed = parseRolloutChunk({ sessionId: session.codexSessionId!, forgeTurnId: turnId, executionId: input.executionId, executionRole: input.executionRole, offset: row?.rollout_start_offset ?? 0 }, source.subarray(row?.rollout_start_offset ?? 0).toString("utf8"));
+    const parsed = this.runtimes(session.provider ?? "codex").parseChunk({ sessionId: session.codexSessionId!, forgeTurnId: turnId, executionId: input.executionId, executionRole: input.executionRole, offset: row?.rollout_start_offset ?? 0 }, source.subarray(row?.rollout_start_offset ?? 0).toString("utf8"), "", this.activeTurnIds.get(turnId) ? { activeTurnId: this.activeTurnIds.get(turnId)! } : {});
     const completion: Completion = { marker: false, completed: false, steeredAfterCompletion: false };
     let activeTurnId: string | undefined;
     for (const event of parsed.events) activeTurnId = await this.reduceCompletion(completion, activeTurnId, event, marker, resultPath);
@@ -310,7 +275,7 @@ export class HerdrTurnRunner {
       if (activeTurnId) completion.codexTurnId = activeTurnId;
     }
     if (completion.codexTurnId && event.kind === "turn_finished" && data.turnId === completion.codexTurnId) {
-      if (data.error === true) throw new AgentFailure("turn-failed", "The interactive Codex turn completed with an error");
+      if (data.error === true) throw new AgentFailure("turn-failed", "The interactive agent turn completed with an error");
       completion.completed = true;
       completion.steeredAfterCompletion = false;
       completion.resultVersion = await this.resultVersion(resultPath);
@@ -337,22 +302,19 @@ export class HerdrTurnRunner {
     if (!this.artifacts || !session.rolloutPath || completion.rolloutEndOffset === undefined) return undefined;
     const row = this.database.authQuery((db) => db.prepare("SELECT rollout_start_offset FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { rollout_start_offset: number } | undefined);
     const source = await readFile(session.rolloutPath);
-    const bytes = this.sanitizeRange(source.subarray(row?.rollout_start_offset ?? 0, completion.rolloutEndOffset));
+    const bytes = this.sanitizeRange(source.subarray(row?.rollout_start_offset ?? 0, completion.rolloutEndOffset), this.runtimes(session.provider ?? "codex"));
     const chunks: StoredArtifact[] = [];
     for (let offset = 0; offset < bytes.length; offset += artifactChunkBytes) chunks.push(await this.putContentAddressed(input, "herdr-rollout-chunk", gzipSync(bytes.subarray(offset, offset + artifactChunkBytes)), "application/gzip"));
     const manifest = Buffer.from(JSON.stringify({ version: 1, sessionId: session.codexSessionId!, forgeTurnId: turnId, startOffset: row?.rollout_start_offset ?? 0, endOffset: completion.rolloutEndOffset, chunks: chunks.map(({ id, sha256, byteSize }) => ({ id, sha256, byteSize })) }), "utf8");
     return this.putContentAddressed(input, "herdr-rollout-manifest", manifest, "application/json");
   }
-  private sanitizeRange(bytes: Buffer): Buffer {
+  private sanitizeRange(bytes: Buffer, runtime: HerdrProviderRuntime): Buffer {
     return Buffer.from(bytes.toString("utf8").split(/(?<=\n)/).filter(Boolean).map((line) => {
       try {
         const outer = jsonRequired(line.trimEnd());
-        if (outer && typeof outer === "object" && "payload" in outer) {
-          const payload = jsonRequired(sanitizeCodexLine(JSON.stringify(outer.payload)));
-          return `${JSON.stringify({ ...outer, payload })}\n`;
-        }
-        return `${sanitizeCodexLine(line.trimEnd())}\n`;
-      } catch { return `${sanitizeCodexLine(line.trimEnd())}\n`; }
+        if (outer && typeof outer === "object" && "payload" in outer) return `${JSON.stringify({ ...outer, payload: jsonRequired(runtime.sanitizeLine(JSON.stringify(outer.payload))) })}\n`;
+        return `${runtime.sanitizeLine(line.trimEnd())}\n`;
+      } catch { return `${runtime.sanitizeLine(line.trimEnd())}\n`; }
     }).join(""), "utf8");
   }
   private async putContentAddressed(input: HerdrTurnInput<unknown>, kind: string, bytes: Buffer, mimeType: string): Promise<StoredArtifact> {
@@ -368,16 +330,14 @@ export class HerdrTurnRunner {
   private interruptedGeneration(turnId: string): number | undefined { return this.database.authQuery((db) => (db.prepare("SELECT interrupted_generation FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { interrupted_generation: number | null } | undefined)?.interrupted_generation ?? undefined); }
   private async blockedExcerpt(session: EnsuredRoleSession): Promise<string | undefined> {
     if (!this.herdr.readAgent) return undefined;
-    const output = await this.herdr.readAgent(session.agentName).catch(() => "");
-    return this.excerpt(output);
+    return this.excerpt(await this.herdr.readAgent(session.agentName).catch(() => ""));
   }
   private async questionExcerpt(input: HerdrTurnInput<unknown>, session: EnsuredRoleSession, turnId: string): Promise<string | undefined> {
     if (!session.rolloutPath || !session.codexSessionId) return undefined;
     const source = await readFile(session.rolloutPath).catch(() => Buffer.alloc(0));
     const row = this.database.authQuery((db) => db.prepare("SELECT rollout_start_offset FROM forge_herdr_turns WHERE turn_id = ?").get(turnId) as { rollout_start_offset: number } | undefined);
-    const parsed = parseRolloutChunk({ sessionId: session.codexSessionId, forgeTurnId: turnId, executionId: input.executionId, executionRole: input.executionRole, offset: row?.rollout_start_offset ?? 0 }, source.subarray(row?.rollout_start_offset ?? 0).toString("utf8"));
-    const messages = parsed.events.filter((event) => event.kind === "message" && event.data.role === "agent" && typeof event.data.text === "string");
-    const message = messages.at(-1)?.data.text;
+    const parsed = this.runtimes(session.provider ?? "codex").parseChunk({ sessionId: session.codexSessionId, forgeTurnId: turnId, executionId: input.executionId, executionRole: input.executionRole, offset: row?.rollout_start_offset ?? 0 }, source.subarray(row?.rollout_start_offset ?? 0).toString("utf8"), "", this.activeTurnIds.get(turnId) ? { activeTurnId: this.activeTurnIds.get(turnId)! } : {});
+    const message = parsed.events.filter((event) => event.kind === "message" && event.data.role === "agent" && typeof event.data.text === "string").at(-1)?.data.text;
     return typeof message === "string" && this.isQuestion(message) ? this.excerpt(message) : undefined;
   }
   private isQuestion(message: string): boolean {

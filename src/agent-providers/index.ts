@@ -1,13 +1,11 @@
+import { herdrClaudeProvider } from "./herdr-claude.js";
 import { herdrCodexProvider } from "./herdr-codex.js";
-import type { AgentProvider } from "./provider.js";
+import type { AgentProvider, AgentProviderKind } from "./provider.js";
 
-export const agentProviders = { codex: herdrCodexProvider } as const satisfies Record<string, AgentProvider>;
+export const agentProviders = { codex: herdrCodexProvider, claude: herdrClaudeProvider } as const satisfies Record<AgentProviderKind, AgentProvider>;
 
-/**
- * Single resolution point for the active agent provider. Multi-provider
- * routing (per-profile or config-driven selection) is deliberately deferred
- * until a second adapter exists; today the answer is always Codex.
- */
-export function resolveAgentProvider(): AgentProvider {
-  return agentProviders.codex;
+export function resolveAgentProvider(provider: AgentProviderKind = "codex"): AgentProvider {
+  const resolved = agentProviders[provider];
+  if (!resolved) throw new Error(`Unknown agent provider: ${provider}`);
+  return resolved;
 }

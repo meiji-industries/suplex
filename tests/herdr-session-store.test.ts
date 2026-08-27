@@ -8,6 +8,7 @@ import { ForgeDatabase } from "../src/database.js";
 import { runCommand } from "../src/command-runner.js";
 import { HerdrFailure, type HerdrAgent, type Pane } from "../src/herdr-client.js";
 import { agentName, developerPaneEnvironment, HerdrSessionStore, herdrLabel, launchFingerprint, type RoleSessionTask } from "../src/herdr-session-store.js";
+import { claudeRuntime } from "../src/agent-providers/herdr-runtime.js";
 
 test("labels and agent names are bounded, stable, and valid", () => {
   expect(herdrLabel("ACME / Issue 12!")).toBe("acme-issue-12");
@@ -141,6 +142,7 @@ class StartupHerdrFake {
   readonly agents = new Map<string, HerdrAgent>();
   readonly closed: string[] = [];
   readonly starts: string[] = [];
+  readonly startInputs: Array<{ name: string; paneId: string; kind?: string; args?: string[] }> = [];
   readonly panes: string[] = [];
   readonly commands: string[] = [];
   readonly launchPaths: string[] = [];
@@ -193,7 +195,8 @@ class StartupHerdrFake {
     const failure = this.closeFailures.get(paneId);
     if (failure) throw failure;
   }
-  async startAgent(input: { name: string; paneId: string }) {
+  async startAgent(input: { name: string; paneId: string; kind?: string; args?: string[] }) {
+    this.startInputs.push(input);
     this.startAttempts.push(input.name);
     if (this.startFailure) throw this.startFailure;
     if (this.inactiveNameOnStart) {
@@ -678,6 +681,22 @@ test("a missing resumed rollout fails the role session without another pane", as
     await expect(store.ensureRoleSession(taskFor(value.root), "lead", startupSettings)).rejects.toMatchObject({ code: "codex_session_unrecoverable", retryable: false });
     expect(herdr.panes).toEqual(["pane-1"]);
     expect(value.database.authQuery((db) => db.prepare("SELECT codex_session_id, status FROM forge_herdr_role_sessions WHERE id = ?").get(row.id))).toEqual({ codex_session_id: "missing-session", status: "failed" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
+test("Claude sessions preassign identities and launch through Herdr as Claude", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  const runtime = { ...claudeRuntime, candidatePaths: async () => [], prepareLaunch: async () => {} };
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {}, () => runtime);
+    const session = await store.ensureRoleSession(taskFor(value.root), "lead", { provider: "claude", model: "claude-fable-5", reasoningLevel: "high", serviceTier: "default" });
+    expect(session.provider).toBe("claude");
+    expect(session.codexSessionId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(herdr.startInputs).toContainEqual(expect.objectContaining({ kind: "claude", args: ["--model", "claude-fable-5", "--effort", "high", "--permission-mode", "bypassPermissions", "--session-id", session.codexSessionId] }));
   } finally {
     value.database.close();
     await rm(value.root, { recursive: true, force: true });

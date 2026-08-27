@@ -2,7 +2,10 @@ import type { HealthCheck } from "../health.js";
 import type { CommandRunner } from "../provider-readiness.js";
 import type { z } from "zod";
 
+export type AgentProviderKind = "codex" | "claude";
+
 export interface AgentProfileSettings {
+  provider: AgentProviderKind;
   model: string;
   reasoningLevel: string;
   servicePriority: string;

@@ -8,7 +8,6 @@ import type Database from "better-sqlite3";
 import type { ForgeConfig } from "./config.js";
 import { ArtifactStore, type StoredArtifact } from "./artifacts.js";
 import { AgentFailure } from "./agent-failure.js";
-import { resolveAgentProvider } from "./agent-providers/index.js";
 import type { AgentProvider } from "./agent-providers/provider.js";
 import { CliHerdrClient } from "./herdr-client.js";
 import { HerdrTurnRunner, type HerdrTurnInput, type HerdrTurnOutput } from "./herdr-turn-runner.js";
@@ -147,9 +146,9 @@ interface DeveloperContext {
 interface DeveloperProfile {
   id: string;
   model: string;
-  provider: string;
-  reasoningLevel: string;
-  servicePriority: string;
+  provider: "codex" | "claude";
+  reasoningLevel: "low" | "medium" | "high" | "xhigh";
+  servicePriority: "standard" | "priority" | "fast";
 }
 
 interface PriorDeveloperExecution {
@@ -202,7 +201,6 @@ export async function rollbackUnpushedRepairCommits(worktreePath: string, branch
 export class DeveloperService {
   private readonly artifacts: ArtifactStore;
   private readonly browserProof: BrowserProofService;
-  private readonly provider: AgentProvider;
   private readonly turnRunner: { run<T>(input: HerdrTurnInput<T>): Promise<HerdrTurnOutput<T>> };
   private readonly roleSessions: HerdrSessionStore;
   private readonly worktrees: WorktreeManager;
@@ -214,7 +212,6 @@ export class DeveloperService {
   constructor(private readonly database: ForgeDatabase, private readonly config: ForgeConfig, options: DeveloperServiceOptions = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot, database);
     this.browserProof = new BrowserProofService(database, this.artifacts);
-    this.provider = options.provider ?? resolveAgentProvider();
     const herdr = new CliHerdrClient();
     this.roleSessions = new HerdrSessionStore(database, herdr);
     this.turnRunner = options.turnRunner ?? new HerdrTurnRunner(database, herdr, this.roleSessions, new IssueTimelineEvents(database));
@@ -274,7 +271,6 @@ export class DeveloperService {
     const plan = jsonRequired(planText) as { kind?: unknown; steps?: Array<{ number: number; instruction: string; verification: string }> };
     if (plan.kind !== "plan" || !Array.isArray(plan.steps) || !plan.steps.length) throw new AgentFailure("plan-unavailable", "A final Lead plan is required before development");
     const profile = this.executionProfile(input, input.roleProfiles.builder);
-    if (profile && profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer execution requires an allowed Codex profile");
     const prior = input.supersedesExecutionId
       ? this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE id = ? AND task_id = ? AND company_id = ? AND workflow_id = ?").get(input.supersedesExecutionId, input.taskId, input.companyId, input.workflowId) as PriorDeveloperExecution | undefined)
       : this.database.authQuery((db) => db.prepare("SELECT id, status, branch_name, worktree_path, target_base_sha FROM forge_developer_executions WHERE task_id = ? AND company_id = ? AND workflow_id = ? AND plan_revision = ? AND status IN ('interrupted', 'cancelled', 'failed', 'blocked') ORDER BY attempt DESC LIMIT 1").get(input.taskId, input.companyId, input.workflowId, input.planRevision) as PriorDeveloperExecution | undefined);
@@ -401,7 +397,6 @@ export class DeveloperService {
     }
     const plan = (await this.artifacts.getArtifact({ companyId: input.companyId, storagePath: planRow.storage_path, sha256: planRow.sha256 })).toString("utf8");
     const profile = this.executionProfile(input);
-    if (profile && profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer profile is unavailable for merge-conflict resolution");
     this.requireDeveloperSession(input.developerSessionRef);
     const executionId = input.developerTurnExecutionId ?? `developer_${randomBytes(12).toString("hex")}`;
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
@@ -496,7 +491,6 @@ export class DeveloperService {
     if (!prior || !review) throw new AgentFailure("repair-identity-mismatch", "Developer repair coordinates do not match the immutable review subject");
     const priorSubject = DeliveryReviewSubjectSchema.parse({ planRevision: review.plan_revision, targetBaseSha: review.base_sha, subjectCommit: review.subject_commit, subjectTree: review.subject_tree, developerExecutionId: prior.id, deliveryArtifactId: prior.delivery_artifact_id, developerEvidenceArtifactId: prior.evidence_artifact_id, leadSessionRef: review.session_ref, developerSessionRef: prior.session_ref });
     const profile = this.executionProfile(input);
-    if (profile && profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer profile is unavailable for repair");
     const executionId = input.developerTurnExecutionId ?? `developer_${randomBytes(12).toString("hex")}`;
     const existing = this.database.authQuery((db) => db.prepare("SELECT task_id AS taskId, company_id AS companyId, workflow_id AS workflowId, plan_revision AS planRevision, attempt, status, branch_name AS branchName, worktree_path AS worktreePath, target_base_sha AS targetBaseSha, supersedes_execution_id AS supersedesExecutionId, session_ref AS sessionRef FROM forge_developer_executions WHERE id = ?").get(executionId) as { taskId: string; companyId: string; workflowId: string; planRevision: number; attempt: number; status: string; branchName: string; worktreePath: string; targetBaseSha: string; supersedesExecutionId: string | null; sessionRef: string | null } | undefined);
     const attempt = input.developerAttempt ?? Number((this.database.authQuery((db) => db.prepare("SELECT COALESCE(MAX(attempt), 0) AS attempt FROM forge_developer_executions WHERE workflow_id = ? AND plan_revision = ?").get(input.workflowId, input.planRevision) as { attempt: number })).attempt) + 1;
@@ -617,7 +611,6 @@ export class DeveloperService {
     const evidenceLines = [JSON.stringify({ type: "forge.ci-repair-context", ciRunId: input.ciRunId, ciAttemptId: input.ciAttemptId, failedHeadSha: input.failedHeadSha, plan: redact(planText), evidence: redact(evidenceText) })];
     const ciRepairPrompt = this.ciRepairPrompt(planText, { branchName: input.branchName, worktreePath, priorCommit: input.priorCommit, priorTree: input.priorTree }, this.projectTestControl(input.taskId, input.companyId));
     const profile = this.executionProfile(input);
-    if (profile && profile.provider !== this.provider.id) throw new AgentFailure("developer-profile-unavailable", "Developer profile is unavailable for CI repair");
     try {
       const task = this.taskContext(input);
       const turn = await this.turnRunner.run({ task: { ...task, worktreePath, runtimeRoot: this.config.runtimeRoot }, sessionRole: "developer", executionRole: "integrator", ledger: "developer", executionId, promptKind: "ci-repair", prompt: ciRepairPrompt, profile: profile ?? this.developerProfile(), resultSchema: DeveloperRepairReportSchema, schemaPath: await ensureResultSchema(this.config.runtimeRoot, "developer-repair", DeveloperRepairReportSchema), companyId: input.companyId, workflowId: input.workflowId, revision: 0 });

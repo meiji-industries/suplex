@@ -92,8 +92,12 @@ const budgets: Record<string, number> = {
   "src/frontend/main.tsx": 20,
   "src/http/routes/tasks.ts": 179,
   "src/temporal/service.ts": 400,
+  "src/claude-rollout.ts": 320,
+  "src/agent-providers/claude-launch.ts": 120,
+  "src/agent-providers/herdr-runtime.ts": 120,
+  "src/agent-providers/herdr-claude.ts": 60,
+  "src/agent-providers/claude-readiness.ts": 80,
 };
-
 for (const [file, budget] of Object.entries(budgets)) {
   test(`${file} stays within ${budget} lines`, () => {
     const lines = readFileSync(file, "utf8").split("\n").length;

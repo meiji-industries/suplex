@@ -194,7 +194,7 @@ export interface HerdrClient {
   startAgent(input: {
     name: string;
     paneId: string;
-    kind: "codex";
+    kind: "codex" | "claude";
     args: string[];
   }): Promise<HerdrAgent>;
 }
@@ -471,7 +471,7 @@ export class CliHerdrClient implements HerdrClient {
   async startAgent(input: {
     name: string;
     paneId: string;
-    kind: "codex";
+    kind: "codex" | "claude";
     args: string[];
   }): Promise<HerdrAgent> {
     return agent(

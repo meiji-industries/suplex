@@ -182,7 +182,7 @@ interface PlanningRow {
 interface ProfileSettings {
   id: string;
   name: string;
-  provider: string;
+  provider: "codex" | "claude";
   model: string;
   reasoningLevel: string;
   servicePriority: string;
@@ -385,12 +385,12 @@ export class AgentService {
     });
     if (!input.roleProfiles.planner) throw new AgentFailure("profile-unavailable", "Lead planning requires a configured Lead profile");
     const resumeSessionRef = input.resume?.leadSessionRef ?? input.leadSessionRef ?? input.resumeLeadSessionRef;
-    const pinned = resumeSessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND company_id = ? AND role = 'planner' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(resumeSessionRef, input.companyId) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
+    const pinned = resumeSessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, provider, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND company_id = ? AND role = 'planner' AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(resumeSessionRef, input.companyId) as { profileId: string | null; provider: "codex" | "claude"; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const persisted = pinned;
     let leadProfile = persisted
-      ? { id: persisted.profileId ?? input.roleProfiles.planner ?? "pinned-lead", name: "Pinned Lead", provider: "codex", model: persisted.model, reasoningLevel: persisted.reasoningLevel, servicePriority: persisted.servicePriority, capacity: 0 }
+      ? { id: persisted.profileId ?? input.roleProfiles.planner ?? "pinned-lead", name: "Pinned Lead", provider: persisted.provider, model: persisted.model, reasoningLevel: persisted.reasoningLevel, servicePriority: persisted.servicePriority, capacity: 0 }
       : profileSettings.find((profile) => profile.id === input.roleProfiles.planner);
-    if (!leadProfile || leadProfile.provider !== "codex") throw new AgentFailure("profile-unavailable", "The configured Lead profile is unavailable");
+    if (!leadProfile) throw new AgentFailure("profile-unavailable", "The configured Lead profile is unavailable");
     const revisionRequest = input.revisionRequestId ? this.database.authQuery((db) => db.prepare(`SELECT r.disposition, r.worktree_path AS worktreePath, r.branch_name AS branchName, r.base_sha AS baseSha, r.head_sha AS headSha, r.tree_sha AS treeSha, r.exact_base_sha AS exactBaseSha, a.storage_path AS reasonPath, a.sha256 AS reasonSha
       FROM forge_plan_revision_requests r JOIN forge_artifacts a ON a.id = r.reason_artifact_id AND a.company_id = r.company_id AND a.kind = 'plan-revision-reason'
       WHERE r.id = ? AND r.task_id = ? AND r.company_id = ? AND r.workflow_id = ?`).get(input.revisionRequestId, input.taskId, input.companyId, input.workflowId) as { disposition: "reuse" | "new"; worktreePath: string | null; branchName: string | null; baseSha: string | null; headSha: string | null; treeSha: string | null; exactBaseSha: string | null; reasonPath: string; reasonSha: string } | undefined) : undefined;
@@ -1025,20 +1025,19 @@ export class AgentService {
     catch { throw new AgentFailure("scoped-input-missing", "Consolidation repository is unavailable"); }
   }
 
-  private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string, role: "planner" | "reviewer" | "integrator" = "planner"): Promise<{ id: string; model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }> {
-    const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND role = ? AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(sessionRef, role) as { profileId: string | null; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
+  private async resolveTurnProfile(profileId: string | undefined, sessionRef: string | undefined, label: string, role: "planner" | "reviewer" | "integrator" = "planner"): Promise<{ id: string; provider: "codex" | "claude"; model: string; reasoningLevel: "low" | "medium" | "high" | "xhigh"; servicePriority: "standard" | "priority" | "fast" }> {
+    const pinned = sessionRef ? this.database.authQuery((db) => db.prepare("SELECT profile_id AS profileId, provider, resolved_model AS model, resolved_reasoning_level AS reasoningLevel, resolved_service_priority AS servicePriority FROM forge_agent_executions WHERE session_ref = ? AND role = ? AND resolved_model IS NOT NULL ORDER BY started_at DESC LIMIT 1").get(sessionRef, role) as { profileId: string | null; provider: "codex" | "claude"; model: string; reasoningLevel: string; servicePriority: string } | undefined) : undefined;
     const profile = pinned ? undefined : this.database.authQuery((db) => (profileId
       ? db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE id = ?").get(profileId)
-      : db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE provider = ? ORDER BY id LIMIT 1").get("codex")) as { id: string; provider: string; model: string; reasoningLevel: string; servicePriority: string } | undefined);
-    if (!pinned && (!profile || profile.provider !== "codex")) throw new AgentFailure("profile-unavailable", `${label} profile is unavailable`);
+      : db.prepare("SELECT id, provider, model, reasoning_level AS reasoningLevel, service_priority AS servicePriority FROM forge_profiles WHERE provider = ? ORDER BY id LIMIT 1").get("codex")) as { id: string; provider: "codex" | "claude"; model: string; reasoningLevel: string; servicePriority: string } | undefined);
+    if (!pinned && !profile) throw new AgentFailure("profile-unavailable", `${label} profile is unavailable`);
     const model = pinned?.model ?? profile!.model;
     const reasoningLevel = pinned?.reasoningLevel ?? profile!.reasoningLevel;
     const servicePriority = pinned?.servicePriority ?? profile!.servicePriority;
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(model) || !["low", "medium", "high", "xhigh"].includes(reasoningLevel) || !["standard", "priority", "fast"].includes(servicePriority)) {
       throw new AgentFailure("scope_configuration", `${label} profile has invalid pinned turn settings`, { nonRetryable: true });
     }
-    const settings = { id: pinned?.profileId ?? profile!.id, model, reasoningLevel: reasoningLevel as "low" | "medium" | "high" | "xhigh", servicePriority: servicePriority as "standard" | "priority" | "fast" };
-    return settings;
+    return { id: pinned?.profileId ?? profile!.id, provider: pinned?.provider ?? profile!.provider, model, reasoningLevel: reasoningLevel as "low" | "medium" | "high" | "xhigh", servicePriority: servicePriority as "standard" | "priority" | "fast" };
   }
 
   private async ensureResultSchema(name: string, schema: z.ZodType): Promise<string> {

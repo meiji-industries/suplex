@@ -8,6 +8,7 @@ const OptionalCapacitySchema = z.preprocess((value) => value === "" ? null : val
 
 export const ProfileBodySchema = z.object({
   name: z.string().default(""),
+  provider: z.enum(["codex", "claude"]).default("codex"),
   model: z.string().default(""),
   reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]),
   servicePriority: z.enum(["standard", "priority", "fast"]),
@@ -41,12 +42,12 @@ export const ProjectRepositoryBodySchema = z.object({
 
 export const ProjectCreateBodySchema = z.union([ProjectRepositoryBodySchema, ProjectBodySchema]);
 
-export const ProfileResponseSchema = z.object({ id: z.string(), name: z.string(), provider: z.literal("codex"), model: z.string(), reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]), servicePriority: z.enum(["standard", "priority", "fast"]), capacity: z.number().nullable(), effectiveCapacity: z.number().int().min(1).max(32), createdAt: z.string(), updatedAt: z.string() });
+export const ProfileResponseSchema = z.object({ id: z.string(), name: z.string(), provider: z.enum(["codex", "claude"]), model: z.string(), reasoningLevel: z.enum(["low", "medium", "high", "xhigh"]), servicePriority: z.enum(["standard", "priority", "fast"]), capacity: z.number().nullable(), effectiveCapacity: z.number().int().min(1).max(32), createdAt: z.string(), updatedAt: z.string() });
 export const ProfileListResponseSchema = z.object({ profiles: z.array(ProfileResponseSchema) });
 export const AdminCapacityListResponseSchema = z.object({ lanes: z.array(AdminCapacityLaneSchema) });
-export const ModelResponseSchema = z.object({ id: z.string(), displayName: z.string(), description: z.string(), status: z.enum(["active", "retired"]), sortOrder: z.number(), createdAt: z.string(), updatedAt: z.string() });
+export const ModelResponseSchema = z.object({ id: z.string(), provider: z.enum(["codex", "claude"]), displayName: z.string(), description: z.string(), status: z.enum(["active", "retired"]), sortOrder: z.number(), createdAt: z.string(), updatedAt: z.string() });
 export const ModelListResponseSchema = z.object({ models: z.array(ModelResponseSchema) });
-export const ModelBodySchema = z.object({ id: z.string().default(""), displayName: z.string().default(""), description: z.string().default(""), sortOrder: z.coerce.number().int().default(100) });
+export const ModelBodySchema = z.object({ id: z.string().default(""), provider: z.enum(["codex", "claude"]).default("codex"), displayName: z.string().default(""), description: z.string().default(""), sortOrder: z.coerce.number().int().default(100) });
 export const ModelStatusBodySchema = z.object({ status: z.enum(["active", "retired"]) });
 export const ModelIdParamsSchema = z.object({ modelId: z.string() });
 export const ProjectCheckListResponseSchema = z.object({ checks: z.array(z.object({ name: z.string(), status: z.string(), conclusion: z.string().optional() })) });

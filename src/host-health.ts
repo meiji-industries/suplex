@@ -127,12 +127,14 @@ export async function checkWorker(database: ForgeDatabase, taskQueue: string, in
 export function createHostHealthDependencies(config: ForgeConfig, database: ForgeDatabase) {
   const temporal = new TemporalHealthProbe(config);
   const agent = resolveAgentProvider().readinessProbe();
+  const claude = resolveAgentProvider("claude").readinessProbe();
   return {
     temporal: () => temporal.check(),
     database: () => checkDatabase(database),
     artifactRoot: () => checkArtifactRoot(config.artifactRoot),
     worker: async () => checkWorker(database, config.taskQueue, config.installationId, workflowBundleBuildId(config.installationId, await buildProductionWorkflowBundle())),
     codexAuth: () => agent.check(),
+    claudeAuth: () => claude.check(),
     herdrReadiness: () => checkHerdrReadiness(),
     ghAuth: checkGithubAuthentication(process.env.FORGE_GH_COMMAND ?? "gh"),
     backup: () => checkBackupHealth(config),

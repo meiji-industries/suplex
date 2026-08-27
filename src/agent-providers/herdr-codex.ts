@@ -7,9 +7,16 @@ import type { AgentProvider, InteractiveTurnRequest, InteractiveTurnResult } fro
 import { CodexReadinessProbe } from "./codex-readiness.js";
 import type { CommandRunner } from "../provider-readiness.js";
 
-export function interactiveCodexArgs(settings: { model: string; reasoningLevel: string; servicePriority: string }, sessionId?: string): string[] {
-  const profile = ["--model", settings.model, "-c", `model_reasoning_effort=${JSON.stringify(settings.reasoningLevel)}`, "-c", `service_tier=${JSON.stringify(settings.servicePriority === "standard" ? "default" : settings.servicePriority)}`, "-c", "check_for_update_on_startup=false", "--dangerously-bypass-approvals-and-sandbox"];
-  return sessionId ? ["resume", ...profile, sessionId] : profile;
+export async function forwardHerdrAgent(database: ForgeDatabase | undefined, herdr: HerdrClient | undefined, taskId: string, role: "lead" | "developer", text: string): Promise<void> {
+  if (!database || !herdr) throw new Error("Herdr provider requires database and HerdrClient for forwarding");
+  const row = database.authQuery((db) => db.prepare("SELECT agent_name FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(taskId, role) as { agent_name: string | null } | undefined);
+  if (row?.agent_name) await herdr.prompt(row.agent_name, text);
+}
+
+export async function interruptHerdrAgent(database: ForgeDatabase | undefined, herdr: HerdrClient | undefined, taskId: string, role: "lead" | "developer"): Promise<void> {
+  if (!database || !herdr) throw new Error("Herdr provider requires database and HerdrClient for interruption");
+  const row = database.authQuery((db) => db.prepare("SELECT agent_name FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(taskId, role) as { agent_name: string | null } | undefined);
+  if (row?.agent_name) await herdr.sendKeys(row.agent_name, ["ctrl+c"]);
 }
 
 /** The only production provider: Codex runs inside a Herdr-owned interactive pane. */

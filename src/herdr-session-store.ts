@@ -7,10 +7,11 @@ import {
   type HerdrAgent,
   type HerdrClient,
 } from "./herdr-client.js";
-import { discoverRollout, rolloutCandidatePaths } from "./codex-rollout.js";
+import { herdrRuntime, type HerdrProviderRuntime } from "./agent-providers/herdr-runtime.js";
 import { createGitCommandGuard, withWorktreeMiseTrust } from "./worktrees.js";
 export type RoleSessionRole = "lead" | "developer" | "reviewer";
 export interface LaunchSettings {
+  provider?: "codex" | "claude";
   model: string;
   reasoningLevel: string;
   serviceTier: "default" | "priority" | "fast";
@@ -25,6 +26,7 @@ export interface RoleSessionTask {
 }
 export interface EnsuredRoleSession {
   id: string;
+  provider: "codex" | "claude";
   agentName: string;
   paneId: string;
   codexSessionId: string | null;
@@ -70,7 +72,8 @@ export function agentName(
     .slice(0, 32);
 }
 export function launchFingerprint(settings: LaunchSettings, cwd = ""): string {
-  return createHash("sha256").update(JSON.stringify({ ...settings, cwd })).digest("hex");
+  const { provider, ...profile } = settings;
+  return createHash("sha256").update(JSON.stringify({ ...profile, ...(provider === "claude" ? { provider } : {}), cwd })).digest("hex");
 }
 export function developerPaneEnvironment(input: {
   guardDirectory: string;
@@ -100,6 +103,11 @@ export function developerPaneEnvironment(input: {
     "PIP_CACHE_DIR",
     "UV_CACHE_DIR",
     "CCACHE_DIR",
+    "CLAUDE_CONFIG_DIR",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_BASE_URL",
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
   ];
   const values: Record<string, string> = {};
   for (const key of keys) if (input.env[key]) values[key] = input.env[key]!;
@@ -124,6 +132,7 @@ export class HerdrSessionStore {
     private readonly environment: NodeJS.ProcessEnv = process.env,
     private readonly wait: (ms: number) => Promise<void> = (ms) =>
       new Promise((resolve) => setTimeout(resolve, ms)),
+    private readonly runtimes: (kind: "codex" | "claude") => HerdrProviderRuntime = herdrRuntime,
   ) {}
   readRoleSession(id: string): Record<string, unknown> | null {
     return this.database.authQuery((db) =>
@@ -137,24 +146,30 @@ export class HerdrSessionStore {
     role: RoleSessionRole,
     settings: LaunchSettings,
   ): Promise<EnsuredRoleSession> {
-    const reserved = this.reserve(task, role);
+    const existing = this.database.authQuery((db) => db.prepare("SELECT * FROM forge_herdr_role_sessions WHERE task_id = ? AND session_role = ? AND is_current = 1").get(task.taskId, role) as Record<string, any> | undefined);
+    const provider = settings.provider ?? "codex";
+    if (existing && existing.provider_kind !== provider) {
+      if (existing.pane_id) await this.closeRecordedPane(existing.id, existing.pane_id);
+      this.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0, status = 'closed', pane_id = NULL, agent_name = NULL, updated_at = ? WHERE id = ?").run(now(), existing.id));
+    }
+    const reserved = this.reserve(task, role, { ...settings, provider });
     const previous = this.ensuring.get(reserved.id) ?? Promise.resolve();
     let release!: () => void;
-    const current = new Promise<void>((resolve) => {
+    const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    this.ensuring.set(reserved.id, current);
+    this.ensuring.set(reserved.id, gate);
     await previous;
     try {
       return await this.ensureReserved(
         this.readRoleSession(reserved.id) ?? reserved,
         task,
         role,
-        settings,
+        { ...settings, provider },
       );
     } finally {
       release();
-      if (this.ensuring.get(reserved.id) === current)
+      if (this.ensuring.get(reserved.id) === gate)
         this.ensuring.delete(reserved.id);
     }
   }
@@ -260,37 +275,21 @@ export class HerdrSessionStore {
           readinessPath,
         );
       }
-      const args = row.codex_session_id
-      ? [
-          "resume",
-          "--model",
-          settings.model,
-          "-c",
-          `model_reasoning_effort=${JSON.stringify(settings.reasoningLevel)}`,
-          "-c",
-          `service_tier=${JSON.stringify(settings.serviceTier)}`,
-          "-c",
-          "check_for_update_on_startup=false",
-          "--dangerously-bypass-approvals-and-sandbox",
-          row.codex_session_id,
-        ]
-      : [
-          "--model",
-          settings.model,
-          "-c",
-          `model_reasoning_effort=${JSON.stringify(settings.reasoningLevel)}`,
-          "-c",
-          `service_tier=${JSON.stringify(settings.serviceTier)}`,
-          "-c",
-          "check_for_update_on_startup=false",
-          "--dangerously-bypass-approvals-and-sandbox",
-        ];
+      const runtime = this.runtimes(settings.provider ?? "codex");
+      if (runtime.presetSessionId && !row.codex_session_id) {
+        this.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET codex_session_id = ? WHERE id = ? AND codex_session_id IS NULL").run(randomUUID(), row.id));
+        row = this.readRoleSession(row.id)!;
+      }
+      const transcriptExists = row.codex_session_id ? await this.hasRollout(runtime, row.codex_session_id, task.worktreePath) : false;
+      const args = runtime.launchArgs(settings, row.codex_session_id ?? null, transcriptExists);
       let live: HerdrAgent;
       try {
+        await runtime.prepareLaunch({ cwd: task.worktreePath, env: this.environment });
         live = await this.startOrReplace({
           sessionId: row.id,
           name,
           paneId: pane.paneId,
+          kind: runtime.kind,
           args,
           task,
           tab,
@@ -301,15 +300,8 @@ export class HerdrSessionStore {
           readinessPath,
         });
       } catch (error) {
-        if (
-          row.codex_session_id &&
-          !(await this.hasRollout(row.codex_session_id, task.worktreePath))
-        )
-          throw new HerdrFailure(
-            "codex_session_unrecoverable",
-            false,
-            "The recorded Codex session rollout is missing",
-          );
+        if (!runtime.presetSessionId && row.codex_session_id && !transcriptExists)
+          throw new HerdrFailure("codex_session_unrecoverable", false, "The recorded agent session transcript is missing");
         throw error;
       }
       this.assertIdentity(row, live);
@@ -348,7 +340,7 @@ export class HerdrSessionStore {
       throw new HerdrFailure(
         "session_identity_conflict",
         false,
-        "Herdr reported a different Codex session",
+        "Herdr reported a different agent session",
       );
   }
   private async getRecordedAgent(name: string): Promise<HerdrAgent | null> {
@@ -418,6 +410,7 @@ export class HerdrSessionStore {
     sessionId: string;
     name: string;
     paneId: string;
+    kind: "codex" | "claude";
     args: string[];
     task: RoleSessionTask;
     tab: { shellPaneId: string };
@@ -431,7 +424,7 @@ export class HerdrSessionStore {
       return await this.herdr.startAgent({
         name: input.name,
         paneId: input.paneId,
-        kind: "codex",
+        kind: input.kind,
         args: input.args,
       });
     } catch (error) {
@@ -446,7 +439,7 @@ export class HerdrSessionStore {
         return this.herdr.startAgent({
           name: replacement,
           paneId: input.paneId,
-          kind: "codex",
+          kind: input.kind,
           args: input.args,
         });
       }
@@ -477,7 +470,7 @@ export class HerdrSessionStore {
         return await this.herdr.startAgent({
           name: input.name,
           paneId: pane.paneId,
-          kind: "codex",
+          kind: input.kind,
           args: input.args,
         });
       } catch (retryError) {
@@ -522,12 +515,9 @@ export class HerdrSessionStore {
         .run(now(), id, paneId),
     );
   }
-  private async hasRollout(sessionId: string, cwd: string): Promise<boolean> {
+  private async hasRollout(runtime: HerdrProviderRuntime, sessionId: string, cwd: string): Promise<boolean> {
     try {
-      await discoverRollout(
-        await rolloutCandidatePaths(this.environment.CODEX_HOME),
-        { sessionId, cwd },
-      );
+      await runtime.discover(await runtime.candidatePaths(this.environment), { sessionId, cwd });
       return true;
     } catch {
       return false;
@@ -602,6 +592,7 @@ if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READ
   private reserve(
     task: RoleSessionTask,
     role: RoleSessionRole,
+    settings: LaunchSettings,
   ): Record<string, any> {
     return this.database.authQuery((db) =>
       db.transaction(() => {
@@ -628,12 +619,13 @@ if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READ
               ).generation,
             ) + 1;
           db.prepare(
-            "INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, status, created_at, updated_at, ensure_token, ensure_expires_at) VALUES (?, ?, ?, ?, 1, 'codex', 'unbound', ?, ?, ?, ?)",
+            "INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, status, created_at, updated_at, ensure_token, ensure_expires_at) VALUES (?, ?, ?, ?, 1, ?, 'unbound', ?, ?, ?, ?)",
           ).run(
             id,
             task.taskId,
             role,
             generation,
+            settings?.provider ?? "codex",
             now(),
             now(),
             randomUUID(),
@@ -764,6 +756,7 @@ if [ -n "$FORGE_HERDR_READINESS_SENTINEL" ]; then printf ok > "$FORGE_HERDR_READ
     );
     return {
       id: row.id,
+      provider: row.provider_kind as "codex" | "claude",
       agentName: live.name,
       paneId: live.paneId,
       codexSessionId:

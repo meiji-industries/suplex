@@ -44,7 +44,7 @@ export class ProjectFailure extends Error {
 export interface CodexProfile {
   id: string;
   name: string;
-  provider: "codex";
+  provider: "codex" | "claude";
   model: string;
   reasoningLevel: ReasoningLevel;
   servicePriority: ServicePriority;
@@ -54,7 +54,7 @@ export interface CodexProfile {
   updatedAt: string;
 }
 
-type ProfileInput = { name: string; model: string; reasoningLevel: ReasoningLevel; servicePriority: ServicePriority; capacity?: number | null };
+type ProfileInput = { name: string; provider?: "codex" | "claude"; model: string; reasoningLevel: ReasoningLevel; servicePriority: ServicePriority; capacity?: number | null };
 
 export interface Agent {
   id: string;
@@ -76,6 +76,7 @@ export type ModelStatus = "active" | "retired";
 
 export interface CodexModel {
   id: string;
+  provider: "codex" | "claude";
   displayName: string;
   description: string;
   status: ModelStatus;
@@ -171,7 +172,7 @@ interface ProjectRow {
 interface ProfileRow {
   id: string;
   name: string;
-  provider: "codex";
+  provider: "codex" | "claude";
   model: string;
   reasoning_level: ReasoningLevel;
   service_priority: ServicePriority;
@@ -195,6 +196,7 @@ export interface AgentRow {
 
 interface ModelRow {
   model_id: string;
+  provider: "codex" | "claude";
   display_name: string;
   description: string;
   status: ModelStatus;
@@ -314,7 +316,7 @@ export function resolveAgentProfiles(db: import("better-sqlite3").Database, role
 }
 
 function publicModel(row: ModelRow): CodexModel {
-  return { id: row.model_id, displayName: row.display_name, description: row.description, status: row.status, sortOrder: row.sort_order, createdAt: row.created_at, updatedAt: row.updated_at };
+  return { id: row.model_id, provider: row.provider, displayName: row.display_name, description: row.description, status: row.status, sortOrder: row.sort_order, createdAt: row.created_at, updatedAt: row.updated_at };
 }
 
 function publicProject(row: ProjectRow): Project {
@@ -583,13 +585,13 @@ export class ProjectService {
     const name = input.name.trim();
     const model = input.model.trim();
     const capacity = input.capacity ?? null;
-    if (!namePattern.test(name)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-name", "name", "Profile name is invalid")]);
-    const catalogModel = this.database.authQuery((db) => db.prepare("SELECT model_id FROM forge_models WHERE model_id = ? AND status = 'active'").get(model) as { model_id: string } | undefined);
+    const provider = input.provider ?? "codex";
+    const catalogModel = this.database.authQuery((db) => db.prepare("SELECT model_id FROM forge_models WHERE model_id = ? AND provider = ? AND status = 'active'").get(model, provider) as { model_id: string } | undefined);
     if (!modelIdPattern.test(model) || secretPattern.test(model) || !catalogModel) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-model", "model", "Select an active model from the catalog")]);
     if (!["low", "medium", "high", "xhigh"].includes(input.reasoningLevel)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-reasoning", "reasoningLevel", "Reasoning level is invalid")]);
     if (!["standard", "priority", "fast"].includes(input.servicePriority)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-priority", "servicePriority", "Service priority is invalid")]);
     if (capacity !== null && (!Number.isInteger(capacity) || capacity < 1 || capacity > 32)) throw new ProjectFailure("Profile configuration is invalid", [finding("invalid-capacity", "capacity", "Capacity must be an integer from 1 to 32")]);
-    return { name, model, reasoningLevel: input.reasoningLevel, servicePriority: input.servicePriority, capacity };
+    return { name, provider, model, reasoningLevel: input.reasoningLevel, servicePriority: input.servicePriority, capacity };
   }
 
   createProfile(actorUserId: string, input: ProfileInput): CodexProfile {
@@ -597,11 +599,11 @@ export class ProjectService {
     void actor;
     const profileInput = this.validateProfileInput(input);
     const now = this.now().toISOString();
-    const profile = { id: identifier("profile"), name: profileInput.name, provider: "codex" as const, model: profileInput.model, reasoningLevel: profileInput.reasoningLevel, capacity: profileInput.capacity, servicePriority: profileInput.servicePriority, effectiveCapacity: profileInput.capacity ?? this.config.externalTurnCapacity, createdAt: now, updatedAt: now };
+    const profile = { id: identifier("profile"), name: profileInput.name, provider: profileInput.provider, model: profileInput.model, reasoningLevel: profileInput.reasoningLevel, capacity: profileInput.capacity, servicePriority: profileInput.servicePriority, effectiveCapacity: profileInput.capacity ?? this.config.externalTurnCapacity, createdAt: now, updatedAt: now };
     try {
       this.database.authTransaction((db) => {
-        db.prepare(`INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, ?, 'codex', ?, ?, ?, ?, ?, ?)`)
-          .run(profile.id, profile.name, profile.model, profile.reasoningLevel, profile.servicePriority, profile.capacity, now, now);
+        db.prepare("INSERT INTO forge_profiles (id, name, provider, model, reasoning_level, service_priority, capacity, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(profile.id, profile.name, profile.provider, profile.model, profile.reasoningLevel, profile.servicePriority, profile.capacity, now, now);
         this.auth.recordAuditEventInTransaction(db, actorUserId, "profile_created", undefined, undefined, { profileId: profile.id });
       });
     } catch {
@@ -616,7 +618,7 @@ export class ProjectService {
     const now = this.now().toISOString();
     try {
       const changed = this.database.authTransaction((db) => {
-        const result = db.prepare("UPDATE forge_profiles SET name = ?, model = ?, reasoning_level = ?, service_priority = ?, capacity = ?, updated_at = ? WHERE id = ?").run(profileInput.name, profileInput.model, profileInput.reasoningLevel, profileInput.servicePriority, profileInput.capacity, now, profileId);
+        const result = db.prepare("UPDATE forge_profiles SET name = ?, provider = ?, model = ?, reasoning_level = ?, service_priority = ?, capacity = ?, updated_at = ? WHERE id = ?").run(profileInput.name, profileInput.provider, profileInput.model, profileInput.reasoningLevel, profileInput.servicePriority, profileInput.capacity, now, profileId);
         if (result.changes !== 1) throw new ProjectFailure("Profile not found", [], 404);
         this.auth.recordAuditEventInTransaction(db, actorUserId, "profile_updated", undefined, undefined, { profileId });
         return db.prepare("SELECT * FROM forge_profiles WHERE id = ?").get(profileId) as ProfileRow;
@@ -751,8 +753,7 @@ export class ProjectService {
       return rows.map(publicModel);
     });
   }
-
-  createModel(actorUserId: string, input: { id: string; displayName: string; description?: string; sortOrder?: number }): CodexModel {
+  createModel(actorUserId: string, input: { id: string; provider?: "codex" | "claude"; displayName: string; description?: string; sortOrder?: number }): CodexModel {
     this.requireAdmin(actorUserId);
     const id = input.id.trim().toLowerCase();
     const displayName = input.displayName.trim();
@@ -764,7 +765,7 @@ export class ProjectService {
     const now = this.now().toISOString();
     try {
       this.database.authTransaction((db) => {
-        db.prepare("INSERT INTO forge_models (model_id, display_name, description, status, sort_order, created_at, updated_at) VALUES (?, ?, ?, 'active', ?, ?, ?)").run(id, displayName, description, sortOrder, now, now);
+        db.prepare("INSERT INTO forge_models (model_id, provider, display_name, description, status, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, ?, ?)").run(id, input.provider ?? "codex", displayName, description, sortOrder, now, now);
         this.auth.recordAuditEventInTransaction(db, actorUserId, "model_created", undefined, undefined, { modelId: id });
       });
     } catch {

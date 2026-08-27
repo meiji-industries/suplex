@@ -94,8 +94,8 @@ function NewTaskDialog({ open, onOpenChange, companyStatus, projects, projectId,
   };
   return (
     <Dialog open={open} onOpenChange={(nextOpen) => { if (!busy) onOpenChange(nextOpen); }}>
-      <DialogContent className="max-h-[min(85vh,420px)] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto rounded-xl p-0 shadow-2xl sm:max-w-[936px]" showCloseButton>
-        <DialogHeader className="flex-row items-center justify-between px-4 py-3 pr-12 sm:px-5 sm:pr-12">
+      <DialogContent className="max-h-[min(85vh,420px)] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto rounded-xl p-0 shadow-2xl sm:max-w-[936px]" showCloseButton={false}>
+        <DialogHeader className="flex-row items-center justify-between px-4 py-3 sm:px-5">
           <Breadcrumb>
             <BreadcrumbList className="gap-2 text-sm">
               <BreadcrumbItem>

@@ -1,9 +1,12 @@
 import type { IssueWorkflowInput, IssueWorkflowState } from "./issue-contracts.js";
 
 type SourcePullRequestState = Pick<IssueWorkflowState, "releaseRepository" | "branchName" | "pullRequestNumber" | "pullRequestUrl" | "githubPullRequestExists">;
+type SourcePullRequestInput = Pick<IssueWorkflowInput, "repository" | "source"> | { repository: string; source: { number: number; url: string; headBranch: string; baseBranch: string } };
 
-export function sourcePullRequestState(input: IssueWorkflowInput, enabled: boolean): SourcePullRequestState | undefined {
-  return enabled && input.repository && input.source?.kind === "pull_request" ? { releaseRepository: input.repository, branchName: input.source.headBranch, pullRequestNumber: input.source.number, pullRequestUrl: input.source.url, githubPullRequestExists: true } : undefined;
+export function sourcePullRequestState(input: SourcePullRequestInput | null | undefined, enabled: boolean): SourcePullRequestState | undefined {
+  const source = input?.source;
+  if (!enabled || !input?.repository || !source || ("kind" in source && source.kind !== "pull_request") || !("number" in source)) return undefined;
+  return { releaseRepository: input.repository, branchName: source.headBranch, pullRequestNumber: source.number, pullRequestUrl: source.url, githubPullRequestExists: true };
 }
 
 export function isSourcePullRequestPreDelivery(state: IssueWorkflowState, source: SourcePullRequestState | undefined): boolean {

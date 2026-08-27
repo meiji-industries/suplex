@@ -4,6 +4,16 @@ export interface ObserveGithubPullRequestActivityInput {
   pullRequestNumber?: number | null | undefined;
 }
 
+export interface LoadTaskSourcePullRequestActivityInput {
+  taskId: string;
+  companyId: string;
+}
+
+export interface TaskSourcePullRequest {
+  repository: string;
+  source: { number: number; url: string; headBranch: string; baseBranch: string };
+}
+
 export interface GithubPullRequestObservationResult {
   exists: boolean;
   number: number | null;
@@ -23,6 +33,7 @@ export interface GithubPullRequestObservationResult {
 }
 
 export interface GithubSyncActivities {
+  loadTaskSourcePullRequest(input: LoadTaskSourcePullRequestActivityInput): Promise<TaskSourcePullRequest | null>;
   observeGithubPullRequest(input: ObserveGithubPullRequestActivityInput): Promise<GithubPullRequestObservationResult>;
   applyGithubPullRequestAction(input: { repository: string; number: number; headSha: string; action: "mark_ready" | "enable_auto_merge" | "merge" }): Promise<void>;
 }

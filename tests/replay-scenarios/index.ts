@@ -23,6 +23,7 @@ import { scenario as developerResultClaim } from "./developer-result-claim.js";
 import { scenario as developerBlockedCancellation } from "./developer-blocked-cancellation.js";
 import { scenario as developerReconciliationRecovery } from "./developer-reconciliation-recovery.js";
 import { scenario as sourcePullRequestMerged } from "./source-pull-request-merged.js";
+import { scenario as sourcePullRequestAdopted } from "./source-pull-request-adopted.js";
 
 export const replayScenarios = [
   normalSuccess,
@@ -49,4 +50,5 @@ export const replayScenarios = [
   developerReconciliationRecovery,
   developerBlockedCancellation,
   sourcePullRequestMerged,
+  sourcePullRequestAdopted,
 ] as const satisfies readonly ReplayScenarioDefinition[];

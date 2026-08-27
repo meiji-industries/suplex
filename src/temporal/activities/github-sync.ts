@@ -2,6 +2,7 @@ import type { GithubPullRequestObservationResult, GithubSyncActivities } from ".
 import type { ActivityContext } from "./context.js";
 import { Context } from "@temporalio/activity";
 import { runCommand } from "../../command-runner.js";
+import { loadTaskConfiguration } from "../../task-project-configuration.js";
 import { json } from "../../task-utils.js";
 
 /** Author and change stats are presentation-only; a failure here never blocks the observation. */
@@ -26,6 +27,12 @@ async function pullRequestPresentation(ctx: ActivityContext, repository: string,
 /** Reads GitHub only. Workflow code decides how an observed external change is adopted. */
 export function createGithubSyncActivities(ctx: ActivityContext): GithubSyncActivities {
   return {
+    async loadTaskSourcePullRequest(input) {
+      const configuration = ctx.database.authQuery((db) => loadTaskConfiguration(db, ctx.artifacts, input));
+      if (configuration.source?.kind !== "pull_request") return null;
+      const { number, url, headBranch, baseBranch } = configuration.source;
+      return { repository: configuration.repository, source: { number, url, headBranch, baseBranch } };
+    },
     async observeGithubPullRequest(input) {
       Context.current().heartbeat({ repository: input.repository, branch: input.branch });
       const github = ctx.options.githubRelease ?? ctx.githubRelease;

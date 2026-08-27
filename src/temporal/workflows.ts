@@ -7,7 +7,7 @@ import { applyLegacyGithubObservation } from "./github-observation.js";
 import { advanceSourcePullRequestState, isSourcePullRequestPreDelivery, sourcePullRequestState } from "./github-source-pull-request.js";
 import { githubPullRequestObservationFields } from "../github-pull-request-observation.js";
 import { reconcile, type PullRequestTarget } from "../pull-request-reconciler.js";
-import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, recordProbeStarted, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
+import { planMergeConflict, projectIssueStateActivity, reconcileTargetBase, recordProbeStarted, loadTaskSourcePullRequest, observeGithubPullRequest, applyGithubPullRequestAction } from "./workflow/activity-proxies.js";
 import { syncGithubPullRequestSignal } from "./issue-updates.js";
 import { evidencePointer, humanBlocker } from "./workflow/state-transitions.js";
 import { createIssueWorkflowContext } from "./workflow/context.js";
@@ -81,9 +81,8 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   assertPayloadWithinLimit("Issue Workflow input", validatedInput);
   const continuation = validatedInput.continuationState, continueAfter = validatedInput.continueAsNewAfter ?? 0;
   const reviseContinueEnabled = patched(reviseContinuePatch), guardedHandlersEnabled = patched(guardedHandlersPatch);
-  const failedRetryEnabled = patched(failedRetryPatch);
-  const herdrExecutionSubstrateEnabled = patched(herdrExecutionSubstratePatch);
-  const sourcePullRequest = sourcePullRequestState(validatedInput, patched("forge-adopt-source-pull-request-v1"));
+  const failedRetryEnabled = patched(failedRetryPatch), herdrExecutionSubstrateEnabled = patched(herdrExecutionSubstratePatch);
+  let sourcePullRequest = sourcePullRequestState(validatedInput, patched("forge-adopt-source-pull-request-v1"));
   const addRevisionCommand = (commands: IssueCommand[]): IssueCommand[] => reviseContinueEnabled && !commands.includes("revise_plan") ? [...commands, "revise_plan"] : commands;
   let state = IssueWorkflowStateSchema.parse({
     ...buildInitialIssueWorkflowState(validatedInput),
@@ -226,6 +225,7 @@ export async function issueWorkflow(input: IssueWorkflowInput): Promise<IssueWor
   setHandler(issueStateQuery, () => state);
   setHandler(syncGithubPullRequestSignal, () => { githubSyncRequested = true; });
   const syncGithubPullRequest = async (): Promise<void> => {
+    if (!state.releaseRepository && !sourcePullRequest && patched("forge-adopt-source-pull-request-v2")) sourcePullRequest = await loadTaskSourcePullRequest({ taskId: state.issueId, companyId: state.companyId }).then((source) => sourcePullRequestState(source, true), () => undefined);
     if (!state.releaseRepository && sourcePullRequest) { state = IssueWorkflowStateSchema.parse(advanceSourcePullRequestState(state, sourcePullRequest)); await projectIssueState(state); }
     if (!state.releaseRepository || !state.branchName) return;
     const observed = await observeGithubPullRequest({ repository: state.releaseRepository, branch: state.branchName, pullRequestNumber: state.pullRequestNumber }).catch(() => null);

@@ -37,7 +37,8 @@ export type ReplayScenario =
   | "developer_result_claim"
   | "developer_reconciliation_recovery"
   | "developer_blocked_cancellation"
-  | "source_pull_request_merged";
+  | "source_pull_request_merged"
+  | "source_pull_request_adopted";
 
 export interface Deferred<T = void> {
   promise: Promise<T>;

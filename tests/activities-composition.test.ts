@@ -31,6 +31,7 @@ const expectedActivityKeys = [
   "finalReview",
   "findActiveDeveloperExecution",
   "findRecoverableDeveloperExecution",
+  "loadTaskSourcePullRequest",
   "observeGithubPullRequest",
   "planCiRepair",
   "planDeliveryRepair",

@@ -50,8 +50,8 @@ export async function createReconciliationHarness() {
 
   async function runAllReconciliation(taskId?: string): Promise<void> {
     await reconcileActiveTurns(database, config, { herdr: { getAgent: async () => null } as never }, taskId);
-    await reconcileWorktrees(database, config, { taskId });
-    await reconcileGithubObservations(database, config, { taskId, observe: undefined });
+    await reconcileWorktrees(database, config, taskId ? { taskId } : {});
+    await reconcileGithubObservations(database, config, taskId ? { taskId } : {});
   }
 
   function snapshot(taskId = "task"): ReconciliationSnapshot {

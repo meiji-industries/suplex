@@ -15,6 +15,17 @@ import { evidencePointer, humanBlocker } from "./state-transitions.js";
 import { TERMINAL_PHASES } from "../../issue-phases.js";
 import type { IssueWorkflowContext, StateRef } from "./context.js";
 
+export type RepairFailureClass = "transient_infrastructure" | "rate_limited" | "credential_missing" | "code_failure" | "ci_failure" | "merge_conflict_mechanical" | "product_ambiguity" | "no_progress";
+
+export function classifyRepairFailure(input: { code: string | null; category?: string | null; summary: string; source: "local_check" | "ci" | "merge" | "review" }): RepairFailureClass {
+  if (["login-expired", "unauthenticated"].includes(input.code ?? "") || input.category === "provider_authentication") return "credential_missing";
+  if (["rate-limited", "capacity-exhausted", "capacity_unavailable"].includes(input.code ?? "")) return "rate_limited";
+  if (["model-unavailable", "provider-unavailable", "activity-failed", "timeout", "repair-infrastructure-failure", "ci-provider-unavailable"].includes(input.code ?? "") || input.category === "provider_connectivity_exhausted") return "transient_infrastructure";
+  if (input.source === "merge") return input.code === "product-decision-required" ? "product_ambiguity" : "merge_conflict_mechanical";
+  if (input.source === "ci") return "ci_failure";
+  return "code_failure";
+}
+
 export function compactStateForContinuation(state: IssueWorkflowState): IssueWorkflowState {
   const compact = { ...state, activeOperation: null } as Record<string, unknown>;
   for (const key of ["worktreePath", "deliveryBlockingFindings", "deliveryRepairPlan", "forwardMergeConflictFiles", "forwardMergeConflictDiff", "conflictFiles", "conflictDiff"]) delete compact[key];
@@ -280,7 +291,7 @@ const AUTO_CHAINED_COMMANDS = { delivery_ready: "review_delivery", delivery_revi
 // (plan conflict -> required -> resolve throws -> plan conflict ...) and each pass has a new revision.
 const haltedChains = new Set<string>();
 const AUTO_RETRY_BLOCKER_DELAYS = [30_000, 120_000, 300_000] as const;
-const AUTO_RETRY_BLOCKER_COMMANDS = new Set(["review_delivery", "final_review", "accept_delivery", "reconcile_acceptance", "reconcile_merge", "retry_target_base_reconciliation"]);
+const AUTO_RETRY_BLOCKER_COMMANDS = new Set(["review_delivery", "repair_delivery", "final_review", "accept_delivery", "reconcile_acceptance", "reconcile_merge", "retry_target_base_reconciliation"]);
 
 // Human decision gates: the member is choosing, not handing work to an agent, so a failure inside one of
 // these is retried in place by the guarded fallback below.
@@ -316,12 +327,12 @@ export async function runAutoChainedCommand(ctx: IssueWorkflowContext, chained: 
   }
 }
 
-function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation" | null {
+function retryOnlyBlockerCommand(ctx: IssueWorkflowContext): "review_delivery" | "repair_delivery" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation" | null {
   if (ctx.state.phase !== "delivery_blocked") return null;
   const nonDestructive = ctx.state.allowedCommands.filter((command) => command !== "cancel_issue");
   const command = nonDestructive[0];
   if (nonDestructive.length !== 1 || !command || !AUTO_RETRY_BLOCKER_COMMANDS.has(command)) return null;
-  return command as "review_delivery" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation";
+  return command as "review_delivery" | "repair_delivery" | "final_review" | "accept_delivery" | "reconcile_acceptance" | "reconcile_merge" | "retry_target_base_reconciliation";
 }
 
 function retryScope(ctx: IssueWorkflowContext, command: string): string | null {
@@ -353,6 +364,7 @@ export async function autoRetryDeliveryBlocker(ctx: IssueWorkflowContext): Promi
   if (ctx.state.phase !== "delivery_blocked" || retryOnlyBlockerCommand(ctx) !== command || retryScope(ctx, command) !== scope) return true;
   const input = { expectedRevision: ctx.state.revision, actorUserId: ctx.input.autoMergeActorUserId ?? ctx.input.autoApprovePlanActorUserId ?? "forge-auto-retry", commandId };
   if (command === "review_delivery") await reviewDelivery(ctx, input);
+  else if (command === "repair_delivery") await repairDelivery(ctx, input);
   else if (command === "final_review") await ctx.runFinalReviewTurn();
   else if (command === "accept_delivery") await ctx.retryAcceptDelivery(input);
   else if (command === "reconcile_acceptance") await ctx.reconcileAcceptanceTurn();

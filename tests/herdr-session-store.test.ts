@@ -330,6 +330,25 @@ test("developer launches the guarded environment from a short private script", a
   }
 });
 
+test("a retired Developer session is replaced by a new generation", async () => {
+  const value = await startupFixture();
+  const herdr = new StartupHerdrFake();
+  try {
+    const store = new HerdrSessionStore(value.database, herdr as never, process.env, async () => {});
+    const first = await store.ensureRoleSession(taskFor(value.root), "developer", startupSettings);
+    value.database.authQuery((db) => db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0, status = 'closed' WHERE id = ?").run(first.id));
+
+    const second = await store.ensureRoleSession(taskFor(value.root), "developer", startupSettings);
+
+    expect(second.id).not.toBe(first.id);
+    expect(second.generation).toBeGreaterThan(first.generation);
+    expect(value.database.authQuery((db) => db.prepare("SELECT is_current, status FROM forge_herdr_role_sessions WHERE id = ?").get(first.id))).toEqual({ is_current: 0, status: "closed" });
+  } finally {
+    value.database.close();
+    await rm(value.root, { recursive: true, force: true });
+  }
+});
+
 test("adopts a recorded live agent with a matching fingerprint without splitting", async () => {
   const value = await startupFixture();
   const herdr = new StartupHerdrFake();

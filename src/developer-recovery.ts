@@ -52,6 +52,12 @@ export async function cancelDeveloperExecution(database: ForgeDatabase, executio
   if (!execution) return { status: "cancelled" };
   await new HerdrCodexProvider(database, new CliHerdrClient()).interrupt(execution.taskId, "developer");
   const now = new Date().toISOString();
-  database.authQuery((db) => db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ?, failure_code = NULL, failure_summary = NULL WHERE id = ? AND status IN ('starting', 'running')").run(now, executionId));
+  database.authTransaction((db) => {
+    db.prepare("UPDATE forge_developer_executions SET status = 'cancelled', finished_at = ?, failure_code = NULL, failure_summary = NULL WHERE id = ? AND status IN ('starting', 'running')").run(now, executionId);
+    // `closed` is the established terminal role-session status.  Retiring the
+    // current row makes the next ensure allocate a new generation and Codex
+    // session, while deliberately leaving its pane alone for its owner.
+    db.prepare("UPDATE forge_herdr_role_sessions SET is_current = 0, status = 'closed', updated_at = ? WHERE task_id = ? AND session_role = 'developer' AND is_current = 1").run(now, execution.taskId);
+  });
   return { status: "cancelled_confirmed", executionId, exitCode: null, exitSignal: "SIGINT", evidenceArtifactId: null };
 }

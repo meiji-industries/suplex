@@ -20,8 +20,8 @@ import { createGitCommandGuard, WorktreeFailure, WorktreeManager } from "./workt
 import { ForwardMergeConflictArtifactSchema, type ForwardMergeConflictArtifact } from "./forward-merge.js";
 import { runPinnedVerification } from "./verification.js";
 import { loadTaskConfiguration } from "./task-project-configuration.js";
-import { loadDefaultPrompts, renderPrompt } from "./prompts.js";
-import { isVersionedPromptSet } from "./prompt-resolution.js";
+import { loadDefaultPrompts, loadPromptCatalog, renderPrompt, type PromptPath } from "./prompts.js";
+import { isVersionedPromptSet, resolvePromptSet, type PromptOverrideRow } from "./prompt-resolution.js";
 import { DeliveryReviewSubjectSchema, DeveloperRepairActivityInputSchema, DeveloperRepairActivityResultSchema, type CiRepairActivityInput, type CiRepairActivityResult, type DeliveryFinding, type DeveloperExecutionActivityInput, type DeveloperExecutionResult, type DeveloperRepairActivityInput, type DeveloperRepairActivityResult, type DeveloperSupervisorActivityIdentity, type MergeConflictResolutionActivityInput, type MergeConflictResolutionActivityResult } from "./temporal/issue-contracts.js";
 import { buildGitBranchName } from "./git-branch-name.js";
 import { fallbackGitPresentation } from "./git-presentation.js";
@@ -261,7 +261,10 @@ export class DeveloperService {
     const taskConfiguration = this.database.authQuery((db) => loadTaskConfiguration(db, this.artifacts, input));
     const projectRevision = ProjectRevisionSchema.safeParse(taskConfiguration);
     if (!projectRevision.success) throw new AgentFailure("scoped-input-missing", "Pinned project execution configuration is unavailable");
-    this.prompts = this.pinnedPrompts(taskConfiguration, input.companyId);
+    const promptsRepinned = (input.developerAttempt ?? 1) > 1;
+    this.prompts = promptsRepinned
+      ? this.currentPrompts(taskConfiguration.projectId)
+      : this.pinnedPrompts(taskConfiguration, input.companyId);
     const repositoryPath = await scopedRepository(this.config.repositoryRoot, projectRevision.data.repositoryPath);
     const [brief, planText, leadEvidence] = await Promise.all([
       this.artifacts.getArtifact({ companyId: input.companyId, storagePath: context.briefStoragePath, sha256: context.briefSha256 }).then((bytes) => bytes.toString("utf8")),
@@ -322,7 +325,10 @@ export class DeveloperService {
       this.bindCapacityInTransaction(db, input, executionId, existing?.sessionRef ?? undefined, worktree.worktreePath);
     });
     const prompt = this.prompt(context.title, brief, planText, leadEvidence, worktree, input.runProjectTests, input.visualEvidence, input.operatorNote);
-    const evidenceLines = [JSON.stringify({ type: "forge.prompt", text: redact(prompt) })];
+    const evidenceLines = [
+      JSON.stringify({ type: "forge.prompt", text: redact(prompt) }),
+      ...(promptsRepinned ? [JSON.stringify({ type: "forge.prompts", promptsRepinned: true })] : []),
+    ];
     let sessionRef: string | undefined = existing?.sessionRef ?? undefined;
     try {
         const task = this.taskContext(input);
@@ -691,6 +697,13 @@ export class DeveloperService {
     if (!artifact) throw new AgentFailure("scoped-input-missing", "Pinned task prompts are unavailable");
     const parsed = jsonRequired(this.artifacts.getArtifactSync({ companyId, storagePath: artifact.storage_path, sha256: configuration.prompts.sha256 }).toString("utf8")) as unknown;
     return new Map(Object.entries(isVersionedPromptSet(parsed) ? parsed.prompts : parsed as Record<string, string>));
+  }
+  private currentPrompts(projectId: string): ReadonlyMap<string, string> {
+    const catalog = loadPromptCatalog();
+    const rows = this.database.authQuery((db) => db.prepare("SELECT id, template_id AS templateId, mode, content, base_template_sha256 AS baseTemplateSha256, current_revision AS currentRevision, scope FROM forge_prompt_overrides WHERE scope_key IN ('global', ?)").all(projectId) as Array<PromptOverrideRow & { scope: "global" | "project" }>);
+    const active = (scope: "global" | "project") => new Map(rows.filter((row) => row.scope === scope).flatMap((row) => catalog.has(row.templateId) ? [[row.templateId, row] as const] : []));
+    const resolved = resolvePromptSet(catalog, { global: active("global"), project: active("project") });
+    return new Map([...resolved.values()].map((prompt) => [catalog.get(prompt.templateId)!.path as PromptPath, prompt.text]));
   }
   private async persistEvidence(companyId: string, lines: string[], stableKey?: string): Promise<StoredArtifact> {
     const content = Buffer.from(`${lines.join("\n")}\n`, "utf8");

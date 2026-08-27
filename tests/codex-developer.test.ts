@@ -80,6 +80,34 @@ test("Developer delivery uses the fake turn role session and preserves delivery 
   } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
 });
 
+test("a Developer retry uses current project prompts and records prompt repinning", async () => {
+  const value = await fixture();
+  const worktree = join(value.root, "worktrees", "task_1");
+  const artifacts = new ArtifactStore(value.config.artifactRoot);
+  const now = new Date().toISOString();
+  const pinned = await artifacts.put("company_1", "task-prompt-set", { filename: "pinned-prompts.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ "developer/execution.md": "PINNED FIRST ATTEMPT {{title}}" })) });
+  const configuration = await artifacts.put("company_1", "task-project-configuration", { filename: "retry-configuration.json", mimeType: "application/json", bytes: Buffer.from(JSON.stringify({ projectId: "project_1", projectName: "Project", repositoryPath: join(value.root, "repo"), worktreeRoot: join(value.root, "worktrees"), repository: "acme/forge", baseBranch: "main", targetBranch: "main", baseSha: await command("git", ["rev-parse", "HEAD"], join(value.root, "repo")), targetSha: await command("git", ["rev-parse", "HEAD"], join(value.root, "repo")), setupCommand: "true", verificationCommand: "pnpm test", requiredChecks: [], roleAgents: { builder: "profile_1" }, roleProfiles: { builder: "profile_1" }, capturedAt: now, prompts: { artifactId: pinned.id, sha256: pinned.sha256, overrides: [] } })) });
+  const fake = fakeTurnRunner(async () => {
+    await writeFile(join(worktree, "MARKER.md"), "done\n");
+    await command("git", ["add", "MARKER.md"], worktree);
+    await command("git", ["commit", "-m", "retry delivery"], worktree);
+    return { kind: "delivery", summary: "Retry delivered", steps: [{ number: 1, status: "completed", filesChanged: ["MARKER.md"], notes: "done" }], authorizedStepsNotCompleted: [], resultCommit: "a".repeat(40), resultTree: "b".repeat(40), dirtyState: "clean", blocker: null };
+  });
+  try {
+    value.database.authQuery((db) => {
+      for (const artifact of [pinned, configuration]) db.prepare("INSERT INTO forge_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?, ?, 'task_1', ?, ?, ?, ?, ?, ?, ?)").run(artifact.id, artifact.companyId, artifact.kind, artifact.filename, artifact.mimeType, artifact.byteSize, artifact.sha256, artifact.storagePath, artifact.createdAt);
+      db.prepare("UPDATE forge_tasks SET project_configuration_artifact_id = ? WHERE id = 'task_1'").run(configuration.id);
+      db.prepare("INSERT INTO forge_prompt_overrides (id, scope, project_id, scope_key, template_id, mode, content, base_template_sha256, current_revision, updated_by_user_id, created_at, updated_at) VALUES ('override', 'project', 'project_1', 'project_1', 'developer/execution', 'append', 'CURRENT RETRY PROMPT', 'base', 1, 'user_1', ?, ?)").run(now, now);
+    });
+
+    const result = await new DeveloperService(value.database, value.config, { turnRunner: fake.turnRunner }).run({ ...value.input, developerAttempt: 2 });
+    expect(fake.calls[0]!.prompt).toContain("CURRENT RETRY PROMPT");
+    expect(fake.calls[0]!.prompt).not.toContain("PINNED FIRST ATTEMPT");
+    const evidence = value.database.authQuery((db) => db.prepare("SELECT storage_path, sha256 FROM forge_artifacts WHERE id = ?").get(result.evidenceArtifactId) as { storage_path: string; sha256: string });
+    expect(artifacts.getArtifactSync({ companyId: "company_1", storagePath: evidence.storage_path, sha256: evidence.sha256 }).toString("utf8")).toContain('"promptsRepinned":true');
+  } finally { value.database.close(); await rm(value.root, { recursive: true, force: true }); }
+});
+
 test("required Developer proof is ingested and persisted without local paths", async () => {
   const value = await fixture(), worktree = join(value.root, "worktrees", "task_1");
   const proof = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), Buffer.from([0, 0, 0, 13]), Buffer.from("IHDR"), Buffer.alloc(17), Buffer.from([0, 0, 0, 0]), Buffer.from("IEND"), Buffer.alloc(4)]);

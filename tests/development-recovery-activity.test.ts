@@ -2,12 +2,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 
 import { createTestConfig } from "../src/config.js";
 import { ForgeDatabase } from "../src/database.js";
 import { createActivityContext } from "../src/temporal/activities/context.js";
 import { createDevelopmentActivities } from "../src/temporal/activities/development.js";
+import { HerdrCodexProvider } from "../src/agent-providers/herdr-codex.js";
 
 const now = "2026-08-26T00:00:00.000Z";
 const baseSha = "a".repeat(40);
@@ -56,6 +57,19 @@ test("findRecoverableDeveloperExecution joins the current role session and atomi
 
   await expect(activities.findRecoverableDeveloperExecution({ taskId: "task", companyId: "company", workflowId: "workflow" })).resolves.toEqual({ executionId: "candidate", planRevision: 7, attempt: 1, sessionRef: "session-candidate", worktreePath: "/worktrees/candidate", branchName: "forge/candidate", targetBaseSha: baseSha });
   expect(database.authQuery((db) => db.prepare("SELECT status, failure_code, finished_at FROM forge_developer_executions WHERE id = 'candidate'").get())).toEqual({ status: "running", failure_code: null, finished_at: null });
+});
+
+test("cancelling Developer retires its current role session", async () => {
+  const { database, activities } = await setup();
+  addCandidate(database, { id: "candidate", status: "running" });
+  const interrupt = vi.spyOn(HerdrCodexProvider.prototype, "interrupt").mockResolvedValue();
+  try {
+    await expect(activities.cancelDeveloperExecution({ taskId: "task", companyId: "company", executionId: "candidate" })).resolves.toMatchObject({ status: "cancelled_confirmed" });
+    expect(database.authQuery((db) => db.prepare("SELECT status FROM forge_developer_executions WHERE id = 'candidate'").get())).toEqual({ status: "cancelled" });
+    expect(database.authQuery((db) => db.prepare("SELECT is_current, status FROM forge_herdr_role_sessions WHERE id = 'session-candidate'").get())).toEqual({ is_current: 0, status: "closed" });
+  } finally {
+    interrupt.mockRestore();
+  }
 });
 
 test("findRecoverableDeveloperExecution leaves ambiguous candidates untouched", async () => {

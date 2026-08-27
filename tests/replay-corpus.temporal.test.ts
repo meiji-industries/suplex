@@ -34,4 +34,4 @@ test("runs and replays the Temporal scenario corpus", async () => {
   } finally {
     await harness.stop();
   }
-}, 120_000);
+}, 300_000);

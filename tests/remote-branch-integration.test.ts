@@ -39,8 +39,8 @@ async function fixture() {
   return { config, database, peer, worktreePath };
 }
 
-async function integrate(value: Awaited<ReturnType<typeof fixture>>, remoteHead: string) {
-  return integrateRemoteBranch(value.database, value.config, { taskId: "task", companyId: "company", workflowId: "workflow", repository: "acme/forge", branchName: "forge/task", remoteHead, worktreePath: value.worktreePath, targetBaseSha: "a".repeat(40) });
+async function integrate(value: Awaited<ReturnType<typeof fixture>>, remoteHead: string, deps?: Parameters<typeof integrateRemoteBranch>[3]) {
+  return integrateRemoteBranch(value.database, value.config, { taskId: "task", companyId: "company", workflowId: "workflow", repository: "acme/forge", branchName: "forge/task", remoteHead, worktreePath: value.worktreePath, targetBaseSha: "a".repeat(40) }, deps);
 }
 
 test("does not run git for an unowned remote task branch", async () => {
@@ -62,6 +62,71 @@ test("fast-forwards a clean owned branch and records the idempotent integration"
   expect(await git(value.worktreePath, "rev-parse", "HEAD")).toBe(remoteHead);
   await expect(integrate(value, remoteHead)).resolves.toEqual({ kind: "fast_forwarded", from: expect.any(String), to: remoteHead });
   expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_issue_timeline WHERE event_type = 'remote_branch_integrated'").get())).toEqual({ count: 1 });
+});
+
+test("up_to_date", async () => {
+  const value = await fixture();
+  const remoteHead = await git(value.worktreePath, "rev-parse", "HEAD");
+
+  await expect(integrate(value, remoteHead)).resolves.toEqual({ kind: "up_to_date", head: remoteHead });
+  await expect(integrate(value, remoteHead)).resolves.toEqual({ kind: "up_to_date", head: remoteHead });
+});
+
+test("merged", async () => {
+  const value = await fixture();
+  await writeFile(join(value.worktreePath, "LOCAL.md"), "local\n");
+  await git(value.worktreePath, "add", "LOCAL.md");
+  await git(value.worktreePath, "commit", "-m", "local");
+  await writeFile(join(value.peer, "REMOTE.md"), "remote\n");
+  await git(value.peer, "add", "REMOTE.md");
+  await git(value.peer, "commit", "-m", "remote");
+  const remoteHead = await git(value.peer, "rev-parse", "HEAD");
+  await git(value.peer, "push", "origin", "forge/task");
+
+  const result = await integrate(value, remoteHead);
+  expect(result).toMatchObject({ kind: "merged", remoteHead, mergeCommit: expect.any(String) });
+  expect((await git(value.worktreePath, "rev-list", "--parents", "-n", "1", "HEAD")).split(" ")).toHaveLength(3);
+  expect(await git(value.worktreePath, "status", "--porcelain")).toBe("");
+  await expect(integrate(value, remoteHead)).resolves.toEqual(result);
+});
+
+test("dirty_worktree", async () => {
+  const value = await fixture();
+  await writeFile(join(value.worktreePath, "DIRTY.md"), "do not touch\n");
+  const calls: string[][] = [];
+  const result = await integrate(value, "b".repeat(40), {
+    git: async (args, cwd, taskId) => {
+      calls.push(args);
+      const command = await runCommand({ taskId, stepId: null, command: "git", args, cwd });
+      return { ok: command.exitCode === 0, stdout: command.stdout.trim(), stderr: command.stderr };
+    },
+  });
+
+  expect(result).toEqual({ kind: "dirty_worktree", dirtyFileCount: 1 });
+  expect(await git(value.worktreePath, "status", "--porcelain")).toBe("?? DIRTY.md");
+  expect(calls).toEqual([["status", "--porcelain=v1", "--untracked-files=all"]]);
+  await expect(integrate(value, "b".repeat(40))).resolves.toEqual(result);
+});
+
+test("skipped_active_turn", async () => {
+  const value = await fixture();
+  value.database.authTransaction((db) => db.prepare("INSERT INTO forge_developer_executions (id, task_id, company_id, workflow_id, plan_revision, attempt, status, branch_name, worktree_path, target_base_sha, started_at) VALUES ('running-developer', 'task', 'company', 'workflow', 1, 1, 'running', 'forge/task', ?, ?, ?)").run(value.worktreePath, "a".repeat(40), new Date().toISOString()));
+  let commands = 0;
+
+  await expect(integrate(value, "b".repeat(40), { git: async () => { commands += 1; return { ok: true, stdout: "", stderr: "" }; } })).resolves.toEqual({ kind: "skipped_active_turn" });
+  await expect(integrate(value, "b".repeat(40))).resolves.toEqual({ kind: "skipped_active_turn" });
+  expect(commands).toBe(0);
+});
+
+test("not_owned", async () => {
+  const value = await fixture();
+  let commands = 0;
+  const input = { taskId: "task", companyId: "company", workflowId: "workflow", repository: "acme/forge", branchName: "forge/task", remoteHead: "b".repeat(40), worktreePath: join(value.config.worktreeRoot, "unrecorded"), targetBaseSha: "a".repeat(40) };
+  const deps = { git: async () => { commands += 1; return { ok: true, stdout: "", stderr: "" }; } };
+
+  await expect(integrateRemoteBranch(value.database, value.config, { ...input, worktreePath: join(value.config.worktreeRoot, "..", "outside") }, deps)).resolves.toEqual({ kind: "not_owned" });
+  await expect(integrateRemoteBranch(value.database, value.config, input, deps)).resolves.toEqual({ kind: "not_owned" });
+  expect(commands).toBe(0);
 });
 
 test("aborts a remote conflict and persists its evidence", async () => {

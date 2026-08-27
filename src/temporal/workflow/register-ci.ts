@@ -54,14 +54,23 @@ export function registerCiHandlers(ctx: IssueWorkflowContext): void {
     return ctx.state;
   };
   const reconcileCiTurn = async (): Promise<contracts.IssueWorkflowState> => {
-    if (!ctx.state.releaseId || !ctx.state.expectedHeadSha) throw new Error("Exact release head is required for CI reconciliation");
+    if (!ctx.state.releaseId || !ctx.state.expectedHeadSha) throw new Error("Release evidence is required for CI reconciliation");
     const attempt = (ctx.state.ciAttempt ?? 0) + 1;
     const expectedReleaseId = ctx.state.releaseId;
     const expectedHeadSha = ctx.state.expectedHeadSha;
     const expectedRevision = ctx.state.revision;
     let result;
     try {
-      if (ctx.patched("forge-github-sync-v1") && ctx.state.releaseRepository && ctx.state.branchName) await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber });
+      const observed = ctx.patched("forge-live-head-v1") && ctx.state.releaseRepository && ctx.state.branchName
+        ? await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
+        : ctx.patched("forge-github-sync-v1") && ctx.state.releaseRepository && ctx.state.branchName
+          ? await activityProxies.observeGithubPullRequest({ repository: ctx.state.releaseRepository, branch: ctx.state.branchName, pullRequestNumber: ctx.state.pullRequestNumber })
+          : null;
+      if (ctx.patched("forge-live-head-v1") && observed?.exists && observed.state === "open" && observed.headSha && observed.headSha !== ctx.state.expectedHeadSha) {
+        ctx.state = contracts.IssueWorkflowStateSchema.parse({ ...ctx.state, revision: ctx.state.revision + 1, phase: "delivery_ready", owner: "lead", allowedCommands: ["review_delivery", "cancel_issue"], pendingAction: "Reviewing the latest changes", expectedHeadSha: observed.headSha, expectedHeadTree: null, resultCommit: observed.headSha, resultTree: null, deliveryReviewId: null, finalReviewId: null, ciRunId: null, ciOutcome: null, acceptanceId: null, blocker: null, lastEventId: `${ctx.state.workflowId}:${ctx.state.revision + 1}` });
+        await ctx.project();
+        return ctx.state;
+      }
       result = await activityProxies.reconcileCi({ taskId: ctx.input.issueId, companyId: ctx.input.companyId, releaseId: ctx.state.releaseId, expectedHeadSha: ctx.state.expectedHeadSha, attemptNumber: attempt });
     } catch (error) {
       if (ctx.state.phase !== "ci_waiting" || ctx.state.revision !== expectedRevision || ctx.state.releaseId !== expectedReleaseId || ctx.state.expectedHeadSha !== expectedHeadSha) return ctx.state;

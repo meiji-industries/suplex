@@ -1,9 +1,6 @@
 import { Alert, AlertDescription } from ".././components/ui/alert.js";
 import { Button } from ".././components/ui/button.js";
-import { Textarea } from ".././components/ui/textarea.js";
-import { RadioGroup, RadioGroupItem } from ".././components/ui/radio-group.js";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from ".././components/ui/alert-dialog.js";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from ".././components/ui/dialog.js";
+import { TaskAttentionCard } from ".././components/app/task-attention-card.js";
 import { useCompanyContext } from ".././components/app/company-context.js";
 import { SettingsLayout } from ".././components/app/settings-layout.js";
 import { isApiError, readJson, withCompany } from ".././lib/api.js";
@@ -16,12 +13,7 @@ export function AttentionView(): ReactElement {
   const [companies, setCompanies] = useState<ApiAttentionCompany[]>([]);
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
-  const [noteAction, setNoteAction] = useState<{ item: ApiAttentionItem; action: ApiAttentionAction }>();
-  const [cancelAction, setCancelAction] = useState<{ item: ApiAttentionItem; action: ApiAttentionAction }>();
-  const [note, setNote] = useState("");
   const [actionBusy, setActionBusy] = useState("");
-  const [decisions, setDecisions] = useState<Record<string, string>>({});
-  const [decisionNotes, setDecisionNotes] = useState<Record<string, string>>({});
   const reload = useCallback(async (): Promise<void> => {
     try { setError(""); setCompanies((await readJson<{ companies: ApiAttentionCompany[] }>("/api/attention")).companies); }
     catch (reason) { if (reason instanceof Error && reason.message === "Authentication required") window.location.assign("/auth"); else setError("Unable to load attention"); }
@@ -34,18 +26,12 @@ export function AttentionView(): ReactElement {
     setError("");
     try {
       await readJson(`/api/tasks/${encodeURIComponent(item.taskId)}/${path}`, { method: "POST", body: JSON.stringify({ expectedRevision: action.expectedRevision, ...(actionNote ? { note: actionNote } : {}) }) });
-      setNoteAction(undefined); setCancelAction(undefined); setNote(""); setStatus(""); await reload();
+      setStatus(""); await reload();
     } catch (reason) {
-      if (isApiError(reason, 409)) { setNoteAction(undefined); setCancelAction(undefined); setNote(""); setStatus("This issue changed. Refreshing the current attention state."); await reload(); }
+      if (isApiError(reason, 409)) { setStatus("This issue changed. Refreshing the current attention state."); await reload(); }
       else setError(reason instanceof Error ? reason.message : "Unable to apply attention action");
     } finally { setActionBusy(""); }
   }, [reload]);
-
-  const requestAction = (item: ApiAttentionItem, action: ApiAttentionAction): void => {
-    if (action.requiresNote) { setNote(""); setNoteAction({ item, action }); }
-    else if (action.destructive) setCancelAction({ item, action });
-    else void performAction(item, action);
-  };
 
   const cardAction = (item: ApiAttentionItem, cardAction: ApiAttentionItem["card"]["primaryAction"]): ApiAttentionAction => item.actions.find((action) => action.command === cardAction.command) ?? { command: cardAction.command as ApiAttentionAction["command"], label: cardAction.label, expectedRevision: item.sourceRevision, requiresNote: Boolean(cardAction.requiresNote), destructive: Boolean(cardAction.destructive) };
 
@@ -58,8 +44,8 @@ export function AttentionView(): ReactElement {
         {visibleCompanies.map((company) => <section className="bg-background" key={company.companyId}>
           <div className="flex items-center justify-between border-y px-3 py-2 text-xs sm:px-4"><span className="font-medium">{company.companyName}</span><span className="text-muted-foreground">{company.attentionCount}</span></div>
           {company.attention.map((item) => <div className="grid gap-2 border-b px-3 py-2.5 text-xs sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:px-4" key={item.taskId}>
-            <div className="min-w-0"><a className="font-medium hover:underline" href={withCompany(`/tasks/${encodeURIComponent(item.taskId)}`, item.companyId)}>{item.taskTitle}</a><div className="mt-0.5 text-muted-foreground">{item.card.title}</div><div className="mt-0.5 text-muted-foreground">{item.card.explanation}</div><div className="mt-1 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-muted-foreground">{item.card.evidence.map((evidence) => evidence.kind === "url" ? <a className="hover:underline" href={evidence.ref} key={evidence.ref}>{evidence.label || evidence.ref}</a> : <span key={evidence.ref}>{evidence.label || evidence.ref}</span>)}</div>{item.card.decision ? <div className="mt-2"><RadioGroup value={decisions[item.taskId] || item.card.decision.recommendedChoiceId} onValueChange={(value) => setDecisions((current) => ({ ...current, [item.taskId]: value }))} aria-label={item.card.title}>{item.card.decision.choices.map((choice) => <label className="flex items-center gap-1.5 py-0.5" key={choice.id}><RadioGroupItem value={choice.id} />{choice.label}</label>)}</RadioGroup><Textarea aria-label={`${item.card.title} note`} className="mt-1" value={decisionNotes[item.taskId] || ""} onChange={(event) => setDecisionNotes((current) => ({ ...current, [item.taskId]: event.target.value }))} placeholder={item.card.decision.freeTextPrompt} /></div> : null}</div>
-            <div className="flex flex-wrap items-center gap-1.5 sm:justify-end"><Button size="sm" variant={item.card.primaryAction.destructive ? "destructive" : "outline"} onClick={() => { const action = cardAction(item, item.card.primaryAction); const decision = item.card.decision; const choice = decision?.choices.find((entry) => entry.id === (decisions[item.taskId] || decision.recommendedChoiceId)); if (action.requiresNote) void performAction(item, action, [choice?.label, decisionNotes[item.taskId]].filter(Boolean).join("\n")); else requestAction(item, action); }} disabled={Boolean(actionBusy)}>{item.card.primaryAction.label}</Button>{item.card.secondaryAction ? <Button size="sm" variant={item.card.secondaryAction.destructive ? "destructive" : "ghost"} onClick={() => requestAction(item, cardAction(item, item.card.secondaryAction!))} disabled={Boolean(actionBusy)}>{item.card.secondaryAction.label}</Button> : null}<span className="whitespace-nowrap text-[11px] text-muted-foreground">{relativeTime(item.activatedAt)}</span></div>
+            <div className="min-w-0"><a className="font-medium hover:underline" href={withCompany(`/tasks/${encodeURIComponent(item.taskId)}`, item.companyId)}>{item.taskTitle}</a><div className="mt-2"><TaskAttentionCard card={item.card} busy={Boolean(actionBusy)} onAction={(command, note) => void performAction(item, cardAction(item, { command, label: command }), note)} /></div></div>
+            <span className="whitespace-nowrap text-[11px] text-muted-foreground sm:self-end">{relativeTime(item.activatedAt)}</span>
           </div>)}
           {company.attention.length === 0 ? <div className="px-3 py-5 text-center text-xs text-muted-foreground sm:px-4">Nothing needs you right now.</div> : null}
         </section>)}
@@ -67,8 +53,6 @@ export function AttentionView(): ReactElement {
         {status ? <div role="status" aria-live="polite" className="px-4 py-2 text-xs text-amber-700">{status}</div> : null}
         {error ? <div className="mx-4 my-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       </div>
-      <Dialog open={Boolean(noteAction)} onOpenChange={(open) => { if (!open && !actionBusy) setNoteAction(undefined); }}><DialogContent><DialogHeader><DialogTitle>{noteAction?.action.label}</DialogTitle><DialogDescription>A note is required before this issue can be updated.</DialogDescription></DialogHeader><Textarea aria-label={`${noteAction?.action.label ?? "Action"} note`} value={note} onChange={(event) => setNote(event.target.value)} placeholder="Add a concise decision note" /><DialogFooter><DialogClose render={<Button type="button" variant="ghost" />}>Keep issue</DialogClose><Button onClick={() => { if (noteAction) void performAction(noteAction.item, noteAction.action, note); }} disabled={!note.trim() || Boolean(actionBusy)}>{noteAction?.action.label}</Button></DialogFooter></DialogContent></Dialog>
-      <AlertDialog open={Boolean(cancelAction)} onOpenChange={(open) => { if (!open && !actionBusy) setCancelAction(undefined); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Cancel {cancelAction?.item.issueKey ? `${cancelAction.item.issueKey} · ` : ""}{cancelAction?.item.taskTitle}?</AlertDialogTitle><AlertDialogDescription>This stops the current issue workflow and keeps its history available.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep issue</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => { if (cancelAction) void performAction(cancelAction.item, cancelAction.action); }} disabled={Boolean(actionBusy)}>Cancel issue</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     </SettingsLayout>
   );
 }

@@ -22,6 +22,7 @@ import { TaskProgress } from "../components/app/task-progress.js";
 import { PhaseTimings } from "../components/app/phase-timings.js";
 import { deliveryTargetLabel, taskIsProcessing, taskPresentationPhase, TaskStatus } from "../components/app/task-status.js";
 import { DeveloperRecoveryStatus } from "../components/app/developer-recovery-status.js";
+import { TaskAttentionCard } from "../components/app/task-attention-card.js";
 import type { DeveloperRecoveryAction } from "../components/app/developer-recovery-actions.js";
 import { PlanBlockerResponseForm } from "../components/app/plan-blocker-response-form.js";
 import { PlanDecisionForm } from "../components/app/plan-decision-form.js";
@@ -606,7 +607,8 @@ export function TaskDetailsPage({ task, project, companyId: _companyId, busy, er
                     <PlanningRunCard task={task} />
                     {showLastHandlerError ? <Alert variant="destructive"><AlertDescription>Last action failed: {task.lastHandlerError!.reason} ({relativeTime(task.lastHandlerError!.at)})</AlertDescription></Alert> : null}
                     {pullRequestInMain ? <div data-active-pull-request><GithubPullRequestCard task={task} busy={busy} onRefresh={onRefresh} onMarkReady={onMarkReady} /></div> : <TaskActions task={task} busy={busy} onStartPlanning={onStartPlanning} onPlanAction={onPlanAction} onRevisePlan={onRevisePlan} onContinueWork={onContinueWork} onOpenDiff={openDiff} decisionControls={decisionControls} />}
-                    {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} executionStatus={task.developerExecution?.status} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} onAction={async (action: DeveloperRecoveryAction) => onPlanAction(action)} /> : null}
+                    {task.attentionCard && task.owner === "human" && !task.developerRecovery ? <TaskAttentionCard card={task.attentionCard} busy={busy} onAction={async (command, note) => { const descriptor = task.commands.find((entry) => entry.name === command); await onPlanAction((descriptor?.endpoint ?? command.replaceAll("_", "-")) as TaskPlanAction, note); }} /> : null}
+                    {task.developerRecovery ? <DeveloperRecoveryStatus taskId={task.id} recovery={task.developerRecovery} executionStatus={task.developerExecution?.status} allowedCommands={task.allowedCommands} busy={busy} isAdmin={isAdmin} {...(task.attentionCard ? { attentionCard: task.attentionCard } : {})} onAction={async (action: DeveloperRecoveryAction, note) => onPlanAction(action as TaskPlanAction, note)} /> : null}
                     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
                     {leadPlan}
                     {task.governance.supplementalReview ? <Card data-task-second-review size="sm" aria-label="Second review">

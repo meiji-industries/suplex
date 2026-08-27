@@ -2,11 +2,14 @@ import { useState, type ReactElement } from "react";
 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../ui/alert-dialog.js";
 import { Button } from "../ui/button.js";
+import { TaskAttentionCard } from "./task-attention-card.js";
+import type { AttentionCard } from "../../../recovery/convergence.js";
 
-export type DeveloperRecoveryAction = "retry-development" | "cancel-development";
+export type DeveloperRecoveryAction = string;
 
-export function DeveloperRecoveryActions({ allowedCommands, busy, isAdmin, onAction }: { allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction) => Promise<void> }): ReactElement {
+export function DeveloperRecoveryActions({ allowedCommands, busy, isAdmin, onAction, card }: { allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction, note?: string) => Promise<void>; card?: AttentionCard }): ReactElement {
   void isAdmin;
+  if (card) return <TaskAttentionCard card={card} busy={busy} onAction={(command, note) => onAction(command.replaceAll("_", "-"), note)} />;
   const [confirmAction, setConfirmAction] = useState<DeveloperRecoveryAction>();
   const [pendingAction, setPendingAction] = useState<DeveloperRecoveryAction>();
   const openConfirmation = (action: DeveloperRecoveryAction): void => setConfirmAction(action);

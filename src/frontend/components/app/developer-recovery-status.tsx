@@ -6,6 +6,7 @@ import type { ReactElement, ReactNode } from "react";
 
 import { DeveloperRecoveryActions, type DeveloperRecoveryAction } from "./developer-recovery-actions.js";
 import type { TaskResponse } from "../../../http/contracts/tasks.js";
+import type { AttentionCard } from "../../../recovery/convergence.js";
 
 export type DeveloperRecoveryView = NonNullable<TaskResponse["developerRecovery"]>;
 
@@ -21,7 +22,7 @@ const labels: Record<DeveloperRecoveryView["status"], string> = {
   failed: "Failed",
 };
 
-export function DeveloperRecoveryStatus({ taskId, recovery, executionStatus, allowedCommands, busy, isAdmin, onAction, developmentStatus, children }: { taskId: string; recovery: DeveloperRecoveryView | undefined; executionStatus?: string | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction) => Promise<void>; developmentStatus?: ReactNode; children?: ReactNode }): ReactElement | null {
+export function DeveloperRecoveryStatus({ taskId, recovery, executionStatus, allowedCommands, busy, isAdmin, onAction, attentionCard, developmentStatus, children }: { taskId: string; recovery: DeveloperRecoveryView | undefined; executionStatus?: string | undefined; allowedCommands: string[]; busy: boolean; isAdmin: boolean; onAction: (action: DeveloperRecoveryAction, note?: string) => Promise<void>; attentionCard?: AttentionCard; developmentStatus?: ReactNode; children?: ReactNode }): ReactElement | null {
   if (!recovery) return null;
   const interrupted = recovery.status === "interrupted";
   const failed = recovery.status === "failed";
@@ -44,7 +45,7 @@ export function DeveloperRecoveryStatus({ taskId, recovery, executionStatus, all
             {recovery.lastHeartbeatAt ? <p className="mt-1 text-xs">Last heartbeat {new Date(recovery.lastHeartbeatAt).toLocaleString()}</p> : null}
             {recovery.evidenceArtifactId ? <p className="mt-1 text-xs"><a href={`/api/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeURIComponent(recovery.evidenceArtifactId)}`} target="_blank" rel="noreferrer">Open retained evidence</a></p> : null}
           </CardContent>
-          {hasActions ? <CardFooter className="justify-end border-t"><DeveloperRecoveryActions allowedCommands={recoveryCommands} busy={busy} isAdmin={isAdmin} onAction={onAction} /></CardFooter> : null}
+          {hasActions ? <CardFooter className="justify-end border-t"><DeveloperRecoveryActions allowedCommands={recoveryCommands} busy={busy} isAdmin={isAdmin} onAction={onAction} {...(attentionCard ? { card: attentionCard } : {})} /></CardFooter> : null}
         </Collapsible.Panel>
       </Collapsible.Root>
     </Card>;
